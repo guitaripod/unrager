@@ -1,6 +1,7 @@
 pub mod app;
 pub mod command;
 pub mod event;
+pub mod filter;
 pub mod focus;
 pub mod media;
 pub mod seen;

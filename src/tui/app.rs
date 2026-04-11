@@ -6,6 +6,10 @@ use crate::model::Tweet;
 use crate::parse::timeline::TimelinePage;
 use crate::tui::command::{self, Command};
 use crate::tui::event::{self, Event, EventTx, RequestId};
+use crate::tui::filter::{
+    self, Classifier, FilterCache, FilterConfig, FilterDecision, FilterMode, FilterState,
+    TweetPayload,
+};
 use crate::tui::focus::{self, FocusEntry, TweetDetail};
 use crate::tui::media::MediaRegistry;
 use crate::tui::seen::SeenStore;
@@ -88,6 +92,12 @@ pub struct App {
     pub inline_threads: HashMap<String, InlineThread>,
     pub media: MediaRegistry,
     pub media_auto_expand: bool,
+    pub filter_mode: FilterMode,
+    pub filter_cfg: Option<FilterConfig>,
+    pub filter_cache: Option<FilterCache>,
+    pub filter_classifier: Option<Classifier>,
+    pub filter_verdicts: HashMap<String, FilterState>,
+    pub filter_inflight: HashSet<String>,
     pub(super) client: Arc<GqlClient>,
     pub(super) tx: EventTx,
     pub(super) pending_thread: Option<RequestId>,
@@ -104,6 +114,9 @@ impl App {
         let config_dir = config::config_dir()?;
         let seen = SeenStore::open(&cache_dir.join("seen.db"))?;
         let session_path = config_dir.join("session.json");
+
+        let (filter_cfg, filter_cache, filter_classifier) =
+            init_filter_stack(&config_dir, &cache_dir).await;
 
         let loaded = session::load(&session_path);
         let (initial_kind, initial_selected) = loaded
@@ -151,6 +164,12 @@ impl App {
             inline_threads: HashMap::new(),
             media: MediaRegistry::new(),
             media_auto_expand: false,
+            filter_mode: FilterMode::On,
+            filter_cfg,
+            filter_cache,
+            filter_classifier,
+            filter_verdicts: HashMap::new(),
+            filter_inflight: HashSet::new(),
             client,
             tx,
             pending_thread: None,
@@ -176,6 +195,70 @@ impl App {
         }
     }
 
+    pub fn filter_pending_count(&self) -> usize {
+        self.filter_inflight.len()
+    }
+
+    pub fn toggle_filter(&mut self) {
+        if self.filter_classifier.is_none() {
+            self.filter_mode = FilterMode::Off;
+            self.set_status("filter unavailable (ollama down)");
+            return;
+        }
+        self.filter_mode = match self.filter_mode {
+            FilterMode::On => FilterMode::Off,
+            FilterMode::Off => FilterMode::On,
+        };
+        let msg = match self.filter_mode {
+            FilterMode::On => "filter: on",
+            FilterMode::Off => "filter: off",
+        };
+        self.set_status(msg);
+    }
+
+    fn queue_filter_classification(&mut self, tweets: Vec<Tweet>) {
+        if !matches!(self.filter_mode, FilterMode::On) {
+            return;
+        }
+        let (Some(cache), Some(classifier)) =
+            (self.filter_cache.as_mut(), self.filter_classifier.as_ref())
+        else {
+            return;
+        };
+        for t in &tweets {
+            if self.filter_verdicts.contains_key(&t.rest_id) {
+                continue;
+            }
+            if let Some(decision) = cache.get(&t.rest_id) {
+                self.filter_verdicts
+                    .insert(t.rest_id.clone(), FilterState::Classified(decision));
+                continue;
+            }
+            if !self.filter_inflight.insert(t.rest_id.clone()) {
+                continue;
+            }
+            self.filter_verdicts
+                .insert(t.rest_id.clone(), FilterState::Unclassified);
+            let payload = TweetPayload {
+                rest_id: t.rest_id.clone(),
+                text: filter::build_classification_text(t),
+            };
+            classifier.classify_async(payload, self.tx.clone());
+        }
+    }
+
+    fn handle_tweet_classified(&mut self, rest_id: String, verdict: FilterDecision) {
+        self.filter_inflight.remove(&rest_id);
+        if let Some(cache) = self.filter_cache.as_mut() {
+            cache.put(&rest_id, verdict);
+        }
+        self.filter_verdicts
+            .insert(rest_id.clone(), FilterState::Classified(verdict));
+        if matches!(verdict, FilterDecision::Hide) {
+            self.remove_tweet_by_id(&rest_id);
+        }
+    }
+
     pub fn save_session(&self) {
         let Some(kind) = self.source.kind.clone() else {
             return;
@@ -189,6 +272,25 @@ impl App {
         };
         if let Err(e) = session::save(&self.session_path, &state) {
             tracing::warn!("failed to save session: {e}");
+        }
+    }
+
+    fn remove_tweet_by_id(&mut self, rest_id: &str) {
+        let Some(idx) = self.source.tweets.iter().position(|t| t.rest_id == rest_id) else {
+            return;
+        };
+        self.source.tweets.remove(idx);
+        if self.source.tweets.is_empty() {
+            self.source.list_state.select(None);
+            return;
+        }
+        if let Some(sel) = self.source.list_state.selected() {
+            let new_sel = if idx < sel {
+                sel - 1
+            } else {
+                sel.min(self.source.tweets.len() - 1)
+            };
+            self.source.list_state.select(Some(new_sel));
         }
     }
 
@@ -209,6 +311,15 @@ impl App {
             }
         }
         self.set_status("no more unread tweets in this source");
+    }
+
+    fn maybe_load_more(&mut self) {
+        if self.source.loading || self.source.exhausted || self.source.cursor.is_none() {
+            return;
+        }
+        if self.source.near_bottom() {
+            self.fetch_source(true);
+        }
     }
 
     fn mark_all_seen_in_source(&mut self) {
@@ -287,6 +398,9 @@ impl App {
             }
             Event::MediaFailed { url, err } => {
                 self.media.mark_failed(&url, err);
+            }
+            Event::TweetClassified { rest_id, verdict } => {
+                self.handle_tweet_classified(rest_id, verdict);
             }
             Event::Quit => self.running = false,
             Event::FocusGained | Event::FocusLost => {}
@@ -369,6 +483,7 @@ impl App {
             (KeyCode::Char('X'), _) if self.active == ActivePane::Detail => {
                 self.toggle_inline_thread()
             }
+            (KeyCode::Char('c'), KeyModifiers::NONE) => self.toggle_filter(),
             (KeyCode::Char('y'), KeyModifiers::NONE) => self.yank_url(),
             (KeyCode::Char('Y'), _) => self.yank_json(),
             (KeyCode::Char('o'), KeyModifiers::NONE) => self.open_tweet_in_browser(),
@@ -692,6 +807,8 @@ impl App {
         self.active = ActivePane::Source;
         self.expanded_bodies.clear();
         self.inline_threads.clear();
+        self.filter_verdicts.clear();
+        self.filter_inflight.clear();
         self.fetch_source(false);
         self.save_session();
     }
@@ -809,17 +926,6 @@ impl App {
         self.fetch_source(false);
     }
 
-    fn maybe_load_more(&mut self) {
-        if self.source.loading
-            || self.source.exhausted
-            || self.source.cursor.is_none()
-            || !self.source.near_bottom()
-        {
-            return;
-        }
-        self.fetch_source(true);
-    }
-
     fn fetch_source(&mut self, append: bool) {
         let Some(kind) = self.source.kind.clone() else {
             return;
@@ -856,7 +962,16 @@ impl App {
         }
         self.source.loading = false;
         match result {
-            Ok(page) => {
+            Ok(mut page) => {
+                if matches!(self.filter_mode, FilterMode::On)
+                    && self.filter_classifier.is_some()
+                {
+                    if let Some(cache) = &self.filter_cache {
+                        page.tweets
+                            .retain(|t| !matches!(cache.get(&t.rest_id), Some(FilterDecision::Hide)));
+                    }
+                }
+                let old_len = self.source.tweets.len();
                 if append {
                     self.source.append(page);
                 } else {
@@ -865,6 +980,12 @@ impl App {
                 self.error = None;
                 self.clear_status();
                 self.queue_source_media();
+                let new_slice: Vec<Tweet> = if append {
+                    self.source.tweets[old_len..].to_vec()
+                } else {
+                    self.source.tweets.clone()
+                };
+                self.queue_filter_classification(new_slice);
             }
             Err(e) => {
                 self.error = Some(e.to_string());
@@ -889,6 +1010,45 @@ impl App {
         }
         for t in replies {
             self.media.ensure_tweet_media(t, &self.tx);
+        }
+    }
+}
+
+async fn init_filter_stack(
+    config_dir: &std::path::Path,
+    cache_dir: &std::path::Path,
+) -> (
+    Option<FilterConfig>,
+    Option<FilterCache>,
+    Option<Classifier>,
+) {
+    let cfg = match FilterConfig::load_or_init(&config_dir.join("filter.toml")) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("filter config failed to load: {e} — filter disabled");
+            return (None, None, None);
+        }
+    };
+    let cache = match FilterCache::open(&cache_dir.join("filter.db"), cfg.rubric_hash()) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("filter cache failed to open: {e} — filter disabled");
+            return (None, None, None);
+        }
+    };
+    let classifier = Classifier::new(&cfg);
+    match tokio::time::timeout(Duration::from_secs(2), classifier.health_check()).await {
+        Ok(Ok(())) => {
+            tracing::debug!("filter ollama health ok");
+            (Some(cfg), Some(cache), Some(classifier))
+        }
+        Ok(Err(e)) => {
+            tracing::warn!("ollama unreachable: {e} — filter disabled");
+            (None, None, None)
+        }
+        Err(_) => {
+            tracing::warn!("ollama health check timed out — filter disabled");
+            (None, None, None)
         }
     }
 }

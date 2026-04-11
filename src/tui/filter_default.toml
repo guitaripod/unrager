@@ -1,0 +1,20 @@
+# unrager rage filter rubric.
+# Edit the topics freely; verdicts recache automatically when the rubric changes.
+
+drop_topics = [
+    "american electoral politics, presidents, congress, partisan fights",
+    "war, military conflict, battlefield footage, casualty counts",
+    "gender wars, men-vs-women discourse, trad-vs-feminist fights",
+    "trans and LGBTQ culture-war framing",
+    "uber-nationalism, flag-waving identity politics of any country",
+    "migrants and refugees in europe framed as a crisis or threat",
+    "systemic abuse framing (institutional predators, coverups, mass-victim narratives)",
+    "race-based outrage, racial grievance framing",
+    "doom headlines about imminent collapse, recession, apocalypse",
+]
+extra_guidance = "Keep technical, scientific, art, music, sports, personal-life, and humor tweets even if they touch these topics in passing. Only hide when the tweet's primary purpose is outrage or tribal alignment."
+
+[ollama]
+model = "gemma4:latest"
+host = "http://localhost:11434"
+timeout_seconds = 20

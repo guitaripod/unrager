@@ -53,6 +53,10 @@ pub enum Event {
         url: String,
         err: String,
     },
+    TweetClassified {
+        rest_id: String,
+        verdict: crate::tui::filter::FilterDecision,
+    },
     OpenTweetResolved {
         request_id: RequestId,
         result: Result<crate::model::Tweet>,

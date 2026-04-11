@@ -3,6 +3,7 @@ use crate::tui::app::{
     ActivePane, App, DisplayNameStyle, InlineThread, InputMode, MetricsStyle, SPINNER_FRAMES,
     TimestampStyle,
 };
+use crate::tui::filter::FilterMode;
 use crate::tui::focus::FocusEntry;
 use crate::tui::media::{
     self, MediaEntry, MediaRegistry, media_badge_failed, media_badge_loading, placeholder_row_span,
@@ -79,6 +80,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     ])
     .areas(frame.area());
 
+    let filter_mode = app.filter_mode;
+    let filter_pending = app.filter_pending_count();
+    let filter_enabled = app.filter_classifier.is_some();
+
     draw_header(frame, top, app);
 
     let source_active = app.active == ActivePane::Source;
@@ -90,6 +95,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         is_dark: app.is_dark,
         media_enabled: app.media.supported,
         media_auto_expand: app.media_auto_expand,
+    };
+    let filter_ctx = FilterRenderCtx {
+        mode: filter_mode,
+        pending: filter_pending,
+        enabled: filter_enabled,
     };
 
     if app.is_split() {
@@ -110,6 +120,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             app.error.as_deref(),
             opts,
             source_active,
+            filter_ctx,
         );
         draw_detail(
             frame,
@@ -133,6 +144,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             app.error.as_deref(),
             opts,
             true,
+            filter_ctx,
         );
     }
 
@@ -141,6 +153,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.mode == InputMode::Help {
         draw_help_overlay(frame, frame.area());
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FilterRenderCtx {
+    pub mode: FilterMode,
+    pub pending: usize,
+    pub enabled: bool,
 }
 
 fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
@@ -191,6 +210,16 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(Color::Magenta),
         ));
     }
+    spans.push(Span::raw("  "));
+    let (badge_text, badge_color) = if app.filter_classifier.is_none() {
+        ("[c —]", Color::DarkGray)
+    } else {
+        match app.filter_mode {
+            FilterMode::On => ("[c]", Color::Green),
+            FilterMode::Off => ("[c off]", Color::DarkGray),
+        }
+    };
+    spans.push(Span::styled(badge_text, Style::default().fg(badge_color)));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -216,8 +245,17 @@ fn draw_source_list(
     error: Option<&str>,
     opts: RenderOpts,
     active: bool,
+    filter_ctx: FilterRenderCtx,
 ) {
-    let title = source.title();
+    let base_title = source.title();
+    let title = if matches!(filter_ctx.mode, FilterMode::On)
+        && filter_ctx.enabled
+        && filter_ctx.pending > 0
+    {
+        format!("{base_title}  ·  filtering {}", filter_ctx.pending)
+    } else {
+        base_title
+    };
 
     if source.tweets.is_empty() {
         let msg = if source.loading {
@@ -988,7 +1026,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
 
 fn draw_help_overlay(frame: &mut Frame, area: Rect) {
     let w = area.width.min(72);
-    let h = area.height.saturating_sub(2).min(34);
+    let h = area.height.saturating_sub(2).min(48);
     let x = (area.width.saturating_sub(w)) / 2;
     let y = (area.height.saturating_sub(h)) / 2;
     let popup = Rect {
@@ -1041,6 +1079,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect) {
         Line::from("  M              toggle retweet / like / view counts (replies always shown)"),
         Line::from("  N              toggle display names (handle-only mode)"),
         Line::from("  I              toggle media auto-expand (show images for all media tweets)"),
+        Line::from("  c              toggle rage filter (LLM hides inflammatory topics)"),
         Line::from("  x              expand / collapse selected tweet body"),
         Line::from("  X              toggle inline thread replies (detail pane only)"),
         Line::from("  Ctrl-d / Ctrl-u  half-page down / up"),

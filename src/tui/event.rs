@@ -21,6 +21,7 @@ pub fn next_request_id() -> RequestId {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum Event {
     Tick,
     Render,
@@ -38,6 +39,10 @@ pub enum Event {
         request_id: RequestId,
         focal_id: String,
         result: Result<TimelinePage>,
+    },
+    OpenTweetResolved {
+        request_id: RequestId,
+        result: Result<crate::model::Tweet>,
     },
 }
 

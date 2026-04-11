@@ -3,6 +3,7 @@ use crate::error::Result;
 use crate::gql::GqlClient;
 use crate::model::Tweet;
 use crate::parse::timeline::TimelinePage;
+use crate::tui::command::{self, Command};
 use crate::tui::event::{self, Event, EventTx, RequestId};
 use crate::tui::focus::{self, FocusEntry, TweetDetail};
 use crate::tui::source::{self, Source, SourceKind};
@@ -18,33 +19,50 @@ pub enum ActivePane {
     Detail,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputMode {
+    Normal,
+    Command,
+}
+
 pub struct App {
     pub running: bool,
+    pub mode: InputMode,
+    pub command_buffer: String,
     pub source: Source,
     pub focus_stack: Vec<FocusEntry>,
     pub active: ActivePane,
+    pub history: Vec<SourceKind>,
+    pub history_cursor: usize,
     pub status: String,
     pub error: Option<String>,
     pub last_tick: Instant,
     pub(super) client: Arc<GqlClient>,
     pub(super) tx: EventTx,
     pub(super) pending_thread: Option<RequestId>,
+    pub(super) pending_open: Option<RequestId>,
 }
 
 impl App {
     pub async fn new(tx: EventTx) -> Result<Self> {
         let client = Arc::new(common::build_gql_client().await?);
+        let initial_kind = SourceKind::Home { following: false };
         Ok(Self {
             running: true,
-            source: Source::new(SourceKind::Home { following: false }),
+            mode: InputMode::Normal,
+            command_buffer: String::new(),
+            source: Source::new(initial_kind.clone()),
             focus_stack: Vec::new(),
             active: ActivePane::Source,
-            status: "press ? for help, q to quit".into(),
+            history: vec![initial_kind],
+            history_cursor: 0,
+            status: "press ? for help, : for command, q to quit".into(),
             error: None,
             last_tick: Instant::now(),
             client,
             tx,
             pending_thread: None,
+            pending_open: None,
         })
     }
 
@@ -84,6 +102,9 @@ impl App {
                 focal_id,
                 result,
             } => self.handle_thread_loaded(request_id, focal_id, result),
+            Event::OpenTweetResolved { request_id, result } => {
+                self.handle_open_tweet_resolved(request_id, result);
+            }
             Event::Quit => self.running = false,
             Event::FocusGained | Event::FocusLost => {}
         }
@@ -91,6 +112,10 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
+        if matches!(self.mode, InputMode::Command) {
+            self.handle_key_command(key);
+            return;
+        }
         match (key.code, key.modifiers) {
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => self.running = false,
             (KeyCode::Tab, _) if self.is_split() => {
@@ -99,8 +124,15 @@ impl App {
                     ActivePane::Detail => ActivePane::Source,
                 };
             }
+            (KeyCode::Char(':'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                self.mode = InputMode::Command;
+                self.command_buffer.clear();
+                self.error = None;
+            }
             (KeyCode::Char('q'), KeyModifiers::NONE) => self.pop_or_quit(),
             (KeyCode::Esc, _) => self.pop_or_quit(),
+            (KeyCode::Char(']'), KeyModifiers::NONE) => self.history_forward(),
+            (KeyCode::Char('['), KeyModifiers::NONE) => self.history_back(),
             _ => match self.active {
                 ActivePane::Source => self.handle_key_source(key),
                 ActivePane::Detail => self.handle_key_detail(key),
@@ -156,6 +188,80 @@ impl App {
         }
     }
 
+    fn handle_key_command(&mut self, key: KeyEvent) {
+        match (key.code, key.modifiers) {
+            (KeyCode::Esc, _) => {
+                self.mode = InputMode::Normal;
+                self.command_buffer.clear();
+            }
+            (KeyCode::Enter, _) => self.run_command_buffer(),
+            (KeyCode::Backspace, _) => {
+                self.command_buffer.pop();
+            }
+            (KeyCode::Char(c), _) => {
+                self.command_buffer.push(c);
+            }
+            _ => {}
+        }
+    }
+
+    fn run_command_buffer(&mut self) {
+        let input = std::mem::take(&mut self.command_buffer);
+        self.mode = InputMode::Normal;
+        match command::parse(&input) {
+            Ok(Command::SwitchSource(kind)) => self.switch_source(kind),
+            Ok(Command::OpenTweet(id)) => self.open_tweet_by_id(id),
+            Ok(Command::Quit) => self.running = false,
+            Ok(Command::Help) => {
+                self.status =
+                    "help: j/k nav, Enter open, h back, q pop, : command, ] forward, [ back".into();
+            }
+            Err(e) => {
+                self.error = Some(e.0);
+            }
+        }
+    }
+
+    fn switch_source(&mut self, kind: SourceKind) {
+        if self.source.kind.as_ref() == Some(&kind) {
+            return;
+        }
+        while self.history.len() > self.history_cursor + 1 {
+            self.history.pop();
+        }
+        self.history.push(kind.clone());
+        self.history_cursor = self.history.len() - 1;
+        self.replace_source(kind);
+    }
+
+    fn replace_source(&mut self, kind: SourceKind) {
+        self.source = Source::new(kind);
+        self.error = None;
+        self.focus_stack.clear();
+        self.active = ActivePane::Source;
+        self.fetch_source(false);
+    }
+
+    fn history_back(&mut self) {
+        if self.history_cursor == 0 {
+            return;
+        }
+        self.history_cursor -= 1;
+        if let Some(kind) = self.history.get(self.history_cursor).cloned() {
+            self.replace_source(kind);
+        }
+    }
+
+    fn history_forward(&mut self) {
+        if self.history_cursor + 1 >= self.history.len() {
+            return;
+        }
+        self.history_cursor += 1;
+        if let Some(kind) = self.history.get(self.history_cursor).cloned() {
+            self.replace_source(kind);
+        }
+    }
+
     fn pop_or_quit(&mut self) {
         if self.focus_stack.pop().is_some() {
             self.pending_thread = None;
@@ -173,6 +279,28 @@ impl App {
         self.focus_stack.push(FocusEntry::Tweet(detail));
         self.active = ActivePane::Detail;
         self.fetch_thread(focal_id);
+    }
+
+    fn open_tweet_by_id(&mut self, id: String) {
+        let request_id = event::next_request_id();
+        self.pending_open = Some(request_id);
+        let client = self.client.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = source::fetch_single_tweet(&client, &id).await;
+            let _ = tx.send(Event::OpenTweetResolved { request_id, result });
+        });
+    }
+
+    fn handle_open_tweet_resolved(&mut self, request_id: RequestId, result: Result<Tweet>) {
+        if self.pending_open != Some(request_id) {
+            return;
+        }
+        self.pending_open = None;
+        match result {
+            Ok(tweet) => self.push_tweet(tweet),
+            Err(e) => self.error = Some(e.to_string()),
+        }
     }
 
     fn fetch_thread(&mut self, focal_id: String) {

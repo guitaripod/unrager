@@ -1,5 +1,5 @@
 use crate::model::Tweet;
-use crate::tui::app::{ActivePane, App};
+use crate::tui::app::{ActivePane, App, InputMode};
 use crate::tui::focus::{FocusEntry, TweetDetail};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -312,6 +312,26 @@ fn short_count(n: u64) -> String {
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
+    if app.mode == InputMode::Command {
+        let spans = vec![
+            Span::styled(
+                "CMD ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  :"),
+            Span::styled(
+                app.command_buffer.clone(),
+                Style::default().fg(Color::White),
+            ),
+            Span::styled("▎", Style::default().fg(Color::Yellow)),
+        ];
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        return;
+    }
+
     let mut spans = vec![
         Span::styled(
             "NORMAL ",
@@ -340,9 +360,9 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         ));
         spans.push(Span::raw("   "));
         let hints = if app.is_split() {
-            "j/k nav  Enter open  h back  Tab swap  q pop  r reload"
+            "j/k nav  Enter open  h back  Tab swap  : cmd  q pop"
         } else {
-            "j/k nav  Enter open  g/G top/bot  r reload  q quit"
+            "j/k nav  Enter open  g/G top/bot  : cmd  ]/[ hist  r reload  q quit"
         };
         spans.push(Span::styled(hints, Style::default().fg(Color::DarkGray)));
     }

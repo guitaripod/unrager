@@ -14,7 +14,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::time::timeout;
 
-pub const CLIENT_ID: &str = "WlRQQlUwaFB0Q01WU1RVQ25QeGc6MTpjaQ";
+pub const CLIENT_ID: &str = "LS1paXFQbTFyNUxmZnVua2lFVTY6MTpjaQ";
 const REDIRECT_URI: &str = "http://127.0.0.1:8765/callback";
 const CALLBACK_PORT: u16 = 8765;
 const AUTHORIZE_URL: &str = "https://x.com/i/oauth2/authorize";

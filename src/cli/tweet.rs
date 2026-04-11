@@ -25,11 +25,11 @@ pub async fn run(args: Args) -> Result<()> {
     };
 
     if args.dry_run {
-        println!("DRY RUN — no network writes. Would POST https://api.x.com/2/tweets with:");
+        eprintln!("DRY RUN — no network writes. Would POST https://api.x.com/2/tweets with:");
         println!("{}", serde_json::to_string_pretty(&request.to_json())?);
-        println!();
-        println!("Cost if sent: $0.01 (pay-per-use).");
-        println!("Remove --dry-run to actually post.");
+        eprintln!();
+        eprintln!("Cost if sent: $0.01 (pay-per-use).");
+        eprintln!("Remove --dry-run to actually post.");
         return Ok(());
     }
 

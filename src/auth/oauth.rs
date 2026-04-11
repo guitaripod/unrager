@@ -86,19 +86,30 @@ fn load(path: &std::path::Path) -> Result<Option<Tokens>> {
 }
 
 fn save(path: &std::path::Path, tokens: &Tokens) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let json = serde_json::to_vec_pretty(tokens)?;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)?;
     use std::io::Write;
-    file.write_all(&json)?;
-    file.sync_all()?;
+
+    let parent = path.parent().ok_or_else(|| {
+        Error::Config(format!(
+            "tokens path has no parent directory: {}",
+            path.display()
+        ))
+    })?;
+    std::fs::create_dir_all(parent)?;
+
+    let json = serde_json::to_vec_pretty(tokens)?;
+
+    let tmp_path = path.with_extension("json.tmp");
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp_path)?;
+        file.write_all(&json)?;
+        file.sync_all()?;
+    }
+    std::fs::rename(&tmp_path, path)?;
     Ok(())
 }
 
@@ -120,10 +131,10 @@ async fn run_pkce_flow() -> Result<Tokens> {
         scope = urlencoding::encode(SCOPES),
     );
 
-    println!("Opening browser for authorization...");
-    println!("If nothing opens, visit this URL manually:");
-    println!("  {authorize_url}");
-    println!();
+    eprintln!("Opening browser for authorization...");
+    eprintln!("If nothing opens, visit this URL manually:");
+    eprintln!("  {authorize_url}");
+    eprintln!();
     let _ = std::process::Command::new("xdg-open")
         .arg(&authorize_url)
         .stdin(std::process::Stdio::null())

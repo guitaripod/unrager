@@ -202,7 +202,12 @@ impl GqlClient {
                 body: truncate(&body, 400),
             });
         }
-        let value: Value = serde_json::from_str(&body)?;
+        let value: Value = serde_json::from_str(&body).map_err(|e| {
+            Error::GraphqlShape(format!(
+                "response was not valid json ({e}); body preview: {}",
+                truncate(&body, 400)
+            ))
+        })?;
         if let Some(errors) = value.get("errors").and_then(Value::as_array)
             && !errors.is_empty()
         {
@@ -215,10 +220,46 @@ impl GqlClient {
     }
 }
 
-fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        format!("{}…", &s[..max])
+fn truncate(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s.to_string();
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &s[..end])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate;
+
+    #[test]
+    fn truncate_ascii_short() {
+        assert_eq!(truncate("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_ascii_long() {
+        assert_eq!(truncate("0123456789abcdef", 8), "01234567…");
+    }
+
+    #[test]
+    fn truncate_never_splits_multibyte() {
+        let s = "aaaa🦀bbbb";
+        for cap in 0..=s.len() {
+            let out = truncate(s, cap);
+            assert!(out.is_char_boundary(out.trim_end_matches('…').len()));
+        }
+    }
+
+    #[test]
+    fn truncate_at_codepoint_boundary() {
+        let s = "a🦀b";
+        assert_eq!(truncate(s, 1), "a…");
+        assert_eq!(truncate(s, 2), "a…");
+        assert_eq!(truncate(s, 3), "a…");
+        assert_eq!(truncate(s, 5), "a🦀…");
     }
 }

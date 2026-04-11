@@ -58,11 +58,15 @@ pub struct App {
     pub session_path: PathBuf,
     pub timestamps: TimestampStyle,
     pub metrics: MetricsStyle,
+    pub split_pct: u16,
+    pub spinner_frame: usize,
     pub(super) client: Arc<GqlClient>,
     pub(super) tx: EventTx,
     pub(super) pending_thread: Option<RequestId>,
     pub(super) pending_open: Option<RequestId>,
 }
+
+pub const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 impl App {
     pub async fn new(tx: EventTx) -> Result<Self> {
@@ -96,6 +100,8 @@ impl App {
             session_path,
             timestamps: TimestampStyle::Relative,
             metrics: MetricsStyle::Visible,
+            split_pct: 50,
+            spinner_frame: 0,
             client,
             tx,
             pending_thread: None,
@@ -161,6 +167,15 @@ impl App {
         })
     }
 
+    pub fn is_any_loading(&self) -> bool {
+        self.source.loading
+            || self.pending_thread.is_some()
+            || self.pending_open.is_some()
+            || self.focus_stack.last().is_some_and(|e| match e {
+                FocusEntry::Tweet(d) => d.loading,
+            })
+    }
+
     pub fn handle_event(&mut self, event: Event, terminal: &mut DefaultTerminal) -> Result<()> {
         match event {
             Event::Render => {
@@ -168,6 +183,9 @@ impl App {
             }
             Event::Tick => {
                 self.last_tick = Instant::now();
+                if self.is_any_loading() {
+                    self.spinner_frame = self.spinner_frame.wrapping_add(1);
+                }
             }
             Event::Key(key) => self.handle_key(key),
             Event::Resize(_, _) => {
@@ -222,6 +240,12 @@ impl App {
                     TimestampStyle::Relative => TimestampStyle::Absolute,
                     TimestampStyle::Absolute => TimestampStyle::Relative,
                 };
+            }
+            (KeyCode::Char(','), KeyModifiers::NONE) if self.is_split() => {
+                self.split_pct = self.split_pct.saturating_sub(5).max(20);
+            }
+            (KeyCode::Char('.'), KeyModifiers::NONE) if self.is_split() => {
+                self.split_pct = (self.split_pct + 5).min(80);
             }
             (KeyCode::Char('F'), _) => self.toggle_home_mode(),
             (KeyCode::Char('M'), _) => {

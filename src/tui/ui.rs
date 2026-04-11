@@ -1,5 +1,5 @@
 use crate::model::Tweet;
-use crate::tui::app::{ActivePane, App, InputMode, MetricsStyle, TimestampStyle};
+use crate::tui::app::{ActivePane, App, InputMode, MetricsStyle, SPINNER_FRAMES, TimestampStyle};
 use crate::tui::focus::{FocusEntry, TweetDetail};
 use crate::tui::seen::SeenStore;
 use crate::tui::source::Source;
@@ -37,9 +37,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     };
 
     if app.is_split() {
-        let [left, right] =
-            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .areas(main);
+        let left_pct = app.split_pct;
+        let right_pct = 100 - left_pct;
+        let [left, right] = Layout::horizontal([
+            Constraint::Percentage(left_pct),
+            Constraint::Percentage(right_pct),
+        ])
+        .areas(main);
         draw_source_list(
             frame,
             left,
@@ -89,9 +93,10 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled(app.source.title(), Style::default().fg(Color::White)),
     ];
     if app.source.loading {
+        let frame = SPINNER_FRAMES[app.spinner_frame % SPINNER_FRAMES.len()];
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
-            "[loading…]",
+            format!("{frame} loading"),
             Style::default().fg(Color::Yellow),
         ));
     }
@@ -654,6 +659,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect) {
         Line::from("  j / k / ↓ ↑    move selection"),
         Line::from("  g / G          top / bottom of the list"),
         Line::from("  Tab            swap active pane (when split)"),
+        Line::from("  , / .          narrow / widen the source pane split"),
         Line::from("  h / ←          move focus from detail back to source"),
         Line::from("  Enter / l      open selected tweet into detail pane"),
         Line::from("  q / Esc        pop detail pane; quit if stack is empty"),

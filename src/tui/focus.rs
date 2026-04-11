@@ -40,9 +40,11 @@ impl TweetDetail {
             })
             .collect();
         self.list_state = ListState::default();
-        if !self.replies.is_empty() {
-            self.list_state.select(Some(0));
-        }
+        self.list_state.select(Some(0));
+    }
+
+    pub fn total_items(&self) -> usize {
+        1 + self.replies.len()
     }
 
     pub fn selected(&self) -> usize {
@@ -50,11 +52,12 @@ impl TweetDetail {
     }
 
     pub fn select_next(&mut self) {
-        if self.replies.is_empty() {
+        let total = self.total_items();
+        if total == 0 {
             return;
         }
         let current = self.selected();
-        if current + 1 < self.replies.len() {
+        if current + 1 < total {
             self.list_state.select(Some(current + 1));
         }
     }
@@ -67,16 +70,33 @@ impl TweetDetail {
     }
 
     pub fn advance(&mut self, delta: isize) {
-        if self.replies.is_empty() {
+        let total = self.total_items() as isize;
+        if total == 0 {
             return;
         }
         let current = self.selected() as isize;
-        let next = (current + delta).clamp(0, self.replies.len() as isize - 1) as usize;
+        let next = (current + delta).clamp(0, total - 1) as usize;
         self.list_state.select(Some(next));
     }
 
+    pub fn jump_top(&mut self) {
+        self.list_state.select(Some(0));
+        *self.list_state.offset_mut() = 0;
+    }
+
+    pub fn jump_bottom(&mut self) {
+        let total = self.total_items();
+        if total > 0 {
+            self.list_state.select(Some(total - 1));
+        }
+    }
+
     pub fn selected_reply(&self) -> Option<&Tweet> {
-        self.replies.get(self.selected())
+        let sel = self.selected();
+        if sel == 0 {
+            return None;
+        }
+        self.replies.get(sel - 1)
     }
 }
 

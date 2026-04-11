@@ -40,6 +40,19 @@ pub enum Event {
         focal_id: String,
         result: Result<TimelinePage>,
     },
+    InlineThreadLoaded {
+        focal_id: String,
+        result: Result<TimelinePage>,
+    },
+    MediaLoaded {
+        url: String,
+        id: u32,
+        id_expanded: u32,
+    },
+    MediaFailed {
+        url: String,
+        err: String,
+    },
     OpenTweetResolved {
         request_id: RequestId,
         result: Result<crate::model::Tweet>,

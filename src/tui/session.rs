@@ -1,4 +1,5 @@
 use crate::error::Result;
+use crate::tui::app::{DisplayNameStyle, MetricsStyle, TimestampStyle};
 use crate::tui::source::SourceKind;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -7,6 +8,12 @@ use std::path::Path;
 pub struct SessionState {
     pub source_kind: SourceKind,
     pub selected: usize,
+    #[serde(default)]
+    pub metrics: Option<MetricsStyle>,
+    #[serde(default)]
+    pub display_names: Option<DisplayNameStyle>,
+    #[serde(default)]
+    pub timestamps: Option<TimestampStyle>,
 }
 
 pub fn load(path: &Path) -> Option<SessionState> {
@@ -35,6 +42,9 @@ mod tests {
         let state = SessionState {
             source_kind: SourceKind::Home { following: true },
             selected: 7,
+            metrics: Some(MetricsStyle::Hidden),
+            display_names: Some(DisplayNameStyle::Hidden),
+            timestamps: Some(TimestampStyle::Absolute),
         };
         save(tmp.path(), &state).unwrap();
         let loaded = load(tmp.path()).unwrap();
@@ -43,6 +53,8 @@ mod tests {
             SourceKind::Home { following: true }
         ));
         assert_eq!(loaded.selected, 7);
+        assert_eq!(loaded.metrics, Some(MetricsStyle::Hidden));
+        assert_eq!(loaded.display_names, Some(DisplayNameStyle::Hidden));
     }
 
     #[test]
@@ -53,6 +65,9 @@ mod tests {
                 handle: "jack".into(),
             },
             selected: 0,
+            metrics: None,
+            display_names: None,
+            timestamps: None,
         };
         save(tmp.path(), &state).unwrap();
         let loaded = load(tmp.path()).unwrap();

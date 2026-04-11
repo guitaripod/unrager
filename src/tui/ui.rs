@@ -1,8 +1,12 @@
 use crate::model::Tweet;
 use crate::tui::app::{
-    ActivePane, App, DisplayNameStyle, InputMode, MetricsStyle, SPINNER_FRAMES, TimestampStyle,
+    ActivePane, App, DisplayNameStyle, InlineThread, InputMode, MetricsStyle, SPINNER_FRAMES,
+    TimestampStyle,
 };
-use crate::tui::focus::{FocusEntry, TweetDetail};
+use crate::tui::focus::FocusEntry;
+use crate::tui::media::{
+    self, MediaEntry, MediaRegistry, media_badge_failed, media_badge_loading, placeholder_row_span,
+};
 use crate::tui::seen::SeenStore;
 use crate::tui::source::Source;
 use chrono::{DateTime, Utc};
@@ -10,14 +14,62 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use std::collections::{HashMap, HashSet};
+
+const SCROLL_LOOKAHEAD: usize = 3;
+
+fn last_visible_index(items: &[ListItem<'_>], offset: usize, inner_h: usize) -> usize {
+    let mut rows = 0usize;
+    let mut last = offset;
+    for i in offset..items.len() {
+        let h = items[i].height().max(1);
+        if rows + h > inner_h {
+            break;
+        }
+        rows += h;
+        last = i;
+    }
+    last
+}
+
+fn apply_scroll_padding(state: &mut ListState, items: &[ListItem<'_>], area_height: u16) {
+    if items.is_empty() {
+        return;
+    }
+    let inner = area_height.saturating_sub(2) as usize;
+    if inner == 0 {
+        return;
+    }
+    let sel = state.selected().unwrap_or(0);
+    if sel >= items.len() {
+        return;
+    }
+    let mut off = state.offset().min(sel);
+    let target_sel = (sel + SCROLL_LOOKAHEAD).min(items.len().saturating_sub(1));
+    loop {
+        let lv = last_visible_index(items, off, inner);
+        if lv >= target_sel {
+            break;
+        }
+        if off >= sel {
+            break;
+        }
+        off += 1;
+    }
+    *state.offset_mut() = off;
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct RenderOpts {
     pub timestamps: TimestampStyle,
     pub metrics: MetricsStyle,
     pub display_names: DisplayNameStyle,
+    pub is_dark: bool,
+    pub media_enabled: bool,
+    pub media_auto_expand: bool,
 }
+
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let [top, main, bottom] = Layout::vertical([
@@ -35,6 +87,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         timestamps: app.timestamps,
         metrics: app.metrics,
         display_names: app.display_names,
+        is_dark: app.is_dark,
+        media_enabled: app.media.supported,
+        media_auto_expand: app.media_auto_expand,
     };
 
     if app.is_split() {
@@ -50,6 +105,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             left,
             &mut app.source,
             &app.seen,
+            &app.expanded_bodies,
+            &app.media,
             app.error.as_deref(),
             opts,
             source_active,
@@ -59,6 +116,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             right,
             app.focus_stack.last_mut(),
             &app.seen,
+            &app.expanded_bodies,
+            &app.inline_threads,
+            &app.media,
             opts,
             detail_active,
         );
@@ -68,6 +128,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             main,
             &mut app.source,
             &app.seen,
+            &app.expanded_bodies,
+            &app.media,
             app.error.as_deref(),
             opts,
             true,
@@ -122,7 +184,7 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(Color::Green),
         ));
     }
-    if app.is_split() {
+    if app.focus_stack.len() > 1 {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
             format!("[stack: {}]", app.focus_stack.len()),
@@ -149,6 +211,8 @@ fn draw_source_list(
     area: Rect,
     source: &mut Source,
     seen: &SeenStore,
+    expanded: &HashSet<String>,
+    media_reg: &MediaRegistry,
     error: Option<&str>,
     opts: RenderOpts,
     active: bool,
@@ -166,19 +230,36 @@ fn draw_source_list(
         return;
     }
 
+    let wrap_width = (area.width as usize).saturating_sub(4);
     let items: Vec<ListItem> = source
         .tweets
         .iter()
         .enumerate()
         .map(|(i, t)| {
             let is_seen = seen.is_seen(&t.rest_id);
-            let mut item = ListItem::new(tweet_lines(t, opts, is_seen, false));
+            let is_expanded = expanded.contains(&t.rest_id);
+            let lines = tweet_lines(
+                t,
+                opts,
+                is_seen,
+                false,
+                wrap_width,
+                is_expanded,
+                media_reg,
+            );
+            let mut item = ListItem::new(lines);
             if i % 2 == 1 {
                 item = item.style(Style::default().bg(ZEBRA_BG));
             }
             item
         })
         .collect();
+
+    apply_scroll_padding(&mut source.list_state, &items, area.height);
+
+    if opts.media_enabled && opts.media_auto_expand {
+        emit_placements_for_tweets(media_reg, source.tweets.iter(), wrap_width);
+    }
 
     let list = List::new(items)
         .block(block_with_focus(&title, active))
@@ -193,6 +274,9 @@ fn draw_detail(
     area: Rect,
     entry: Option<&mut FocusEntry>,
     seen: &SeenStore,
+    expanded: &HashSet<String>,
+    inline_threads: &HashMap<String, InlineThread>,
+    media_reg: &MediaRegistry,
     opts: RenderOpts,
     active: bool,
 ) {
@@ -200,103 +284,65 @@ fn draw_detail(
         return;
     };
 
-    let title = format!("tweet @{}", detail.tweet.author.handle);
-
-    let [focal_area, replies_area] =
-        Layout::vertical([Constraint::Length(12), Constraint::Min(0)]).areas(area);
-
-    draw_focal_tweet(frame, focal_area, detail, &title, active, opts);
-    draw_replies(frame, replies_area, detail, active, seen, opts);
-}
-
-fn draw_focal_tweet(
-    frame: &mut Frame,
-    area: Rect,
-    detail: &TweetDetail,
-    title: &str,
-    active: bool,
-    opts: RenderOpts,
-) {
-    let t = &detail.tweet;
-    let show_name = matches!(opts.display_names, DisplayNameStyle::Visible);
-    let mut lines = vec![
-        Line::from(author_spans(
-            &t.author.handle,
-            t.author.verified,
-            &t.author.name,
-            show_name,
-        )),
-        Line::from(vec![
-            Span::styled(
-                format_timestamp(t.created_at, opts.timestamps),
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::raw("  "),
-            Span::styled(t.url.clone(), Style::default().fg(Color::DarkGray)),
-        ]),
-        Line::from(""),
-    ];
-    let body = if t.in_reply_to_tweet_id.is_some() {
-        strip_leading_mentions(&t.text)
-    } else {
-        &t.text
-    };
-    for text_line in body.lines() {
-        lines.push(Line::from(highlight_text(text_line)));
-    }
-    if matches!(opts.metrics, MetricsStyle::Visible) {
-        lines.push(Line::from(""));
-        lines.push(Line::from(stats_spans(t)));
-    }
-
-    let p = Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .block(block_with_focus(title, active));
-    frame.render_widget(p, area);
-}
-
-fn draw_replies(
-    frame: &mut Frame,
-    area: Rect,
-    detail: &mut TweetDetail,
-    active: bool,
-    seen: &SeenStore,
-    opts: RenderOpts,
-) {
-    let title = if detail.loading {
-        "replies [loading…]".to_string()
+    let reply_suffix = if detail.loading {
+        " [loading replies…]".to_string()
+    } else if detail.replies.is_empty() && detail.error.is_none() {
+        " · no replies".to_string()
     } else if detail.replies.is_empty() {
-        "replies".to_string()
+        String::new()
     } else {
-        format!("replies ({})", detail.replies.len())
+        format!(" · {} replies", detail.replies.len())
     };
+    let title = format!("tweet @{}{}", detail.tweet.author.handle, reply_suffix);
 
-    if detail.replies.is_empty() {
-        let msg = if detail.loading {
-            "loading replies…"
-        } else if let Some(err) = &detail.error {
-            err.as_str()
-        } else {
-            "no replies"
-        };
-        let body = Paragraph::new(msg).block(block_with_focus(&title, active));
-        frame.render_widget(body, area);
-        return;
+    let wrap_width = (area.width as usize).saturating_sub(4);
+
+    let focal_lines = tweet_lines(&detail.tweet, opts, false, false, wrap_width, true, media_reg);
+    let mut items: Vec<ListItem> = Vec::with_capacity(1 + detail.replies.len());
+    items.push(ListItem::new(focal_lines));
+
+    for (i, t) in detail.replies.iter().enumerate() {
+        let is_seen = seen.is_seen(&t.rest_id);
+        let is_expanded = expanded.contains(&t.rest_id);
+        let mut lines = tweet_lines(
+            t,
+            opts,
+            is_seen,
+            true,
+            wrap_width,
+            is_expanded,
+            media_reg,
+        );
+        if let Some(thread) = inline_threads.get(&t.rest_id) {
+            append_inline_thread(&mut lines, thread, opts, wrap_width, media_reg);
+        }
+        let mut item = ListItem::new(lines);
+        if i % 2 == 0 {
+            item = item.style(Style::default().bg(ZEBRA_BG));
+        }
+        items.push(item);
     }
 
-    let items: Vec<ListItem> = detail
-        .replies
-        .iter()
-        .enumerate()
-        .map(|(i, t)| {
-            let is_seen = seen.is_seen(&t.rest_id);
-            let mut item = ListItem::new(tweet_lines(t, opts, is_seen, true));
-            if i % 2 == 1 {
-                item = item.style(Style::default().bg(ZEBRA_BG));
-            }
-            item
-        })
-        .collect();
+    if detail.replies.is_empty() && detail.loading {
+        items.push(ListItem::new(Line::from(Span::styled(
+            "  loading replies…",
+            Style::default().fg(Color::Yellow),
+        ))));
+    }
+    if let Some(err) = &detail.error {
+        items.push(ListItem::new(Line::from(Span::styled(
+            format!("  error: {err}"),
+            Style::default().fg(Color::Red),
+        ))));
+    }
+
+    apply_scroll_padding(&mut detail.list_state, &items, area.height);
+
+    if opts.media_enabled {
+        let focal_iter = std::iter::once(&detail.tweet);
+        let replies_iter = detail.replies.iter();
+        emit_placements_for_tweets(media_reg, focal_iter.chain(replies_iter), wrap_width);
+    }
 
     let list = List::new(items)
         .block(block_with_focus(&title, active))
@@ -309,10 +355,10 @@ fn draw_replies(
 fn highlight_style(active: bool) -> Style {
     if active {
         Style::default()
-            .bg(Color::Indexed(236))
+            .bg(Color::Indexed(24))
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().bg(Color::Indexed(234))
+        Style::default().bg(Color::Indexed(238))
     }
 }
 
@@ -320,17 +366,16 @@ fn highlight_symbol(active: bool) -> &'static str {
     if active { "▶ " } else { "· " }
 }
 
-fn author_spans<'a>(
-    handle: &'a str,
+fn author_spans(
+    handle: &str,
     verified: bool,
-    name: &'a str,
+    name: &str,
     show_name: bool,
-) -> Vec<Span<'a>> {
+) -> Vec<Span<'static>> {
+    let color = handle_color(handle);
     let mut spans = vec![Span::styled(
         format!("@{handle}"),
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
     )];
     if verified {
         spans.push(Span::styled(" ✓", Style::default().fg(Color::Blue)));
@@ -345,27 +390,81 @@ fn author_spans<'a>(
     spans
 }
 
+const HANDLE_PALETTE: &[Color] = &[
+    Color::Indexed(39),
+    Color::Indexed(45),
+    Color::Indexed(51),
+    Color::Indexed(48),
+    Color::Indexed(82),
+    Color::Indexed(118),
+    Color::Indexed(154),
+    Color::Indexed(226),
+    Color::Indexed(220),
+    Color::Indexed(214),
+    Color::Indexed(208),
+    Color::Indexed(203),
+    Color::Indexed(198),
+    Color::Indexed(205),
+    Color::Indexed(213),
+    Color::Indexed(177),
+    Color::Indexed(141),
+    Color::Indexed(105),
+    Color::Indexed(75),
+    Color::Indexed(80),
+];
+
+fn handle_color(handle: &str) -> Color {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in handle.as_bytes() {
+        h ^= b.to_ascii_lowercase() as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    HANDLE_PALETTE[(h as usize) % HANDLE_PALETTE.len()]
+}
+
 const TEXT_LINES_IN_CARD: usize = 3;
 
-pub const ZEBRA_BG: Color = Color::Indexed(234);
+pub const ZEBRA_BG: Color = Color::Indexed(236);
 const GLYPH_REPLIES: &str = "↳";
 const GLYPH_RETWEETS: &str = "⟲";
 const GLYPH_LIKES: &str = "♥";
 const GLYPH_VIEWS: &str = "◉";
-const GLYPH_IS_REPLY: &str = "↳";
+const GLYPH_IS_REPLY: &str = "⮎";
+const GLYPH_PHOTO: &str = "▣";
+const GLYPH_VIDEO: &str = "▶";
+const GLYPH_GIF: &str = "↻";
 
-fn tweet_lines(t: &Tweet, opts: RenderOpts, seen: bool, in_reply_context: bool) -> Vec<Line<'_>> {
+fn tweet_lines(
+    t: &Tweet,
+    opts: RenderOpts,
+    seen: bool,
+    in_reply_context: bool,
+    wrap_width: usize,
+    expanded: bool,
+    media_reg: &MediaRegistry,
+) -> Vec<Line<'static>> {
+    let photo_count = t
+        .media
+        .iter()
+        .filter(|m| matches!(m.kind, crate::model::MediaKind::Photo))
+        .count();
+    let has_photo_media = photo_count > 0;
+    let first_media_kind = t.media.first().map(|m| m.kind);
+
+    let effective_expanded =
+        expanded || (opts.media_auto_expand && opts.media_enabled && has_photo_media);
+
     let dot = if seen {
-        Span::styled("  ", Style::default())
+        Span::raw("  ")
     } else {
         Span::styled("● ", Style::default().fg(Color::Green))
     };
 
-    let mut header = vec![dot];
-    if t.in_reply_to_tweet_id.is_some() {
+    let mut header: Vec<Span<'static>> = vec![dot];
+    if t.in_reply_to_tweet_id.is_some() && !in_reply_context {
         header.push(Span::styled(
             format!("{GLYPH_IS_REPLY} "),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(Color::Indexed(244)),
         ));
     }
     let show_name = matches!(opts.display_names, DisplayNameStyle::Visible);
@@ -380,17 +479,48 @@ fn tweet_lines(t: &Tweet, opts: RenderOpts, seen: bool, in_reply_context: bool) 
         format_timestamp(t.created_at, opts.timestamps),
         Style::default().fg(Color::DarkGray),
     ));
-    if matches!(opts.metrics, MetricsStyle::Visible) {
+    if let Some(kind) = first_media_kind {
+        let (glyph, color) = match kind {
+            crate::model::MediaKind::Photo => (GLYPH_PHOTO, Color::Indexed(75)),
+            crate::model::MediaKind::Video => (GLYPH_VIDEO, Color::Indexed(203)),
+            crate::model::MediaKind::AnimatedGif => (GLYPH_GIF, Color::Indexed(214)),
+        };
+        header.push(Span::raw("  "));
+        let label = if photo_count > 1 {
+            format!("{glyph}×{photo_count}")
+        } else {
+            glyph.to_string()
+        };
+        header.push(Span::styled(label, Style::default().fg(color)));
+    }
+    let show_extra = effective_expanded || matches!(opts.metrics, MetricsStyle::Visible);
+    let extras = if show_extra {
+        extra_stats_spans(t)
+    } else {
+        Vec::new()
+    };
+    if let Some(reply_span) = reply_count_span(t) {
         header.push(Span::raw("    "));
-        header.extend(stats_spans(t));
+        header.push(reply_span);
+    }
+    if !extras.is_empty() {
+        header.push(Span::raw("    "));
+        header.extend(extras);
     }
 
-    let mut lines = vec![Line::from(header)];
+    let mut lines: Vec<Line<'static>> = vec![Line::from(header)];
 
-    let text_style = if seen {
+    let primary_color = if opts.is_dark {
+        Color::White
+    } else {
+        Color::Black
+    };
+    let body_base_style = if seen {
         Style::default().fg(Color::DarkGray)
     } else {
         Style::default()
+            .fg(primary_color)
+            .add_modifier(Modifier::BOLD)
     };
 
     let body_text: &str = if in_reply_context && t.in_reply_to_tweet_id.is_some() {
@@ -398,27 +528,243 @@ fn tweet_lines(t: &Tweet, opts: RenderOpts, seen: bool, in_reply_context: bool) 
     } else {
         &t.text
     };
-    let total_text_lines = body_text.lines().count();
-    let indent = Span::raw("  ");
-    for text_line in body_text.lines().take(TEXT_LINES_IN_CARD) {
-        let mut spans = vec![indent.clone()];
-        let mut word_spans = highlight_text(text_line);
-        if seen {
-            for s in word_spans.iter_mut() {
-                s.style = text_style;
+
+    let indent: Span<'static> = Span::raw("  ");
+    let text_width = wrap_width.saturating_sub(2).max(1);
+
+    let mut wrapped: Vec<String> = Vec::new();
+    for text_line in body_text.lines() {
+        wrapped.extend(wrap_text(text_line, text_width));
+    }
+    let total_text_lines = wrapped.len();
+
+    let render_body_line = |wline: &str| -> Vec<Span<'static>> {
+        let mut word_spans = highlight_text(wline);
+        for s in word_spans.iter_mut() {
+            if seen {
+                s.style = body_base_style;
+            } else if s.style.fg.is_none() {
+                s.style = body_base_style;
             }
         }
-        spans.extend(word_spans);
+        word_spans
+    };
+
+    let cap = if effective_expanded {
+        total_text_lines
+    } else {
+        TEXT_LINES_IN_CARD
+    };
+    for wline in wrapped.iter().take(cap) {
+        let mut spans = vec![indent.clone()];
+        spans.extend(render_body_line(wline));
         lines.push(Line::from(spans));
     }
-    if total_text_lines > TEXT_LINES_IN_CARD {
+    if !effective_expanded && total_text_lines > cap {
         lines.push(Line::from(vec![
             indent.clone(),
             Span::styled(
-                format!("… +{} more", total_text_lines - TEXT_LINES_IN_CARD),
+                format!("… +{} more  (press x to expand)", total_text_lines - cap),
                 Style::default().fg(Color::DarkGray),
             ),
         ]));
+    }
+
+    if effective_expanded && opts.media_enabled && has_photo_media {
+        let photo_urls: Vec<&str> = t
+            .media
+            .iter()
+            .filter(|m| matches!(m.kind, crate::model::MediaKind::Photo))
+            .map(|m| m.url.as_str())
+            .collect();
+        let visible_count = photo_urls.len().min(4);
+        let slice = &photo_urls[..visible_count];
+        let overflow = photo_urls.len().saturating_sub(visible_count);
+        let (cell_cols, cell_rows) = media::layout_for(visible_count, wrap_width);
+
+        let ready_ids: Vec<Option<u32>> = slice
+            .iter()
+            .map(|url| match media_reg.get(url) {
+                Some(MediaEntry::Ready { id_expanded, .. }) => Some(*id_expanded),
+                _ => None,
+            })
+            .collect();
+        let any_not_ready = ready_ids.iter().any(|o| o.is_none());
+        let first_state = media_reg.get(slice[0]);
+
+        if any_not_ready {
+            match first_state {
+                Some(MediaEntry::Failed(_)) => lines.push(media_badge_failed()),
+                _ => lines.push(media_badge_loading()),
+            }
+        } else {
+            for row in 0..cell_rows {
+                let mut spans: Vec<Span<'static>> = vec![indent.clone()];
+                for (i, maybe_id) in ready_ids.iter().enumerate() {
+                    if i > 0 {
+                        spans.push(Span::raw("  "));
+                    }
+                    if let Some(id) = maybe_id {
+                        spans.push(placeholder_row_span(*id, row, cell_cols));
+                    }
+                }
+                lines.push(Line::from(spans));
+            }
+            if overflow > 0 {
+                lines.push(Line::from(vec![
+                    indent.clone(),
+                    Span::styled(
+                        format!("[+{overflow} more]"),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]));
+            }
+        }
+    }
+
+    lines
+}
+
+fn emit_placements_for_tweets<'a, I>(registry: &MediaRegistry, tweets: I, wrap_width: usize)
+where
+    I: IntoIterator<Item = &'a Tweet>,
+{
+    if !registry.supported {
+        return;
+    }
+    use std::io::Write;
+    let mut out = std::io::stdout().lock();
+    for tweet in tweets {
+        let photo_count = tweet
+            .media
+            .iter()
+            .filter(|m| matches!(m.kind, crate::model::MediaKind::Photo))
+            .count();
+        if photo_count == 0 {
+            continue;
+        }
+        let visible = photo_count.min(4);
+        let (cols, rows) = media::layout_for(visible, wrap_width);
+        for media in &tweet.media {
+            if !matches!(media.kind, crate::model::MediaKind::Photo) {
+                continue;
+            }
+            if let Some(MediaEntry::Ready { id_expanded, .. }) = registry.get(&media.url) {
+                let _ = write!(
+                    out,
+                    "\x1b_Ga=p,U=1,i={id_expanded},c={cols},r={rows},q=2\x1b\\"
+                );
+            }
+        }
+    }
+    let _ = out.flush();
+}
+
+fn append_inline_thread(
+    lines: &mut Vec<Line<'static>>,
+    thread: &InlineThread,
+    opts: RenderOpts,
+    wrap_width: usize,
+    media_reg: &MediaRegistry,
+) {
+    lines.push(Line::from(Span::styled(
+        "  ── replies ──",
+        Style::default().fg(Color::DarkGray),
+    )));
+    if thread.loading {
+        lines.push(Line::from(Span::styled(
+            "    loading thread…",
+            Style::default().fg(Color::Yellow),
+        )));
+        return;
+    }
+    if let Some(err) = &thread.error {
+        lines.push(Line::from(Span::styled(
+            format!("    error: {err}"),
+            Style::default().fg(Color::Red),
+        )));
+        return;
+    }
+    if thread.replies.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "    no replies",
+            Style::default().fg(Color::DarkGray),
+        )));
+        return;
+    }
+    let child_wrap = wrap_width.saturating_sub(4);
+    for reply in &thread.replies {
+        let reply_lines = tweet_lines(reply, opts, false, true, child_wrap, false, media_reg);
+        for mut line in reply_lines {
+            let gutter = Span::styled("  │ ", Style::default().fg(Color::DarkGray));
+            let mut new_spans = vec![gutter];
+            new_spans.append(&mut line.spans);
+            lines.push(Line::from(new_spans));
+        }
+    }
+}
+
+fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut current_w = 0usize;
+    let push_word = |w: &str, lines: &mut Vec<String>| {
+        let mut buf = String::new();
+        let mut buf_w = 0usize;
+        for ch in w.chars() {
+            let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if buf_w + cw > width && !buf.is_empty() {
+                lines.push(std::mem::take(&mut buf));
+                buf_w = 0;
+            }
+            buf.push(ch);
+            buf_w += cw;
+        }
+        if !buf.is_empty() {
+            lines.push(buf);
+        }
+    };
+    for word in text.split(' ') {
+        let w = UnicodeWidthStr::width(word);
+        if current.is_empty() {
+            if w > width {
+                push_word(word, &mut lines);
+                if let Some(last) = lines.pop() {
+                    current_w = UnicodeWidthStr::width(last.as_str());
+                    current = last;
+                }
+            } else {
+                current.push_str(word);
+                current_w = w;
+            }
+        } else if current_w + 1 + w <= width {
+            current.push(' ');
+            current.push_str(word);
+            current_w += 1 + w;
+        } else {
+            lines.push(std::mem::take(&mut current));
+            current_w = 0;
+            if w > width {
+                push_word(word, &mut lines);
+                if let Some(last) = lines.pop() {
+                    current_w = UnicodeWidthStr::width(last.as_str());
+                    current = last;
+                }
+            } else {
+                current.push_str(word);
+                current_w = w;
+            }
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
     }
     lines
 }
@@ -438,36 +784,56 @@ fn strip_leading_mentions(text: &str) -> &str {
     s
 }
 
-fn stats_spans(t: &Tweet) -> Vec<Span<'static>> {
-    let style = Style::default().fg(Color::DarkGray);
-    let mut spans = vec![
-        Span::styled(
-            format!("{GLYPH_REPLIES} {}", short_count(t.reply_count)),
-            style,
-        ),
-        Span::raw("  "),
-        Span::styled(
-            format!("{GLYPH_RETWEETS} {}", short_count(t.retweet_count)),
-            style,
-        ),
-        Span::raw("  "),
-        Span::styled(
-            format!("{GLYPH_LIKES} {}", short_count(t.like_count)),
-            style,
-        ),
-    ];
-    if let Some(v) = t.view_count {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(
-            format!("{GLYPH_VIEWS} {}", short_count(v)),
-            style,
-        ));
+fn reply_count_span(t: &Tweet) -> Option<Span<'static>> {
+    if t.reply_count == 0 {
+        return None;
     }
-    spans
+    Some(Span::styled(
+        format!("{GLYPH_REPLIES} {}", short_count(t.reply_count)),
+        Style::default().fg(Color::DarkGray),
+    ))
 }
 
-fn highlight_text(text: &str) -> Vec<Span<'_>> {
-    let mut spans = Vec::new();
+fn extra_stats_spans(t: &Tweet) -> Vec<Span<'static>> {
+    let style = Style::default().fg(Color::DarkGray);
+    let mut parts: Vec<Span<'static>> = Vec::new();
+    let push = |span: Span<'static>, parts: &mut Vec<Span<'static>>| {
+        if !parts.is_empty() {
+            parts.push(Span::raw("  "));
+        }
+        parts.push(span);
+    };
+    if t.retweet_count > 0 {
+        push(
+            Span::styled(
+                format!("{GLYPH_RETWEETS} {}", short_count(t.retweet_count)),
+                style,
+            ),
+            &mut parts,
+        );
+    }
+    if t.like_count > 0 {
+        push(
+            Span::styled(
+                format!("{GLYPH_LIKES} {}", short_count(t.like_count)),
+                style,
+            ),
+            &mut parts,
+        );
+    }
+    if let Some(v) = t.view_count
+        && v > 0
+    {
+        push(
+            Span::styled(format!("{GLYPH_VIEWS} {}", short_count(v)), style),
+            &mut parts,
+        );
+    }
+    parts
+}
+
+fn highlight_text(text: &str) -> Vec<Span<'static>> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
     let mut word_start = 0usize;
     let bytes = text.as_bytes();
     let mut i = 0;
@@ -476,7 +842,7 @@ fn highlight_text(text: &str) -> Vec<Span<'_>> {
             if word_start < i {
                 push_word(&text[word_start..i], &mut spans);
             }
-            spans.push(Span::raw(&text[i..=i]));
+            spans.push(Span::raw(text[i..=i].to_string()));
             word_start = i + 1;
         }
         i += 1;
@@ -485,20 +851,33 @@ fn highlight_text(text: &str) -> Vec<Span<'_>> {
         push_word(&text[word_start..], &mut spans);
     }
     if spans.is_empty() {
-        spans.push(Span::raw(""));
+        spans.push(Span::raw(String::new()));
     }
     spans
 }
 
-fn push_word<'a>(word: &'a str, spans: &mut Vec<Span<'a>>) {
+fn push_word(word: &str, spans: &mut Vec<Span<'static>>) {
     if word.starts_with('@') && word.len() > 1 {
-        spans.push(Span::styled(word, Style::default().fg(Color::Cyan)));
+        let handle = word[1..]
+            .trim_end_matches(|c: char| !(c.is_ascii_alphanumeric() || c == '_'));
+        let color = if handle.is_empty() {
+            Color::Cyan
+        } else {
+            handle_color(handle)
+        };
+        spans.push(Span::styled(word.to_string(), Style::default().fg(color)));
     } else if word.starts_with('#') && word.len() > 1 {
-        spans.push(Span::styled(word, Style::default().fg(Color::Magenta)));
+        spans.push(Span::styled(
+            word.to_string(),
+            Style::default().fg(Color::Magenta),
+        ));
     } else if word.starts_with("http://") || word.starts_with("https://") {
-        spans.push(Span::styled(word, Style::default().fg(Color::Blue)));
+        spans.push(Span::styled(
+            word.to_string(),
+            Style::default().fg(Color::Blue),
+        ));
     } else {
-        spans.push(Span::raw(word));
+        spans.push(Span::raw(word.to_string()));
     }
 }
 
@@ -513,29 +892,29 @@ fn relative_time(dt: DateTime<Utc>) -> String {
     let delta = Utc::now().signed_duration_since(dt);
     let secs = delta.num_seconds();
     if secs < 0 {
-        return "just now".into();
+        return "now".into();
     }
     if secs < 60 {
-        return format!("{secs}s ago");
+        return format!("{secs}s");
     }
     let mins = secs / 60;
     if mins < 60 {
-        return format!("{mins}m ago");
+        return format!("{mins}m");
     }
     let hours = mins / 60;
     if hours < 24 {
-        return format!("{hours}h ago");
+        return format!("{hours}h");
     }
     let days = hours / 24;
     if days < 30 {
-        return format!("{days}d ago");
+        return format!("{days}d");
     }
     let months = days / 30;
     if months < 12 {
-        return format!("{months}mo ago");
+        return format!("{months}mo");
     }
     let years = days / 365;
-    format!("{years}y ago")
+    format!("{years}y")
 }
 
 fn short_count(n: u64) -> String {
@@ -609,7 +988,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
 
 fn draw_help_overlay(frame: &mut Frame, area: Rect) {
     let w = area.width.min(72);
-    let h = area.height.min(24);
+    let h = area.height.saturating_sub(2).min(34);
     let x = (area.width.saturating_sub(w)) / 2;
     let y = (area.height.saturating_sub(h)) / 2;
     let popup = Rect {
@@ -656,12 +1035,17 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect) {
         Line::from("  r              reload current source"),
         Line::from("  y              yank selected tweet URL to clipboard"),
         Line::from("  Y              yank selected tweet JSON to clipboard"),
+        Line::from("  o              open selected tweet in browser"),
         Line::from("  m              open first media url externally"),
         Line::from("  t              toggle relative / absolute timestamps"),
-        Line::from("  M              toggle metrics (reply/retweet/like counts) visibility"),
+        Line::from("  M              toggle retweet / like / view counts (replies always shown)"),
         Line::from("  N              toggle display names (handle-only mode)"),
+        Line::from("  I              toggle media auto-expand (show images for all media tweets)"),
+        Line::from("  x              expand / collapse selected tweet body"),
+        Line::from("  X              toggle inline thread replies (detail pane only)"),
         Line::from("  Ctrl-d / Ctrl-u  half-page down / up"),
         Line::from("  Ctrl-c           quit immediately from any mode"),
+        Line::from("  ?                show / hide this help"),
         Line::from(""),
         Line::from(Span::styled(
             "press any key to close",

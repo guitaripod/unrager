@@ -2,6 +2,7 @@ pub mod app;
 pub mod command;
 pub mod event;
 pub mod focus;
+pub mod media;
 pub mod seen;
 pub mod session;
 pub mod source;
@@ -10,18 +11,29 @@ pub mod ui;
 use crate::error::Result;
 use app::App;
 use event::EventLoop;
+use std::time::Duration;
 
 pub async fn run() -> Result<()> {
+    let is_dark = detect_is_dark();
     let mut terminal = ratatui::init();
-    let result = run_inner(&mut terminal).await;
+    let result = run_inner(&mut terminal, is_dark).await;
+    media::cleanup_all();
     ratatui::restore();
     result
 }
 
-async fn run_inner(terminal: &mut ratatui::DefaultTerminal) -> Result<()> {
+fn detect_is_dark() -> bool {
+    match termbg::theme(Duration::from_millis(200)) {
+        Ok(termbg::Theme::Dark) => true,
+        Ok(termbg::Theme::Light) => false,
+        Err(_) => true,
+    }
+}
+
+async fn run_inner(terminal: &mut ratatui::DefaultTerminal, is_dark: bool) -> Result<()> {
     let mut events = EventLoop::new();
     let tx = events.sender();
-    let mut app = App::new(tx).await?;
+    let mut app = App::new(tx, is_dark).await?;
     events.start();
     app.load_initial();
 

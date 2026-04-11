@@ -7,15 +7,27 @@ use crate::parse::timeline::TimelinePage;
 use crate::tui::command::{self, Command};
 use crate::tui::event::{self, Event, EventTx, RequestId};
 use crate::tui::focus::{self, FocusEntry, TweetDetail};
+use crate::tui::media::MediaRegistry;
 use crate::tui::seen::SeenStore;
 use crate::tui::session::{self, SessionState};
 use crate::tui::source::{self, Source, SourceKind};
 use crate::tui::ui;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::DefaultTerminal;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+pub const DEFAULT_STATUS: &str = "? for help";
+
+#[derive(Debug, Default)]
+pub struct InlineThread {
+    pub loading: bool,
+    pub replies: Vec<Tweet>,
+    pub error: Option<String>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivePane {
@@ -30,19 +42,22 @@ pub enum InputMode {
     Help,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TimestampStyle {
     Absolute,
     Relative,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MetricsStyle {
     Visible,
     Hidden,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DisplayNameStyle {
     Visible,
     Hidden,
@@ -58,6 +73,7 @@ pub struct App {
     pub history: Vec<SourceKind>,
     pub history_cursor: usize,
     pub status: String,
+    pub status_until: Option<Instant>,
     pub error: Option<String>,
     pub last_tick: Instant,
     pub seen: SeenStore,
@@ -67,6 +83,11 @@ pub struct App {
     pub display_names: DisplayNameStyle,
     pub split_pct: u16,
     pub spinner_frame: usize,
+    pub is_dark: bool,
+    pub expanded_bodies: HashSet<String>,
+    pub inline_threads: HashMap<String, InlineThread>,
+    pub media: MediaRegistry,
+    pub media_auto_expand: bool,
     pub(super) client: Arc<GqlClient>,
     pub(super) tx: EventTx,
     pub(super) pending_thread: Option<RequestId>,
@@ -76,7 +97,7 @@ pub struct App {
 pub const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 impl App {
-    pub async fn new(tx: EventTx) -> Result<Self> {
+    pub async fn new(tx: EventTx, is_dark: bool) -> Result<Self> {
         let client = Arc::new(common::build_gql_client().await?);
 
         let cache_dir = config::cache_dir()?;
@@ -84,9 +105,23 @@ impl App {
         let seen = SeenStore::open(&cache_dir.join("seen.db"))?;
         let session_path = config_dir.join("session.json");
 
-        let (initial_kind, initial_selected) = session::load(&session_path)
-            .map(|s| (s.source_kind, s.selected))
+        let loaded = session::load(&session_path);
+        let (initial_kind, initial_selected) = loaded
+            .as_ref()
+            .map(|s| (s.source_kind.clone(), s.selected))
             .unwrap_or_else(|| (SourceKind::Home { following: false }, 0));
+        let loaded_metrics = loaded
+            .as_ref()
+            .and_then(|s| s.metrics)
+            .unwrap_or(MetricsStyle::Visible);
+        let loaded_display_names = loaded
+            .as_ref()
+            .and_then(|s| s.display_names)
+            .unwrap_or(DisplayNameStyle::Visible);
+        let loaded_timestamps = loaded
+            .as_ref()
+            .and_then(|s| s.timestamps)
+            .unwrap_or(TimestampStyle::Relative);
 
         let mut source = Source::new(initial_kind.clone());
         source.set_selected(initial_selected);
@@ -100,21 +135,45 @@ impl App {
             active: ActivePane::Source,
             history: vec![initial_kind],
             history_cursor: 0,
-            status: "press ? for help, : for command, q to quit".into(),
+            status: DEFAULT_STATUS.into(),
+            status_until: None,
             error: None,
             last_tick: Instant::now(),
             seen,
             session_path,
-            timestamps: TimestampStyle::Relative,
-            metrics: MetricsStyle::Visible,
-            display_names: DisplayNameStyle::Visible,
+            timestamps: loaded_timestamps,
+            metrics: loaded_metrics,
+            display_names: loaded_display_names,
             split_pct: 50,
             spinner_frame: 0,
+            is_dark,
+            expanded_bodies: HashSet::new(),
+            inline_threads: HashMap::new(),
+            media: MediaRegistry::new(),
+            media_auto_expand: false,
             client,
             tx,
             pending_thread: None,
             pending_open: None,
         })
+    }
+
+    pub fn set_status(&mut self, msg: impl Into<String>) {
+        self.status = msg.into();
+        self.status_until = Some(Instant::now() + Duration::from_secs(3));
+    }
+
+    pub fn clear_status(&mut self) {
+        self.status = DEFAULT_STATUS.into();
+        self.status_until = None;
+    }
+
+    fn tick_status(&mut self) {
+        if let Some(until) = self.status_until
+            && Instant::now() >= until
+        {
+            self.clear_status();
+        }
     }
 
     pub fn save_session(&self) {
@@ -124,6 +183,9 @@ impl App {
         let state = SessionState {
             source_kind: kind,
             selected: self.source.selected(),
+            metrics: Some(self.metrics),
+            display_names: Some(self.display_names),
+            timestamps: Some(self.timestamps),
         };
         if let Err(e) = session::save(&self.session_path, &state) {
             tracing::warn!("failed to save session: {e}");
@@ -146,7 +208,7 @@ impl App {
                 return;
             }
         }
-        self.status = "no more unread tweets in this source".into();
+        self.set_status("no more unread tweets in this source");
     }
 
     fn mark_all_seen_in_source(&mut self) {
@@ -158,7 +220,7 @@ impl App {
             .collect();
         let n = ids.len();
         self.seen.mark_all(ids);
-        self.status = format!("marked {n} tweets as read");
+        self.set_status(format!("marked {n} tweets as read"));
     }
 
     pub fn load_initial(&mut self) {
@@ -194,6 +256,7 @@ impl App {
                 if self.is_any_loading() {
                     self.spinner_frame = self.spinner_frame.wrapping_add(1);
                 }
+                self.tick_status();
             }
             Event::Key(key) => self.handle_key(key),
             Event::Resize(_, _) => {
@@ -211,6 +274,19 @@ impl App {
             } => self.handle_thread_loaded(request_id, focal_id, result),
             Event::OpenTweetResolved { request_id, result } => {
                 self.handle_open_tweet_resolved(request_id, result);
+            }
+            Event::InlineThreadLoaded { focal_id, result } => {
+                self.handle_inline_thread_loaded(focal_id, result);
+            }
+            Event::MediaLoaded {
+                url,
+                id,
+                id_expanded,
+            } => {
+                self.media.mark_ready(&url, id, id_expanded);
+            }
+            Event::MediaFailed { url, err } => {
+                self.media.mark_failed(&url, err);
             }
             Event::Quit => self.running = false,
             Event::FocusGained | Event::FocusLost => {}
@@ -261,23 +337,41 @@ impl App {
                     MetricsStyle::Visible => MetricsStyle::Hidden,
                     MetricsStyle::Hidden => MetricsStyle::Visible,
                 };
-                self.status = match self.metrics {
-                    MetricsStyle::Visible => "metrics on".into(),
-                    MetricsStyle::Hidden => "metrics off".into(),
+                let msg = match self.metrics {
+                    MetricsStyle::Visible => "metrics on",
+                    MetricsStyle::Hidden => "metrics off",
                 };
+                self.set_status(msg);
+                self.save_session();
             }
             (KeyCode::Char('N'), _) => {
                 self.display_names = match self.display_names {
                     DisplayNameStyle::Visible => DisplayNameStyle::Hidden,
                     DisplayNameStyle::Hidden => DisplayNameStyle::Visible,
                 };
-                self.status = match self.display_names {
-                    DisplayNameStyle::Visible => "display names on".into(),
-                    DisplayNameStyle::Hidden => "display names off (handles only)".into(),
+                let msg = match self.display_names {
+                    DisplayNameStyle::Visible => "display names on",
+                    DisplayNameStyle::Hidden => "display names off (handles only)",
                 };
+                self.set_status(msg);
+                self.save_session();
+            }
+            (KeyCode::Char('x'), KeyModifiers::NONE) => self.toggle_expand_selected(),
+            (KeyCode::Char('I'), _) => {
+                self.media_auto_expand = !self.media_auto_expand;
+                let msg = if self.media_auto_expand {
+                    "media auto-expand on"
+                } else {
+                    "media auto-expand off"
+                };
+                self.set_status(msg);
+            }
+            (KeyCode::Char('X'), _) if self.active == ActivePane::Detail => {
+                self.toggle_inline_thread()
             }
             (KeyCode::Char('y'), KeyModifiers::NONE) => self.yank_url(),
             (KeyCode::Char('Y'), _) => self.yank_json(),
+            (KeyCode::Char('o'), KeyModifiers::NONE) => self.open_tweet_in_browser(),
             (KeyCode::Char('m'), KeyModifiers::NONE) => self.open_media_external(),
             (KeyCode::Char('q'), KeyModifiers::NONE) => self.pop_or_quit(),
             (KeyCode::Esc, _) => self.pop_or_quit(),
@@ -288,6 +382,80 @@ impl App {
                 ActivePane::Detail => self.handle_key_detail(key),
             },
         }
+    }
+
+    fn toggle_expand_selected(&mut self) {
+        let Some(id) = self.selected_tweet().map(|t| t.rest_id.clone()) else {
+            return;
+        };
+        if !self.expanded_bodies.remove(&id) {
+            self.expanded_bodies.insert(id);
+            self.set_status("expanded");
+        } else {
+            self.set_status("collapsed");
+        }
+    }
+
+    fn toggle_inline_thread(&mut self) {
+        let Some(id) = self.selected_tweet().map(|t| t.rest_id.clone()) else {
+            return;
+        };
+        if self.inline_threads.remove(&id).is_some() {
+            self.set_status("thread collapsed");
+            return;
+        }
+        self.inline_threads.insert(
+            id.clone(),
+            InlineThread {
+                loading: true,
+                replies: Vec::new(),
+                error: None,
+            },
+        );
+        self.set_status("loading thread…");
+        let client = self.client.clone();
+        let tx = self.tx.clone();
+        let focal_id = id;
+        tokio::spawn(async move {
+            let result = focus::fetch_thread(&client, &focal_id).await;
+            let _ = tx.send(Event::InlineThreadLoaded { focal_id, result });
+        });
+    }
+
+    fn handle_inline_thread_loaded(
+        &mut self,
+        focal_id: String,
+        result: Result<TimelinePage>,
+    ) {
+        let Some(entry) = self.inline_threads.get_mut(&focal_id) else {
+            return;
+        };
+        entry.loading = false;
+        let replies_snapshot: Vec<Tweet> = match result {
+            Ok(page) => {
+                entry.replies = page
+                    .tweets
+                    .into_iter()
+                    .filter(|t| {
+                        t.rest_id != focal_id
+                            && t.in_reply_to_tweet_id.as_deref() == Some(focal_id.as_str())
+                    })
+                    .collect();
+                entry.error = None;
+                let n = entry.replies.len();
+                self.set_status(format!("thread loaded ({n} replies)"));
+                self.inline_threads
+                    .get(&focal_id)
+                    .map(|e| e.replies.clone())
+                    .unwrap_or_default()
+            }
+            Err(e) => {
+                entry.error = Some(e.to_string());
+                self.clear_status();
+                Vec::new()
+            }
+        };
+        self.queue_thread_media(&replies_snapshot);
     }
 
     fn selected_tweet(&self) -> Option<&Tweet> {
@@ -327,7 +495,7 @@ impl App {
 
     fn copy_to_clipboard(&mut self, text: String, note: &str) {
         match arboard::Clipboard::new().and_then(|mut c| c.set_text(text)) {
-            Ok(()) => self.status = note.to_string(),
+            Ok(()) => self.set_status(note.to_string()),
             Err(e) => self.error = Some(format!("clipboard failed: {e}")),
         }
     }
@@ -337,7 +505,7 @@ impl App {
             matches!(self.source.kind, Some(SourceKind::Home { following: true }));
         let current_is_home = matches!(self.source.kind, Some(SourceKind::Home { .. }));
         if !current_is_home {
-            self.status = "F only toggles on home source; use :user etc for others".into();
+            self.set_status("F only toggles on home source; use :user etc for others");
             return;
         }
         self.switch_source(SourceKind::Home {
@@ -345,12 +513,29 @@ impl App {
         });
     }
 
+    fn open_tweet_in_browser(&mut self) {
+        let Some(tweet) = self.selected_tweet() else {
+            return;
+        };
+        let url = tweet.url.clone();
+        match std::process::Command::new("xdg-open")
+            .arg(&url)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(_) => self.set_status(format!("opened {url}")),
+            Err(e) => self.error = Some(format!("xdg-open failed: {e}")),
+        }
+    }
+
     fn open_media_external(&mut self) {
         let Some(tweet) = self.selected_tweet() else {
             return;
         };
         let Some(media) = tweet.media.first() else {
-            self.status = "no media on selected tweet".into();
+            self.set_status("no media on selected tweet");
             return;
         };
         let url = media.url.clone();
@@ -361,7 +546,7 @@ impl App {
             .stderr(std::process::Stdio::null())
             .spawn();
         match result {
-            Ok(_) => self.status = format!("opened {url}"),
+            Ok(_) => self.set_status(format!("opened {url}")),
             Err(e) => self.error = Some(format!("xdg-open failed: {e}")),
         }
     }
@@ -420,6 +605,26 @@ impl App {
             (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => {
                 if let Some(FocusEntry::Tweet(d)) = self.focus_stack.last_mut() {
                     d.select_prev();
+                }
+            }
+            (KeyCode::Char('g'), KeyModifiers::NONE) => {
+                if let Some(FocusEntry::Tweet(d)) = self.focus_stack.last_mut() {
+                    d.jump_top();
+                }
+            }
+            (KeyCode::Char('G'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                if let Some(FocusEntry::Tweet(d)) = self.focus_stack.last_mut() {
+                    d.jump_bottom();
+                }
+            }
+            (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+                if let Some(FocusEntry::Tweet(d)) = self.focus_stack.last_mut() {
+                    d.advance(10);
+                }
+            }
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+                if let Some(FocusEntry::Tweet(d)) = self.focus_stack.last_mut() {
+                    d.advance(-10);
                 }
             }
             (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, _) => {
@@ -485,6 +690,8 @@ impl App {
         self.error = None;
         self.focus_stack.clear();
         self.active = ActivePane::Source;
+        self.expanded_bodies.clear();
+        self.inline_threads.clear();
         self.fetch_source(false);
         self.save_session();
     }
@@ -522,6 +729,7 @@ impl App {
 
     fn push_tweet(&mut self, tweet: Tweet) {
         let focal_id = tweet.rest_id.clone();
+        self.media.ensure_tweet_media(&tweet, &self.tx);
         let detail = TweetDetail::new(tweet);
         self.focus_stack.push(FocusEntry::Tweet(detail));
         self.active = ActivePane::Detail;
@@ -581,13 +789,18 @@ impl App {
         if detail.tweet.rest_id != focal_id {
             return;
         }
-        match result {
-            Ok(page) => detail.apply_page(page),
+        let replies_snapshot: Vec<Tweet> = match result {
+            Ok(page) => {
+                detail.apply_page(page);
+                detail.replies.clone()
+            }
             Err(e) => {
                 detail.loading = false;
                 detail.error = Some(e.to_string());
+                Vec::new()
             }
-        }
+        };
+        self.queue_thread_media(&replies_snapshot);
     }
 
     fn reload_source(&mut self) {
@@ -650,10 +863,32 @@ impl App {
                     self.source.reset_with(page);
                 }
                 self.error = None;
+                self.clear_status();
+                self.queue_source_media();
             }
             Err(e) => {
                 self.error = Some(e.to_string());
+                self.clear_status();
             }
+        }
+    }
+
+    fn queue_source_media(&mut self) {
+        if !self.media.supported {
+            return;
+        }
+        let tweets: Vec<Tweet> = self.source.tweets.clone();
+        for t in &tweets {
+            self.media.ensure_tweet_media(t, &self.tx);
+        }
+    }
+
+    fn queue_thread_media(&mut self, replies: &[Tweet]) {
+        if !self.media.supported {
+            return;
+        }
+        for t in replies {
+            self.media.ensure_tweet_media(t, &self.tx);
         }
     }
 }

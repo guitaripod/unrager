@@ -1,7 +1,9 @@
-use crate::api::{ApiClient, PostRequest};
+use crate::api::ApiClient;
+use crate::cli::tweet::{emit_dry_run, resolve_media};
 use crate::error::{Error, Result};
 use crate::util::parse_tweet_ref;
 use clap::Args as ClapArgs;
+use std::path::PathBuf;
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
@@ -13,34 +15,36 @@ pub struct Args {
 
     #[arg(
         long,
+        value_name = "PATH",
+        help = "Attach a media file (repeat up to 4 times)"
+    )]
+    pub media: Vec<PathBuf>,
+
+    #[arg(
+        long,
         help = "Print the exact request body that would be sent, without actually posting"
     )]
     pub dry_run: bool,
 }
 
 pub async fn run(args: Args) -> Result<()> {
-    if args.text.trim().is_empty() {
-        return Err(Error::Config("reply text must not be empty".into()));
+    if args.text.trim().is_empty() && args.media.is_empty() {
+        return Err(Error::Config(
+            "reply text must not be empty (or attach --media)".into(),
+        ));
     }
     let target_id = parse_tweet_ref(&args.target)?;
-
-    let request = PostRequest {
-        text: args.text,
-        in_reply_to_tweet_id: Some(target_id.clone()),
-    };
+    let media_files = resolve_media(&args.media)?;
 
     if args.dry_run {
-        eprintln!("DRY RUN — no network writes. Would POST https://api.x.com/2/tweets with:");
-        println!("{}", serde_json::to_string_pretty(&request.to_json())?);
-        eprintln!();
-        eprintln!("Reply target: {target_id}");
-        eprintln!("Cost if sent: $0.01 (pay-per-use).");
-        eprintln!("Remove --dry-run to actually post.");
+        emit_dry_run(&args.text, Some(&target_id), &media_files)?;
         return Ok(());
     }
 
     let client = ApiClient::new().await?;
-    let posted = client.post(&request).await?;
+    let posted = client
+        .post_with_media(&args.text, Some(&target_id), &media_files)
+        .await?;
     println!("posted: {}", posted.url());
     Ok(())
 }

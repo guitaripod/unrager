@@ -1,3 +1,4 @@
+use crate::api::media::MediaFile;
 use crate::auth::oauth;
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -10,6 +11,7 @@ const TWEETS_ENDPOINT: &str = "https://api.x.com/2/tweets";
 pub struct PostRequest {
     pub text: String,
     pub in_reply_to_tweet_id: Option<String>,
+    pub media_ids: Vec<String>,
 }
 
 impl PostRequest {
@@ -17,6 +19,9 @@ impl PostRequest {
         let mut body = json!({ "text": self.text });
         if let Some(ref reply_to) = self.in_reply_to_tweet_id {
             body["reply"] = json!({ "in_reply_to_tweet_id": reply_to });
+        }
+        if !self.media_ids.is_empty() {
+            body["media"] = json!({ "media_ids": self.media_ids });
         }
         body
     }
@@ -44,7 +49,7 @@ impl ApiClient {
         let tokens = oauth::load_or_authorize().await?;
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(120))
             .build()?;
         Ok(Self {
             http,
@@ -52,7 +57,28 @@ impl ApiClient {
         })
     }
 
-    pub async fn post(&self, request: &PostRequest) -> Result<PostedTweet> {
+    pub async fn post_with_media(
+        &self,
+        text: &str,
+        in_reply_to_tweet_id: Option<&str>,
+        media_files: &[MediaFile],
+    ) -> Result<PostedTweet> {
+        if !media_files.is_empty() {
+            return Err(Error::Config(
+                "media upload is not wired up yet in this build; remove --media \
+                 or use --dry-run to inspect the plan"
+                    .into(),
+            ));
+        }
+        let request = PostRequest {
+            text: text.to_string(),
+            in_reply_to_tweet_id: in_reply_to_tweet_id.map(str::to_string),
+            media_ids: Vec::new(),
+        };
+        self.post_request(&request).await
+    }
+
+    async fn post_request(&self, request: &PostRequest) -> Result<PostedTweet> {
         let body = request.to_json();
         let res = self
             .http
@@ -68,7 +94,9 @@ impl ApiClient {
             return Err(classify_post_error(status.as_u16(), &text));
         }
 
-        let parsed: Value = serde_json::from_str(&text)?;
+        let parsed: Value = serde_json::from_str(&text).map_err(|e| {
+            Error::GraphqlShape(format!("post response was not valid json ({e}): {text}"))
+        })?;
         let data = parsed
             .get("data")
             .ok_or_else(|| Error::GraphqlShape(format!("post response missing data: {text}")))?;
@@ -86,7 +114,8 @@ fn classify_post_error(status: u16, body: &str) -> Error {
     }
     if status == 401 {
         return Error::Config(format!(
-            "401: access token rejected. Delete ~/.config/unrager/tokens.json and re-authorize. Raw: {body}"
+            "401: access token rejected. \
+             Delete ~/.config/unrager/tokens.json and re-authorize. Raw: {body}"
         ));
     }
     Error::GraphqlStatus {

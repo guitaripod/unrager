@@ -1,36 +1,48 @@
 use crate::auth::XSession;
 use crate::error::{Error, Result};
-use crate::gql::query_ids::{Operation, QueryIdStore};
+use crate::gql::query_ids::{Operation, QueryId, QueryIdStore};
+use crate::gql::scraper;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
+use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::Duration;
-use tokio::sync::Mutex;
+use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::{Instant, sleep_until};
 
 pub const WEB_BEARER: &str = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA";
 
 const GQL_BASE: &str = "https://x.com/i/api/graphql";
 const MIN_INTERVAL: Duration = Duration::from_millis(400);
+const USER_AGENT: &str =
+    "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0";
 
 pub struct GqlClient {
     http: reqwest::Client,
     session: XSession,
-    store: QueryIdStore,
-    next_allowed: Mutex<Instant>,
+    store: Mutex<QueryIdStore>,
+    cache_path: PathBuf,
+    next_allowed: AsyncMutex<Instant>,
+}
+
+enum Method {
+    Get,
+    Post,
 }
 
 impl GqlClient {
-    pub fn new(session: XSession, store: QueryIdStore) -> Result<Self> {
+    pub fn new(session: XSession, store: QueryIdStore, cache_path: PathBuf) -> Result<Self> {
         let http = reqwest::Client::builder()
-            .user_agent("Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0")
+            .user_agent(USER_AGENT)
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))
             .build()?;
         Ok(Self {
             http,
             session,
-            store,
-            next_allowed: Mutex::new(Instant::now()),
+            store: Mutex::new(store),
+            cache_path,
+            next_allowed: AsyncMutex::new(Instant::now()),
         })
     }
 
@@ -38,81 +50,99 @@ impl GqlClient {
         &self.session
     }
 
-    pub async fn get(
+    pub async fn get(&self, op: Operation, variables: &Value, features: &Value) -> Result<Value> {
+        self.call(Method::Get, op, variables, features).await
+    }
+
+    pub async fn post(&self, op: Operation, variables: &Value, features: &Value) -> Result<Value> {
+        self.call(Method::Post, op, variables, features).await
+    }
+
+    async fn call(
         &self,
+        method: Method,
+        op: Operation,
+        variables: &Value,
+        features: &Value,
+    ) -> Result<Value> {
+        match self.call_once(&method, op, variables, features).await {
+            Ok(v) => Ok(v),
+            Err(Error::GraphqlStatus { status: 404, .. }) | Err(Error::GraphqlStatus { status: 400, .. }) => {
+                tracing::warn!("{} returned stale query id, refreshing", op.name());
+                self.refresh_query_ids().await?;
+                self.call_once(&method, op, variables, features).await
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn call_once(
+        &self,
+        method: &Method,
         op: Operation,
         variables: &Value,
         features: &Value,
     ) -> Result<Value> {
         let qid = self
-            .store
-            .get(op)
+            .lookup_qid(op)
             .ok_or_else(|| Error::GraphqlShape(format!("no query id for operation {}", op.name())))?;
         let url = format!("{GQL_BASE}/{}/{}", qid.id, op.name());
 
-        let vars_json = serde_json::to_string(variables)?;
-        let features_json = serde_json::to_string(features)?;
-        let query = [
-            ("variables", vars_json.as_str()),
-            ("features", features_json.as_str()),
-        ];
-
         self.throttle().await;
 
-        let res = self
-            .http
-            .get(&url)
-            .headers(self.headers()?)
-            .query(&query)
-            .send()
-            .await?;
+        let req = match method {
+            Method::Get => {
+                let vars_json = serde_json::to_string(variables)?;
+                let features_json = serde_json::to_string(features)?;
+                let query = [
+                    ("variables", vars_json.as_str()),
+                    ("features", features_json.as_str()),
+                ];
+                self.http.get(&url).headers(self.headers()?).query(&query)
+            }
+            Method::Post => {
+                let body = serde_json::json!({
+                    "variables": variables,
+                    "features": features,
+                    "queryId": qid.id,
+                });
+                self.http.post(&url).headers(self.headers()?).json(&body)
+            }
+        };
 
+        let res = req.send().await?;
         self.parse(res).await
     }
 
-    pub async fn post(
-        &self,
-        op: Operation,
-        variables: &Value,
-        features: &Value,
-    ) -> Result<Value> {
-        let qid = self
-            .store
-            .get(op)
-            .ok_or_else(|| Error::GraphqlShape(format!("no query id for operation {}", op.name())))?;
-        let url = format!("{GQL_BASE}/{}/{}", qid.id, op.name());
+    fn lookup_qid(&self, op: Operation) -> Option<QueryId> {
+        self.store.lock().ok()?.get(op).cloned()
+    }
 
-        let body = serde_json::json!({
-            "variables": variables,
-            "features": features,
-            "queryId": qid.id,
-        });
-
-        self.throttle().await;
-
-        let res = self
-            .http
-            .post(&url)
-            .headers(self.headers()?)
-            .json(&body)
-            .send()
-            .await?;
-
-        self.parse(res).await
+    async fn refresh_query_ids(&self) -> Result<()> {
+        let fresh = scraper::scrape(&self.http).await?;
+        let snapshot = {
+            let mut guard = self
+                .store
+                .lock()
+                .map_err(|_| Error::Config("query id store poisoned".into()))?;
+            guard.merge_iter(fresh);
+            guard.clone()
+        };
+        if let Err(e) = snapshot.save_cached(&self.cache_path) {
+            tracing::warn!("failed to persist query id cache: {e}");
+        }
+        Ok(())
     }
 
     async fn throttle(&self) {
-        let mut guard = self.next_allowed.lock().await;
-        let now = Instant::now();
-        if *guard > now {
-            let wait_until = *guard;
-            drop(guard);
-            sleep_until(wait_until).await;
+        let wait_until = {
             let mut guard = self.next_allowed.lock().await;
-            *guard = Instant::now() + MIN_INTERVAL;
-        } else {
-            *guard = now + MIN_INTERVAL;
-        }
+            let now = Instant::now();
+            let target = if *guard > now { *guard } else { now };
+            *guard = target + MIN_INTERVAL;
+            target
+        };
+        sleep_until(wait_until).await;
     }
 
     fn headers(&self) -> Result<HeaderMap> {
@@ -151,10 +181,7 @@ impl GqlClient {
             reqwest::header::CONTENT_TYPE,
             HeaderValue::from_static("application/json"),
         );
-        h.insert(
-            reqwest::header::ACCEPT,
-            HeaderValue::from_static("*/*"),
-        );
+        h.insert(reqwest::header::ACCEPT, HeaderValue::from_static("*/*"));
         h.insert(
             HeaderName::from_static("referer"),
             HeaderValue::from_static("https://x.com/"),
@@ -176,13 +203,13 @@ impl GqlClient {
             });
         }
         let value: Value = serde_json::from_str(&body)?;
-        if let Some(errors) = value.get("errors").and_then(Value::as_array) {
-            if !errors.is_empty() {
-                return Err(Error::GraphqlShape(format!(
-                    "graphql errors: {}",
-                    truncate(&errors[0].to_string(), 400)
-                )));
-            }
+        if let Some(errors) = value.get("errors").and_then(Value::as_array)
+            && !errors.is_empty()
+        {
+            return Err(Error::GraphqlShape(format!(
+                "graphql errors: {}",
+                truncate(&errors[0].to_string(), 400)
+            )));
         }
         Ok(value)
     }

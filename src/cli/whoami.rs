@@ -1,4 +1,5 @@
 use crate::auth::chromium;
+use crate::config;
 use crate::error::Result;
 use crate::gql::endpoints;
 use crate::gql::query_ids::Operation;
@@ -14,8 +15,10 @@ pub struct Args {
 
 pub async fn run(args: Args) -> Result<()> {
     let session = chromium::load_session().await?;
-    let store = QueryIdStore::with_fallbacks();
-    let client = GqlClient::new(session, store)?;
+
+    let cache_path = config::cache_dir()?.join("query-ids.json");
+    let store = QueryIdStore::with_fallbacks_and_cache(&cache_path);
+    let client = GqlClient::new(session, store, cache_path)?;
 
     let response = client
         .get(

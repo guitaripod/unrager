@@ -1,5 +1,7 @@
+use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -15,7 +17,6 @@ pub enum Operation {
     Bookmarks,
     Notifications,
 }
-
 
 impl Operation {
     pub const fn name(self) -> &'static str {
@@ -60,12 +61,57 @@ impl QueryIdStore {
         Self { entries }
     }
 
+    pub fn with_fallbacks_and_cache(cache_path: &Path) -> Self {
+        let mut store = Self::with_fallbacks();
+        match Self::load_cached(cache_path) {
+            Ok(Some(cached)) => {
+                tracing::debug!(
+                    "loaded {} query ids from cache at {}",
+                    cached.entries.len(),
+                    cache_path.display()
+                );
+                store.merge_iter(cached.entries.into_values());
+            }
+            Ok(None) => {
+                tracing::debug!("no query id cache yet; using fallback table");
+            }
+            Err(e) => {
+                tracing::warn!("failed to load query id cache, using fallback only: {e}");
+            }
+        }
+        store
+    }
+
     pub fn get(&self, op: Operation) -> Option<&QueryId> {
         self.entries.get(op.name())
     }
 
-    pub fn insert(&mut self, qid: QueryId) {
-        self.entries.insert(qid.operation.clone(), qid);
+    pub fn merge_iter(&mut self, fresh: impl IntoIterator<Item = QueryId>) {
+        for qid in fresh {
+            self.entries.insert(qid.operation.clone(), qid);
+        }
+    }
+
+    pub fn load_cached(path: &Path) -> Result<Option<Self>> {
+        match std::fs::read(path) {
+            Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn save_cached(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let json = serde_json::to_vec_pretty(self)?;
+        std::fs::write(path, json)?;
+        tracing::debug!(
+            "wrote {} query ids to cache at {}",
+            self.entries.len(),
+            path.display()
+        );
+        Ok(())
     }
 }
 

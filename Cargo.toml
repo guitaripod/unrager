@@ -33,6 +33,7 @@ toml = "0.8"
 url = "2"
 oauth2 = "5"
 tempfile = "3"
+regex = "1"
 
 [profile.release]
 lto = "thin"

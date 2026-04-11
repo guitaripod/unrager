@@ -31,9 +31,12 @@ chrono = { version = "0.4", default-features = false, features = ["std", "serde"
 directories = "5"
 toml = "0.8"
 url = "2"
-oauth2 = "5"
 tempfile = "3"
 regex = "1"
+sha2 = "0.10"
+base64 = "0.22"
+rand = "0.8"
+urlencoding = "2"
 
 [profile.release]
 lto = "thin"

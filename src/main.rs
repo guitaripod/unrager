@@ -31,6 +31,7 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::Bookmarks(args) => cli::bookmarks::run(args).await,
         Command::Tweet(args) => cli::tweet::run(args).await,
         Command::Reply(args) => cli::reply::run(args).await,
+        Command::Auth(args) => cli::auth::run(args).await,
     }
 }
 

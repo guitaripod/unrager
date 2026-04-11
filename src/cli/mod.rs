@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod bookmarks;
 pub mod common;
 pub mod home;
@@ -58,4 +59,7 @@ pub enum Command {
 
     #[command(about = "Reply to a tweet (official API, costs ~$0.01)")]
     Reply(reply::Args),
+
+    #[command(about = "Manage OAuth 2.0 tokens for the write path")]
+    Auth(auth::Args),
 }

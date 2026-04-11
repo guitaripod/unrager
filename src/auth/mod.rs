@@ -1,4 +1,5 @@
 pub mod chromium;
+pub mod oauth;
 
 use serde::{Deserialize, Serialize};
 

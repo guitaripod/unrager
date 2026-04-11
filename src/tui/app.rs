@@ -71,7 +71,7 @@ impl App {
             .unwrap_or_else(|| (SourceKind::Home { following: false }, 0));
 
         let mut source = Source::new(initial_kind.clone());
-        source.selected = initial_selected;
+        source.set_selected(initial_selected);
 
         Ok(Self {
             running: true,
@@ -101,7 +101,7 @@ impl App {
         };
         let state = SessionState {
             source_kind: kind,
-            selected: self.source.selected,
+            selected: self.source.selected(),
         };
         if let Err(e) = session::save(&self.session_path, &state) {
             tracing::warn!("failed to save session: {e}");
@@ -109,16 +109,16 @@ impl App {
     }
 
     fn mark_current_seen(&mut self) {
-        if let Some(t) = self.source.tweets.get(self.source.selected) {
+        if let Some(t) = self.source.tweets.get(self.source.selected()) {
             self.seen.mark_seen(&t.rest_id);
         }
     }
 
     fn jump_next_unread(&mut self) {
-        let start = self.source.selected + 1;
+        let start = self.source.selected() + 1;
         for i in start..self.source.tweets.len() {
             if !self.seen.is_seen(&self.source.tweets[i].rest_id) {
-                self.source.selected = i;
+                self.source.set_selected(i);
                 self.mark_current_seen();
                 self.maybe_load_more();
                 return;
@@ -232,13 +232,16 @@ impl App {
 
     fn selected_tweet(&self) -> Option<&Tweet> {
         match self.active {
-            ActivePane::Source => self.source.tweets.get(self.source.selected),
+            ActivePane::Source => self.source.tweets.get(self.source.selected()),
             ActivePane::Detail => {
                 let detail = self.top_detail()?;
                 if detail.replies.is_empty() {
                     Some(&detail.tweet)
                 } else {
-                    detail.replies.get(detail.selected).or(Some(&detail.tweet))
+                    detail
+                        .replies
+                        .get(detail.selected())
+                        .or(Some(&detail.tweet))
                 }
             }
         }
@@ -329,10 +332,19 @@ impl App {
                 self.mark_all_seen_in_source();
             }
             (KeyCode::Enter, _) | (KeyCode::Char('l'), KeyModifiers::NONE) => {
-                if let Some(tweet) = self.source.tweets.get(self.source.selected).cloned() {
+                if let Some(tweet) = self.source.tweets.get(self.source.selected()).cloned() {
                     self.mark_current_seen();
                     self.push_tweet(tweet);
                 }
+            }
+            (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+                self.source.advance(10);
+                self.mark_current_seen();
+                self.maybe_load_more();
+            }
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+                self.source.advance(-10);
+                self.mark_current_seen();
             }
             _ => {}
         }

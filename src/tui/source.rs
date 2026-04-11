@@ -4,6 +4,7 @@ use crate::gql::endpoints;
 use crate::gql::query_ids::Operation;
 use crate::model::Tweet;
 use crate::parse::timeline::{self, TimelinePage};
+use ratatui::widgets::ListState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -75,14 +76,16 @@ pub struct Source {
     pub cursor: Option<String>,
     pub loading: bool,
     pub exhausted: bool,
-    pub selected: usize,
-    pub scroll_offset: usize,
+    pub list_state: ListState,
 }
 
 impl Source {
     pub fn new(kind: SourceKind) -> Self {
+        let mut list_state = ListState::default();
+        list_state.select(Some(0));
         Self {
             kind: Some(kind),
+            list_state,
             ..Self::default()
         }
     }
@@ -94,12 +97,25 @@ impl Source {
             .unwrap_or_else(|| "(empty)".to_string())
     }
 
+    pub fn selected(&self) -> usize {
+        self.list_state.selected().unwrap_or(0)
+    }
+
+    pub fn set_selected(&mut self, index: usize) {
+        self.list_state.select(Some(index));
+    }
+
     pub fn reset_with(&mut self, page: TimelinePage) {
         self.tweets = page.tweets;
         self.cursor = page.next_cursor;
         self.exhausted = self.cursor.is_none();
-        self.selected = 0;
-        self.scroll_offset = 0;
+        let last = self.tweets.len().saturating_sub(1);
+        let current = self.list_state.selected().unwrap_or(0).min(last);
+        self.list_state = ListState::default();
+        self.list_state.select(Some(current));
+        if !self.tweets.is_empty() {
+            *self.list_state.offset_mut() = 0;
+        }
     }
 
     pub fn append(&mut self, page: TimelinePage) {
@@ -115,25 +131,36 @@ impl Source {
         if self.tweets.is_empty() {
             return;
         }
-        if self.selected + 1 < self.tweets.len() {
-            self.selected += 1;
+        let current = self.selected();
+        if current + 1 < self.tweets.len() {
+            self.set_selected(current + 1);
         }
     }
 
     pub fn select_prev(&mut self) {
-        if self.selected > 0 {
-            self.selected -= 1;
+        let current = self.selected();
+        if current > 0 {
+            self.set_selected(current - 1);
         }
     }
 
+    pub fn advance(&mut self, delta: isize) {
+        if self.tweets.is_empty() {
+            return;
+        }
+        let current = self.selected() as isize;
+        let next = (current + delta).clamp(0, self.tweets.len() as isize - 1) as usize;
+        self.set_selected(next);
+    }
+
     pub fn jump_top(&mut self) {
-        self.selected = 0;
-        self.scroll_offset = 0;
+        self.set_selected(0);
+        *self.list_state.offset_mut() = 0;
     }
 
     pub fn jump_bottom(&mut self) {
         if !self.tweets.is_empty() {
-            self.selected = self.tweets.len() - 1;
+            self.set_selected(self.tweets.len() - 1);
         }
     }
 
@@ -141,7 +168,7 @@ impl Source {
         if self.tweets.is_empty() {
             return true;
         }
-        self.selected + 5 >= self.tweets.len()
+        self.selected() + 5 >= self.tweets.len()
     }
 }
 

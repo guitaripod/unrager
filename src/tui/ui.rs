@@ -1,14 +1,19 @@
 use crate::model::Tweet;
 use crate::tui::app::{ActivePane, App, InputMode, TimestampStyle};
 use crate::tui::focus::{FocusEntry, TweetDetail};
+use crate::tui::seen::SeenStore;
+use crate::tui::source::Source;
 use chrono::{DateTime, Utc};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
+    ScrollbarState, Wrap,
+};
 
-pub fn draw(frame: &mut Frame, app: &App) {
+pub fn draw(frame: &mut Frame, app: &mut App) {
     let [top, main, bottom] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(0),
@@ -18,14 +23,41 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
     draw_header(frame, top, app);
 
+    let source_active = app.active == ActivePane::Source;
+    let detail_active = app.active == ActivePane::Detail;
+    let timestamps = app.timestamps;
+
     if app.is_split() {
         let [left, right] =
             Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
                 .areas(main);
-        draw_source_list(frame, left, app, app.active == ActivePane::Source);
-        draw_detail(frame, right, app, app.active == ActivePane::Detail);
+        draw_source_list(
+            frame,
+            left,
+            &mut app.source,
+            &app.seen,
+            app.error.as_deref(),
+            timestamps,
+            source_active,
+        );
+        draw_detail(
+            frame,
+            right,
+            app.focus_stack.last_mut(),
+            &app.seen,
+            timestamps,
+            detail_active,
+        );
     } else {
-        draw_source_list(frame, main, app, true);
+        draw_source_list(
+            frame,
+            main,
+            &mut app.source,
+            &app.seen,
+            app.error.as_deref(),
+            timestamps,
+            true,
+        );
     }
 
     draw_footer(frame, bottom, app);
@@ -97,29 +129,34 @@ fn block_with_focus(title: &str, active: bool) -> Block<'_> {
         .title(format!(" {title} "))
 }
 
-fn draw_source_list(frame: &mut Frame, area: Rect, app: &App, active: bool) {
-    let title = app.source.title();
+fn draw_source_list(
+    frame: &mut Frame,
+    area: Rect,
+    source: &mut Source,
+    seen: &SeenStore,
+    error: Option<&str>,
+    timestamps: TimestampStyle,
+    active: bool,
+) {
+    let title = source.title();
 
-    if app.source.tweets.is_empty() {
-        let msg = if app.source.loading {
+    if source.tweets.is_empty() {
+        let msg = if source.loading {
             "loading timeline…"
-        } else if let Some(err) = &app.error {
-            err.as_str()
         } else {
-            "no tweets"
+            error.unwrap_or("no tweets")
         };
         let body = Paragraph::new(msg).block(block_with_focus(&title, active));
         frame.render_widget(body, area);
         return;
     }
 
-    let items: Vec<ListItem> = app
-        .source
+    let items: Vec<ListItem> = source
         .tweets
         .iter()
         .map(|t| {
-            let seen = app.seen.is_seen(&t.rest_id);
-            ListItem::new(tweet_lines(t, app.timestamps, seen))
+            let is_seen = seen.is_seen(&t.rest_id);
+            ListItem::new(tweet_lines(t, timestamps, is_seen))
         })
         .collect();
 
@@ -128,13 +165,36 @@ fn draw_source_list(frame: &mut Frame, area: Rect, app: &App, active: bool) {
         .highlight_style(highlight_style(active))
         .highlight_symbol(highlight_symbol(active));
 
-    let mut state = ListState::default();
-    state.select(Some(app.source.selected));
-    frame.render_stateful_widget(list, area, &mut state);
+    frame.render_stateful_widget(list, area, &mut source.list_state);
+
+    if source.tweets.len() > 1 {
+        let mut scrollbar_state =
+            ScrollbarState::new(source.tweets.len()).position(source.selected());
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .thumb_symbol("█")
+            .track_symbol(Some("│"));
+        frame.render_stateful_widget(
+            scrollbar,
+            area.inner(Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
+            &mut scrollbar_state,
+        );
+    }
 }
 
-fn draw_detail(frame: &mut Frame, area: Rect, app: &App, active: bool) {
-    let Some(FocusEntry::Tweet(detail)) = app.focus_stack.last() else {
+fn draw_detail(
+    frame: &mut Frame,
+    area: Rect,
+    entry: Option<&mut FocusEntry>,
+    seen: &SeenStore,
+    timestamps: TimestampStyle,
+    active: bool,
+) {
+    let Some(FocusEntry::Tweet(detail)) = entry else {
         return;
     };
 
@@ -143,8 +203,8 @@ fn draw_detail(frame: &mut Frame, area: Rect, app: &App, active: bool) {
     let [focal_area, replies_area] =
         Layout::vertical([Constraint::Length(12), Constraint::Min(0)]).areas(area);
 
-    draw_focal_tweet(frame, focal_area, detail, &title, active, app.timestamps);
-    draw_replies(frame, replies_area, detail, active, app);
+    draw_focal_tweet(frame, focal_area, detail, &title, active, timestamps);
+    draw_replies(frame, replies_area, detail, active, seen, timestamps);
 }
 
 fn draw_focal_tweet(
@@ -176,7 +236,7 @@ fn draw_focal_tweet(
         lines.push(Line::from(highlight_text(text_line)));
     }
     lines.push(Line::from(""));
-    lines.push(stats_line(t));
+    lines.push(Line::from(stats_spans(t)));
 
     let p = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
@@ -184,7 +244,14 @@ fn draw_focal_tweet(
     frame.render_widget(p, area);
 }
 
-fn draw_replies(frame: &mut Frame, area: Rect, detail: &TweetDetail, active: bool, app: &App) {
+fn draw_replies(
+    frame: &mut Frame,
+    area: Rect,
+    detail: &mut TweetDetail,
+    active: bool,
+    seen: &SeenStore,
+    timestamps: TimestampStyle,
+) {
     let title = if detail.loading {
         "replies [loading…]".to_string()
     } else if detail.replies.is_empty() {
@@ -210,8 +277,8 @@ fn draw_replies(frame: &mut Frame, area: Rect, detail: &TweetDetail, active: boo
         .replies
         .iter()
         .map(|t| {
-            let seen = app.seen.is_seen(&t.rest_id);
-            ListItem::new(tweet_lines(t, app.timestamps, seen))
+            let is_seen = seen.is_seen(&t.rest_id);
+            ListItem::new(tweet_lines(t, timestamps, is_seen))
         })
         .collect();
 
@@ -220,9 +287,25 @@ fn draw_replies(frame: &mut Frame, area: Rect, detail: &TweetDetail, active: boo
         .highlight_style(highlight_style(active))
         .highlight_symbol(highlight_symbol(active));
 
-    let mut state = ListState::default();
-    state.select(Some(detail.selected));
-    frame.render_stateful_widget(list, area, &mut state);
+    frame.render_stateful_widget(list, area, &mut detail.list_state);
+
+    if detail.replies.len() > 1 {
+        let mut scrollbar_state =
+            ScrollbarState::new(detail.replies.len()).position(detail.selected());
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .thumb_symbol("█")
+            .track_symbol(Some("│"));
+        frame.render_stateful_widget(
+            scrollbar,
+            area.inner(Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
+            &mut scrollbar_state,
+        );
+    }
 }
 
 fn highlight_style(active: bool) -> Style {
@@ -257,33 +340,6 @@ fn author_spans<'a>(handle: &'a str, verified: bool, name: &'a str) -> Vec<Span<
         ));
     }
     spans
-}
-
-fn stats_line(t: &Tweet) -> Line<'static> {
-    let mut spans = vec![
-        Span::styled(
-            format!("💬 {}", short_count(t.reply_count)),
-            Style::default().fg(Color::DarkGray),
-        ),
-        Span::raw("   "),
-        Span::styled(
-            format!("🔁 {}", short_count(t.retweet_count)),
-            Style::default().fg(Color::DarkGray),
-        ),
-        Span::raw("   "),
-        Span::styled(
-            format!("♥ {}", short_count(t.like_count)),
-            Style::default().fg(Color::DarkGray),
-        ),
-    ];
-    if let Some(v) = t.view_count {
-        spans.push(Span::raw("   "));
-        spans.push(Span::styled(
-            format!("👁 {}", short_count(v)),
-            Style::default().fg(Color::DarkGray),
-        ));
-    }
-    Line::from(spans)
 }
 
 const TEXT_LINES_IN_CARD: usize = 3;
@@ -484,13 +540,16 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     ];
     if let Some(err) = &app.error {
         spans.push(Span::styled(
-            format!("error: {err}"),
-            Style::default().fg(Color::Red),
+            format!(" error: {err} "),
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::Red)
+                .add_modifier(Modifier::BOLD),
         ));
     } else {
         let count = app.source.tweets.len();
         let sel = if count > 0 {
-            app.source.selected + 1
+            app.source.selected() + 1
         } else {
             0
         };

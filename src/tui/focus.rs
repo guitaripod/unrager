@@ -4,6 +4,7 @@ use crate::gql::endpoints;
 use crate::gql::query_ids::Operation;
 use crate::model::Tweet;
 use crate::parse::timeline::{self, TimelinePage};
+use ratatui::widgets::ListState;
 use serde_json::Value;
 
 #[derive(Debug)]
@@ -12,17 +13,19 @@ pub struct TweetDetail {
     pub replies: Vec<Tweet>,
     pub loading: bool,
     pub error: Option<String>,
-    pub selected: usize,
+    pub list_state: ListState,
 }
 
 impl TweetDetail {
     pub fn new(tweet: Tweet) -> Self {
+        let mut list_state = ListState::default();
+        list_state.select(Some(0));
         Self {
             tweet,
             replies: Vec::new(),
             loading: true,
             error: None,
-            selected: 0,
+            list_state,
         }
     }
 
@@ -36,23 +39,44 @@ impl TweetDetail {
                 t.rest_id != focal_id && t.in_reply_to_tweet_id.as_deref() == Some(&focal_id)
             })
             .collect();
-        self.selected = 0;
+        self.list_state = ListState::default();
+        if !self.replies.is_empty() {
+            self.list_state.select(Some(0));
+        }
+    }
+
+    pub fn selected(&self) -> usize {
+        self.list_state.selected().unwrap_or(0)
     }
 
     pub fn select_next(&mut self) {
-        if !self.replies.is_empty() && self.selected + 1 < self.replies.len() {
-            self.selected += 1;
+        if self.replies.is_empty() {
+            return;
+        }
+        let current = self.selected();
+        if current + 1 < self.replies.len() {
+            self.list_state.select(Some(current + 1));
         }
     }
 
     pub fn select_prev(&mut self) {
-        if self.selected > 0 {
-            self.selected -= 1;
+        let current = self.selected();
+        if current > 0 {
+            self.list_state.select(Some(current - 1));
         }
     }
 
+    pub fn advance(&mut self, delta: isize) {
+        if self.replies.is_empty() {
+            return;
+        }
+        let current = self.selected() as isize;
+        let next = (current + delta).clamp(0, self.replies.len() as isize - 1) as usize;
+        self.list_state.select(Some(next));
+    }
+
     pub fn selected_reply(&self) -> Option<&Tweet> {
-        self.replies.get(self.selected)
+        self.replies.get(self.selected())
     }
 }
 

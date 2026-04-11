@@ -1,4 +1,6 @@
 use crate::error::Result;
+use crate::parse::timeline::TimelinePage;
+use crate::tui::source::SourceKind;
 use crossterm::event::{Event as CtEvent, EventStream, KeyEvent};
 use futures::StreamExt;
 use std::time::Duration;
@@ -7,9 +9,9 @@ use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 
 const TICK_HZ: f64 = 4.0;
-const RENDER_HZ: f64 = 60.0;
+const RENDER_HZ: f64 = 30.0;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Event {
     Tick,
     Render,
@@ -18,10 +20,17 @@ pub enum Event {
     FocusGained,
     FocusLost,
     Quit,
+    TimelineLoaded {
+        kind: SourceKind,
+        result: Result<TimelinePage>,
+        append: bool,
+    },
 }
 
+pub type EventTx = mpsc::UnboundedSender<Event>;
+
 pub struct EventLoop {
-    tx: mpsc::UnboundedSender<Event>,
+    tx: EventTx,
     rx: mpsc::UnboundedReceiver<Event>,
     cancel: CancellationToken,
 }
@@ -42,12 +51,8 @@ impl EventLoop {
         }
     }
 
-    pub fn sender(&self) -> mpsc::UnboundedSender<Event> {
+    pub fn sender(&self) -> EventTx {
         self.tx.clone()
-    }
-
-    pub fn cancel_token(&self) -> CancellationToken {
-        self.cancel.clone()
     }
 
     pub fn start(&self) {
@@ -61,7 +66,7 @@ impl EventLoop {
     }
 }
 
-async fn pump_events(tx: mpsc::UnboundedSender<Event>, cancel: CancellationToken) {
+async fn pump_events(tx: EventTx, cancel: CancellationToken) {
     let mut tick = interval(Duration::from_secs_f64(1.0 / TICK_HZ));
     let mut render = interval(Duration::from_secs_f64(1.0 / RENDER_HZ));
     let mut stream = EventStream::new();
@@ -69,50 +74,16 @@ async fn pump_events(tx: mpsc::UnboundedSender<Event>, cancel: CancellationToken
     loop {
         tokio::select! {
             _ = cancel.cancelled() => break,
-            _ = tick.tick() => {
-                let _ = tx.send(Event::Tick);
-            }
-            _ = render.tick() => {
-                let _ = tx.send(Event::Render);
-            }
+            _ = tick.tick() => { let _ = tx.send(Event::Tick); }
+            _ = render.tick() => { let _ = tx.send(Event::Render); }
             Some(evt) = stream.next() => match evt {
-                Ok(CtEvent::Key(k)) => {
-                    let _ = tx.send(Event::Key(k));
-                }
-                Ok(CtEvent::Resize(w, h)) => {
-                    let _ = tx.send(Event::Resize(w, h));
-                }
-                Ok(CtEvent::FocusGained) => {
-                    let _ = tx.send(Event::FocusGained);
-                }
-                Ok(CtEvent::FocusLost) => {
-                    let _ = tx.send(Event::FocusLost);
-                }
+                Ok(CtEvent::Key(k)) => { let _ = tx.send(Event::Key(k)); }
+                Ok(CtEvent::Resize(w, h)) => { let _ = tx.send(Event::Resize(w, h)); }
+                Ok(CtEvent::FocusGained) => { let _ = tx.send(Event::FocusGained); }
+                Ok(CtEvent::FocusLost) => { let _ = tx.send(Event::FocusLost); }
                 Ok(_) => {}
                 Err(_) => break,
             },
         }
     }
-}
-
-pub fn dispatch_result<E: std::fmt::Display>(
-    tx: &mpsc::UnboundedSender<Event>,
-    result: std::result::Result<Event, E>,
-) {
-    match result {
-        Ok(e) => {
-            let _ = tx.send(e);
-        }
-        Err(e) => {
-            tracing::error!("event dispatch error: {e}");
-        }
-    }
-}
-
-pub type EventTx = mpsc::UnboundedSender<Event>;
-
-pub fn send(tx: &EventTx, e: Event) -> Result<()> {
-    tx.send(e)
-        .map_err(|e| crate::error::Error::Config(format!("event channel closed: {e}")))?;
-    Ok(())
 }

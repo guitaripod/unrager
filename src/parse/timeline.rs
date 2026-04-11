@@ -30,7 +30,7 @@ pub fn walk(instructions: &[Value]) -> TimelinePage {
                     }
                 }
             }
-            "TimelineReplaceEntry" => {
+            "TimelineReplaceEntry" | "TimelinePinEntry" => {
                 if let Some(entry) = instr.get("entry") {
                     collect_from_entry(entry, &mut page);
                 }

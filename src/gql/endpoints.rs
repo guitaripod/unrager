@@ -42,6 +42,50 @@ pub fn tweet_detail_variables(focal_tweet_id: &str, cursor: Option<&str>) -> Val
     vars
 }
 
+pub fn user_by_screen_name_variables(screen_name: &str) -> Value {
+    json!({
+        "screen_name": screen_name,
+        "withSafetyModeUserFields": true
+    })
+}
+
+pub fn user_by_screen_name_features() -> Value {
+    json!({
+        "hidden_profile_subscriptions_enabled": true,
+        "profile_label_improvements_pcf_label_in_post_enabled": true,
+        "rweb_tipjar_consumption_enabled": true,
+        "responsive_web_graphql_exclude_directive_enabled": true,
+        "verified_phone_label_enabled": false,
+        "subscriptions_verification_info_is_identity_verified_enabled": true,
+        "subscriptions_verification_info_verified_since_enabled": true,
+        "highlights_tweets_tab_ui_enabled": true,
+        "responsive_web_twitter_article_notes_tab_enabled": true,
+        "subscriptions_feature_can_gift_premium": true,
+        "creator_subscriptions_tweet_preview_api_enabled": true,
+        "responsive_web_graphql_skip_user_profile_image_extensions_enabled": false,
+        "responsive_web_graphql_timeline_navigation_enabled": true
+    })
+}
+
+pub fn user_tweets_variables(user_id: &str, count: u32, cursor: Option<&str>) -> Value {
+    let mut vars = json!({
+        "userId": user_id,
+        "count": count,
+        "includePromotedContent": false,
+        "withQuickPromoteEligibilityTweetFields": true,
+        "withVoice": true,
+        "withV2Timeline": true
+    });
+    if let Some(c) = cursor {
+        vars["cursor"] = Value::String(c.to_string());
+    }
+    vars
+}
+
+pub fn user_tweets_features() -> Value {
+    tweet_read_features()
+}
+
 pub fn tweet_read_features() -> Value {
     json!({
         "creator_subscriptions_tweet_preview_api_enabled": true,

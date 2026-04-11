@@ -56,6 +56,20 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(Color::DarkGray),
         ));
     }
+    let ids: Vec<String> = app
+        .source
+        .tweets
+        .iter()
+        .map(|t| t.rest_id.clone())
+        .collect();
+    let unread = app.seen.count_unseen(&ids);
+    if unread > 0 {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!("[{unread} unread]"),
+            Style::default().fg(Color::Green),
+        ));
+    }
     if app.is_split() {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(

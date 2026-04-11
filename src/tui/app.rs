@@ -1,4 +1,5 @@
 use crate::cli::common;
+use crate::config;
 use crate::error::Result;
 use crate::gql::GqlClient;
 use crate::model::Tweet;
@@ -6,10 +7,13 @@ use crate::parse::timeline::TimelinePage;
 use crate::tui::command::{self, Command};
 use crate::tui::event::{self, Event, EventTx, RequestId};
 use crate::tui::focus::{self, FocusEntry, TweetDetail};
+use crate::tui::seen::SeenStore;
+use crate::tui::session::{self, SessionState};
 use crate::tui::source::{self, Source, SourceKind};
 use crate::tui::ui;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::DefaultTerminal;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -37,6 +41,8 @@ pub struct App {
     pub status: String,
     pub error: Option<String>,
     pub last_tick: Instant,
+    pub seen: SeenStore,
+    pub session_path: PathBuf,
     pub(super) client: Arc<GqlClient>,
     pub(super) tx: EventTx,
     pub(super) pending_thread: Option<RequestId>,
@@ -46,12 +52,24 @@ pub struct App {
 impl App {
     pub async fn new(tx: EventTx) -> Result<Self> {
         let client = Arc::new(common::build_gql_client().await?);
-        let initial_kind = SourceKind::Home { following: false };
+
+        let cache_dir = config::cache_dir()?;
+        let config_dir = config::config_dir()?;
+        let seen = SeenStore::open(&cache_dir.join("seen.db"))?;
+        let session_path = config_dir.join("session.json");
+
+        let (initial_kind, initial_selected) = session::load(&session_path)
+            .map(|s| (s.source_kind, s.selected))
+            .unwrap_or_else(|| (SourceKind::Home { following: false }, 0));
+
+        let mut source = Source::new(initial_kind.clone());
+        source.selected = initial_selected;
+
         Ok(Self {
             running: true,
             mode: InputMode::Normal,
             command_buffer: String::new(),
-            source: Source::new(initial_kind.clone()),
+            source,
             focus_stack: Vec::new(),
             active: ActivePane::Source,
             history: vec![initial_kind],
@@ -59,11 +77,57 @@ impl App {
             status: "press ? for help, : for command, q to quit".into(),
             error: None,
             last_tick: Instant::now(),
+            seen,
+            session_path,
             client,
             tx,
             pending_thread: None,
             pending_open: None,
         })
+    }
+
+    pub fn save_session(&self) {
+        let Some(kind) = self.source.kind.clone() else {
+            return;
+        };
+        let state = SessionState {
+            source_kind: kind,
+            selected: self.source.selected,
+        };
+        if let Err(e) = session::save(&self.session_path, &state) {
+            tracing::warn!("failed to save session: {e}");
+        }
+    }
+
+    fn mark_current_seen(&mut self) {
+        if let Some(t) = self.source.tweets.get(self.source.selected) {
+            self.seen.mark_seen(&t.rest_id);
+        }
+    }
+
+    fn jump_next_unread(&mut self) {
+        let start = self.source.selected + 1;
+        for i in start..self.source.tweets.len() {
+            if !self.seen.is_seen(&self.source.tweets[i].rest_id) {
+                self.source.selected = i;
+                self.mark_current_seen();
+                self.maybe_load_more();
+                return;
+            }
+        }
+        self.status = "no more unread tweets in this source".into();
+    }
+
+    fn mark_all_seen_in_source(&mut self) {
+        let ids: Vec<String> = self
+            .source
+            .tweets
+            .iter()
+            .map(|t| t.rest_id.clone())
+            .collect();
+        let n = ids.len();
+        self.seen.mark_all(ids);
+        self.status = format!("marked {n} tweets as read");
     }
 
     pub fn load_initial(&mut self) {
@@ -144,19 +208,30 @@ impl App {
         match (key.code, key.modifiers) {
             (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => {
                 self.source.select_next();
+                self.mark_current_seen();
                 self.maybe_load_more();
             }
             (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => {
                 self.source.select_prev();
+                self.mark_current_seen();
             }
-            (KeyCode::Char('g'), KeyModifiers::NONE) => self.source.jump_top(),
+            (KeyCode::Char('g'), KeyModifiers::NONE) => {
+                self.source.jump_top();
+                self.mark_current_seen();
+            }
             (KeyCode::Char('G'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
                 self.source.jump_bottom();
+                self.mark_current_seen();
                 self.maybe_load_more();
             }
             (KeyCode::Char('r'), KeyModifiers::NONE) => self.reload_source(),
+            (KeyCode::Char('u'), KeyModifiers::NONE) => self.jump_next_unread(),
+            (KeyCode::Char('U'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                self.mark_all_seen_in_source();
+            }
             (KeyCode::Enter, _) | (KeyCode::Char('l'), KeyModifiers::NONE) => {
                 if let Some(tweet) = self.source.tweets.get(self.source.selected).cloned() {
+                    self.mark_current_seen();
                     self.push_tweet(tweet);
                 }
             }
@@ -240,6 +315,7 @@ impl App {
         self.focus_stack.clear();
         self.active = ActivePane::Source;
         self.fetch_source(false);
+        self.save_session();
     }
 
     fn history_back(&mut self) {

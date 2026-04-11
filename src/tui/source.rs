@@ -4,11 +4,13 @@ use crate::gql::endpoints;
 use crate::gql::query_ids::Operation;
 use crate::model::Tweet;
 use crate::parse::timeline::{self, TimelinePage};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const PAGE_SIZE: u32 = 20;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum SourceKind {
     Home {
         following: bool,
@@ -28,7 +30,8 @@ pub enum SourceKind {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SearchProduct {
     Top,
     Latest,

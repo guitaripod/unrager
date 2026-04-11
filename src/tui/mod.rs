@@ -2,6 +2,8 @@ pub mod app;
 pub mod command;
 pub mod event;
 pub mod focus;
+pub mod seen;
+pub mod session;
 pub mod source;
 pub mod ui;
 
@@ -29,5 +31,7 @@ async fn run_inner(terminal: &mut ratatui::DefaultTerminal) -> Result<()> {
         };
         app.handle_event(event, terminal)?;
     }
+
+    app.save_session();
     Ok(())
 }

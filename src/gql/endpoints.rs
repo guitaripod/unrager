@@ -105,6 +105,28 @@ pub fn home_timeline_features() -> Value {
     tweet_read_features()
 }
 
+pub fn search_timeline_variables(
+    query: &str,
+    count: u32,
+    product: &str,
+    cursor: Option<&str>,
+) -> Value {
+    let mut vars = json!({
+        "rawQuery": query,
+        "count": count,
+        "querySource": "typed_query",
+        "product": product
+    });
+    if let Some(c) = cursor {
+        vars["cursor"] = Value::String(c.to_string());
+    }
+    vars
+}
+
+pub fn search_timeline_features() -> Value {
+    tweet_read_features()
+}
+
 pub fn tweet_read_features() -> Value {
     json!({
         "creator_subscriptions_tweet_preview_api_enabled": true,

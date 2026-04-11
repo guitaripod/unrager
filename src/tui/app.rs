@@ -42,6 +42,12 @@ pub enum MetricsStyle {
     Hidden,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayNameStyle {
+    Visible,
+    Hidden,
+}
+
 pub struct App {
     pub running: bool,
     pub mode: InputMode,
@@ -58,6 +64,7 @@ pub struct App {
     pub session_path: PathBuf,
     pub timestamps: TimestampStyle,
     pub metrics: MetricsStyle,
+    pub display_names: DisplayNameStyle,
     pub split_pct: u16,
     pub spinner_frame: usize,
     pub(super) client: Arc<GqlClient>,
@@ -100,6 +107,7 @@ impl App {
             session_path,
             timestamps: TimestampStyle::Relative,
             metrics: MetricsStyle::Visible,
+            display_names: DisplayNameStyle::Visible,
             split_pct: 50,
             spinner_frame: 0,
             client,
@@ -256,6 +264,16 @@ impl App {
                 self.status = match self.metrics {
                     MetricsStyle::Visible => "metrics on".into(),
                     MetricsStyle::Hidden => "metrics off".into(),
+                };
+            }
+            (KeyCode::Char('N'), _) => {
+                self.display_names = match self.display_names {
+                    DisplayNameStyle::Visible => DisplayNameStyle::Hidden,
+                    DisplayNameStyle::Hidden => DisplayNameStyle::Visible,
+                };
+                self.status = match self.display_names {
+                    DisplayNameStyle::Visible => "display names on".into(),
+                    DisplayNameStyle::Hidden => "display names off (handles only)".into(),
                 };
             }
             (KeyCode::Char('y'), KeyModifiers::NONE) => self.yank_url(),

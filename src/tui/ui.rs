@@ -1,5 +1,7 @@
 use crate::model::Tweet;
-use crate::tui::app::{ActivePane, App, InputMode, MetricsStyle, SPINNER_FRAMES, TimestampStyle};
+use crate::tui::app::{
+    ActivePane, App, DisplayNameStyle, InputMode, MetricsStyle, SPINNER_FRAMES, TimestampStyle,
+};
 use crate::tui::focus::{FocusEntry, TweetDetail};
 use crate::tui::seen::SeenStore;
 use crate::tui::source::Source;
@@ -8,15 +10,13 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{
-    Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
-    ScrollbarState, Wrap,
-};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 
 #[derive(Debug, Clone, Copy)]
 pub struct RenderOpts {
     pub timestamps: TimestampStyle,
     pub metrics: MetricsStyle,
+    pub display_names: DisplayNameStyle,
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
@@ -34,6 +34,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let opts = RenderOpts {
         timestamps: app.timestamps,
         metrics: app.metrics,
+        display_names: app.display_names,
     };
 
     if app.is_split() {
@@ -185,24 +186,6 @@ fn draw_source_list(
         .highlight_symbol(highlight_symbol(active));
 
     frame.render_stateful_widget(list, area, &mut source.list_state);
-
-    if source.tweets.len() > 1 {
-        let mut scrollbar_state =
-            ScrollbarState::new(source.tweets.len()).position(source.selected());
-        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(None)
-            .end_symbol(None)
-            .thumb_symbol("█")
-            .track_symbol(Some("│"));
-        frame.render_stateful_widget(
-            scrollbar,
-            area.inner(Margin {
-                vertical: 1,
-                horizontal: 0,
-            }),
-            &mut scrollbar_state,
-        );
-    }
 }
 
 fn draw_detail(
@@ -235,11 +218,13 @@ fn draw_focal_tweet(
     opts: RenderOpts,
 ) {
     let t = &detail.tweet;
+    let show_name = matches!(opts.display_names, DisplayNameStyle::Visible);
     let mut lines = vec![
         Line::from(author_spans(
             &t.author.handle,
             t.author.verified,
             &t.author.name,
+            show_name,
         )),
         Line::from(vec![
             Span::styled(
@@ -319,24 +304,6 @@ fn draw_replies(
         .highlight_symbol(highlight_symbol(active));
 
     frame.render_stateful_widget(list, area, &mut detail.list_state);
-
-    if detail.replies.len() > 1 {
-        let mut scrollbar_state =
-            ScrollbarState::new(detail.replies.len()).position(detail.selected());
-        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(None)
-            .end_symbol(None)
-            .thumb_symbol("█")
-            .track_symbol(Some("│"));
-        frame.render_stateful_widget(
-            scrollbar,
-            area.inner(Margin {
-                vertical: 1,
-                horizontal: 0,
-            }),
-            &mut scrollbar_state,
-        );
-    }
 }
 
 fn highlight_style(active: bool) -> Style {
@@ -353,7 +320,12 @@ fn highlight_symbol(active: bool) -> &'static str {
     if active { "▶ " } else { "· " }
 }
 
-fn author_spans<'a>(handle: &'a str, verified: bool, name: &'a str) -> Vec<Span<'a>> {
+fn author_spans<'a>(
+    handle: &'a str,
+    verified: bool,
+    name: &'a str,
+    show_name: bool,
+) -> Vec<Span<'a>> {
     let mut spans = vec![Span::styled(
         format!("@{handle}"),
         Style::default()
@@ -363,7 +335,7 @@ fn author_spans<'a>(handle: &'a str, verified: bool, name: &'a str) -> Vec<Span<
     if verified {
         spans.push(Span::styled(" ✓", Style::default().fg(Color::Blue)));
     }
-    if !name.is_empty() {
+    if show_name && !name.is_empty() {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
             name.to_string(),
@@ -396,10 +368,12 @@ fn tweet_lines(t: &Tweet, opts: RenderOpts, seen: bool, in_reply_context: bool) 
             Style::default().fg(Color::DarkGray),
         ));
     }
+    let show_name = matches!(opts.display_names, DisplayNameStyle::Visible);
     header.extend(author_spans(
         &t.author.handle,
         t.author.verified,
         &t.author.name,
+        show_name,
     ));
     header.push(Span::styled("  ·  ", Style::default().fg(Color::DarkGray)));
     header.push(Span::styled(
@@ -685,7 +659,9 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect) {
         Line::from("  m              open first media url externally"),
         Line::from("  t              toggle relative / absolute timestamps"),
         Line::from("  M              toggle metrics (reply/retweet/like counts) visibility"),
+        Line::from("  N              toggle display names (handle-only mode)"),
         Line::from("  Ctrl-d / Ctrl-u  half-page down / up"),
+        Line::from("  Ctrl-c           quit immediately from any mode"),
         Line::from(""),
         Line::from(Span::styled(
             "press any key to close",

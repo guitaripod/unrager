@@ -201,12 +201,12 @@ impl App {
                     ActivePane::Detail => ActivePane::Source,
                 };
             }
-            (KeyCode::Char(':'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+            (KeyCode::Char(':'), _) => {
                 self.mode = InputMode::Command;
                 self.command_buffer.clear();
                 self.error = None;
             }
-            (KeyCode::Char('?'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+            (KeyCode::Char('?'), _) => {
                 self.mode = InputMode::Help;
             }
             (KeyCode::Char('t'), KeyModifiers::NONE) => {
@@ -215,13 +215,14 @@ impl App {
                     TimestampStyle::Absolute => TimestampStyle::Relative,
                 };
             }
+            (KeyCode::Char('F'), _) => self.toggle_home_mode(),
             (KeyCode::Char('y'), KeyModifiers::NONE) => self.yank_url(),
-            (KeyCode::Char('Y'), KeyModifiers::NONE | KeyModifiers::SHIFT) => self.yank_json(),
+            (KeyCode::Char('Y'), _) => self.yank_json(),
             (KeyCode::Char('m'), KeyModifiers::NONE) => self.open_media_external(),
             (KeyCode::Char('q'), KeyModifiers::NONE) => self.pop_or_quit(),
             (KeyCode::Esc, _) => self.pop_or_quit(),
-            (KeyCode::Char(']'), KeyModifiers::NONE) => self.history_forward(),
-            (KeyCode::Char('['), KeyModifiers::NONE) => self.history_back(),
+            (KeyCode::Char(']'), _) => self.history_forward(),
+            (KeyCode::Char('['), _) => self.history_back(),
             _ => match self.active {
                 ActivePane::Source => self.handle_key_source(key),
                 ActivePane::Detail => self.handle_key_detail(key),
@@ -266,6 +267,19 @@ impl App {
             Ok(()) => self.status = note.to_string(),
             Err(e) => self.error = Some(format!("clipboard failed: {e}")),
         }
+    }
+
+    fn toggle_home_mode(&mut self) {
+        let current_following =
+            matches!(self.source.kind, Some(SourceKind::Home { following: true }));
+        let current_is_home = matches!(self.source.kind, Some(SourceKind::Home { .. }));
+        if !current_is_home {
+            self.status = "F only toggles on home source; use :user etc for others".into();
+            return;
+        }
+        self.switch_source(SourceKind::Home {
+            following: !current_following,
+        });
     }
 
     fn open_media_external(&mut self) {

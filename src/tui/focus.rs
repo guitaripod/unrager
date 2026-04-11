@@ -29,11 +29,13 @@ impl TweetDetail {
     pub fn apply_page(&mut self, page: TimelinePage) {
         self.loading = false;
         let focal_id = self.tweet.rest_id.clone();
-        for reply in page.tweets {
-            if reply.rest_id != focal_id {
-                self.replies.push(reply);
-            }
-        }
+        self.replies = page
+            .tweets
+            .into_iter()
+            .filter(|t| {
+                t.rest_id != focal_id && t.in_reply_to_tweet_id.as_deref() == Some(&focal_id)
+            })
+            .collect();
         self.selected = 0;
     }
 

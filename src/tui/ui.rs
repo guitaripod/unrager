@@ -286,20 +286,30 @@ fn stats_line(t: &Tweet) -> Line<'static> {
     Line::from(spans)
 }
 
+const TEXT_LINES_IN_CARD: usize = 3;
+
 fn tweet_lines(t: &Tweet, timestamps: TimestampStyle, seen: bool) -> Vec<Line<'_>> {
-    let mut name_spans = author_spans(&t.author.handle, t.author.verified, &t.author.name);
-    name_spans.push(Span::raw("  "));
-    name_spans.push(Span::styled(
+    let dot = if seen {
+        Span::styled("  ", Style::default())
+    } else {
+        Span::styled("● ", Style::default().fg(Color::Green))
+    };
+
+    let mut header = vec![dot];
+    header.extend(author_spans(
+        &t.author.handle,
+        t.author.verified,
+        &t.author.name,
+    ));
+    header.push(Span::styled("  ·  ", Style::default().fg(Color::DarkGray)));
+    header.push(Span::styled(
         format_timestamp(t.created_at, timestamps),
         Style::default().fg(Color::DarkGray),
     ));
-    if !seen {
-        name_spans.insert(0, Span::styled("●  ", Style::default().fg(Color::Green)));
-    } else {
-        name_spans.insert(0, Span::styled("   ", Style::default()));
-    }
+    header.push(Span::raw("    "));
+    header.extend(stats_spans(t));
 
-    let mut lines = vec![Line::from(name_spans)];
+    let mut lines = vec![Line::from(header)];
 
     let text_style = if seen {
         Style::default().fg(Color::DarkGray)
@@ -307,25 +317,56 @@ fn tweet_lines(t: &Tweet, timestamps: TimestampStyle, seen: bool) -> Vec<Line<'_
         Style::default()
     };
 
-    for text_line in t.text.lines().take(6) {
-        let mut spans = highlight_text(text_line);
+    let total_text_lines = t.text.lines().count();
+    let indent = Span::raw("  ");
+    for text_line in t.text.lines().take(TEXT_LINES_IN_CARD) {
+        let mut spans = vec![indent.clone()];
+        let mut word_spans = highlight_text(text_line);
         if seen {
-            for s in spans.iter_mut() {
+            for s in word_spans.iter_mut() {
                 s.style = text_style;
             }
         }
+        spans.extend(word_spans);
         lines.push(Line::from(spans));
     }
-    if t.text.lines().count() > 6 {
-        lines.push(Line::from(vec![Span::styled(
-            "…",
-            Style::default().fg(Color::DarkGray),
-        )]));
+    if total_text_lines > TEXT_LINES_IN_CARD {
+        lines.push(Line::from(vec![
+            indent.clone(),
+            Span::styled(
+                format!("… +{} more", total_text_lines - TEXT_LINES_IN_CARD),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
     }
-
-    lines.push(stats_line(t));
-    lines.push(Line::from(""));
     lines
+}
+
+fn stats_spans(t: &Tweet) -> Vec<Span<'static>> {
+    let mut spans = vec![
+        Span::styled(
+            format!("💬 {}", short_count(t.reply_count)),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            format!("🔁 {}", short_count(t.retweet_count)),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            format!("♥ {}", short_count(t.like_count)),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ];
+    if let Some(v) = t.view_count {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!("👁 {}", short_count(v)),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    spans
 }
 
 fn highlight_text(text: &str) -> Vec<Span<'_>> {
@@ -497,6 +538,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect) {
         Line::from("  q / Esc        pop detail pane; quit if stack is empty"),
         Line::from(""),
         Line::from("SOURCES"),
+        Line::from("  F              toggle For You / Following on home"),
         Line::from("  :home [following]          home For You / Following feed"),
         Line::from("  :user <handle>              timeline of a user"),
         Line::from("  :search <query> [!top|...]  live search"),

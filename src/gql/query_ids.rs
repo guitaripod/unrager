@@ -15,6 +15,7 @@ pub enum Operation {
     UserTweets,
     SearchTimeline,
     Bookmarks,
+    BookmarkSearchTimeline,
     Notifications,
 }
 
@@ -30,6 +31,7 @@ impl Operation {
             Self::UserTweets => "UserTweets",
             Self::SearchTimeline => "SearchTimeline",
             Self::Bookmarks => "Bookmarks",
+            Self::BookmarkSearchTimeline => "BookmarkSearchTimeline",
             Self::Notifications => "Notifications",
         }
     }

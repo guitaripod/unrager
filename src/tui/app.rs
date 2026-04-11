@@ -36,6 +36,12 @@ pub enum TimestampStyle {
     Relative,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetricsStyle {
+    Visible,
+    Hidden,
+}
+
 pub struct App {
     pub running: bool,
     pub mode: InputMode,
@@ -51,6 +57,7 @@ pub struct App {
     pub seen: SeenStore,
     pub session_path: PathBuf,
     pub timestamps: TimestampStyle,
+    pub metrics: MetricsStyle,
     pub(super) client: Arc<GqlClient>,
     pub(super) tx: EventTx,
     pub(super) pending_thread: Option<RequestId>,
@@ -88,6 +95,7 @@ impl App {
             seen,
             session_path,
             timestamps: TimestampStyle::Relative,
+            metrics: MetricsStyle::Visible,
             client,
             tx,
             pending_thread: None,
@@ -216,6 +224,16 @@ impl App {
                 };
             }
             (KeyCode::Char('F'), _) => self.toggle_home_mode(),
+            (KeyCode::Char('M'), _) => {
+                self.metrics = match self.metrics {
+                    MetricsStyle::Visible => MetricsStyle::Hidden,
+                    MetricsStyle::Hidden => MetricsStyle::Visible,
+                };
+                self.status = match self.metrics {
+                    MetricsStyle::Visible => "metrics on".into(),
+                    MetricsStyle::Hidden => "metrics off".into(),
+                };
+            }
             (KeyCode::Char('y'), KeyModifiers::NONE) => self.yank_url(),
             (KeyCode::Char('Y'), _) => self.yank_json(),
             (KeyCode::Char('m'), KeyModifiers::NONE) => self.open_media_external(),

@@ -1,5 +1,5 @@
 use crate::model::Tweet;
-use crate::tui::app::{ActivePane, App, InputMode, TimestampStyle};
+use crate::tui::app::{ActivePane, App, InputMode, MetricsStyle, TimestampStyle};
 use crate::tui::focus::{FocusEntry, TweetDetail};
 use crate::tui::seen::SeenStore;
 use crate::tui::source::Source;
@@ -13,6 +13,12 @@ use ratatui::widgets::{
     ScrollbarState, Wrap,
 };
 
+#[derive(Debug, Clone, Copy)]
+pub struct RenderOpts {
+    pub timestamps: TimestampStyle,
+    pub metrics: MetricsStyle,
+}
+
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let [top, main, bottom] = Layout::vertical([
         Constraint::Length(1),
@@ -25,7 +31,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     let source_active = app.active == ActivePane::Source;
     let detail_active = app.active == ActivePane::Detail;
-    let timestamps = app.timestamps;
+    let opts = RenderOpts {
+        timestamps: app.timestamps,
+        metrics: app.metrics,
+    };
 
     if app.is_split() {
         let [left, right] =
@@ -37,7 +46,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             &mut app.source,
             &app.seen,
             app.error.as_deref(),
-            timestamps,
+            opts,
             source_active,
         );
         draw_detail(
@@ -45,7 +54,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             right,
             app.focus_stack.last_mut(),
             &app.seen,
-            timestamps,
+            opts,
             detail_active,
         );
     } else {
@@ -55,7 +64,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             &mut app.source,
             &app.seen,
             app.error.as_deref(),
-            timestamps,
+            opts,
             true,
         );
     }
@@ -135,7 +144,7 @@ fn draw_source_list(
     source: &mut Source,
     seen: &SeenStore,
     error: Option<&str>,
-    timestamps: TimestampStyle,
+    opts: RenderOpts,
     active: bool,
 ) {
     let title = source.title();
@@ -154,9 +163,14 @@ fn draw_source_list(
     let items: Vec<ListItem> = source
         .tweets
         .iter()
-        .map(|t| {
+        .enumerate()
+        .map(|(i, t)| {
             let is_seen = seen.is_seen(&t.rest_id);
-            ListItem::new(tweet_lines(t, timestamps, is_seen))
+            let mut item = ListItem::new(tweet_lines(t, opts, is_seen, false));
+            if i % 2 == 1 {
+                item = item.style(Style::default().bg(ZEBRA_BG));
+            }
+            item
         })
         .collect();
 
@@ -191,7 +205,7 @@ fn draw_detail(
     area: Rect,
     entry: Option<&mut FocusEntry>,
     seen: &SeenStore,
-    timestamps: TimestampStyle,
+    opts: RenderOpts,
     active: bool,
 ) {
     let Some(FocusEntry::Tweet(detail)) = entry else {
@@ -203,8 +217,8 @@ fn draw_detail(
     let [focal_area, replies_area] =
         Layout::vertical([Constraint::Length(12), Constraint::Min(0)]).areas(area);
 
-    draw_focal_tweet(frame, focal_area, detail, &title, active, timestamps);
-    draw_replies(frame, replies_area, detail, active, seen, timestamps);
+    draw_focal_tweet(frame, focal_area, detail, &title, active, opts);
+    draw_replies(frame, replies_area, detail, active, seen, opts);
 }
 
 fn draw_focal_tweet(
@@ -213,7 +227,7 @@ fn draw_focal_tweet(
     detail: &TweetDetail,
     title: &str,
     active: bool,
-    timestamps: TimestampStyle,
+    opts: RenderOpts,
 ) {
     let t = &detail.tweet;
     let mut lines = vec![
@@ -224,7 +238,7 @@ fn draw_focal_tweet(
         )),
         Line::from(vec![
             Span::styled(
-                format_timestamp(t.created_at, timestamps),
+                format_timestamp(t.created_at, opts.timestamps),
                 Style::default().fg(Color::DarkGray),
             ),
             Span::raw("  "),
@@ -232,11 +246,18 @@ fn draw_focal_tweet(
         ]),
         Line::from(""),
     ];
-    for text_line in t.text.lines() {
+    let body = if t.in_reply_to_tweet_id.is_some() {
+        strip_leading_mentions(&t.text)
+    } else {
+        &t.text
+    };
+    for text_line in body.lines() {
         lines.push(Line::from(highlight_text(text_line)));
     }
-    lines.push(Line::from(""));
-    lines.push(Line::from(stats_spans(t)));
+    if matches!(opts.metrics, MetricsStyle::Visible) {
+        lines.push(Line::from(""));
+        lines.push(Line::from(stats_spans(t)));
+    }
 
     let p = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
@@ -250,7 +271,7 @@ fn draw_replies(
     detail: &mut TweetDetail,
     active: bool,
     seen: &SeenStore,
-    timestamps: TimestampStyle,
+    opts: RenderOpts,
 ) {
     let title = if detail.loading {
         "replies [loading…]".to_string()
@@ -276,9 +297,14 @@ fn draw_replies(
     let items: Vec<ListItem> = detail
         .replies
         .iter()
-        .map(|t| {
+        .enumerate()
+        .map(|(i, t)| {
             let is_seen = seen.is_seen(&t.rest_id);
-            ListItem::new(tweet_lines(t, timestamps, is_seen))
+            let mut item = ListItem::new(tweet_lines(t, opts, is_seen, true));
+            if i % 2 == 1 {
+                item = item.style(Style::default().bg(ZEBRA_BG));
+            }
+            item
         })
         .collect();
 
@@ -344,7 +370,14 @@ fn author_spans<'a>(handle: &'a str, verified: bool, name: &'a str) -> Vec<Span<
 
 const TEXT_LINES_IN_CARD: usize = 3;
 
-fn tweet_lines(t: &Tweet, timestamps: TimestampStyle, seen: bool) -> Vec<Line<'_>> {
+pub const ZEBRA_BG: Color = Color::Indexed(234);
+const GLYPH_REPLIES: &str = "↳";
+const GLYPH_RETWEETS: &str = "⟲";
+const GLYPH_LIKES: &str = "♥";
+const GLYPH_VIEWS: &str = "◉";
+const GLYPH_IS_REPLY: &str = "↳";
+
+fn tweet_lines(t: &Tweet, opts: RenderOpts, seen: bool, in_reply_context: bool) -> Vec<Line<'_>> {
     let dot = if seen {
         Span::styled("  ", Style::default())
     } else {
@@ -352,6 +385,12 @@ fn tweet_lines(t: &Tweet, timestamps: TimestampStyle, seen: bool) -> Vec<Line<'_
     };
 
     let mut header = vec![dot];
+    if t.in_reply_to_tweet_id.is_some() {
+        header.push(Span::styled(
+            format!("{GLYPH_IS_REPLY} "),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
     header.extend(author_spans(
         &t.author.handle,
         t.author.verified,
@@ -359,11 +398,13 @@ fn tweet_lines(t: &Tweet, timestamps: TimestampStyle, seen: bool) -> Vec<Line<'_
     ));
     header.push(Span::styled("  ·  ", Style::default().fg(Color::DarkGray)));
     header.push(Span::styled(
-        format_timestamp(t.created_at, timestamps),
+        format_timestamp(t.created_at, opts.timestamps),
         Style::default().fg(Color::DarkGray),
     ));
-    header.push(Span::raw("    "));
-    header.extend(stats_spans(t));
+    if matches!(opts.metrics, MetricsStyle::Visible) {
+        header.push(Span::raw("    "));
+        header.extend(stats_spans(t));
+    }
 
     let mut lines = vec![Line::from(header)];
 
@@ -373,9 +414,14 @@ fn tweet_lines(t: &Tweet, timestamps: TimestampStyle, seen: bool) -> Vec<Line<'_
         Style::default()
     };
 
-    let total_text_lines = t.text.lines().count();
+    let body_text: &str = if in_reply_context && t.in_reply_to_tweet_id.is_some() {
+        strip_leading_mentions(&t.text)
+    } else {
+        &t.text
+    };
+    let total_text_lines = body_text.lines().count();
     let indent = Span::raw("  ");
-    for text_line in t.text.lines().take(TEXT_LINES_IN_CARD) {
+    for text_line in body_text.lines().take(TEXT_LINES_IN_CARD) {
         let mut spans = vec![indent.clone()];
         let mut word_spans = highlight_text(text_line);
         if seen {
@@ -398,28 +444,44 @@ fn tweet_lines(t: &Tweet, timestamps: TimestampStyle, seen: bool) -> Vec<Line<'_
     lines
 }
 
+fn strip_leading_mentions(text: &str) -> &str {
+    let mut s = text.trim_start();
+    while s.starts_with('@') {
+        let rest = &s[1..];
+        let end = rest
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(rest.len());
+        if end == 0 {
+            return s;
+        }
+        s = rest[end..].trim_start();
+    }
+    s
+}
+
 fn stats_spans(t: &Tweet) -> Vec<Span<'static>> {
+    let style = Style::default().fg(Color::DarkGray);
     let mut spans = vec![
         Span::styled(
-            format!("💬 {}", short_count(t.reply_count)),
-            Style::default().fg(Color::DarkGray),
+            format!("{GLYPH_REPLIES} {}", short_count(t.reply_count)),
+            style,
         ),
         Span::raw("  "),
         Span::styled(
-            format!("🔁 {}", short_count(t.retweet_count)),
-            Style::default().fg(Color::DarkGray),
+            format!("{GLYPH_RETWEETS} {}", short_count(t.retweet_count)),
+            style,
         ),
         Span::raw("  "),
         Span::styled(
-            format!("♥ {}", short_count(t.like_count)),
-            Style::default().fg(Color::DarkGray),
+            format!("{GLYPH_LIKES} {}", short_count(t.like_count)),
+            style,
         ),
     ];
     if let Some(v) = t.view_count {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
-            format!("👁 {}", short_count(v)),
-            Style::default().fg(Color::DarkGray),
+            format!("{GLYPH_VIEWS} {}", short_count(v)),
+            style,
         ));
     }
     spans
@@ -616,6 +678,8 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect) {
         Line::from("  Y              yank selected tweet JSON to clipboard"),
         Line::from("  m              open first media url externally"),
         Line::from("  t              toggle relative / absolute timestamps"),
+        Line::from("  M              toggle metrics (reply/retweet/like counts) visibility"),
+        Line::from("  Ctrl-d / Ctrl-u  half-page down / up"),
         Line::from(""),
         Line::from(Span::styled(
             "press any key to close",
@@ -632,4 +696,45 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect) {
         )
         .wrap(Wrap { trim: false });
     frame.render_widget(help, popup.inner(Margin::new(0, 0)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_leading_mentions;
+
+    #[test]
+    fn strips_single_mention() {
+        assert_eq!(strip_leading_mentions("@jack hello"), "hello");
+    }
+
+    #[test]
+    fn strips_multiple_mentions() {
+        assert_eq!(
+            strip_leading_mentions("@jack @alice @bob great point!"),
+            "great point!"
+        );
+    }
+
+    #[test]
+    fn leaves_mid_body_mentions_alone() {
+        assert_eq!(
+            strip_leading_mentions("thanks @jack for the reply"),
+            "thanks @jack for the reply"
+        );
+    }
+
+    #[test]
+    fn empty_input() {
+        assert_eq!(strip_leading_mentions(""), "");
+    }
+
+    #[test]
+    fn only_mentions() {
+        assert_eq!(strip_leading_mentions("@jack @alice"), "");
+    }
+
+    #[test]
+    fn handles_underscore_in_handle() {
+        assert_eq!(strip_leading_mentions("@some_user hi there"), "hi there");
+    }
 }

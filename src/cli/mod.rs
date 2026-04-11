@@ -22,7 +22,7 @@ use clap::{Parser, Subcommand};
 )]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 
     #[arg(long, global = true, help = "Emit verbose tracing to stderr")]
     pub debug: bool,

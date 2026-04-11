@@ -2,13 +2,20 @@ use clap::Parser;
 use tracing_subscriber::{EnvFilter, fmt};
 use unrager::cli::{self, Cli, Command};
 use unrager::error::Result;
+use unrager::tui;
 
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
     init_tracing(cli.debug);
+    install_panic_hook();
 
-    if let Err(e) = dispatch(cli.command).await {
+    let result = match cli.command {
+        Some(command) => dispatch(command).await,
+        None => tui::run().await,
+    };
+
+    if let Err(e) = result {
         eprintln!("error: {e}");
         let mut source = std::error::Error::source(&e);
         while let Some(s) = source {
@@ -33,6 +40,14 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::Reply(args) => cli::reply::run(args).await,
         Command::Auth(args) => cli::auth::run(args).await,
     }
+}
+
+fn install_panic_hook() {
+    let original = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        ratatui::restore();
+        original(info);
+    }));
 }
 
 fn init_tracing(debug: bool) {

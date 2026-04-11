@@ -19,7 +19,7 @@ const REDIRECT_URI: &str = "http://127.0.0.1:8765/callback";
 const CALLBACK_PORT: u16 = 8765;
 const AUTHORIZE_URL: &str = "https://x.com/i/oauth2/authorize";
 const TOKEN_URL: &str = "https://api.x.com/2/oauth2/token";
-const SCOPES: &str = "tweet.read tweet.write users.read offline.access";
+const SCOPES: &str = "tweet.read tweet.write users.read media.write offline.access";
 const CALLBACK_TIMEOUT: StdDuration = StdDuration::from_secs(300);
 const REFRESH_MARGIN: Duration = Duration::seconds(60);
 

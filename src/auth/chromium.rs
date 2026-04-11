@@ -256,17 +256,18 @@ fn try_all(encrypted: &[u8], passwords: &[Vec<u8>]) -> Result<([u8; PBKDF2_KEY_L
 
 fn decrypt_and_extract(encrypted: &[u8], key: &[u8; PBKDF2_KEY_LEN]) -> Result<String> {
     let plain = decrypt_v11(encrypted, key)?;
-    let stripped = if plain.len() > INTEGRITY_PREFIX_LEN {
-        &plain[INTEGRITY_PREFIX_LEN..]
-    } else {
-        plain.as_slice()
-    };
-    if stripped.is_empty() || !is_printable(stripped) {
-        return Err(Error::CookieDecrypt(
-            "decrypted bytes don't look like a printable cookie value",
-        ));
+
+    if !plain.is_empty() && is_printable(&plain) {
+        return Ok(String::from_utf8_lossy(&plain).into_owned());
     }
-    Ok(String::from_utf8_lossy(stripped).into_owned())
+
+    if plain.len() > INTEGRITY_PREFIX_LEN && is_printable(&plain[INTEGRITY_PREFIX_LEN..]) {
+        return Ok(String::from_utf8_lossy(&plain[INTEGRITY_PREFIX_LEN..]).into_owned());
+    }
+
+    Err(Error::CookieDecrypt(
+        "decrypted bytes don't look like a printable cookie value",
+    ))
 }
 
 fn decrypt_v11(encrypted: &[u8], key: &[u8; PBKDF2_KEY_LEN]) -> Result<Vec<u8>> {

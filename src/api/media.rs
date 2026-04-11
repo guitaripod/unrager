@@ -241,19 +241,17 @@ impl<'a> MediaUploader<'a> {
     }
 
     async fn init(&self, file: &MediaFile) -> Result<String> {
-        let total_bytes = file.size.to_string();
-        let query = [
-            ("command", "INIT"),
-            ("total_bytes", total_bytes.as_str()),
-            ("media_type", file.mime.as_str()),
-            ("media_category", file.category.as_api()),
-        ];
+        let form = Form::new()
+            .text("command", "INIT")
+            .text("total_bytes", file.size.to_string())
+            .text("media_type", file.mime.clone())
+            .text("media_category", file.category.as_api());
 
         let res = self
             .http
             .post(MEDIA_UPLOAD_URL)
             .bearer_auth(self.access_token)
-            .query(&query)
+            .multipart(form)
             .send()
             .await?;
 
@@ -262,24 +260,20 @@ impl<'a> MediaUploader<'a> {
     }
 
     async fn append(&self, media_id: &str, segment_index: u64, chunk: &[u8]) -> Result<()> {
-        let seg = segment_index.to_string();
-        let query = [
-            ("command", "APPEND"),
-            ("media_id", media_id),
-            ("segment_index", seg.as_str()),
-        ];
-
         let part = Part::bytes(chunk.to_vec())
             .file_name("chunk")
             .mime_str("application/octet-stream")
             .map_err(|e| Error::Config(format!("bad chunk mime: {e}")))?;
-        let form = Form::new().part("media", part);
+        let form = Form::new()
+            .text("command", "APPEND")
+            .text("media_id", media_id.to_string())
+            .text("segment_index", segment_index.to_string())
+            .part("media", part);
 
         let res = self
             .http
             .post(MEDIA_UPLOAD_URL)
             .bearer_auth(self.access_token)
-            .query(&query)
             .multipart(form)
             .send()
             .await?;
@@ -293,12 +287,14 @@ impl<'a> MediaUploader<'a> {
     }
 
     async fn finalize(&self, media_id: &str) -> Result<Value> {
-        let query = [("command", "FINALIZE"), ("media_id", media_id)];
+        let form = Form::new()
+            .text("command", "FINALIZE")
+            .text("media_id", media_id.to_string());
         let res = self
             .http
             .post(MEDIA_UPLOAD_URL)
             .bearer_auth(self.access_token)
-            .query(&query)
+            .multipart(form)
             .send()
             .await?;
         parse_upload_response(res).await

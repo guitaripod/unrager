@@ -106,15 +106,20 @@ pub fn emit_dry_run(
     if let Some(id) = in_reply_to_tweet_id {
         eprintln!("Reply target: {id}");
     }
-    if media_files.is_empty() {
-        eprintln!("Cost if sent: $0.01 (pay-per-use tweet creation).");
-    } else {
-        eprintln!(
-            "Cost if sent: $0.01 for the tweet + metered media upload credits. \
-             Media uploads ARE billed on pay-per-use (confirmed via HTTP 402 \
-             CreditsDepleted on an empty-balance account)."
-        );
-    }
+    let upload_calls: usize = media_files
+        .iter()
+        .map(|f| match f.strategy() {
+            crate::api::UploadStrategy::SingleShot => 1,
+            crate::api::UploadStrategy::Chunked { segments } => 2 + segments as usize,
+        })
+        .sum();
+    let total_calls = 1 + upload_calls;
+    eprintln!(
+        "Billable calls if sent: {total_calls} (1 POST /2/tweets + {upload_calls} media upload call{}). \
+         Per-call cost varies by endpoint; check your Developer Console under \
+         Billing > Usage for the authoritative rates — X does not publish them on public docs.",
+        if upload_calls == 1 { "" } else { "s" }
+    );
     eprintln!("Remove --dry-run to actually post.");
     Ok(())
 }

@@ -1,10 +1,11 @@
 use crate::model::Tweet;
-use crate::tui::app::App;
+use crate::tui::app::{ActivePane, App};
+use crate::tui::focus::{FocusEntry, TweetDetail};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 
 pub fn draw(frame: &mut Frame, app: &App) {
     let [top, main, bottom] = Layout::vertical([
@@ -15,7 +16,17 @@ pub fn draw(frame: &mut Frame, app: &App) {
     .areas(frame.area());
 
     draw_header(frame, top, app);
-    draw_main(frame, main, app);
+
+    if app.is_split() {
+        let [left, right] =
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .areas(main);
+        draw_source_list(frame, left, app, app.active == ActivePane::Source);
+        draw_detail(frame, right, app, app.active == ActivePane::Detail);
+    } else {
+        draw_source_list(frame, main, app, true);
+    }
+
     draw_footer(frame, bottom, app);
 }
 
@@ -45,10 +56,31 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(Color::DarkGray),
         ));
     }
+    if app.is_split() {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!("[stack: {}]", app.focus_stack.len()),
+            Style::default().fg(Color::Magenta),
+        ));
+    }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_main(frame: &mut Frame, area: Rect, app: &App) {
+fn block_with_focus(title: &str, active: bool) -> Block<'_> {
+    let border_style = if active {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style)
+        .title(format!(" {title} "))
+}
+
+fn draw_source_list(frame: &mut Frame, area: Rect, app: &App, active: bool) {
+    let title = app.source.title();
+
     if app.source.tweets.is_empty() {
         let msg = if app.source.loading {
             "loading timeline…"
@@ -57,8 +89,7 @@ fn draw_main(frame: &mut Frame, area: Rect, app: &App) {
         } else {
             "no tweets"
         };
-        let body =
-            Paragraph::new(msg).block(Block::default().borders(Borders::ALL).title(" unrager "));
+        let body = Paragraph::new(msg).block(block_with_focus(&title, active));
         frame.render_widget(body, area);
         return;
     }
@@ -71,17 +102,140 @@ fn draw_main(frame: &mut Frame, area: Rect, app: &App) {
         .collect();
 
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(" unrager "))
-        .highlight_style(
-            Style::default()
-                .bg(Color::Indexed(236))
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("▶ ");
+        .block(block_with_focus(&title, active))
+        .highlight_style(highlight_style(active))
+        .highlight_symbol(highlight_symbol(active));
 
     let mut state = ListState::default();
     state.select(Some(app.source.selected));
     frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn draw_detail(frame: &mut Frame, area: Rect, app: &App, active: bool) {
+    let Some(FocusEntry::Tweet(detail)) = app.focus_stack.last() else {
+        return;
+    };
+
+    let title = format!("tweet @{}", detail.tweet.author.handle);
+
+    let [focal_area, replies_area] =
+        Layout::vertical([Constraint::Length(12), Constraint::Min(0)]).areas(area);
+
+    draw_focal_tweet(frame, focal_area, detail, &title, active);
+    draw_replies(frame, replies_area, detail, active);
+}
+
+fn draw_focal_tweet(
+    frame: &mut Frame,
+    area: Rect,
+    detail: &TweetDetail,
+    title: &str,
+    active: bool,
+) {
+    let t = &detail.tweet;
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(
+                format!("@{}", t.author.handle),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            if t.author.verified {
+                Span::styled(" ✓", Style::default().fg(Color::Blue))
+            } else {
+                Span::raw("")
+            },
+            Span::raw("  "),
+            Span::styled(t.author.name.clone(), Style::default().fg(Color::Gray)),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                t.created_at.format("%Y-%m-%d %H:%M UTC").to_string(),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::raw("  "),
+            Span::styled(t.url.clone(), Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(""),
+    ];
+    for text_line in t.text.lines() {
+        lines.push(Line::from(text_line.to_string()));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("💬 {}", short_count(t.reply_count)),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::raw("   "),
+        Span::styled(
+            format!("🔁 {}", short_count(t.retweet_count)),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::raw("   "),
+        Span::styled(
+            format!("♥ {}", short_count(t.like_count)),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]));
+
+    let p = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .block(block_with_focus(title, active));
+    frame.render_widget(p, area);
+}
+
+fn draw_replies(frame: &mut Frame, area: Rect, detail: &TweetDetail, active: bool) {
+    let title = if detail.loading {
+        "replies [loading…]".to_string()
+    } else if detail.replies.is_empty() {
+        "replies".to_string()
+    } else {
+        format!("replies ({})", detail.replies.len())
+    };
+
+    if detail.replies.is_empty() {
+        let msg = if detail.loading {
+            "loading replies…"
+        } else if let Some(err) = &detail.error {
+            err.as_str()
+        } else {
+            "no replies"
+        };
+        let body = Paragraph::new(msg).block(block_with_focus(&title, active));
+        frame.render_widget(body, area);
+        return;
+    }
+
+    let items: Vec<ListItem> = detail
+        .replies
+        .iter()
+        .map(|t| ListItem::new(tweet_lines(t)))
+        .collect();
+
+    let list = List::new(items)
+        .block(block_with_focus(&title, active))
+        .highlight_style(highlight_style(active))
+        .highlight_symbol(highlight_symbol(active));
+
+    let mut state = ListState::default();
+    state.select(Some(detail.selected));
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn highlight_style(active: bool) -> Style {
+    if active {
+        Style::default()
+            .bg(Color::Indexed(236))
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().bg(Color::Indexed(234))
+    }
+}
+
+fn highlight_symbol(active: bool) -> &'static str {
+    if active { "▶ " } else { "· " }
 }
 
 fn tweet_lines(t: &Tweet) -> Vec<Line<'_>> {
@@ -185,10 +339,12 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(Color::Gray),
         ));
         spans.push(Span::raw("   "));
-        spans.push(Span::styled(
-            "j/k nav  g/G top/bot  r reload  q quit",
-            Style::default().fg(Color::DarkGray),
-        ));
+        let hints = if app.is_split() {
+            "j/k nav  Enter open  h back  Tab swap  q pop  r reload"
+        } else {
+            "j/k nav  Enter open  g/G top/bot  r reload  q quit"
+        };
+        spans.push(Span::styled(hints, Style::default().fg(Color::DarkGray)));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }

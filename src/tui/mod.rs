@@ -1,5 +1,6 @@
 pub mod app;
 pub mod event;
+pub mod focus;
 pub mod source;
 pub mod ui;
 

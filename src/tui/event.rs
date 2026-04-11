@@ -3,6 +3,7 @@ use crate::parse::timeline::TimelinePage;
 use crate::tui::source::SourceKind;
 use crossterm::event::{Event as CtEvent, EventStream, KeyEvent};
 use futures::StreamExt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::interval;
@@ -10,6 +11,14 @@ use tokio_util::sync::CancellationToken;
 
 const TICK_HZ: f64 = 4.0;
 const RENDER_HZ: f64 = 30.0;
+
+pub type RequestId = u64;
+
+static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+
+pub fn next_request_id() -> RequestId {
+    NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 #[derive(Debug)]
 pub enum Event {
@@ -24,6 +33,11 @@ pub enum Event {
         kind: SourceKind,
         result: Result<TimelinePage>,
         append: bool,
+    },
+    ThreadLoaded {
+        request_id: RequestId,
+        focal_id: String,
+        result: Result<TimelinePage>,
     },
 }
 

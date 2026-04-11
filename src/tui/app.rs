@@ -1,7 +1,10 @@
 use crate::cli::common;
 use crate::error::Result;
 use crate::gql::GqlClient;
-use crate::tui::event::{Event, EventTx};
+use crate::model::Tweet;
+use crate::parse::timeline::TimelinePage;
+use crate::tui::event::{self, Event, EventTx, RequestId};
+use crate::tui::focus::{self, FocusEntry, TweetDetail};
 use crate::tui::source::{self, Source, SourceKind};
 use crate::tui::ui;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -9,14 +12,23 @@ use ratatui::DefaultTerminal;
 use std::sync::Arc;
 use std::time::Instant;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivePane {
+    Source,
+    Detail,
+}
+
 pub struct App {
     pub running: bool,
     pub source: Source,
+    pub focus_stack: Vec<FocusEntry>,
+    pub active: ActivePane,
     pub status: String,
     pub error: Option<String>,
     pub last_tick: Instant,
     pub(super) client: Arc<GqlClient>,
     pub(super) tx: EventTx,
+    pub(super) pending_thread: Option<RequestId>,
 }
 
 impl App {
@@ -25,16 +37,29 @@ impl App {
         Ok(Self {
             running: true,
             source: Source::new(SourceKind::Home { following: false }),
+            focus_stack: Vec::new(),
+            active: ActivePane::Source,
             status: "press ? for help, q to quit".into(),
             error: None,
             last_tick: Instant::now(),
             client,
             tx,
+            pending_thread: None,
         })
     }
 
     pub fn load_initial(&mut self) {
-        self.fetch(false);
+        self.fetch_source(false);
+    }
+
+    pub fn is_split(&self) -> bool {
+        !self.focus_stack.is_empty()
+    }
+
+    pub fn top_detail(&self) -> Option<&TweetDetail> {
+        self.focus_stack.last().map(|entry| match entry {
+            FocusEntry::Tweet(d) => d,
+        })
     }
 
     pub fn handle_event(&mut self, event: Event, terminal: &mut DefaultTerminal) -> Result<()> {
@@ -54,6 +79,11 @@ impl App {
                 result,
                 append,
             } => self.handle_timeline_loaded(kind, result, append),
+            Event::ThreadLoaded {
+                request_id,
+                focal_id,
+                result,
+            } => self.handle_thread_loaded(request_id, focal_id, result),
             Event::Quit => self.running = false,
             Event::FocusGained | Event::FocusLost => {}
         }
@@ -62,8 +92,24 @@ impl App {
 
     fn handle_key(&mut self, key: KeyEvent) {
         match (key.code, key.modifiers) {
-            (KeyCode::Char('q'), KeyModifiers::NONE) | (KeyCode::Esc, _) => self.running = false,
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => self.running = false,
+            (KeyCode::Tab, _) if self.is_split() => {
+                self.active = match self.active {
+                    ActivePane::Source => ActivePane::Detail,
+                    ActivePane::Detail => ActivePane::Source,
+                };
+            }
+            (KeyCode::Char('q'), KeyModifiers::NONE) => self.pop_or_quit(),
+            (KeyCode::Esc, _) => self.pop_or_quit(),
+            _ => match self.active {
+                ActivePane::Source => self.handle_key_source(key),
+                ActivePane::Detail => self.handle_key_detail(key),
+            },
+        }
+    }
+
+    fn handle_key_source(&mut self, key: KeyEvent) {
+        match (key.code, key.modifiers) {
             (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => {
                 self.source.select_next();
                 self.maybe_load_more();
@@ -76,40 +122,103 @@ impl App {
                 self.source.jump_bottom();
                 self.maybe_load_more();
             }
-            (KeyCode::Char('r'), KeyModifiers::NONE) => self.reload(),
+            (KeyCode::Char('r'), KeyModifiers::NONE) => self.reload_source(),
+            (KeyCode::Enter, _) | (KeyCode::Char('l'), KeyModifiers::NONE) => {
+                if let Some(tweet) = self.source.tweets.get(self.source.selected).cloned() {
+                    self.push_tweet(tweet);
+                }
+            }
             _ => {}
         }
     }
 
-    fn handle_timeline_loaded(
+    fn handle_key_detail(&mut self, key: KeyEvent) {
+        match (key.code, key.modifiers) {
+            (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => {
+                if let Some(FocusEntry::Tweet(d)) = self.focus_stack.last_mut() {
+                    d.select_next();
+                }
+            }
+            (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => {
+                if let Some(FocusEntry::Tweet(d)) = self.focus_stack.last_mut() {
+                    d.select_prev();
+                }
+            }
+            (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, _) => {
+                self.active = ActivePane::Source;
+            }
+            (KeyCode::Enter, _) | (KeyCode::Char('l'), KeyModifiers::NONE) => {
+                if let Some(reply) = self.top_detail().and_then(|d| d.selected_reply()).cloned() {
+                    self.push_tweet(reply);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn pop_or_quit(&mut self) {
+        if self.focus_stack.pop().is_some() {
+            self.pending_thread = None;
+            if self.focus_stack.is_empty() {
+                self.active = ActivePane::Source;
+            }
+        } else {
+            self.running = false;
+        }
+    }
+
+    fn push_tweet(&mut self, tweet: Tweet) {
+        let focal_id = tweet.rest_id.clone();
+        let detail = TweetDetail::new(tweet);
+        self.focus_stack.push(FocusEntry::Tweet(detail));
+        self.active = ActivePane::Detail;
+        self.fetch_thread(focal_id);
+    }
+
+    fn fetch_thread(&mut self, focal_id: String) {
+        let request_id = event::next_request_id();
+        self.pending_thread = Some(request_id);
+        let client = self.client.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = focus::fetch_thread(&client, &focal_id).await;
+            let _ = tx.send(Event::ThreadLoaded {
+                request_id,
+                focal_id,
+                result,
+            });
+        });
+    }
+
+    fn handle_thread_loaded(
         &mut self,
-        kind: SourceKind,
-        result: Result<crate::parse::timeline::TimelinePage>,
-        append: bool,
+        request_id: RequestId,
+        focal_id: String,
+        result: Result<TimelinePage>,
     ) {
-        if self.source.kind.as_ref() != Some(&kind) {
+        if self.pending_thread != Some(request_id) {
             return;
         }
-        self.source.loading = false;
+        self.pending_thread = None;
+        let Some(FocusEntry::Tweet(detail)) = self.focus_stack.last_mut() else {
+            return;
+        };
+        if detail.tweet.rest_id != focal_id {
+            return;
+        }
         match result {
-            Ok(page) => {
-                if append {
-                    self.source.append(page);
-                } else {
-                    self.source.reset_with(page);
-                }
-                self.error = None;
-            }
+            Ok(page) => detail.apply_page(page),
             Err(e) => {
-                self.error = Some(e.to_string());
+                detail.loading = false;
+                detail.error = Some(e.to_string());
             }
         }
     }
 
-    fn reload(&mut self) {
+    fn reload_source(&mut self) {
         self.source.cursor = None;
         self.source.exhausted = false;
-        self.fetch(false);
+        self.fetch_source(false);
     }
 
     fn maybe_load_more(&mut self) {
@@ -120,10 +229,10 @@ impl App {
         {
             return;
         }
-        self.fetch(true);
+        self.fetch_source(true);
     }
 
-    fn fetch(&mut self, append: bool) {
+    fn fetch_source(&mut self, append: bool) {
         let Some(kind) = self.source.kind.clone() else {
             return;
         };
@@ -146,5 +255,30 @@ impl App {
                 append,
             });
         });
+    }
+
+    fn handle_timeline_loaded(
+        &mut self,
+        kind: SourceKind,
+        result: Result<TimelinePage>,
+        append: bool,
+    ) {
+        if self.source.kind.as_ref() != Some(&kind) {
+            return;
+        }
+        self.source.loading = false;
+        match result {
+            Ok(page) => {
+                if append {
+                    self.source.append(page);
+                } else {
+                    self.source.reset_with(page);
+                }
+                self.error = None;
+            }
+            Err(e) => {
+                self.error = Some(e.to_string());
+            }
+        }
     }
 }

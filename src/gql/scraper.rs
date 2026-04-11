@@ -5,8 +5,7 @@ use reqwest::Client;
 use std::sync::OnceLock;
 
 const HOMEPAGE: &str = "https://x.com/";
-const SCRAPER_UA: &str =
-    "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0";
+const SCRAPER_UA: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0";
 
 static MAIN_JS_RE: OnceLock<Regex> = OnceLock::new();
 static QUERY_ID_RE: OnceLock<Regex> = OnceLock::new();

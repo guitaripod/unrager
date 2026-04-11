@@ -32,19 +32,18 @@ pub async fn run(args: Args) -> Result<()> {
     let user_id = resolve_user_id(&client, screen_name).await?;
     tracing::debug!("resolved @{screen_name} to user_id {user_id}");
 
-    let tweets =
-        common::paginate_timeline(args.max_pages, args.count as usize, async |cursor| {
-            let response = client
-                .get(
-                    Operation::UserTweets,
-                    &endpoints::user_tweets_variables(&user_id, args.count, cursor.as_deref()),
-                    &endpoints::user_tweets_features(),
-                )
-                .await?;
-            let instructions = extract_instructions(&response)?;
-            Ok(timeline::walk(instructions))
-        })
-        .await?;
+    let tweets = common::paginate_timeline(args.max_pages, args.count as usize, async |cursor| {
+        let response = client
+            .get(
+                Operation::UserTweets,
+                &endpoints::user_tweets_variables(&user_id, args.count, cursor.as_deref()),
+                &endpoints::user_tweets_features(),
+            )
+            .await?;
+        let instructions = extract_instructions(&response)?;
+        Ok(timeline::walk(instructions))
+    })
+    .await?;
 
     common::emit_tweets(&tweets, args.json, "(no tweets)")
 }

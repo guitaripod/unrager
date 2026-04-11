@@ -4,7 +4,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
 use rand::Rng;
-use rand::distributions::Alphanumeric;
+use rand::distr::Alphanumeric;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::os::unix::fs::OpenOptionsExt;
@@ -116,7 +116,7 @@ fn save(path: &std::path::Path, tokens: &Tokens) -> Result<()> {
 async fn run_pkce_flow() -> Result<Tokens> {
     let verifier = random_verifier();
     let challenge = code_challenge(&verifier);
-    let state: String = rand::thread_rng()
+    let state: String = rand::rng()
         .sample_iter(&Alphanumeric)
         .take(32)
         .map(char::from)
@@ -149,7 +149,7 @@ async fn run_pkce_flow() -> Result<Tokens> {
 
 fn random_verifier() -> String {
     let mut buf = [0u8; 32];
-    rand::thread_rng().fill(&mut buf);
+    rand::rng().fill(&mut buf);
     URL_SAFE_NO_PAD.encode(buf)
 }
 
@@ -230,7 +230,9 @@ fn handle_callback_line(line: &str, expected_state: &str) -> Result<String> {
         let Some((k, v)) = pair.split_once('=') else {
             continue;
         };
-        let decoded = urlencoding::decode(v).map(|c| c.into_owned()).unwrap_or_default();
+        let decoded = urlencoding::decode(v)
+            .map(|c| c.into_owned())
+            .unwrap_or_default();
         match k {
             "code" => code = Some(decoded),
             "state" => state = Some(decoded),
@@ -310,7 +312,8 @@ fn success_html() -> String {
      .card{max-width:480px;padding:2rem;text-align:center}h1{margin:0 0 .5rem}\
      p{opacity:.7;margin:0}</style></head><body><div class=\"card\">\
      <h1>unrager authorized ✓</h1><p>You can close this tab and return to the terminal.</p>\
-     </div></body></html>".to_string()
+     </div></body></html>"
+        .to_string()
 }
 
 fn error_html(msg: &str) -> String {

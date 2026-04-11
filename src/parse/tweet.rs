@@ -9,7 +9,8 @@ pub fn parse_tweet_result_by_rest_id(response: &Value) -> Result<Tweet> {
         .ok_or_else(|| Error::GraphqlShape("missing data.tweetResult".into()))?;
     let result = wrapper.get("result").ok_or_else(|| {
         Error::GraphqlShape(
-            "tweet not accessible: it may be deleted, protected, or from a suspended account".into(),
+            "tweet not accessible: it may be deleted, protected, or from a suspended account"
+                .into(),
         )
     })?;
     parse_tweet_result(result)
@@ -17,7 +18,10 @@ pub fn parse_tweet_result_by_rest_id(response: &Value) -> Result<Tweet> {
 
 pub fn parse_tweet_result(result: &Value) -> Result<Tweet> {
     let unwrapped = unwrap_visibility(result)?;
-    let typename = unwrapped.get("__typename").and_then(Value::as_str).unwrap_or("");
+    let typename = unwrapped
+        .get("__typename")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     match typename {
         "Tweet" => parse_tweet_node(unwrapped),
         "TweetTombstone" => Err(Error::GraphqlShape(format!(
@@ -29,7 +33,10 @@ pub fn parse_tweet_result(result: &Value) -> Result<Tweet> {
         ))),
         "TweetUnavailable" => Err(Error::GraphqlShape(format!(
             "tweet is unavailable: {}",
-            unwrapped.get("reason").and_then(Value::as_str).unwrap_or("unknown")
+            unwrapped
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
         ))),
         other => Err(Error::GraphqlShape(format!(
             "unexpected tweet __typename: {other:?}"

@@ -33,23 +33,18 @@ pub async fn run(args: Args) -> Result<()> {
 
     let client = common::build_gql_client().await?;
 
-    let tweets =
-        common::paginate_timeline(args.max_pages, args.count as usize, async |cursor| {
-            let response = client
-                .get(
-                    Operation::BookmarkSearchTimeline,
-                    &endpoints::bookmark_search_variables(
-                        &args.query,
-                        args.count,
-                        cursor.as_deref(),
-                    ),
-                    &endpoints::bookmark_search_features(),
-                )
-                .await?;
-            let instructions = extract_instructions(&response)?;
-            Ok(timeline::walk(instructions))
-        })
-        .await?;
+    let tweets = common::paginate_timeline(args.max_pages, args.count as usize, async |cursor| {
+        let response = client
+            .get(
+                Operation::BookmarkSearchTimeline,
+                &endpoints::bookmark_search_variables(&args.query, args.count, cursor.as_deref()),
+                &endpoints::bookmark_search_features(),
+            )
+            .await?;
+        let instructions = extract_instructions(&response)?;
+        Ok(timeline::walk(instructions))
+    })
+    .await?;
 
     common::emit_tweets(&tweets, args.json, "(no matching bookmarks)")
 }

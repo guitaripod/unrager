@@ -26,12 +26,21 @@ const COOKIE_NAMES: &[&str] = &["auth_token", "ct0", "twid"];
 
 const BROWSER_CANDIDATES: &[(&str, &[&str])] = &[
     ("Vivaldi", &["vivaldi", "Default", "Cookies"]),
-    ("Vivaldi Snapshot", &["vivaldi-snapshot", "Default", "Cookies"]),
+    (
+        "Vivaldi Snapshot",
+        &["vivaldi-snapshot", "Default", "Cookies"],
+    ),
     ("Chromium", &["chromium", "Default", "Cookies"]),
     ("Chrome", &["google-chrome", "Default", "Cookies"]),
     ("Chrome Beta", &["google-chrome-beta", "Default", "Cookies"]),
-    ("Chrome Dev", &["google-chrome-unstable", "Default", "Cookies"]),
-    ("Brave", &["BraveSoftware", "Brave-Browser", "Default", "Cookies"]),
+    (
+        "Chrome Dev",
+        &["google-chrome-unstable", "Default", "Cookies"],
+    ),
+    (
+        "Brave",
+        &["BraveSoftware", "Brave-Browser", "Default", "Cookies"],
+    ),
     ("Edge Dev", &["microsoft-edge-dev", "Default", "Cookies"]),
     ("Opera", &["opera", "Default", "Cookies"]),
 ];
@@ -135,10 +144,7 @@ fn read_encrypted_cookies(path: &Path) -> Result<Vec<(String, Vec<u8>)>> {
     Ok(out)
 }
 
-fn decrypt_all(
-    encrypted: &[(String, Vec<u8>)],
-    passwords: &[Vec<u8>],
-) -> Result<XSession> {
+fn decrypt_all(encrypted: &[(String, Vec<u8>)], passwords: &[Vec<u8>]) -> Result<XSession> {
     let mut winning_key: Option<[u8; PBKDF2_KEY_LEN]> = None;
     let mut auth_token = None;
     let mut ct0 = None;
@@ -234,10 +240,7 @@ fn derive_key(password: &[u8]) -> Option<[u8; PBKDF2_KEY_LEN]> {
     Some(key)
 }
 
-fn try_all(
-    encrypted: &[u8],
-    passwords: &[Vec<u8>],
-) -> Result<([u8; PBKDF2_KEY_LEN], String)> {
+fn try_all(encrypted: &[u8], passwords: &[Vec<u8>]) -> Result<([u8; PBKDF2_KEY_LEN], String)> {
     let mut last_err = Error::CookieDecrypt("no candidate keys produced a valid plaintext");
     for password in passwords {
         let Some(key) = derive_key(password) else {
@@ -274,7 +277,9 @@ fn decrypt_v11(encrypted: &[u8], key: &[u8; PBKDF2_KEY_LEN]) -> Result<Vec<u8>> 
     }
     let body = &encrypted[V11_PREFIX.len()..];
     if body.is_empty() || body.len() % 16 != 0 {
-        return Err(Error::CookieDecrypt("ciphertext length not a multiple of 16"));
+        return Err(Error::CookieDecrypt(
+            "ciphertext length not a multiple of 16",
+        ));
     }
     let mut buf = body.to_vec();
     let plaintext = Aes128CbcDec::new(key.into(), &AES_IV.into())

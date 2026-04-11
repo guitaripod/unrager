@@ -194,7 +194,10 @@ pub fn bookmarks_variables(count: u32, cursor: Option<&str>) -> Value {
 pub fn bookmarks_features() -> Value {
     let mut f = tweet_read_features();
     if let Value::Object(ref mut m) = f {
-        m.insert("graphql_timeline_v2_bookmark_timeline".into(), Value::Bool(true));
+        m.insert(
+            "graphql_timeline_v2_bookmark_timeline".into(),
+            Value::Bool(true),
+        );
     }
     f
 }

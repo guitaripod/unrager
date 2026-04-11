@@ -25,9 +25,19 @@ pub async fn run(args: Args) -> Result<()> {
         Command::Login => {
             let tokens = oauth::load_or_authorize().await?;
             println!("authorized ✓");
-            println!("  scope:      {}", tokens.scope.unwrap_or_else(|| "(not reported)".into()));
+            println!(
+                "  scope:      {}",
+                tokens.scope.unwrap_or_else(|| "(not reported)".into())
+            );
             println!("  expires_at: {}", tokens.expires_at.to_rfc3339());
-            println!("  refresh:    {}", if tokens.refresh_token.is_some() { "yes" } else { "no" });
+            println!(
+                "  refresh:    {}",
+                if tokens.refresh_token.is_some() {
+                    "yes"
+                } else {
+                    "no"
+                }
+            );
             println!("  cached at:  {}", oauth::tokens_path()?.display());
             Ok(())
         }
@@ -40,11 +50,25 @@ pub async fn run(args: Args) -> Result<()> {
             }
             let bytes = std::fs::read(&path)?;
             let tokens: oauth::Tokens = serde_json::from_slice(&bytes)?;
-            let expired = if tokens.is_expired() { " (expired)" } else { "" };
+            let expired = if tokens.is_expired() {
+                " (expired)"
+            } else {
+                ""
+            };
             println!("cached at:  {}", path.display());
-            println!("scope:      {}", tokens.scope.unwrap_or_else(|| "(not reported)".into()));
+            println!(
+                "scope:      {}",
+                tokens.scope.unwrap_or_else(|| "(not reported)".into())
+            );
             println!("expires_at: {}{expired}", tokens.expires_at.to_rfc3339());
-            println!("refresh:    {}", if tokens.refresh_token.is_some() { "yes" } else { "no" });
+            println!(
+                "refresh:    {}",
+                if tokens.refresh_token.is_some() {
+                    "yes"
+                } else {
+                    "no"
+                }
+            );
             Ok(())
         }
         Command::Logout => {

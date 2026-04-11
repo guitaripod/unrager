@@ -49,7 +49,12 @@ fn collect_from_entry(entry: &Value, page: &mut TimelinePage) {
     let entry_type = content
         .get("entryType")
         .and_then(Value::as_str)
-        .unwrap_or_else(|| content.get("__typename").and_then(Value::as_str).unwrap_or(""));
+        .unwrap_or_else(|| {
+            content
+                .get("__typename")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+        });
 
     match entry_type {
         "TimelineTimelineItem" => {

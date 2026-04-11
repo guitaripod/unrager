@@ -14,8 +14,7 @@ const WEB_BEARER: &str = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz
 
 const GQL_BASE: &str = "https://x.com/i/api/graphql";
 const MIN_INTERVAL: Duration = Duration::from_millis(400);
-const USER_AGENT: &str =
-    "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0";
+const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0";
 
 pub struct GqlClient {
     http: reqwest::Client,
@@ -63,7 +62,8 @@ impl GqlClient {
     ) -> Result<Value> {
         match self.call_once(&method, op, variables, features).await {
             Ok(v) => Ok(v),
-            Err(Error::GraphqlStatus { status: 404, .. }) | Err(Error::GraphqlStatus { status: 400, .. }) => {
+            Err(Error::GraphqlStatus { status: 404, .. })
+            | Err(Error::GraphqlStatus { status: 400, .. }) => {
                 tracing::warn!("{} returned stale query id, refreshing", op.name());
                 self.refresh_query_ids().await?;
                 self.call_once(&method, op, variables, features).await
@@ -79,9 +79,9 @@ impl GqlClient {
         variables: &Value,
         features: &Value,
     ) -> Result<Value> {
-        let qid = self
-            .lookup_qid(op)
-            .ok_or_else(|| Error::GraphqlShape(format!("no query id for operation {}", op.name())))?;
+        let qid = self.lookup_qid(op).ok_or_else(|| {
+            Error::GraphqlShape(format!("no query id for operation {}", op.name()))
+        })?;
         let url = format!("{GQL_BASE}/{}/{}", qid.id, op.name());
 
         self.throttle().await;

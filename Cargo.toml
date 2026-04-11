@@ -35,7 +35,7 @@ tempfile = "3"
 regex = "1"
 sha2 = "0.10"
 base64 = "0.22"
-rand = "0.8"
+rand = "0.9"
 urlencoding = "2"
 
 [profile.release]

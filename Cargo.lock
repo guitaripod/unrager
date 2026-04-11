@@ -2392,7 +2392,7 @@ dependencies = [
  "directories",
  "hmac",
  "pbkdf2",
- "rand 0.8.5",
+ "rand 0.9.3",
  "regex",
  "reqwest",
  "rusqlite",

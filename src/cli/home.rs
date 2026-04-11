@@ -29,19 +29,18 @@ pub async fn run(args: Args) -> Result<()> {
         Operation::HomeTimeline
     };
 
-    let tweets =
-        common::paginate_timeline(args.max_pages, args.count as usize, async |cursor| {
-            let response = client
-                .post(
-                    op,
-                    &endpoints::home_timeline_variables(args.count, cursor.as_deref()),
-                    &endpoints::home_timeline_features(),
-                )
-                .await?;
-            let instructions = extract_instructions(&response)?;
-            Ok(timeline::walk(instructions))
-        })
-        .await?;
+    let tweets = common::paginate_timeline(args.max_pages, args.count as usize, async |cursor| {
+        let response = client
+            .post(
+                op,
+                &endpoints::home_timeline_variables(args.count, cursor.as_deref()),
+                &endpoints::home_timeline_features(),
+            )
+            .await?;
+        let instructions = extract_instructions(&response)?;
+        Ok(timeline::walk(instructions))
+    })
+    .await?;
 
     common::emit_tweets(&tweets, args.json, "(home timeline returned no tweets)")
 }

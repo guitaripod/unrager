@@ -13,7 +13,7 @@ All 8 read commands plus the `tweet` / `reply` write path are implemented. The l
 Hybrid, by necessity.
 
 - **Reads** use the same GraphQL endpoints X's web client uses, authenticated with cookies pulled directly from your local browser session. This path is free, unquota'd, and returns the exact same data you see in the web app.
-- **Writes** use the official X API v2 via OAuth 2.0 PKCE on pay-per-use billing. This costs roughly $0.01 per post (under $2/month at typical personal volume) but carries zero risk to your account, because it is the path X itself wants you to use. Cookie-auth writes are where accounts get suspended; we avoid that entirely.
+- **Writes** use the official X API v2 via OAuth 2.0 PKCE on pay-per-use billing. Tweet creation is $0.01; media uploads are metered separately (empirically confirmed — X returns HTTP 402 `CreditsDepleted` on media upload at $0 balance, so media uploads are not bundled into the tweet cost despite some older docs suggesting otherwise). Zero risk to your account because it is the path X itself wants you to use; cookie-auth writes are where accounts get suspended, and we avoid that entirely.
 
 ## Requirements
 

@@ -386,6 +386,16 @@ fn has_pending_processing_info(value: &Value) -> bool {
 }
 
 fn classify_media_error(status: u16, body: &str) -> Error {
+    if (status == 402 || status == 403)
+        && (body.contains("CreditsDepleted")
+            || body.contains("credits to fulfill")
+            || body.contains("\"type\":\"https://api.twitter.com/2/problems/credits\""))
+    {
+        return Error::Config(format!(
+            "{status}: credits depleted. Media uploads ARE billed on pay-per-use; \
+             top up at console.x.com > Billing > Credits. Raw: {body}"
+        ));
+    }
     if status == 413 {
         return Error::Config(format!(
             "413: media file too large for this endpoint. Raw: {body}"
@@ -405,7 +415,7 @@ fn classify_media_error(status: u16, body: &str) -> Error {
     if status == 403 {
         return Error::Config(format!(
             "403: media upload forbidden. Check that your app has Read+Write scope \
-             and that tweet.write is granted. Raw: {body}"
+             and that media.write is granted. Raw: {body}"
         ));
     }
     Error::GraphqlStatus {

@@ -106,7 +106,15 @@ pub fn emit_dry_run(
     if let Some(id) = in_reply_to_tweet_id {
         eprintln!("Reply target: {id}");
     }
-    eprintln!("Cost if sent: $0.01 (pay-per-use; media upload is bundled, not billed separately).");
+    if media_files.is_empty() {
+        eprintln!("Cost if sent: $0.01 (pay-per-use tweet creation).");
+    } else {
+        eprintln!(
+            "Cost if sent: $0.01 for the tweet + metered media upload credits. \
+             Media uploads ARE billed on pay-per-use (confirmed via HTTP 402 \
+             CreditsDepleted on an empty-balance account)."
+        );
+    }
     eprintln!("Remove --dry-run to actually post.");
     Ok(())
 }

@@ -111,9 +111,9 @@ impl ApiClient {
 }
 
 fn classify_post_error(status: u16, body: &str) -> Error {
-    if status == 403 && (body.contains("insufficient") || body.contains("credit")) {
+    if is_credits_depleted(status, body) {
         return Error::Config(format!(
-            "403: insufficient credits for the write. \
+            "{status}: credits depleted. \
              Top up at console.x.com > Billing > Credits. Raw: {body}"
         ));
     }
@@ -127,4 +127,12 @@ fn classify_post_error(status: u16, body: &str) -> Error {
         status,
         body: body.to_string(),
     }
+}
+
+fn is_credits_depleted(status: u16, body: &str) -> bool {
+    (status == 402 || status == 403)
+        && (body.contains("CreditsDepleted")
+            || body.contains("credits to fulfill")
+            || body.contains("insufficient")
+            || body.contains("\"type\":\"https://api.twitter.com/2/problems/credits\""))
 }

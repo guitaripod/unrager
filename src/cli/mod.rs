@@ -1,4 +1,5 @@
 pub mod bookmarks;
+pub mod common;
 pub mod home;
 pub mod mentions;
 pub mod read;

@@ -7,6 +7,17 @@ pub fn tweet(tweet: &Tweet) -> String {
     out
 }
 
+pub fn tweet_list(tweets: &[Tweet]) -> String {
+    let mut out = String::new();
+    for (i, t) in tweets.iter().enumerate() {
+        if i > 0 {
+            let _ = writeln!(out, "────────────────────────────────────────");
+        }
+        render_into(&mut out, t, 0);
+    }
+    out
+}
+
 fn render_into(out: &mut String, t: &Tweet, indent_level: usize) {
     let indent = "  ".repeat(indent_level);
     let verified = if t.author.verified { " ✓" } else { "" };

@@ -25,6 +25,23 @@ pub fn tweet_by_rest_id_variables(tweet_id: &str) -> Value {
     })
 }
 
+pub fn tweet_detail_variables(focal_tweet_id: &str, cursor: Option<&str>) -> Value {
+    let mut vars = json!({
+        "focalTweetId": focal_tweet_id,
+        "with_rux_injections": false,
+        "includePromotedContent": false,
+        "withCommunity": true,
+        "withQuickPromoteEligibilityTweetFields": false,
+        "withBirdwatchNotes": false,
+        "withVoice": false,
+        "withV2Timeline": true
+    });
+    if let Some(c) = cursor {
+        vars["cursor"] = Value::String(c.to_string());
+    }
+    vars
+}
+
 pub fn tweet_read_features() -> Value {
     json!({
         "creator_subscriptions_tweet_preview_api_enabled": true,

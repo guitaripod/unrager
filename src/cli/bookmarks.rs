@@ -1,6 +1,5 @@
 use crate::cli::common;
 use crate::error::{Error, Result};
-use crate::gql::GqlClient;
 use crate::gql::endpoints;
 use crate::gql::query_ids::Operation;
 use crate::parse::timeline;
@@ -34,47 +33,25 @@ pub async fn run(args: Args) -> Result<()> {
 
     let client = common::build_gql_client().await?;
 
-    let mut all = Vec::new();
-    let mut cursor: Option<String> = None;
-    let target = args.count as usize;
+    let tweets =
+        common::paginate_timeline(args.max_pages, args.count as usize, async |cursor| {
+            let response = client
+                .get(
+                    Operation::BookmarkSearchTimeline,
+                    &endpoints::bookmark_search_variables(
+                        &args.query,
+                        args.count,
+                        cursor.as_deref(),
+                    ),
+                    &endpoints::bookmark_search_features(),
+                )
+                .await?;
+            let instructions = extract_instructions(&response)?;
+            Ok(timeline::walk(instructions))
+        })
+        .await?;
 
-    for page_idx in 0..args.max_pages {
-        let response = call(&client, &args.query, args.count, cursor.as_deref()).await?;
-        let instructions = extract_instructions(&response)?;
-        let page = timeline::walk(instructions);
-        tracing::debug!(
-            "bookmarks page {page_idx}: {} tweets, next_cursor={:?}",
-            page.tweets.len(),
-            page.next_cursor.as_ref().map(|c| c.len())
-        );
-        let fetched = page.tweets.len();
-        all.extend(page.tweets);
-        if all.len() >= target {
-            break;
-        }
-        match page.next_cursor {
-            Some(next) if fetched > 0 => cursor = Some(next),
-            _ => break,
-        }
-    }
-
-    all.truncate(target);
-    common::emit_tweets(&all, args.json, "(no matching bookmarks)")
-}
-
-async fn call(
-    client: &GqlClient,
-    query: &str,
-    count: u32,
-    cursor: Option<&str>,
-) -> Result<Value> {
-    client
-        .get(
-            Operation::BookmarkSearchTimeline,
-            &endpoints::bookmark_search_variables(query, count, cursor),
-            &endpoints::bookmark_search_features(),
-        )
-        .await
+    common::emit_tweets(&tweets, args.json, "(no matching bookmarks)")
 }
 
 fn extract_instructions(response: &Value) -> Result<&[Value]> {

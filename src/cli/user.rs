@@ -4,7 +4,6 @@ use crate::gql::GqlClient;
 use crate::gql::endpoints;
 use crate::gql::query_ids::Operation;
 use crate::parse::timeline;
-use crate::render::pretty;
 use clap::Args as ClapArgs;
 use serde_json::Value;
 
@@ -26,56 +25,28 @@ pub struct Args {
 pub async fn run(args: Args) -> Result<()> {
     let screen_name = args.handle.trim_start_matches('@');
     if screen_name.is_empty() {
-        return Err(Error::BadTweetRef(args.handle.clone()));
+        return Err(Error::Config("handle must not be empty".into()));
     }
 
     let client = common::build_gql_client().await?;
     let user_id = resolve_user_id(&client, screen_name).await?;
     tracing::debug!("resolved @{screen_name} to user_id {user_id}");
 
-    let mut all = Vec::new();
-    let mut cursor: Option<String> = None;
-    let target = args.count as usize;
+    let tweets =
+        common::paginate_timeline(args.max_pages, args.count as usize, async |cursor| {
+            let response = client
+                .get(
+                    Operation::UserTweets,
+                    &endpoints::user_tweets_variables(&user_id, args.count, cursor.as_deref()),
+                    &endpoints::user_tweets_features(),
+                )
+                .await?;
+            let instructions = extract_instructions(&response)?;
+            Ok(timeline::walk(instructions))
+        })
+        .await?;
 
-    for page_idx in 0..args.max_pages {
-        let response = client
-            .get(
-                Operation::UserTweets,
-                &endpoints::user_tweets_variables(&user_id, args.count, cursor.as_deref()),
-                &endpoints::user_tweets_features(),
-            )
-            .await?;
-
-        let instructions = extract_user_tweets_instructions(&response)?;
-        let page = timeline::walk(instructions);
-        tracing::debug!(
-            "page {page_idx}: {} tweets, next_cursor={:?}",
-            page.tweets.len(),
-            page.next_cursor.as_ref().map(|c| c.len())
-        );
-
-        let fetched = page.tweets.len();
-        all.extend(page.tweets);
-        if all.len() >= target {
-            break;
-        }
-        match page.next_cursor {
-            Some(next) if fetched > 0 => cursor = Some(next),
-            _ => break,
-        }
-    }
-
-    all.truncate(target);
-
-    if args.json {
-        println!("{}", serde_json::to_string_pretty(&all)?);
-    } else if all.is_empty() {
-        println!("(no tweets)");
-    } else {
-        print!("{}", pretty::tweet_list(&all));
-    }
-
-    Ok(())
+    common::emit_tweets(&tweets, args.json, "(no tweets)")
 }
 
 async fn resolve_user_id(client: &GqlClient, screen_name: &str) -> Result<String> {
@@ -104,15 +75,13 @@ async fn resolve_user_id(client: &GqlClient, screen_name: &str) -> Result<String
         .ok_or_else(|| Error::GraphqlShape(format!("@{screen_name} has no rest_id")))
 }
 
-fn extract_user_tweets_instructions(response: &Value) -> Result<&[Value]> {
+fn extract_instructions(response: &Value) -> Result<&[Value]> {
     response
         .pointer("/data/user/result/timeline/timeline/instructions")
         .or_else(|| response.pointer("/data/user/result/timeline_v2/timeline/instructions"))
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .ok_or_else(|| {
-            Error::GraphqlShape(
-                "missing data.user.result.timeline*.timeline.instructions".into(),
-            )
+            Error::GraphqlShape("missing data.user.result.timeline*.timeline.instructions".into())
         })
 }

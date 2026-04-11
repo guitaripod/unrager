@@ -43,10 +43,3 @@ pub enum MediaKind {
     Video,
     AnimatedGif,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Thread {
-    pub root: Tweet,
-    pub ancestors: Vec<Tweet>,
-    pub replies: Vec<Tweet>,
-}

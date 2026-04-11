@@ -3,7 +3,6 @@ use crate::error::{Error, Result};
 use crate::gql::endpoints;
 use crate::gql::query_ids::Operation;
 use crate::parse::timeline;
-use crate::render::pretty;
 use crate::util::parse_tweet_ref;
 use clap::Args as ClapArgs;
 use serde_json::Value;
@@ -24,10 +23,7 @@ pub async fn run(args: Args) -> Result<()> {
     let focal = parse_tweet_ref(&args.target)?;
     let client = common::build_gql_client().await?;
 
-    let mut all = Vec::new();
-    let mut cursor: Option<String> = None;
-
-    for page_idx in 0..args.max_pages {
+    let tweets = common::paginate_timeline(args.max_pages, usize::MAX, async |cursor| {
         let response = client
             .get(
                 Operation::TweetDetail,
@@ -35,37 +31,18 @@ pub async fn run(args: Args) -> Result<()> {
                 &endpoints::tweet_read_features(),
             )
             .await?;
-
         let instructions = extract_instructions(&response)?;
-        let page = timeline::walk(instructions);
-        tracing::debug!(
-            "page {page_idx}: {} tweets, next_cursor={:?}",
-            page.tweets.len(),
-            page.next_cursor.as_ref().map(|c| c.len())
-        );
+        Ok(timeline::walk(instructions))
+    })
+    .await?;
 
-        let fetched = page.tweets.len();
-        all.extend(page.tweets);
-
-        match page.next_cursor {
-            Some(next) if fetched > 0 => cursor = Some(next),
-            _ => break,
-        }
-    }
-
-    if all.is_empty() {
+    if tweets.is_empty() {
         return Err(Error::GraphqlShape(
             "thread returned no tweets: focal tweet may be inaccessible".into(),
         ));
     }
 
-    if args.json {
-        println!("{}", serde_json::to_string_pretty(&all)?);
-    } else {
-        print!("{}", pretty::tweet_list(&all));
-    }
-
-    Ok(())
+    common::emit_tweets(&tweets, args.json, "(empty)")
 }
 
 fn extract_instructions(response: &Value) -> Result<&[Value]> {

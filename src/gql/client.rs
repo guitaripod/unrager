@@ -10,7 +10,7 @@ use std::time::Duration;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::{Instant, sleep_until};
 
-pub const WEB_BEARER: &str = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA";
+const WEB_BEARER: &str = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA";
 
 const GQL_BASE: &str = "https://x.com/i/api/graphql";
 const MIN_INTERVAL: Duration = Duration::from_millis(400);
@@ -44,10 +44,6 @@ impl GqlClient {
             cache_path,
             next_allowed: AsyncMutex::new(Instant::now()),
         })
-    }
-
-    pub fn session(&self) -> &XSession {
-        &self.session
     }
 
     pub async fn get(&self, op: Operation, variables: &Value, features: &Value) -> Result<Value> {

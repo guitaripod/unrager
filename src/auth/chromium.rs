@@ -193,7 +193,7 @@ async fn candidate_passwords() -> Vec<Vec<u8>> {
 }
 
 async fn collect_keyring_secrets() -> Result<Vec<Vec<u8>>> {
-    let ss = secret_service::SecretService::connect(secret_service::EncryptionType::Dh)
+    let ss = secret_service::SecretService::connect(secret_service::EncryptionType::Plain)
         .await
         .map_err(|e| Error::Keyring(e.to_string()))?;
 

@@ -1,4 +1,4 @@
-use crate::api::media::MediaFile;
+use crate::api::media::{MediaFile, MediaUploader};
 use crate::auth::oauth;
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -63,17 +63,22 @@ impl ApiClient {
         in_reply_to_tweet_id: Option<&str>,
         media_files: &[MediaFile],
     ) -> Result<PostedTweet> {
-        if !media_files.is_empty() {
-            return Err(Error::Config(
-                "media upload is not wired up yet in this build; remove --media \
-                 or use --dry-run to inspect the plan"
-                    .into(),
-            ));
-        }
+        let media_ids = if media_files.is_empty() {
+            Vec::new()
+        } else {
+            let uploader = MediaUploader::new(&self.http, &self.access_token);
+            let mut ids = Vec::with_capacity(media_files.len());
+            for file in media_files {
+                let id = uploader.upload(file).await?;
+                tracing::debug!("uploaded {} → media_id {id}", file.path.display());
+                ids.push(id);
+            }
+            ids
+        };
         let request = PostRequest {
             text: text.to_string(),
             in_reply_to_tweet_id: in_reply_to_tweet_id.map(str::to_string),
-            media_ids: Vec::new(),
+            media_ids,
         };
         self.post_request(&request).await
     }

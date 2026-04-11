@@ -1,5 +1,9 @@
 use crate::error::{Error, Result};
+use reqwest::multipart::{Form, Part};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+use tokio::time::sleep;
 
 pub const MEDIA_UPLOAD_URL: &str = "https://api.x.com/2/media/upload";
 pub const SINGLE_SHOT_MAX: u64 = 5 * 1024 * 1024;
@@ -141,6 +145,277 @@ pub fn validate_set(files: &[MediaFile]) -> Result<()> {
     }
 
     Ok(())
+}
+
+const STATUS_POLL_MAX_ATTEMPTS: u32 = 60;
+const STATUS_POLL_MIN_INTERVAL: Duration = Duration::from_secs(2);
+
+pub struct MediaUploader<'a> {
+    http: &'a reqwest::Client,
+    access_token: &'a str,
+}
+
+impl<'a> MediaUploader<'a> {
+    pub fn new(http: &'a reqwest::Client, access_token: &'a str) -> Self {
+        Self { http, access_token }
+    }
+
+    pub async fn upload(&self, file: &MediaFile) -> Result<String> {
+        match file.strategy() {
+            UploadStrategy::SingleShot => self.upload_single_shot(file).await,
+            UploadStrategy::Chunked { segments } => self.upload_chunked(file, segments).await,
+        }
+    }
+
+    async fn upload_single_shot(&self, file: &MediaFile) -> Result<String> {
+        tracing::debug!(
+            "single-shot upload: {} ({} bytes, {})",
+            file.path.display(),
+            file.size,
+            file.mime
+        );
+        let bytes = tokio::fs::read(&file.path).await.map_err(|e| {
+            Error::Config(format!(
+                "cannot read media file {}: {e}",
+                file.path.display()
+            ))
+        })?;
+        let file_name = file
+            .path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("upload.bin")
+            .to_string();
+
+        let part = Part::bytes(bytes)
+            .file_name(file_name)
+            .mime_str(&file.mime)
+            .map_err(|e| Error::Config(format!("bad media mime type: {e}")))?;
+        let form = Form::new()
+            .part("media", part)
+            .text("media_category", file.category.as_api());
+
+        let res = self
+            .http
+            .post(MEDIA_UPLOAD_URL)
+            .bearer_auth(self.access_token)
+            .multipart(form)
+            .send()
+            .await?;
+
+        let value = parse_upload_response(res).await?;
+        extract_media_id(&value)
+    }
+
+    async fn upload_chunked(&self, file: &MediaFile, segments: u64) -> Result<String> {
+        tracing::debug!(
+            "chunked upload: {} ({} bytes, {} segments, {})",
+            file.path.display(),
+            file.size,
+            segments,
+            file.mime
+        );
+        let media_id = self.init(file).await?;
+        tracing::debug!("INIT → media_id {media_id}");
+
+        let bytes = tokio::fs::read(&file.path).await.map_err(|e| {
+            Error::Config(format!(
+                "cannot read media file {}: {e}",
+                file.path.display()
+            ))
+        })?;
+
+        for (segment_index, chunk) in bytes.chunks(CHUNK_SIZE as usize).enumerate() {
+            self.append(&media_id, segment_index as u64, chunk).await?;
+            tracing::debug!("APPEND segment {} ({} bytes)", segment_index, chunk.len());
+        }
+
+        let finalize_response = self.finalize(&media_id).await?;
+        tracing::debug!("FINALIZE complete");
+
+        if file.category.needs_status_poll() || has_pending_processing_info(&finalize_response) {
+            self.poll_status(&media_id).await?;
+        }
+
+        Ok(media_id)
+    }
+
+    async fn init(&self, file: &MediaFile) -> Result<String> {
+        let total_bytes = file.size.to_string();
+        let query = [
+            ("command", "INIT"),
+            ("total_bytes", total_bytes.as_str()),
+            ("media_type", file.mime.as_str()),
+            ("media_category", file.category.as_api()),
+        ];
+
+        let res = self
+            .http
+            .post(MEDIA_UPLOAD_URL)
+            .bearer_auth(self.access_token)
+            .query(&query)
+            .send()
+            .await?;
+
+        let value = parse_upload_response(res).await?;
+        extract_media_id(&value)
+    }
+
+    async fn append(&self, media_id: &str, segment_index: u64, chunk: &[u8]) -> Result<()> {
+        let seg = segment_index.to_string();
+        let query = [
+            ("command", "APPEND"),
+            ("media_id", media_id),
+            ("segment_index", seg.as_str()),
+        ];
+
+        let part = Part::bytes(chunk.to_vec())
+            .file_name("chunk")
+            .mime_str("application/octet-stream")
+            .map_err(|e| Error::Config(format!("bad chunk mime: {e}")))?;
+        let form = Form::new().part("media", part);
+
+        let res = self
+            .http
+            .post(MEDIA_UPLOAD_URL)
+            .bearer_auth(self.access_token)
+            .query(&query)
+            .multipart(form)
+            .send()
+            .await?;
+
+        let status = res.status();
+        if !status.is_success() {
+            let body = res.text().await.unwrap_or_default();
+            return Err(classify_media_error(status.as_u16(), &body));
+        }
+        Ok(())
+    }
+
+    async fn finalize(&self, media_id: &str) -> Result<Value> {
+        let query = [("command", "FINALIZE"), ("media_id", media_id)];
+        let res = self
+            .http
+            .post(MEDIA_UPLOAD_URL)
+            .bearer_auth(self.access_token)
+            .query(&query)
+            .send()
+            .await?;
+        parse_upload_response(res).await
+    }
+
+    async fn poll_status(&self, media_id: &str) -> Result<()> {
+        for attempt in 0..STATUS_POLL_MAX_ATTEMPTS {
+            let query = [("command", "STATUS"), ("media_id", media_id)];
+            let res = self
+                .http
+                .get(MEDIA_UPLOAD_URL)
+                .bearer_auth(self.access_token)
+                .query(&query)
+                .send()
+                .await?;
+            let value = parse_upload_response(res).await?;
+
+            let processing = value
+                .pointer("/data/processing_info")
+                .or_else(|| value.get("processing_info"));
+            let Some(info) = processing else {
+                tracing::debug!("STATUS returned no processing_info; upload ready");
+                return Ok(());
+            };
+
+            let state = info.get("state").and_then(Value::as_str).unwrap_or("");
+            match state {
+                "succeeded" => return Ok(()),
+                "failed" => {
+                    let reason = info
+                        .pointer("/error/message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("(no reason reported)");
+                    return Err(Error::Config(format!("media processing failed: {reason}")));
+                }
+                _ => {}
+            }
+
+            let wait_secs = info
+                .get("check_after_secs")
+                .and_then(Value::as_u64)
+                .unwrap_or(2)
+                .max(2);
+            tracing::debug!("STATUS attempt {attempt}: state={state:?}, next poll in {wait_secs}s");
+            sleep(Duration::from_secs(wait_secs).max(STATUS_POLL_MIN_INTERVAL)).await;
+        }
+        Err(Error::Config(format!(
+            "media processing did not complete after {STATUS_POLL_MAX_ATTEMPTS} status polls"
+        )))
+    }
+}
+
+async fn parse_upload_response(res: reqwest::Response) -> Result<Value> {
+    let status = res.status();
+    let body = res.text().await?;
+    if !status.is_success() {
+        return Err(classify_media_error(status.as_u16(), &body));
+    }
+    if body.is_empty() {
+        return Ok(Value::Null);
+    }
+    serde_json::from_str(&body).map_err(|e| {
+        Error::GraphqlShape(format!(
+            "media upload response was not valid json ({e}): {body}"
+        ))
+    })
+}
+
+fn extract_media_id(value: &Value) -> Result<String> {
+    if let Some(id) = value.pointer("/data/id").and_then(Value::as_str) {
+        return Ok(id.to_string());
+    }
+    if let Some(id) = value.get("media_id_string").and_then(Value::as_str) {
+        return Ok(id.to_string());
+    }
+    if let Some(id) = value.get("media_id").and_then(Value::as_u64) {
+        return Ok(id.to_string());
+    }
+    Err(Error::GraphqlShape(format!(
+        "media upload response missing media id: {value}"
+    )))
+}
+
+fn has_pending_processing_info(value: &Value) -> bool {
+    value
+        .pointer("/data/processing_info")
+        .or_else(|| value.get("processing_info"))
+        .is_some()
+}
+
+fn classify_media_error(status: u16, body: &str) -> Error {
+    if status == 413 {
+        return Error::Config(format!(
+            "413: media file too large for this endpoint. Raw: {body}"
+        ));
+    }
+    if status == 400 && body.contains("media type") {
+        return Error::Config(format!(
+            "400: X rejected the media type. Only jpeg, png, webp, gif, mp4, mov are supported. Raw: {body}"
+        ));
+    }
+    if status == 401 {
+        return Error::Config(format!(
+            "401: access token rejected during media upload. \
+             Delete ~/.config/unrager/tokens.json and re-authorize. Raw: {body}"
+        ));
+    }
+    if status == 403 {
+        return Error::Config(format!(
+            "403: media upload forbidden. Check that your app has Read+Write scope \
+             and that tweet.write is granted. Raw: {body}"
+        ));
+    }
+    Error::GraphqlStatus {
+        status,
+        body: body.to_string(),
+    }
 }
 
 pub fn format_size(bytes: u64) -> String {

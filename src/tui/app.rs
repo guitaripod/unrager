@@ -27,6 +27,13 @@ pub enum ActivePane {
 pub enum InputMode {
     Normal,
     Command,
+    Help,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimestampStyle {
+    Absolute,
+    Relative,
 }
 
 pub struct App {
@@ -43,6 +50,7 @@ pub struct App {
     pub last_tick: Instant,
     pub seen: SeenStore,
     pub session_path: PathBuf,
+    pub timestamps: TimestampStyle,
     pub(super) client: Arc<GqlClient>,
     pub(super) tx: EventTx,
     pub(super) pending_thread: Option<RequestId>,
@@ -79,6 +87,7 @@ impl App {
             last_tick: Instant::now(),
             seen,
             session_path,
+            timestamps: TimestampStyle::Relative,
             client,
             tx,
             pending_thread: None,
@@ -180,6 +189,10 @@ impl App {
             self.handle_key_command(key);
             return;
         }
+        if matches!(self.mode, InputMode::Help) {
+            self.mode = InputMode::Normal;
+            return;
+        }
         match (key.code, key.modifiers) {
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => self.running = false,
             (KeyCode::Tab, _) if self.is_split() => {
@@ -193,6 +206,18 @@ impl App {
                 self.command_buffer.clear();
                 self.error = None;
             }
+            (KeyCode::Char('?'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                self.mode = InputMode::Help;
+            }
+            (KeyCode::Char('t'), KeyModifiers::NONE) => {
+                self.timestamps = match self.timestamps {
+                    TimestampStyle::Relative => TimestampStyle::Absolute,
+                    TimestampStyle::Absolute => TimestampStyle::Relative,
+                };
+            }
+            (KeyCode::Char('y'), KeyModifiers::NONE) => self.yank_url(),
+            (KeyCode::Char('Y'), KeyModifiers::NONE | KeyModifiers::SHIFT) => self.yank_json(),
+            (KeyCode::Char('m'), KeyModifiers::NONE) => self.open_media_external(),
             (KeyCode::Char('q'), KeyModifiers::NONE) => self.pop_or_quit(),
             (KeyCode::Esc, _) => self.pop_or_quit(),
             (KeyCode::Char(']'), KeyModifiers::NONE) => self.history_forward(),
@@ -201,6 +226,66 @@ impl App {
                 ActivePane::Source => self.handle_key_source(key),
                 ActivePane::Detail => self.handle_key_detail(key),
             },
+        }
+    }
+
+    fn selected_tweet(&self) -> Option<&Tweet> {
+        match self.active {
+            ActivePane::Source => self.source.tweets.get(self.source.selected),
+            ActivePane::Detail => {
+                let detail = self.top_detail()?;
+                if detail.replies.is_empty() {
+                    Some(&detail.tweet)
+                } else {
+                    detail.replies.get(detail.selected).or(Some(&detail.tweet))
+                }
+            }
+        }
+    }
+
+    fn yank_url(&mut self) {
+        let Some(tweet) = self.selected_tweet() else {
+            return;
+        };
+        let text = tweet.url.clone();
+        self.copy_to_clipboard(text, "url copied");
+    }
+
+    fn yank_json(&mut self) {
+        let Some(tweet) = self.selected_tweet() else {
+            return;
+        };
+        match serde_json::to_string_pretty(tweet) {
+            Ok(json) => self.copy_to_clipboard(json, "json copied"),
+            Err(e) => self.error = Some(format!("serialize failed: {e}")),
+        }
+    }
+
+    fn copy_to_clipboard(&mut self, text: String, note: &str) {
+        match arboard::Clipboard::new().and_then(|mut c| c.set_text(text)) {
+            Ok(()) => self.status = note.to_string(),
+            Err(e) => self.error = Some(format!("clipboard failed: {e}")),
+        }
+    }
+
+    fn open_media_external(&mut self) {
+        let Some(tweet) = self.selected_tweet() else {
+            return;
+        };
+        let Some(media) = tweet.media.first() else {
+            self.status = "no media on selected tweet".into();
+            return;
+        };
+        let url = media.url.clone();
+        let result = std::process::Command::new("xdg-open")
+            .arg(&url)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        match result {
+            Ok(_) => self.status = format!("opened {url}"),
+            Err(e) => self.error = Some(format!("xdg-open failed: {e}")),
         }
     }
 

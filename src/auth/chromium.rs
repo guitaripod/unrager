@@ -11,6 +11,7 @@ use super::XSession;
 
 type Aes128CbcDec = cbc::Decryptor<Aes128>;
 
+const COOKIES_PATH_ENV: &str = "UNRAGER_COOKIES_PATH";
 const SAFE_STORAGE_SUFFIX: &str = "Safe Storage";
 const PORTAL_SERVER: &str = "xdg-desktop-portal";
 const PEANUTS_PASSWORD: &[u8] = b"peanuts";
@@ -23,50 +24,79 @@ const INTEGRITY_PREFIX_LEN: usize = 32;
 
 const COOKIE_NAMES: &[&str] = &["auth_token", "ct0", "twid"];
 
+const BROWSER_CANDIDATES: &[(&str, &[&str])] = &[
+    ("Vivaldi", &["vivaldi", "Default", "Cookies"]),
+    ("Vivaldi Snapshot", &["vivaldi-snapshot", "Default", "Cookies"]),
+    ("Chromium", &["chromium", "Default", "Cookies"]),
+    ("Chrome", &["google-chrome", "Default", "Cookies"]),
+    ("Chrome Beta", &["google-chrome-beta", "Default", "Cookies"]),
+    ("Chrome Dev", &["google-chrome-unstable", "Default", "Cookies"]),
+    ("Brave", &["BraveSoftware", "Brave-Browser", "Default", "Cookies"]),
+    ("Edge Dev", &["microsoft-edge-dev", "Default", "Cookies"]),
+    ("Opera", &["opera", "Default", "Cookies"]),
+];
+
 pub async fn load_session() -> Result<XSession> {
-    let cookies_path = default_cookies_path()?;
-    if !cookies_path.exists() {
-        return Err(Error::CookieStoreMissing { path: cookies_path });
-    }
-
-    let encrypted = read_encrypted_cookies(&cookies_path)?;
+    let paths = candidate_paths()?;
     let passwords = candidate_passwords().await;
-    tracing::debug!("trying {} candidate decryption passwords", passwords.len());
+    tracing::debug!(
+        "trying {} cookie paths against {} candidate passwords",
+        paths.len(),
+        passwords.len()
+    );
 
-    let mut winning_key: Option<[u8; PBKDF2_KEY_LEN]> = None;
-    let mut auth_token = None;
-    let mut ct0 = None;
-    let mut twid = None;
-
-    for (name, ciphertext) in &encrypted {
-        let plain = if let Some(key) = winning_key {
-            decrypt_and_extract(ciphertext, &key)?
-        } else {
-            let (key, plain) = try_all(ciphertext, &passwords)?;
-            winning_key = Some(key);
-            plain
+    let mut tried = Vec::new();
+    for (label, path) in &paths {
+        if !path.exists() {
+            continue;
+        }
+        tried.push(format!("{label} ({})", path.display()));
+        let encrypted = match read_encrypted_cookies(path) {
+            Ok(rows) if rows.len() == COOKIE_NAMES.len() => rows,
+            Ok(_) => {
+                tracing::debug!("{label} has no .x.com session");
+                continue;
+            }
+            Err(e) => {
+                tracing::debug!("{label} cookies unreadable: {e}");
+                continue;
+            }
         };
-        match name.as_str() {
-            "auth_token" => auth_token = Some(plain),
-            "ct0" => ct0 = Some(plain),
-            "twid" => twid = Some(plain),
-            _ => {}
+        match decrypt_all(&encrypted, &passwords) {
+            Ok(session) => {
+                tracing::debug!("loaded session from {label}");
+                return Ok(session);
+            }
+            Err(e) => {
+                tracing::debug!("{label} decrypt failed: {e}");
+            }
         }
     }
 
-    match (auth_token, ct0, twid) {
-        (Some(auth_token), Some(ct0), Some(twid)) => Ok(XSession {
-            auth_token,
-            ct0,
-            twid,
-        }),
-        _ => Err(Error::NotLoggedIn),
+    if tried.is_empty() {
+        Err(Error::CookieStoreMissing)
+    } else {
+        Err(Error::NotLoggedIn)
     }
 }
 
-fn default_cookies_path() -> Result<PathBuf> {
+fn candidate_paths() -> Result<Vec<(String, PathBuf)>> {
+    if let Some(override_path) = std::env::var_os(COOKIES_PATH_ENV) {
+        return Ok(vec![("override".into(), PathBuf::from(override_path))]);
+    }
     let base = BaseDirs::new().ok_or_else(|| Error::Config("HOME not set".into()))?;
-    Ok(base.config_dir().join("vivaldi").join("Default").join("Cookies"))
+    let config = base.config_dir();
+    let paths = BROWSER_CANDIDATES
+        .iter()
+        .map(|(label, parts)| {
+            let mut p = config.to_path_buf();
+            for part in *parts {
+                p.push(part);
+            }
+            ((*label).to_string(), p)
+        })
+        .collect();
+    Ok(paths)
 }
 
 fn read_encrypted_cookies(path: &Path) -> Result<Vec<(String, Vec<u8>)>> {
@@ -102,10 +132,43 @@ fn read_encrypted_cookies(path: &Path) -> Result<Vec<(String, Vec<u8>)>> {
     for row in rows {
         out.push(row?);
     }
-    if out.len() < COOKIE_NAMES.len() {
-        return Err(Error::NotLoggedIn);
-    }
     Ok(out)
+}
+
+fn decrypt_all(
+    encrypted: &[(String, Vec<u8>)],
+    passwords: &[Vec<u8>],
+) -> Result<XSession> {
+    let mut winning_key: Option<[u8; PBKDF2_KEY_LEN]> = None;
+    let mut auth_token = None;
+    let mut ct0 = None;
+    let mut twid = None;
+
+    for (name, ciphertext) in encrypted {
+        let plain = match winning_key {
+            Some(key) => decrypt_and_extract(ciphertext, &key)?,
+            None => {
+                let (key, plain) = try_all(ciphertext, passwords)?;
+                winning_key = Some(key);
+                plain
+            }
+        };
+        match name.as_str() {
+            "auth_token" => auth_token = Some(plain),
+            "ct0" => ct0 = Some(plain),
+            "twid" => twid = Some(plain),
+            _ => {}
+        }
+    }
+
+    match (auth_token, ct0, twid) {
+        (Some(auth_token), Some(ct0), Some(twid)) => Ok(XSession {
+            auth_token,
+            ct0,
+            twid,
+        }),
+        _ => Err(Error::NotLoggedIn),
+    }
 }
 
 async fn candidate_passwords() -> Vec<Vec<u8>> {
@@ -181,10 +244,7 @@ fn try_all(
             continue;
         };
         match decrypt_and_extract(encrypted, &key) {
-            Ok(text) => {
-                tracing::debug!("decrypt succeeded with a {}-byte password", password.len());
-                return Ok((key, text));
-            }
+            Ok(text) => return Ok((key, text)),
             Err(e) => last_err = e,
         }
     }

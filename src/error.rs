@@ -4,10 +4,16 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("cookie store not found at {path}: make sure Vivaldi is installed and has been run at least once")]
-    CookieStoreMissing { path: std::path::PathBuf },
+    #[error(
+        "no Chromium-family cookie store found at any known location; \
+         install Vivaldi / Chromium / Chrome / Brave / Edge and run it at least once, \
+         or set UNRAGER_COOKIES_PATH=/path/to/Cookies"
+    )]
+    CookieStoreMissing,
 
-    #[error("no X session found in browser cookies: log in to x.com in Vivaldi first")]
+    #[error(
+        "no x.com session found in any browser cookie store; log in to x.com in Vivaldi / Chrome / Chromium / Brave / Edge first"
+    )]
     NotLoggedIn,
 
     #[error("keyring access failed: {0}")]

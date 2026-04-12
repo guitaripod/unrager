@@ -1,5 +1,5 @@
 use crate::cli::common;
-use crate::config;
+use crate::config::{self, AppConfig};
 use crate::error::Result;
 use crate::gql::GqlClient;
 use crate::model::Tweet;
@@ -99,6 +99,7 @@ pub struct App {
     pub filter_classifier: Option<Classifier>,
     pub filter_verdicts: HashMap<String, FilterState>,
     pub filter_inflight: HashSet<String>,
+    pub app_config: AppConfig,
     pub(super) client: Arc<GqlClient>,
     pub(super) tx: EventTx,
     pub(super) pending_thread: Option<RequestId>,
@@ -115,6 +116,8 @@ impl App {
         let config_dir = config::config_dir()?;
         let seen = SeenStore::open(&cache_dir.join("seen.db"))?;
         let session_path = config_dir.join("session.json");
+
+        let app_config = AppConfig::load(&config_dir);
 
         let (filter_cfg, filter_cache, filter_classifier) =
             init_filter_stack(&config_dir, &cache_dir);
@@ -172,6 +175,7 @@ impl App {
             filter_classifier,
             filter_verdicts: HashMap::new(),
             filter_inflight: HashSet::new(),
+            app_config,
             client,
             tx,
             pending_thread: None,
@@ -681,17 +685,7 @@ impl App {
         let Some(tweet) = self.selected_tweet() else {
             return;
         };
-        let url = tweet.url.clone();
-        match std::process::Command::new("xdg-open")
-            .arg(&url)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        {
-            Ok(_) => self.set_status(format!("opened {url}")),
-            Err(e) => self.error = Some(format!("xdg-open failed: {e}")),
-        }
+        self.open_url(&tweet.url.clone());
     }
 
     fn open_media_external(&mut self) {
@@ -702,16 +696,21 @@ impl App {
             self.set_status("no media on selected tweet");
             return;
         };
-        let url = media.url.clone();
-        let result = std::process::Command::new("xdg-open")
-            .arg(&url)
+        self.open_url(&media.url.clone());
+    }
+
+    fn open_url(&mut self, url: &str) {
+        let (program, args) = self.app_config.browser_parts();
+        match std::process::Command::new(program)
+            .args(args)
+            .arg(url)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .spawn();
-        match result {
+            .spawn()
+        {
             Ok(_) => self.set_status(format!("opened {url}")),
-            Err(e) => self.error = Some(format!("xdg-open failed: {e}")),
+            Err(e) => self.error = Some(format!("{program} failed: {e}")),
         }
     }
 

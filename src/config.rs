@@ -1,6 +1,40 @@
 use crate::error::{Error, Result};
 use directories::ProjectDirs;
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct AppConfig {
+    #[serde(default = "default_browser")]
+    pub browser: String,
+}
+
+fn default_browser() -> String {
+    "xdg-open".into()
+}
+
+impl AppConfig {
+    pub fn load(config_dir: &Path) -> Self {
+        let path = config_dir.join("config.toml");
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            return Self::default();
+        };
+        match toml::from_str(&raw) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                tracing::warn!("failed to parse config.toml: {e} — using defaults");
+                Self::default()
+            }
+        }
+    }
+
+    pub fn browser_parts(&self) -> (&str, Vec<&str>) {
+        let mut parts = self.browser.split_whitespace();
+        let program = parts.next().unwrap_or("xdg-open");
+        let args: Vec<&str> = parts.collect();
+        (program, args)
+    }
+}
 
 pub fn project_dirs() -> Result<ProjectDirs> {
     ProjectDirs::from("", "", "unrager")

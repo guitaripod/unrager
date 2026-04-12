@@ -52,6 +52,7 @@ cargo test
 
 - `~/.config/unrager/session.json` — TUI state
 - `~/.config/unrager/tokens.json` — OAuth tokens (0600)
+- `~/.config/unrager/config.toml` — general settings (browser command, etc.)
 - `~/.config/unrager/filter.toml` — rage filter rubric (auto-created)
 - `~/.cache/unrager/seen.db` — read tracking
 - `~/.cache/unrager/filter.db` — filter verdict cache

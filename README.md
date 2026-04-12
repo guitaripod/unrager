@@ -67,7 +67,9 @@ Photos render inside the terminal via the [kitty graphics protocol](https://sw.k
 - Zebra-striped rows, terminal-theme-aware body text (auto-detects light/dark via OSC 11)
 - Word-wrapped cards, scroll look-ahead, compact timestamps (`2m`/`5h`/`3d`)
 - Command palette (`:home`, `:user`, `:search`, `:mentions`, `:bookmarks`), history (`[`/`]`)
+- Read-tracking: cursor marks tweets as read; For You feed hides already-seen tweets, deduplicates on pagination
 - Share tweets: `y` yanks a [fixupx](https://fixupx.com) embed URL to clipboard, `o` opens in browser
+- Configurable browser command with `{}` URL placeholder for Chromium `--app={}` mode
 - Persistent session preferences, `?` help overlay with full key reference
 
 <p align="center">
@@ -83,7 +85,7 @@ Photos render inside the terminal via the [kitty graphics protocol](https://sw.k
 | `g` / `G` | Top / bottom |
 | `Ctrl-d` / `Ctrl-u` | Half-page down / up |
 | `Enter` / `l` | Open tweet into detail pane |
-| `h` / `←` | Back to source list |
+| `h` / `←` | Go home (source); back to source (detail) |
 | `q` / `Esc` | Pop detail or quit |
 | `Tab` | Swap active pane |
 | `,` / `.` | Narrow / widen split |
@@ -92,12 +94,16 @@ Photos render inside the terminal via the [kitty graphics protocol](https://sw.k
 | `F` | Toggle For You / Following |
 | `c` | Toggle rage filter |
 | `x` | Expand / collapse tweet body |
-| `X` | Inline thread replies (detail pane) |
+| `X` | Inline thread replies (auto-opens detail from source) |
 | `I` | Toggle media auto-expand |
 | `M` | Toggle retweet / like / view counts |
 | `N` | Toggle display names |
 | `t` | Toggle relative / absolute timestamps |
+| `p` | Own profile (tweets with full metrics) |
+| `P` | Open own profile in browser |
+| `R` | Toggle tweets / replies on user profile |
 | `o` | Open tweet in browser |
+| `O` | Open tweet author's profile in browser |
 | `m` | Open media externally |
 | `y` | Yank fixupx URL to clipboard |
 | `Y` | Yank tweet JSON to clipboard |
@@ -157,6 +163,7 @@ All accept `-n <count>`, `--json`, `--max-pages <n>`.
 
 | File | Purpose |
 |---|---|
+| `~/.config/unrager/config.toml` | General settings (browser command, etc.) |
 | `~/.config/unrager/session.json` | TUI session (source, selection, toggles) |
 | `~/.config/unrager/tokens.json` | OAuth 2.0 tokens (mode `0600`) |
 | `~/.config/unrager/filter.toml` | Rage filter rubric (auto-created) |

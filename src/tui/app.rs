@@ -207,7 +207,7 @@ impl App {
 
     pub fn is_own_profile(&self) -> bool {
         match (&self.self_handle, &self.source.kind) {
-            (Some(self_handle), Some(SourceKind::User { handle, .. })) => {
+            (Some(self_handle), Some(SourceKind::User { handle })) => {
                 self_handle.eq_ignore_ascii_case(handle)
             }
             _ => false,
@@ -216,10 +216,7 @@ impl App {
 
     fn open_profile(&mut self) {
         if let Some(handle) = self.self_handle.clone() {
-            self.switch_source(SourceKind::User {
-                handle,
-                with_replies: false,
-            });
+            self.switch_source(SourceKind::User { handle });
             return;
         }
         self.set_status("resolving handle…");
@@ -443,10 +440,7 @@ impl App {
             }
             Event::SelfHandleResolved { handle } => {
                 self.self_handle = Some(handle.clone());
-                self.switch_source(SourceKind::User {
-                    handle,
-                    with_replies: false,
-                });
+                self.switch_source(SourceKind::User { handle });
             }
             Event::Quit => self.running = false,
             Event::FocusGained | Event::FocusLost => {}
@@ -530,6 +524,7 @@ impl App {
                 self.toggle_inline_thread()
             }
             (KeyCode::Char('p'), KeyModifiers::NONE) => self.open_profile(),
+            (KeyCode::Char('P'), _) => self.open_own_profile_in_browser(),
             (KeyCode::Char('c'), KeyModifiers::NONE) => self.toggle_filter(),
             (KeyCode::Char('y'), KeyModifiers::NONE) => self.yank_url(),
             (KeyCode::Char('Y'), _) => self.yank_json(),
@@ -691,20 +686,28 @@ impl App {
     }
 
     fn toggle_user_replies(&mut self) {
-        let (handle, current) = match &self.source.kind {
-            Some(SourceKind::User {
-                handle,
-                with_replies,
-            }) => (handle.clone(), *with_replies),
+        match &self.source.kind {
+            Some(SourceKind::User { handle, .. }) => {
+                let query = format!("from:{handle} filter:replies");
+                self.switch_source(SourceKind::Search {
+                    query,
+                    product: source::SearchProduct::Latest,
+                });
+            }
+            Some(SourceKind::Search { query, .. }) if query.contains("filter:replies") => {
+                let handle = query
+                    .strip_prefix("from:")
+                    .and_then(|s| s.split_whitespace().next())
+                    .unwrap_or("")
+                    .to_string();
+                if !handle.is_empty() {
+                    self.switch_source(SourceKind::User { handle });
+                }
+            }
             _ => {
                 self.set_status("R only toggles on a user profile");
-                return;
             }
-        };
-        self.switch_source(SourceKind::User {
-            handle,
-            with_replies: !current,
-        });
+        }
     }
 
     fn open_tweet_in_browser(&mut self) {
@@ -712,6 +715,15 @@ impl App {
             return;
         };
         self.open_url(&tweet.url.clone());
+    }
+
+    fn open_own_profile_in_browser(&mut self) {
+        let Some(handle) = &self.self_handle else {
+            self.set_status("own handle not resolved yet");
+            return;
+        };
+        let url = format!("https://x.com/{handle}");
+        self.open_url(&url);
     }
 
     fn open_author_in_browser(&mut self) {

@@ -19,8 +19,6 @@ pub enum SourceKind {
     },
     User {
         handle: String,
-        #[serde(default)]
-        with_replies: bool,
     },
     Search {
         query: String,
@@ -61,14 +59,7 @@ impl SourceKind {
         match self {
             Self::Home { following: false } => "home: For You".into(),
             Self::Home { following: true } => "home: Following".into(),
-            Self::User {
-                handle,
-                with_replies: false,
-            } => format!("user: @{handle}"),
-            Self::User {
-                handle,
-                with_replies: true,
-            } => format!("user: @{handle} [replies]"),
+            Self::User { handle } => format!("user: @{handle}"),
             Self::Search { query, product } => {
                 format!("search: {query}  [{}]", product.as_api())
             }
@@ -195,10 +186,7 @@ pub async fn fetch_page(
 ) -> Result<TimelinePage> {
     match kind {
         SourceKind::Home { following } => fetch_home(client, *following, cursor).await,
-        SourceKind::User {
-            handle,
-            with_replies,
-        } => fetch_user(client, handle, *with_replies, cursor).await,
+        SourceKind::User { handle } => fetch_user(client, handle, cursor).await,
         SourceKind::Search { query, product } => {
             fetch_search(client, query, product.as_api(), cursor).await
         }
@@ -244,18 +232,12 @@ async fn fetch_home(
 async fn fetch_user(
     client: &GqlClient,
     handle: &str,
-    with_replies: bool,
     cursor: Option<String>,
 ) -> Result<TimelinePage> {
     let user_id = resolve_user_id(client, handle).await?;
-    let op = if with_replies {
-        Operation::UserTweetsAndReplies
-    } else {
-        Operation::UserTweets
-    };
     let response = client
         .get(
-            op,
+            Operation::UserTweets,
             &endpoints::user_tweets_variables(&user_id, PAGE_SIZE, cursor.as_deref()),
             &endpoints::user_tweets_features(),
         )

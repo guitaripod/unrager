@@ -63,7 +63,6 @@ mod tests {
         let state = SessionState {
             source_kind: SourceKind::User {
                 handle: "jack".into(),
-                with_replies: false,
             },
             selected: 0,
             metrics: None,
@@ -73,7 +72,7 @@ mod tests {
         save(tmp.path(), &state).unwrap();
         let loaded = load(tmp.path()).unwrap();
         match loaded.source_kind {
-            SourceKind::User { handle, .. } => assert_eq!(handle, "jack"),
+            SourceKind::User { handle } => assert_eq!(handle, "jack"),
             _ => panic!("wrong variant"),
         }
     }

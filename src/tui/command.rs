@@ -42,10 +42,7 @@ pub fn parse(input: &str) -> Result<Command, ParseError> {
                 return Err(ParseError("user requires a handle".into()));
             }
             let handle = tail.trim_start_matches('@').to_string();
-            Ok(Command::SwitchSource(SourceKind::User {
-                handle,
-                with_replies: false,
-            }))
+            Ok(Command::SwitchSource(SourceKind::User { handle }))
         }
         "search" => {
             if tail.is_empty() {
@@ -124,7 +121,7 @@ mod tests {
     #[test]
     fn user_handle() {
         match parse(":user @jack").unwrap() {
-            Command::SwitchSource(SourceKind::User { handle, .. }) => assert_eq!(handle, "jack"),
+            Command::SwitchSource(SourceKind::User { handle }) => assert_eq!(handle, "jack"),
             _ => panic!("wrong variant"),
         }
     }
@@ -132,7 +129,7 @@ mod tests {
     #[test]
     fn user_without_at() {
         match parse(":user jack").unwrap() {
-            Command::SwitchSource(SourceKind::User { handle, .. }) => assert_eq!(handle, "jack"),
+            Command::SwitchSource(SourceKind::User { handle }) => assert_eq!(handle, "jack"),
             _ => panic!("wrong variant"),
         }
     }

@@ -67,7 +67,7 @@ Photos render inside the terminal via the [kitty graphics protocol](https://sw.k
 - Zebra-striped rows, terminal-theme-aware body text (auto-detects light/dark via OSC 11)
 - Word-wrapped cards, scroll look-ahead, compact timestamps (`2m`/`5h`/`3d`)
 - Command palette (`:home`, `:user`, `:search`, `:mentions`, `:bookmarks`), history (`[`/`]`)
-- Open in browser (`o`), yank URL (`y`) / JSON (`Y`), external media open (`m`)
+- Share tweets: yank URL (`y`), yank as [fixupx](https://fixupx.com) embed link (`v`), open in browser (`o`)
 - Persistent session preferences, `?` help overlay with full key reference
 
 <p align="center">
@@ -99,7 +99,9 @@ Photos render inside the terminal via the [kitty graphics protocol](https://sw.k
 | `t` | Toggle relative / absolute timestamps |
 | `o` | Open tweet in browser |
 | `m` | Open media externally |
-| `y` / `Y` | Yank URL / JSON to clipboard |
+| `y` | Yank tweet URL to clipboard |
+| `v` | Yank fixupx embed URL to clipboard |
+| `Y` | Yank tweet JSON to clipboard |
 | `r` | Reload source |
 | `u` | Jump to next unread |
 | `U` | Mark all as read |

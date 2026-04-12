@@ -12,7 +12,7 @@ drop_topics = [
     "race-based outrage, racial grievance framing",
     "doom headlines about imminent collapse, recession, apocalypse",
 ]
-extra_guidance = "Keep technical, scientific, art, music, sports, personal-life, and humor tweets even if they touch these topics in passing. Only hide when the tweet's primary purpose is outrage or tribal alignment."
+extra_guidance = "KEEP technical, scientific, art, music, sports, personal-life, and humor tweets that only mention these topics in passing. HIDE if the topic IS the point of the tweet."
 
 [ollama]
 model = "gemma4:latest"

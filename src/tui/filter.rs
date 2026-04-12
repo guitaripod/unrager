@@ -15,7 +15,7 @@ const DEFAULT_CONFIG: &str = include_str!("filter_default.toml");
 const PROMPT_TOPICS_PLACEHOLDER: &str = "{TOPICS}";
 const PROMPT_GUIDANCE_PLACEHOLDER: &str = "{GUIDANCE}";
 const PROMPT_TEXT_PLACEHOLDER: &str = "{TEXT}";
-const PROMPT_TEMPLATE: &str = "You are a content filter. Hide tweets about any of these topics:
+const PROMPT_TEMPLATE: &str = "You are a strict content filter. HIDE any tweet whose primary subject is one of these topics, regardless of tone or framing:
 {TOPICS}
 {GUIDANCE}
 Tweet: \"{TEXT}\"

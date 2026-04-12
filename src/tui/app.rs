@@ -610,14 +610,7 @@ impl App {
             ActivePane::Source => self.source.tweets.get(self.source.selected()),
             ActivePane::Detail => {
                 let detail = self.top_detail()?;
-                if detail.replies.is_empty() {
-                    Some(&detail.tweet)
-                } else {
-                    detail
-                        .replies
-                        .get(detail.selected())
-                        .or(Some(&detail.tweet))
-                }
+                detail.selected_reply().or(Some(&detail.tweet))
             }
         }
     }

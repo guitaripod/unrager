@@ -186,7 +186,7 @@ pub async fn fetch_page(
         SourceKind::Mentions { target } => {
             let handle = match target {
                 Some(h) => h.clone(),
-                None => current_handle(client).await?,
+                None => fetch_self_handle(client).await?,
             };
             let query = format!("@{handle} -from:{handle}");
             fetch_search(client, &query, "Latest", cursor).await
@@ -310,7 +310,7 @@ async fn fetch_bookmarks(
     Ok(timeline::walk(instructions))
 }
 
-async fn current_handle(client: &GqlClient) -> Result<String> {
+pub async fn fetch_self_handle(client: &GqlClient) -> Result<String> {
     let response = client
         .get(
             Operation::Viewer,

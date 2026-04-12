@@ -61,6 +61,9 @@ pub enum Event {
         request_id: RequestId,
         result: Result<crate::model::Tweet>,
     },
+    SelfHandleResolved {
+        handle: String,
+    },
 }
 
 pub type EventTx = mpsc::UnboundedSender<Event>;

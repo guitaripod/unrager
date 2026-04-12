@@ -1064,6 +1064,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect) {
         Line::from("  M              toggle retweet / like / view counts (replies always shown)"),
         Line::from("  N              toggle display names (handle-only mode)"),
         Line::from("  I              toggle media auto-expand (show images for all media tweets)"),
+        Line::from("  p              my profile (own tweets with full metrics)"),
         Line::from("  c              toggle rage filter (LLM hides inflammatory topics)"),
         Line::from("  x              expand / collapse selected tweet body"),
         Line::from("  X              toggle inline thread replies (detail pane only)"),

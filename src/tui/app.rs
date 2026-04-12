@@ -92,6 +92,7 @@ pub struct App {
     pub inline_threads: HashMap<String, InlineThread>,
     pub media: MediaRegistry,
     pub media_auto_expand: bool,
+    pub self_handle: Option<String>,
     pub filter_mode: FilterMode,
     pub filter_cfg: Option<FilterConfig>,
     pub filter_cache: Option<FilterCache>,
@@ -164,6 +165,7 @@ impl App {
             inline_threads: HashMap::new(),
             media: MediaRegistry::new(),
             media_auto_expand: false,
+            self_handle: None,
             filter_mode: FilterMode::On,
             filter_cfg,
             filter_cache,
@@ -197,6 +199,28 @@ impl App {
 
     pub fn filter_pending_count(&self) -> usize {
         self.filter_inflight.len()
+    }
+
+    fn open_profile(&mut self) {
+        if let Some(handle) = self.self_handle.clone() {
+            self.metrics = MetricsStyle::Visible;
+            self.display_names = DisplayNameStyle::Visible;
+            self.switch_source(SourceKind::User { handle });
+            return;
+        }
+        self.set_status("resolving handle…");
+        let client = self.client.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            match source::fetch_self_handle(&client).await {
+                Ok(handle) => {
+                    let _ = tx.send(Event::SelfHandleResolved { handle });
+                }
+                Err(e) => {
+                    tracing::warn!("failed to resolve self handle: {e}");
+                }
+            }
+        });
     }
 
     pub fn toggle_filter(&mut self) {
@@ -402,6 +426,12 @@ impl App {
             Event::TweetClassified { rest_id, verdict } => {
                 self.handle_tweet_classified(rest_id, verdict);
             }
+            Event::SelfHandleResolved { handle } => {
+                self.self_handle = Some(handle.clone());
+                self.metrics = MetricsStyle::Visible;
+                self.display_names = DisplayNameStyle::Visible;
+                self.switch_source(SourceKind::User { handle });
+            }
             Event::Quit => self.running = false,
             Event::FocusGained | Event::FocusLost => {}
         }
@@ -483,6 +513,7 @@ impl App {
             (KeyCode::Char('X'), _) if self.active == ActivePane::Detail => {
                 self.toggle_inline_thread()
             }
+            (KeyCode::Char('p'), KeyModifiers::NONE) => self.open_profile(),
             (KeyCode::Char('c'), KeyModifiers::NONE) => self.toggle_filter(),
             (KeyCode::Char('y'), KeyModifiers::NONE) => self.yank_url(),
             (KeyCode::Char('Y'), _) => self.yank_json(),

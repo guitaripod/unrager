@@ -7,6 +7,7 @@ use crate::parse::timeline::{self, TimelinePage};
 use ratatui::widgets::ListState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashSet;
 
 const PAGE_SIZE: u32 = 20;
 
@@ -119,8 +120,14 @@ impl Source {
     }
 
     pub fn append(&mut self, page: TimelinePage) {
-        let incoming = page.tweets.len();
-        self.tweets.extend(page.tweets);
+        let existing: HashSet<&str> = self.tweets.iter().map(|t| t.rest_id.as_str()).collect();
+        let deduped: Vec<Tweet> = page
+            .tweets
+            .into_iter()
+            .filter(|t| !existing.contains(t.rest_id.as_str()))
+            .collect();
+        let incoming = deduped.len();
+        self.tweets.extend(deduped);
         self.cursor = page.next_cursor;
         if self.cursor.is_none() || incoming == 0 {
             self.exhausted = true;

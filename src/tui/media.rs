@@ -62,18 +62,18 @@ pub fn layout_for(count: usize, wrap_width: usize) -> (usize, usize) {
     let inner = wrap_width.saturating_sub(4);
     match count {
         0 => (0, 0),
-        1 => (inner.min(40).max(10), 12),
+        1 => (inner.clamp(10, 40), 12),
         2 => {
             let per = inner.saturating_sub(2) / 2;
-            (per.min(22).max(8), 10)
+            (per.clamp(8, 22), 10)
         }
         3 => {
             let per = inner.saturating_sub(4) / 3;
-            (per.min(16).max(6), 8)
+            (per.clamp(6, 16), 8)
         }
         _ => {
             let per = inner.saturating_sub(6) / 4;
-            (per.min(12).max(6), 6)
+            (per.clamp(6, 12), 6)
         }
     }
 }
@@ -91,6 +91,12 @@ pub struct MediaRegistry {
     pub supported: bool,
     next_id: u32,
     semaphore: Arc<Semaphore>,
+}
+
+impl Default for MediaRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MediaRegistry {
@@ -165,7 +171,8 @@ impl MediaRegistry {
     }
 
     pub fn mark_failed(&mut self, url: &str, err: String) {
-        self.entries.insert(url.to_string(), MediaEntry::Failed(err));
+        self.entries
+            .insert(url.to_string(), MediaEntry::Failed(err));
     }
 }
 
@@ -292,14 +299,12 @@ pub fn placeholder_row_span(id: u32, row: usize, cols: usize) -> Span<'static> {
     placeholder_row(id, row, cols, style)
 }
 
-fn placeholder_row(id: u32, row: usize, cols: usize, style: Style) -> Span<'static> {
-    let _ = id;
+fn placeholder_row(_id: u32, row: usize, cols: usize, style: Style) -> Span<'static> {
     let cols = cols.min(DIACRITICS.len());
     let row = row.min(DIACRITICS.len() - 1);
     let row_dia = DIACRITICS[row];
     let mut s = String::with_capacity(cols * 9);
-    for c in 0..cols {
-        let col_dia = DIACRITICS[c];
+    for &col_dia in DIACRITICS.iter().take(cols) {
         s.push(PLACEHOLDER);
         s.push(row_dia);
         s.push(col_dia);

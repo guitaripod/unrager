@@ -537,11 +537,7 @@ impl App {
         });
     }
 
-    fn handle_inline_thread_loaded(
-        &mut self,
-        focal_id: String,
-        result: Result<TimelinePage>,
-    ) {
+    fn handle_inline_thread_loaded(&mut self, focal_id: String, result: Result<TimelinePage>) {
         let Some(entry) = self.inline_threads.get_mut(&focal_id) else {
             return;
         };
@@ -963,12 +959,11 @@ impl App {
         self.source.loading = false;
         match result {
             Ok(mut page) => {
-                if matches!(self.filter_mode, FilterMode::On)
-                    && self.filter_classifier.is_some()
-                {
+                if matches!(self.filter_mode, FilterMode::On) && self.filter_classifier.is_some() {
                     if let Some(cache) = &self.filter_cache {
-                        page.tweets
-                            .retain(|t| !matches!(cache.get(&t.rest_id), Some(FilterDecision::Hide)));
+                        page.tweets.retain(|t| {
+                            !matches!(cache.get(&t.rest_id), Some(FilterDecision::Hide))
+                        });
                     }
                 }
                 let old_len = self.source.tweets.len();

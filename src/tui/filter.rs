@@ -74,8 +74,8 @@ impl FilterConfig {
         }
         let raw = std::fs::read_to_string(path)
             .map_err(|e| Error::Config(format!("read filter.toml: {e}")))?;
-        let cfg: FilterConfig = toml::from_str(&raw)
-            .map_err(|e| Error::Config(format!("parse filter.toml: {e}")))?;
+        let cfg: FilterConfig =
+            toml::from_str(&raw).map_err(|e| Error::Config(format!("parse filter.toml: {e}")))?;
         Ok(cfg)
     }
 
@@ -148,20 +148,10 @@ pub fn build_classification_text(t: &Tweet) -> String {
 }
 
 fn truncate_on_char_boundary(s: &str, max_chars: usize) -> &str {
-    if s.chars().count() <= max_chars {
-        return s;
+    match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
     }
-    let mut taken = 0;
-    let mut end = 0;
-    for (idx, _) in s.char_indices() {
-        if taken == max_chars {
-            end = idx;
-            break;
-        }
-        taken += 1;
-        end = idx + s[idx..].chars().next().unwrap().len_utf8();
-    }
-    &s[..end]
 }
 
 pub fn parse_verdict(raw: &str) -> FilterDecision {
@@ -192,8 +182,8 @@ impl FilterCache {
             std::fs::create_dir_all(parent)
                 .map_err(|e| Error::Config(format!("create filter cache dir: {e}")))?;
         }
-        let conn = Connection::open(path)
-            .map_err(|e| Error::Config(format!("open filter.db: {e}")))?;
+        let conn =
+            Connection::open(path).map_err(|e| Error::Config(format!("open filter.db: {e}")))?;
         conn.pragma_update(None, "journal_mode", "WAL")
             .map_err(|e| Error::Config(format!("set WAL: {e}")))?;
         conn.pragma_update(None, "synchronous", "NORMAL")
@@ -227,8 +217,7 @@ impl FilterCache {
                 })
                 .map_err(|e| Error::Config(format!("query verdicts: {e}")))?;
             for row in rows {
-                let (id, decision) =
-                    row.map_err(|e| Error::Config(format!("row decode: {e}")))?;
+                let (id, decision) = row.map_err(|e| Error::Config(format!("row decode: {e}")))?;
                 mem.insert(id, decision);
             }
         }

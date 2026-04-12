@@ -23,8 +23,8 @@ const SCROLL_LOOKAHEAD: usize = 3;
 fn last_visible_index(items: &[ListItem<'_>], offset: usize, inner_h: usize) -> usize {
     let mut rows = 0usize;
     let mut last = offset;
-    for i in offset..items.len() {
-        let h = items[i].height().max(1);
+    for (i, item) in items.iter().enumerate().skip(offset) {
+        let h = item.height().max(1);
         if rows + h > inner_h {
             break;
         }
@@ -70,7 +70,6 @@ pub struct RenderOpts {
     pub media_enabled: bool,
     pub media_auto_expand: bool,
 }
-
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let [top, main, bottom] = Layout::vertical([
@@ -235,6 +234,7 @@ fn block_with_focus(title: &str, active: bool) -> Block<'_> {
         .title(format!(" {title} "))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_source_list(
     frame: &mut Frame,
     area: Rect,
@@ -276,15 +276,7 @@ fn draw_source_list(
         .map(|(i, t)| {
             let is_seen = seen.is_seen(&t.rest_id);
             let is_expanded = expanded.contains(&t.rest_id);
-            let lines = tweet_lines(
-                t,
-                opts,
-                is_seen,
-                false,
-                wrap_width,
-                is_expanded,
-                media_reg,
-            );
+            let lines = tweet_lines(t, opts, is_seen, false, wrap_width, is_expanded, media_reg);
             let mut item = ListItem::new(lines);
             if i % 2 == 1 {
                 item = item.style(Style::default().bg(ZEBRA_BG));
@@ -307,6 +299,7 @@ fn draw_source_list(
     frame.render_stateful_widget(list, area, &mut source.list_state);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_detail(
     frame: &mut Frame,
     area: Rect,
@@ -335,22 +328,22 @@ fn draw_detail(
 
     let wrap_width = (area.width as usize).saturating_sub(4);
 
-    let focal_lines = tweet_lines(&detail.tweet, opts, false, false, wrap_width, true, media_reg);
+    let focal_lines = tweet_lines(
+        &detail.tweet,
+        opts,
+        false,
+        false,
+        wrap_width,
+        true,
+        media_reg,
+    );
     let mut items: Vec<ListItem> = Vec::with_capacity(1 + detail.replies.len());
     items.push(ListItem::new(focal_lines));
 
     for (i, t) in detail.replies.iter().enumerate() {
         let is_seen = seen.is_seen(&t.rest_id);
         let is_expanded = expanded.contains(&t.rest_id);
-        let mut lines = tweet_lines(
-            t,
-            opts,
-            is_seen,
-            true,
-            wrap_width,
-            is_expanded,
-            media_reg,
-        );
+        let mut lines = tweet_lines(t, opts, is_seen, true, wrap_width, is_expanded, media_reg);
         if let Some(thread) = inline_threads.get(&t.rest_id) {
             append_inline_thread(&mut lines, thread, opts, wrap_width, media_reg);
         }
@@ -404,12 +397,7 @@ fn highlight_symbol(active: bool) -> &'static str {
     if active { "▶ " } else { "· " }
 }
 
-fn author_spans(
-    handle: &str,
-    verified: bool,
-    name: &str,
-    show_name: bool,
-) -> Vec<Span<'static>> {
+fn author_spans(handle: &str, verified: bool, name: &str, show_name: bool) -> Vec<Span<'static>> {
     let color = handle_color(handle);
     let mut spans = vec![Span::styled(
         format!("@{handle}"),
@@ -579,9 +567,7 @@ fn tweet_lines(
     let render_body_line = |wline: &str| -> Vec<Span<'static>> {
         let mut word_spans = highlight_text(wline);
         for s in word_spans.iter_mut() {
-            if seen {
-                s.style = body_base_style;
-            } else if s.style.fg.is_none() {
+            if seen || s.style.fg.is_none() {
                 s.style = body_base_style;
             }
         }
@@ -896,8 +882,7 @@ fn highlight_text(text: &str) -> Vec<Span<'static>> {
 
 fn push_word(word: &str, spans: &mut Vec<Span<'static>>) {
     if word.starts_with('@') && word.len() > 1 {
-        let handle = word[1..]
-            .trim_end_matches(|c: char| !(c.is_ascii_alphanumeric() || c == '_'));
+        let handle = word[1..].trim_end_matches(|c: char| !(c.is_ascii_alphanumeric() || c == '_'));
         let color = if handle.is_empty() {
             Color::Cyan
         } else {

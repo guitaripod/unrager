@@ -234,7 +234,3 @@ cargo test
 ## Legal
 
 Not affiliated with X Corp. Uses X's web GraphQL endpoints the same way the web client does. Do not use this to scrape at scale or run bots.
-
-## License
-
-[MIT](LICENSE)

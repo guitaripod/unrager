@@ -42,7 +42,6 @@ base64 = "0.22"
 rand = "0.9"
 urlencoding = "2"
 mime_guess = "2"
-arboard = { version = "3", default-features = false }
 unicode-width = "0.2"
 termbg = "0.5"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }

@@ -169,17 +169,28 @@ fn parse_author(node: &Value) -> Result<User> {
 }
 
 fn extract_text(node: &Value, legacy: &Value) -> String {
-    if let Some(note) = node
+    let raw = if let Some(note) = node
         .pointer("/note_tweet/note_tweet_results/result/text")
         .and_then(Value::as_str)
     {
-        return note.to_string();
-    }
-    legacy
-        .get("full_text")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string()
+        note.to_string()
+    } else {
+        legacy
+            .get("full_text")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    decode_html_entities(&raw)
+}
+
+fn decode_html_entities(s: &str) -> String {
+    s.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
 }
 
 fn parse_created_at(legacy: &Value) -> Result<DateTime<Utc>> {

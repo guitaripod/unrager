@@ -521,7 +521,6 @@ impl App {
             (KeyCode::Char('p'), KeyModifiers::NONE) => self.open_profile(),
             (KeyCode::Char('c'), KeyModifiers::NONE) => self.toggle_filter(),
             (KeyCode::Char('y'), KeyModifiers::NONE) => self.yank_url(),
-            (KeyCode::Char('v'), KeyModifiers::NONE) => self.yank_fixup_url(),
             (KeyCode::Char('Y'), _) => self.yank_json(),
             (KeyCode::Char('o'), KeyModifiers::NONE) => self.open_tweet_in_browser(),
             (KeyCode::Char('m'), KeyModifiers::NONE) => self.open_media_external(),
@@ -627,19 +626,11 @@ impl App {
         let Some(tweet) = self.selected_tweet() else {
             return;
         };
-        let text = tweet.url.clone();
-        self.copy_to_clipboard(text, "url copied");
-    }
-
-    fn yank_fixup_url(&mut self) {
-        let Some(tweet) = self.selected_tweet() else {
-            return;
-        };
         let text = tweet
             .url
             .replace("x.com/", "fixupx.com/")
             .replace("twitter.com/", "fixuptwitter.com/");
-        self.copy_to_clipboard(text, "fixupx url copied");
+        self.copy_to_clipboard(text, "url copied");
     }
 
     fn yank_json(&mut self) {
@@ -653,8 +644,29 @@ impl App {
     }
 
     fn copy_to_clipboard(&mut self, text: String, note: &str) {
-        match arboard::Clipboard::new().and_then(|mut c| c.set_text(text)) {
-            Ok(()) => self.set_status(note.to_string()),
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let result = Command::new("wl-copy")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .or_else(|_| {
+                Command::new("xclip")
+                    .args(["-selection", "clipboard"])
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+            });
+        match result {
+            Ok(mut child) => {
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = stdin.write_all(text.as_bytes());
+                }
+                let _ = child.wait();
+                self.set_status(note.to_string());
+            }
             Err(e) => self.error = Some(format!("clipboard failed: {e}")),
         }
     }

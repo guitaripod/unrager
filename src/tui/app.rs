@@ -521,6 +521,7 @@ impl App {
             (KeyCode::Char('p'), KeyModifiers::NONE) => self.open_profile(),
             (KeyCode::Char('c'), KeyModifiers::NONE) => self.toggle_filter(),
             (KeyCode::Char('y'), KeyModifiers::NONE) => self.yank_url(),
+            (KeyCode::Char('v'), KeyModifiers::NONE) => self.yank_fixup_url(),
             (KeyCode::Char('Y'), _) => self.yank_json(),
             (KeyCode::Char('o'), KeyModifiers::NONE) => self.open_tweet_in_browser(),
             (KeyCode::Char('m'), KeyModifiers::NONE) => self.open_media_external(),
@@ -628,6 +629,17 @@ impl App {
         };
         let text = tweet.url.clone();
         self.copy_to_clipboard(text, "url copied");
+    }
+
+    fn yank_fixup_url(&mut self) {
+        let Some(tweet) = self.selected_tweet() else {
+            return;
+        };
+        let text = tweet
+            .url
+            .replace("x.com/", "fixupx.com/")
+            .replace("twitter.com/", "fixuptwitter.com/");
+        self.copy_to_clipboard(text, "fixupx url copied");
     }
 
     fn yank_json(&mut self) {

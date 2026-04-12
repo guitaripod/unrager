@@ -130,6 +130,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             source_active,
             filter_ctx,
         );
+        let detail_opts = RenderOpts {
+            metrics: MetricsStyle::Visible,
+            ..opts
+        };
         draw_detail(
             frame,
             right,
@@ -138,7 +142,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             &app.expanded_bodies,
             &app.inline_threads,
             &app.media,
-            opts,
+            detail_opts,
             detail_active,
         );
     } else {

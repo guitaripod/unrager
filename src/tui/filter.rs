@@ -15,7 +15,9 @@ const DEFAULT_CONFIG: &str = include_str!("filter_default.toml");
 const PROMPT_TOPICS_PLACEHOLDER: &str = "{TOPICS}";
 const PROMPT_GUIDANCE_PLACEHOLDER: &str = "{GUIDANCE}";
 const PROMPT_TEXT_PLACEHOLDER: &str = "{TEXT}";
-const PROMPT_TEMPLATE: &str = "You are a strict content filter. HIDE any tweet whose primary subject is one of these topics, regardless of tone or framing:
+const PROMPT_TEMPLATE: &str = "You are a strict content filter. HIDE any tweet that matches ANY of these criteria, regardless of tone, language, or framing:
+- The tweet's primary subject is one of these topics
+- The author is a person or account that belongs to one of these categories
 {TOPICS}
 {GUIDANCE}
 Tweet: \"{TEXT}\"
@@ -135,7 +137,7 @@ pub fn render_prompt(prefix: &str, text: &str) -> String {
 }
 
 pub fn build_classification_text(t: &Tweet) -> String {
-    let mut s = t.text.clone();
+    let mut s = format!("@{} ({}): {}", t.author.handle, t.author.name, t.text);
     if let Some(q) = &t.quoted_tweet {
         s.push('\n');
         for line in q.text.lines() {
@@ -503,7 +505,7 @@ mod tests {
     #[test]
     fn build_classification_text_plain() {
         let t = tweet("hello world");
-        assert_eq!(build_classification_text(&t), "hello world");
+        assert_eq!(build_classification_text(&t), "@alice (Alice): hello world");
     }
 
     #[test]
@@ -513,7 +515,7 @@ mod tests {
         let merged = build_classification_text(&t);
         assert!(merged.contains("> original post"));
         assert!(merged.contains("> with two lines"));
-        assert!(merged.starts_with("my take"));
+        assert!(merged.starts_with("@alice (Alice): my take"));
     }
 
     #[test]
@@ -531,7 +533,7 @@ mod tests {
         let t = tweet(&text);
         let out = build_classification_text(&t);
         assert!(out.chars().count() <= MAX_TEXT_CHARS);
-        assert_eq!(out.len() % 3, 0); // each char is 3 bytes in this repeat
+        assert!(out.is_char_boundary(out.len()));
     }
 
     #[test]

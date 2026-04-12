@@ -207,7 +207,7 @@ impl App {
 
     pub fn is_own_profile(&self) -> bool {
         match (&self.self_handle, &self.source.kind) {
-            (Some(self_handle), Some(SourceKind::User { handle })) => {
+            (Some(self_handle), Some(SourceKind::User { handle, .. })) => {
                 self_handle.eq_ignore_ascii_case(handle)
             }
             _ => false,
@@ -216,7 +216,10 @@ impl App {
 
     fn open_profile(&mut self) {
         if let Some(handle) = self.self_handle.clone() {
-            self.switch_source(SourceKind::User { handle });
+            self.switch_source(SourceKind::User {
+                handle,
+                with_replies: false,
+            });
             return;
         }
         self.set_status("resolving handle…");
@@ -440,7 +443,10 @@ impl App {
             }
             Event::SelfHandleResolved { handle } => {
                 self.self_handle = Some(handle.clone());
-                self.switch_source(SourceKind::User { handle });
+                self.switch_source(SourceKind::User {
+                    handle,
+                    with_replies: false,
+                });
             }
             Event::Quit => self.running = false,
             Event::FocusGained | Event::FocusLost => {}
@@ -527,7 +533,9 @@ impl App {
             (KeyCode::Char('c'), KeyModifiers::NONE) => self.toggle_filter(),
             (KeyCode::Char('y'), KeyModifiers::NONE) => self.yank_url(),
             (KeyCode::Char('Y'), _) => self.yank_json(),
+            (KeyCode::Char('R'), _) => self.toggle_user_replies(),
             (KeyCode::Char('o'), KeyModifiers::NONE) => self.open_tweet_in_browser(),
+            (KeyCode::Char('O'), _) => self.open_author_in_browser(),
             (KeyCode::Char('m'), KeyModifiers::NONE) => self.open_media_external(),
             (KeyCode::Char('q'), KeyModifiers::NONE) => self.pop_or_quit(),
             (KeyCode::Esc, _) => self.pop_or_quit(),
@@ -682,11 +690,36 @@ impl App {
         });
     }
 
+    fn toggle_user_replies(&mut self) {
+        let (handle, current) = match &self.source.kind {
+            Some(SourceKind::User {
+                handle,
+                with_replies,
+            }) => (handle.clone(), *with_replies),
+            _ => {
+                self.set_status("R only toggles on a user profile");
+                return;
+            }
+        };
+        self.switch_source(SourceKind::User {
+            handle,
+            with_replies: !current,
+        });
+    }
+
     fn open_tweet_in_browser(&mut self) {
         let Some(tweet) = self.selected_tweet() else {
             return;
         };
         self.open_url(&tweet.url.clone());
+    }
+
+    fn open_author_in_browser(&mut self) {
+        let Some(tweet) = self.selected_tweet() else {
+            return;
+        };
+        let url = format!("https://x.com/{}", tweet.author.handle);
+        self.open_url(&url);
     }
 
     fn open_media_external(&mut self) {

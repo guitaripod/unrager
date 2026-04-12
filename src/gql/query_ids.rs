@@ -13,6 +13,7 @@ pub enum Operation {
     HomeLatestTimeline,
     UserByScreenName,
     UserTweets,
+    UserTweetsAndReplies,
     SearchTimeline,
     Bookmarks,
     BookmarkSearchTimeline,
@@ -29,6 +30,7 @@ impl Operation {
             Self::HomeLatestTimeline => "HomeLatestTimeline",
             Self::UserByScreenName => "UserByScreenName",
             Self::UserTweets => "UserTweets",
+            Self::UserTweetsAndReplies => "UserTweetsAndReplies",
             Self::SearchTimeline => "SearchTimeline",
             Self::Bookmarks => "Bookmarks",
             Self::BookmarkSearchTimeline => "BookmarkSearchTimeline",
@@ -125,5 +127,6 @@ const FALLBACK_QUERY_IDS: &[(&str, &str)] = &[
     ("HomeLatestTimeline", "2ee46L1AFXmnTa0EvUog-Q"),
     ("UserByScreenName", "IGgvgiOx4QZndDHuD3x9TQ"),
     ("UserTweets", "x3B_xLqC0yZawOB7WQhaVQ"),
+    ("UserTweetsAndReplies", "bt4TKuFz4T7Ckk-VvQVSow"),
     ("SearchTimeline", "pCd62NDD9dlCDgEGgEVHMg"),
 ];

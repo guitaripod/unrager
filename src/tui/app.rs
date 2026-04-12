@@ -520,8 +520,14 @@ impl App {
                 };
                 self.set_status(msg);
             }
-            (KeyCode::Char('X'), _) if self.active == ActivePane::Detail => {
-                self.toggle_inline_thread()
+            (KeyCode::Char('X'), _) => {
+                if self.active == ActivePane::Source {
+                    if let Some(tweet) = self.source.tweets.get(self.source.selected()).cloned() {
+                        self.mark_current_seen();
+                        self.push_tweet(tweet);
+                    }
+                }
+                self.toggle_inline_thread();
             }
             (KeyCode::Char('p'), KeyModifiers::NONE) => self.open_profile(),
             (KeyCode::Char('P'), _) => self.open_own_profile_in_browser(),
@@ -803,6 +809,9 @@ impl App {
             (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
                 self.source.advance(-10);
                 self.mark_current_seen();
+            }
+            (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, _) => {
+                self.switch_source(SourceKind::Home { following: false });
             }
             _ => {}
         }

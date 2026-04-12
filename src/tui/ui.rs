@@ -1146,7 +1146,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect) {
         Line::from("  g / G          top / bottom of the list"),
         Line::from("  Tab            swap active pane (when split)"),
         Line::from("  , / .          narrow / widen the source pane split"),
-        Line::from("  h / ←          move focus from detail back to source"),
+        Line::from("  h / ←          go home (source pane); back to source (detail pane)"),
         Line::from("  Enter / l      open selected tweet into detail pane"),
         Line::from("  q / Esc        pop detail pane; quit if stack is empty"),
         Line::from(""),

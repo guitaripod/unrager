@@ -117,7 +117,7 @@ impl App {
         let session_path = config_dir.join("session.json");
 
         let (filter_cfg, filter_cache, filter_classifier) =
-            init_filter_stack(&config_dir, &cache_dir).await;
+            init_filter_stack(&config_dir, &cache_dir);
 
         let loaded = session::load(&session_path);
         let (initial_kind, initial_selected) = loaded
@@ -1069,7 +1069,7 @@ impl App {
     }
 }
 
-async fn init_filter_stack(
+fn init_filter_stack(
     config_dir: &std::path::Path,
     cache_dir: &std::path::Path,
 ) -> (
@@ -1092,18 +1092,5 @@ async fn init_filter_stack(
         }
     };
     let classifier = Classifier::new(&cfg);
-    match tokio::time::timeout(Duration::from_secs(2), classifier.health_check()).await {
-        Ok(Ok(())) => {
-            tracing::debug!("filter ollama health ok");
-            (Some(cfg), Some(cache), Some(classifier))
-        }
-        Ok(Err(e)) => {
-            tracing::warn!("ollama unreachable: {e} — filter disabled");
-            (None, None, None)
-        }
-        Err(_) => {
-            tracing::warn!("ollama health check timed out — filter disabled");
-            (None, None, None)
-        }
-    }
+    (Some(cfg), Some(cache), Some(classifier))
 }

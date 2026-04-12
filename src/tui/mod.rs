@@ -24,7 +24,7 @@ pub async fn run() -> Result<()> {
 }
 
 fn detect_is_dark() -> bool {
-    match termbg::theme(Duration::from_millis(200)) {
+    match termbg::theme(Duration::from_millis(100)) {
         Ok(termbg::Theme::Dark) => true,
         Ok(termbg::Theme::Light) => false,
         Err(_) => true,

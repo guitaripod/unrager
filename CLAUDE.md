@@ -26,8 +26,9 @@ cargo test
 3. Commit: `chore: bump version to X.Y.Z`
 4. Tag (no `v` prefix): `git tag X.Y.Z`
 5. Push both: `git push origin master --tags`
+6. The `release` workflow runs CI checks then creates the GitHub release automatically — **never create releases manually with `gh release create`**
 
-The tag must always point at the final commit for that release. If post-release fixes land before the next version, move the tag: `git tag -d X.Y.Z && git tag X.Y.Z && git push origin X.Y.Z --force`.
+Do NOT force-push tags that already have a release. If post-release fixes are needed, they go into the next version.
 
 ## Architecture
 

@@ -702,9 +702,13 @@ impl App {
 
     fn open_url(&mut self, url: &str) {
         let (program, args) = self.app_config.browser_parts();
-        match std::process::Command::new(program)
-            .args(args)
-            .arg(url)
+        let mut cmd = std::process::Command::new(program);
+        if self.app_config.has_url_placeholder() {
+            cmd.args(args.iter().map(|a| a.replace("{}", url)));
+        } else {
+            cmd.args(args).arg(url);
+        }
+        match cmd
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

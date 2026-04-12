@@ -34,6 +34,10 @@ impl AppConfig {
         let args: Vec<&str> = parts.collect();
         (program, args)
     }
+
+    pub fn has_url_placeholder(&self) -> bool {
+        self.browser.contains("{}")
+    }
 }
 
 pub fn project_dirs() -> Result<ProjectDirs> {

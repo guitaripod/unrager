@@ -15,9 +15,12 @@ const DEFAULT_CONFIG: &str = include_str!("filter_default.toml");
 const PROMPT_TOPICS_PLACEHOLDER: &str = "{TOPICS}";
 const PROMPT_GUIDANCE_PLACEHOLDER: &str = "{GUIDANCE}";
 const PROMPT_TEXT_PLACEHOLDER: &str = "{TEXT}";
-const PROMPT_TEMPLATE: &str = "You are a strict content filter. HIDE any tweet that matches ANY of these criteria, regardless of tone, language, or framing:
-- The tweet's primary subject is one of these topics
-- The author is a person or account that belongs to one of these categories
+const PROMPT_TEMPLATE: &str = "You are a strict content filter. Default to HIDE. Only reply KEEP if the tweet clearly does NOT match any of the following criteria.
+
+HIDE if ANY of these are true:
+- The tweet's primary subject matches one of the topics below
+- The author belongs to one of the categories below
+- The tweet uses outrage tactics: ALL CAPS, excessive punctuation, rage-bait framing, engagement farming
 {TOPICS}
 {GUIDANCE}
 Tweet: \"{TEXT}\"

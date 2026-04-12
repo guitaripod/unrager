@@ -57,6 +57,10 @@ cargo test
 - `~/.cache/unrager/seen.db` — read tracking
 - `~/.cache/unrager/filter.db` — filter verdict cache
 
+## Keeping README in sync
+
+When adding or changing key bindings, features, CLI commands, or config paths, update `README.md` to match. The key bindings table, features section, and config table must stay current.
+
 ## Adding a new key binding
 
 1. Add the match arm in `handle_key` (global) or `handle_key_source`/`handle_key_detail` (pane-specific) in `app.rs`
@@ -69,6 +73,14 @@ cargo test
 2. Add a fetch function and wire it into `fetch_page`
 3. Add a command parser branch in `command.rs`
 4. Classification and media queueing happen automatically via `handle_timeline_loaded`
+
+## Feed modes
+
+`V` toggles between All and Originals on Home feeds. Originals mode filters out replies (`in_reply_to_tweet_id.is_some()`), quote tweets (`quoted_tweet.is_some()`), and retweets (`text.starts_with("RT @")`). Filtering happens in `handle_timeline_loaded` at load time — toggling reloads the source. Persisted in session as `feed_mode`.
+
+## Translation
+
+`T` translates the selected tweet to English via Ollama (same model/host as the filter). Translations are ephemeral (in-memory HashMap, cleared on source switch). Press `T` again to revert. The Ollama prompt is a zero-temperature `num_predict: 512` generation with a simple "translate to English" instruction. No caching, no semaphore — it's user-initiated and one-at-a-time.
 
 ## Filter
 

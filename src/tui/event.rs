@@ -57,6 +57,10 @@ pub enum Event {
         rest_id: String,
         verdict: crate::tui::filter::FilterDecision,
     },
+    TweetTranslated {
+        rest_id: String,
+        translated: String,
+    },
     OpenTweetResolved {
         request_id: RequestId,
         result: Result<crate::model::Tweet>,

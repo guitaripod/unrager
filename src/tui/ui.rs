@@ -9,7 +9,7 @@ use crate::tui::media::{
     self, MediaEntry, MediaRegistry, media_badge_failed, media_badge_loading, placeholder_row_span,
 };
 use crate::tui::seen::SeenStore;
-use crate::tui::source::Source;
+use crate::tui::source::{Source, SourceKind};
 use chrono::{DateTime, Utc};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
@@ -129,6 +129,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             opts,
             source_active,
             filter_ctx,
+            &app.translations,
         );
         let detail_opts = RenderOpts {
             metrics: MetricsStyle::Visible,
@@ -144,6 +145,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             &app.media,
             detail_opts,
             detail_active,
+            &app.translations,
         );
     } else {
         draw_source_list(
@@ -157,6 +159,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             opts,
             true,
             filter_ctx,
+            &app.translations,
         );
     }
 
@@ -255,6 +258,15 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
         }
     };
     spans.push(Span::styled(badge_text, Style::default().fg(badge_color)));
+    if matches!(app.feed_mode, crate::tui::app::FeedMode::Originals)
+        && matches!(app.source.kind, Some(SourceKind::Home { .. }))
+    {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            "[originals]",
+            Style::default().fg(Color::Cyan),
+        ));
+    }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -282,6 +294,7 @@ fn draw_source_list(
     opts: RenderOpts,
     active: bool,
     filter_ctx: FilterRenderCtx,
+    translations: &HashMap<String, String>,
 ) {
     let base_title = source.title();
     let title = if matches!(filter_ctx.mode, FilterMode::On)
@@ -312,7 +325,16 @@ fn draw_source_list(
         .map(|(i, t)| {
             let is_seen = seen.is_seen(&t.rest_id);
             let is_expanded = expanded.contains(&t.rest_id);
-            let lines = tweet_lines(t, opts, is_seen, false, wrap_width, is_expanded, media_reg);
+            let lines = tweet_lines(
+                t,
+                opts,
+                is_seen,
+                false,
+                wrap_width,
+                is_expanded,
+                media_reg,
+                translations,
+            );
             let mut item = ListItem::new(lines);
             if i % 2 == 1 {
                 item = item.style(Style::default().bg(ZEBRA_BG));
@@ -342,6 +364,7 @@ fn draw_detail(
     media_reg: &MediaRegistry,
     opts: RenderOpts,
     active: bool,
+    translations: &HashMap<String, String>,
 ) {
     let Some(FocusEntry::Tweet(detail)) = entry else {
         return;
@@ -368,6 +391,7 @@ fn draw_detail(
         wrap_width,
         true,
         media_reg,
+        translations,
     );
     let mut items: Vec<ListItem> = Vec::with_capacity(1 + detail.replies.len());
     items.push(ListItem::new(focal_lines));
@@ -375,9 +399,25 @@ fn draw_detail(
     for (i, t) in detail.replies.iter().enumerate() {
         let is_seen = seen.is_seen(&t.rest_id);
         let is_expanded = expanded.contains(&t.rest_id);
-        let mut lines = tweet_lines(t, opts, is_seen, true, wrap_width, is_expanded, media_reg);
+        let mut lines = tweet_lines(
+            t,
+            opts,
+            is_seen,
+            true,
+            wrap_width,
+            is_expanded,
+            media_reg,
+            translations,
+        );
         if let Some(thread) = inline_threads.get(&t.rest_id) {
-            append_inline_thread(&mut lines, thread, opts, wrap_width, media_reg);
+            append_inline_thread(
+                &mut lines,
+                thread,
+                opts,
+                wrap_width,
+                media_reg,
+                translations,
+            );
         }
         let mut item = ListItem::new(lines);
         if i % 2 == 0 {
@@ -486,6 +526,7 @@ const GLYPH_PHOTO: &str = "▣";
 const GLYPH_VIDEO: &str = "▶";
 const GLYPH_GIF: &str = "↻";
 
+#[allow(clippy::too_many_arguments)]
 fn tweet_lines(
     t: &Tweet,
     opts: RenderOpts,
@@ -494,7 +535,9 @@ fn tweet_lines(
     wrap_width: usize,
     expanded: bool,
     media_reg: &MediaRegistry,
+    translations: &HashMap<String, String>,
 ) -> Vec<Line<'static>> {
+    let translated_text = translations.get(&t.rest_id);
     let photo_count = t
         .media
         .iter()
@@ -531,6 +574,10 @@ fn tweet_lines(
         format_timestamp(t.created_at, opts.timestamps),
         Style::default().fg(Color::DarkGray),
     ));
+    if translated_text.is_some() {
+        header.push(Span::raw("  "));
+        header.push(Span::styled("[EN]", Style::default().fg(Color::Cyan)));
+    }
     if let Some(kind) = first_media_kind {
         let (glyph, color) = match kind {
             crate::model::MediaKind::Photo => (GLYPH_PHOTO, Color::Indexed(75)),
@@ -575,7 +622,9 @@ fn tweet_lines(
             .add_modifier(Modifier::BOLD)
     };
 
-    let body_text: &str = if in_reply_context && t.in_reply_to_tweet_id.is_some() {
+    let body_text: &str = if let Some(tr) = translated_text {
+        tr
+    } else if in_reply_context && t.in_reply_to_tweet_id.is_some() {
         strip_leading_mentions(&t.text)
     } else {
         &t.text
@@ -809,6 +858,7 @@ fn append_inline_thread(
     opts: RenderOpts,
     wrap_width: usize,
     media_reg: &MediaRegistry,
+    translations: &HashMap<String, String>,
 ) {
     lines.push(Line::from(Span::styled(
         "  ── replies ──",
@@ -837,7 +887,16 @@ fn append_inline_thread(
     }
     let child_wrap = wrap_width.saturating_sub(4);
     for reply in &thread.replies {
-        let reply_lines = tweet_lines(reply, opts, false, true, child_wrap, false, media_reg);
+        let reply_lines = tweet_lines(
+            reply,
+            opts,
+            false,
+            true,
+            child_wrap,
+            false,
+            media_reg,
+            translations,
+        );
         for mut line in reply_lines {
             let gutter = Span::styled("  │ ", Style::default().fg(Color::DarkGray));
             let mut new_spans = vec![gutter];
@@ -1130,7 +1189,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
 
 fn draw_help_overlay(frame: &mut Frame, area: Rect) {
     let w = area.width.min(72);
-    let h = area.height.saturating_sub(2).min(48);
+    let h = area.height.saturating_sub(2).min(52);
     let x = (area.width.saturating_sub(w)) / 2;
     let y = (area.height.saturating_sub(h)) / 2;
     let popup = Rect {
@@ -1160,6 +1219,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect) {
         Line::from("  q / Esc        pop detail pane; quit if stack is empty"),
         Line::from(""),
         Line::from("SOURCES"),
+        Line::from("  V              toggle all / originals on home (hides replies, quotes, RTs)"),
         Line::from("  F              toggle For You / Following on home"),
         Line::from("  R              toggle tweets / replies on user profile (via search)"),
         Line::from("  :home [following]          home For You / Following feed"),
@@ -1187,6 +1247,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect) {
         Line::from("  I              toggle media auto-expand (show images for all media tweets)"),
         Line::from("  p              my profile (own tweets with full metrics)"),
         Line::from("  P              open own profile in browser"),
+        Line::from("  T              translate selected tweet to English (toggle)"),
         Line::from("  c              toggle rage filter (LLM hides inflammatory topics)"),
         Line::from("  x              expand / collapse selected tweet body"),
         Line::from("  X              toggle inline thread replies (detail pane only)"),

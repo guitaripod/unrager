@@ -67,6 +67,13 @@ pub enum DisplayNameStyle {
     Hidden,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeedMode {
+    All,
+    Originals,
+}
+
 pub struct App {
     pub running: bool,
     pub mode: InputMode,
@@ -92,6 +99,7 @@ pub struct App {
     pub inline_threads: HashMap<String, InlineThread>,
     pub media: MediaRegistry,
     pub media_auto_expand: bool,
+    pub feed_mode: FeedMode,
     pub self_handle: Option<String>,
     pub filter_mode: FilterMode,
     pub filter_cfg: Option<FilterConfig>,
@@ -99,11 +107,14 @@ pub struct App {
     pub filter_classifier: Option<Classifier>,
     pub filter_verdicts: HashMap<String, FilterState>,
     pub filter_inflight: HashSet<String>,
+    pub translations: HashMap<String, String>,
+    pub translation_inflight: HashSet<String>,
     pub app_config: AppConfig,
     pub(super) client: Arc<GqlClient>,
     pub(super) tx: EventTx,
     pub(super) pending_thread: Option<RequestId>,
     pub(super) pending_open: Option<RequestId>,
+    pub(super) fetch_baseline: Option<usize>,
 }
 
 pub const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -139,6 +150,10 @@ impl App {
             .as_ref()
             .and_then(|s| s.timestamps)
             .unwrap_or(TimestampStyle::Relative);
+        let loaded_feed_mode = loaded
+            .as_ref()
+            .and_then(|s| s.feed_mode)
+            .unwrap_or(FeedMode::All);
 
         let mut source = Source::new(initial_kind.clone());
         source.set_selected(initial_selected);
@@ -168,6 +183,7 @@ impl App {
             inline_threads: HashMap::new(),
             media: MediaRegistry::new(),
             media_auto_expand: false,
+            feed_mode: loaded_feed_mode,
             self_handle: None,
             filter_mode: FilterMode::On,
             filter_cfg,
@@ -175,11 +191,14 @@ impl App {
             filter_classifier,
             filter_verdicts: HashMap::new(),
             filter_inflight: HashSet::new(),
+            translations: HashMap::new(),
+            translation_inflight: HashSet::new(),
             app_config,
             client,
             tx,
             pending_thread: None,
             pending_open: None,
+            fetch_baseline: None,
         })
     }
 
@@ -294,6 +313,38 @@ impl App {
         }
     }
 
+    fn translate_selected(&mut self) {
+        let (rest_id, text) = match self.selected_tweet() {
+            Some(t) => (t.rest_id.clone(), t.text.clone()),
+            None => return,
+        };
+
+        if self.translations.remove(&rest_id).is_some() {
+            self.set_status("translation removed");
+            return;
+        }
+
+        if self.translation_inflight.contains(&rest_id) {
+            self.set_status("translating…");
+            return;
+        }
+
+        let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone()) else {
+            self.set_status("translation unavailable (no ollama config)");
+            return;
+        };
+
+        self.translation_inflight.insert(rest_id.clone());
+        self.set_status("translating…");
+        filter::translate_async(rest_id, text, ollama, self.tx.clone());
+    }
+
+    fn handle_tweet_translated(&mut self, rest_id: String, translated: String) {
+        self.translation_inflight.remove(&rest_id);
+        self.translations.insert(rest_id, translated);
+        self.set_status("translated");
+    }
+
     pub fn save_session(&self) {
         let Some(kind) = self.source.kind.clone() else {
             return;
@@ -304,6 +355,7 @@ impl App {
             metrics: Some(self.metrics),
             display_names: Some(self.display_names),
             timestamps: Some(self.timestamps),
+            feed_mode: Some(self.feed_mode),
         };
         if let Err(e) = session::save(&self.session_path, &state) {
             tracing::warn!("failed to save session: {e}");
@@ -440,6 +492,12 @@ impl App {
             Event::TweetClassified { rest_id, verdict } => {
                 self.handle_tweet_classified(rest_id, verdict);
             }
+            Event::TweetTranslated {
+                rest_id,
+                translated,
+            } => {
+                self.handle_tweet_translated(rest_id, translated);
+            }
             Event::SelfHandleResolved { handle } => {
                 self.self_handle = Some(handle.clone());
                 self.switch_source(SourceKind::User { handle });
@@ -487,6 +545,7 @@ impl App {
             (KeyCode::Char('.'), KeyModifiers::NONE) if self.is_split() => {
                 self.split_pct = (self.split_pct + 5).min(80);
             }
+            (KeyCode::Char('V'), _) => self.toggle_feed_mode(),
             (KeyCode::Char('F'), _) => self.toggle_home_mode(),
             (KeyCode::Char('M'), _) => {
                 self.metrics = match self.metrics {
@@ -533,6 +592,7 @@ impl App {
             }
             (KeyCode::Char('p'), KeyModifiers::NONE) => self.open_profile(),
             (KeyCode::Char('P'), _) => self.open_own_profile_in_browser(),
+            (KeyCode::Char('T'), _) => self.translate_selected(),
             (KeyCode::Char('c'), KeyModifiers::NONE) => self.toggle_filter(),
             (KeyCode::Char('y'), KeyModifiers::NONE) => self.yank_url(),
             (KeyCode::Char('Y'), _) => self.yank_json(),
@@ -678,6 +738,24 @@ impl App {
             }
             Err(e) => self.error = Some(format!("clipboard failed: {e}")),
         }
+    }
+
+    fn toggle_feed_mode(&mut self) {
+        if !matches!(self.source.kind, Some(SourceKind::Home { .. })) {
+            self.set_status("V only toggles on home feed");
+            return;
+        }
+        self.feed_mode = match self.feed_mode {
+            FeedMode::All => FeedMode::Originals,
+            FeedMode::Originals => FeedMode::All,
+        };
+        let msg = match self.feed_mode {
+            FeedMode::All => "feed: all tweets",
+            FeedMode::Originals => "feed: originals only",
+        };
+        self.set_status(msg);
+        self.save_session();
+        self.reload_source();
     }
 
     fn toggle_home_mode(&mut self) {
@@ -918,6 +996,8 @@ impl App {
         self.inline_threads.clear();
         self.filter_verdicts.clear();
         self.filter_inflight.clear();
+        self.translations.clear();
+        self.translation_inflight.clear();
         self.fetch_source(false);
         self.save_session();
     }
@@ -1043,6 +1123,9 @@ impl App {
             return;
         }
         self.source.loading = true;
+        if self.fetch_baseline.is_none() {
+            self.fetch_baseline = Some(self.source.tweets.len());
+        }
         let client = self.client.clone();
         let tx = self.tx.clone();
         let cursor = if append {
@@ -1083,6 +1166,15 @@ impl App {
                         page.tweets = unseen;
                     }
                 }
+                if matches!(self.feed_mode, FeedMode::Originals)
+                    && matches!(kind, SourceKind::Home { .. })
+                {
+                    page.tweets.retain(|t| {
+                        t.in_reply_to_tweet_id.is_none()
+                            && t.quoted_tweet.is_none()
+                            && !t.text.starts_with("RT @")
+                    });
+                }
                 if matches!(self.filter_mode, FilterMode::On) && self.filter_classifier.is_some() {
                     if let Some(cache) = &self.filter_cache {
                         page.tweets.retain(|t| {
@@ -1096,6 +1188,16 @@ impl App {
                 } else {
                     self.source.reset_with(page);
                 }
+                let baseline = self.fetch_baseline.unwrap_or(0);
+                if self.source.tweets.len() < baseline + 10
+                    && self.source.cursor.is_some()
+                    && matches!(kind, SourceKind::Home { .. })
+                {
+                    self.source.exhausted = false;
+                    self.fetch_source(true);
+                    return;
+                }
+                self.fetch_baseline = None;
                 self.error = None;
                 self.clear_status();
                 self.queue_source_media();

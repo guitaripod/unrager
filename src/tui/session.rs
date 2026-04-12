@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::tui::app::{DisplayNameStyle, MetricsStyle, TimestampStyle};
+use crate::tui::app::{DisplayNameStyle, FeedMode, MetricsStyle, TimestampStyle};
 use crate::tui::source::SourceKind;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -14,6 +14,8 @@ pub struct SessionState {
     pub display_names: Option<DisplayNameStyle>,
     #[serde(default)]
     pub timestamps: Option<TimestampStyle>,
+    #[serde(default)]
+    pub feed_mode: Option<FeedMode>,
 }
 
 pub fn load(path: &Path) -> Option<SessionState> {
@@ -45,6 +47,7 @@ mod tests {
             metrics: Some(MetricsStyle::Hidden),
             display_names: Some(DisplayNameStyle::Hidden),
             timestamps: Some(TimestampStyle::Absolute),
+            feed_mode: Some(FeedMode::Originals),
         };
         save(tmp.path(), &state).unwrap();
         let loaded = load(tmp.path()).unwrap();
@@ -68,6 +71,7 @@ mod tests {
             metrics: None,
             display_names: None,
             timestamps: None,
+            feed_mode: None,
         };
         save(tmp.path(), &state).unwrap();
         let loaded = load(tmp.path()).unwrap();

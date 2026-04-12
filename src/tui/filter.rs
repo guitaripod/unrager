@@ -371,6 +371,48 @@ struct OllamaGenerateResponse {
     response: String,
 }
 
+pub fn translate_async(rest_id: String, text: String, ollama: OllamaConfig, tx: EventTx) {
+    tokio::spawn(async move {
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(ollama.timeout_seconds))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        let url = format!("{}/api/generate", ollama.host.trim_end_matches('/'));
+        let prompt = format!(
+            "Translate the following to English. Output ONLY the translation, nothing else.\n\n{text}"
+        );
+        let body = serde_json::json!({
+            "model": ollama.model,
+            "prompt": prompt,
+            "stream": false,
+            "think": false,
+            "options": { "temperature": 0, "num_predict": 512 },
+        });
+        match http.post(&url).json(&body).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                match resp.json::<OllamaGenerateResponse>().await {
+                    Ok(r) => {
+                        let translated = r.response.trim().to_string();
+                        let _ = tx.send(Event::TweetTranslated {
+                            rest_id,
+                            translated,
+                        });
+                    }
+                    Err(e) => {
+                        warn!("translate parse failed for {rest_id}: {e}");
+                    }
+                }
+            }
+            Ok(resp) => {
+                warn!("translate http status {} for {rest_id}", resp.status());
+            }
+            Err(e) => {
+                warn!("translate http error for {rest_id}: {e}");
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

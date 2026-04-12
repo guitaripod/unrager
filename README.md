@@ -45,6 +45,14 @@ unrager   # filter is on by default when Ollama is reachable
 
 Every tweet classified by a local LLM against a user-editable rubric (`~/.config/unrager/filter.toml`). Matching tweets are physically removed from the feed — they never existed. Verdicts cache to SQLite so reloads are instant. Toggle with `c`. If Ollama is unreachable, the filter disables itself and everything shows normally.
 
+### Originals mode
+
+Press `V` on a home feed to switch between **all tweets** and **originals only**. Originals mode hides replies, quote tweets, and retweets — showing only root tweets that represent someone's own standalone thought. The mode persists across sessions and applies to both For You and Following feeds.
+
+### Translation
+
+Press `T` on any tweet to translate it to English via the same local Ollama model used for rage filtering. Press `T` again to revert to the original text. A `[EN]` badge appears in the header of translated tweets. Translations are ephemeral — they live in memory for the current session only.
+
 ### Inline media
 
 Photos render inside the terminal via the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) on Ghostty, Kitty, and WezTerm. Multiple images display side-by-side. Toggle with `I` for auto-expand or `x` per tweet. Falls back to colored `▣`/`▶`/`↻` badges on other terminals.
@@ -91,7 +99,9 @@ Photos render inside the terminal via the [kitty graphics protocol](https://sw.k
 | `,` / `.` | Narrow / widen split |
 | `:` | Command palette |
 | `?` | Help overlay |
+| `V` | Toggle all / originals on home feed |
 | `F` | Toggle For You / Following |
+| `T` | Translate selected tweet to English (toggle) |
 | `c` | Toggle rage filter |
 | `x` | Expand / collapse tweet body |
 | `X` | Inline thread replies (auto-opens detail from source) |

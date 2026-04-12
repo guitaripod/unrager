@@ -611,6 +611,99 @@ fn tweet_lines(
         ]));
     }
 
+    if let Some(qt) = &t.quoted_tweet {
+        let qt_wrap = wrap_width.saturating_sub(6);
+        let qt_style = Style::default().fg(Color::DarkGray);
+        let qt_handle_color = handle_color(&qt.author.handle);
+        let gutter_top = Span::styled("┌ ", qt_style);
+        let gutter_mid = Span::styled("│ ", qt_style);
+        let gutter_bot = Span::styled("└", qt_style);
+
+        let mut header_spans = vec![
+            Span::raw("  "),
+            gutter_top,
+            Span::styled(
+                format!("@{}", qt.author.handle),
+                Style::default()
+                    .fg(qt_handle_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  ·  {}", format_timestamp(qt.created_at, opts.timestamps)),
+                qt_style,
+            ),
+        ];
+        if let Some(first_media) = qt.media.first() {
+            let (glyph, color) = match first_media.kind {
+                crate::model::MediaKind::Photo => (GLYPH_PHOTO, Color::Indexed(75)),
+                crate::model::MediaKind::Video => (GLYPH_VIDEO, Color::Indexed(203)),
+                crate::model::MediaKind::AnimatedGif => (GLYPH_GIF, Color::Indexed(214)),
+            };
+            header_spans.push(Span::raw("  "));
+            header_spans.push(Span::styled(glyph.to_string(), Style::default().fg(color)));
+        }
+        lines.push(Line::from(header_spans));
+
+        let qt_body = &qt.text;
+        let qt_cap = if effective_expanded { usize::MAX } else { 2 };
+        let mut qt_wrapped: Vec<String> = Vec::new();
+        for text_line in qt_body.lines() {
+            qt_wrapped.extend(wrap_text(text_line, qt_wrap));
+        }
+        let qt_total = qt_wrapped.len();
+        for wline in qt_wrapped.iter().take(qt_cap) {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                gutter_mid.clone(),
+                Span::styled(wline.to_string(), qt_style),
+            ]));
+        }
+        if qt_total > qt_cap {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                gutter_mid.clone(),
+                Span::styled(format!("… +{} more", qt_total - qt_cap), qt_style),
+            ]));
+        }
+
+        if effective_expanded && opts.media_enabled {
+            let qt_photos: Vec<&str> = qt
+                .media
+                .iter()
+                .filter(|m| matches!(m.kind, crate::model::MediaKind::Photo))
+                .map(|m| m.url.as_str())
+                .collect();
+            if !qt_photos.is_empty() {
+                let vis = qt_photos.len().min(4);
+                let (cell_cols, cell_rows) = media::layout_for(vis, qt_wrap.saturating_add(2));
+                let ready_ids: Vec<Option<u32>> = qt_photos[..vis]
+                    .iter()
+                    .map(|url| match media_reg.get(url) {
+                        Some(MediaEntry::Ready { id_expanded, .. }) => Some(*id_expanded),
+                        _ => None,
+                    })
+                    .collect();
+                if ready_ids.iter().all(|o| o.is_some()) {
+                    for row in 0..cell_rows {
+                        let mut spans: Vec<Span<'static>> =
+                            vec![Span::raw("  "), gutter_mid.clone()];
+                        for (i, maybe_id) in ready_ids.iter().enumerate() {
+                            if i > 0 {
+                                spans.push(Span::raw("  "));
+                            }
+                            if let Some(id) = maybe_id {
+                                spans.push(placeholder_row_span(*id, row, cell_cols));
+                            }
+                        }
+                        lines.push(Line::from(spans));
+                    }
+                }
+            }
+        }
+
+        lines.push(Line::from(vec![Span::raw("  "), gutter_bot]));
+    }
+
     if effective_expanded && opts.media_enabled && has_photo_media {
         let photo_urls: Vec<&str> = t
             .media

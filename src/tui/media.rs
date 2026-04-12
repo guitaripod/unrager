@@ -117,6 +117,9 @@ impl MediaRegistry {
         if !self.supported {
             return;
         }
+        if let Some(qt) = &tweet.quoted_tweet {
+            self.ensure_tweet_media(qt, tx);
+        }
         for media in &tweet.media {
             if self.entries.contains_key(&media.url) {
                 continue;

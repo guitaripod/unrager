@@ -46,6 +46,48 @@ const BROWSER_CANDIDATES: &[(&str, &[&str])] = &[
 ];
 
 pub async fn load_session() -> Result<XSession> {
+    if let Some(cached) = load_cached_session() {
+        tracing::debug!("using cached session");
+        return Ok(cached);
+    }
+
+    let session = extract_session_from_browser().await?;
+    save_cached_session(&session);
+    Ok(session)
+}
+
+fn session_cache_path() -> Option<PathBuf> {
+    Some(crate::config::cache_dir().ok()?.join("session-cache.json"))
+}
+
+fn load_cached_session() -> Option<XSession> {
+    let path = session_cache_path()?;
+    let meta = std::fs::metadata(&path).ok()?;
+    let age = meta.modified().ok()?.elapsed().ok()?;
+    if age > std::time::Duration::from_secs(24 * 3600) {
+        tracing::debug!(
+            "session cache too old ({:.0}h), re-extracting",
+            age.as_secs_f64() / 3600.0
+        );
+        return None;
+    }
+    let bytes = std::fs::read(&path).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn save_cached_session(session: &XSession) {
+    let Some(path) = session_cache_path() else {
+        return;
+    };
+    if let Ok(json) = serde_json::to_vec(session) {
+        let tmp = path.with_extension("json.tmp");
+        if std::fs::write(&tmp, &json).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
+        }
+    }
+}
+
+async fn extract_session_from_browser() -> Result<XSession> {
     let paths = candidate_paths()?;
     let passwords = candidate_passwords().await;
     tracing::debug!(

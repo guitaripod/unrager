@@ -297,8 +297,8 @@ fn draw_source_list(
     apply_scroll_padding(&mut source.list_state, &items, area.height);
 
     if opts.media_enabled {
-        let needs_placement = opts.media_auto_expand
-            || source.tweets.iter().any(|t| expanded.contains(&t.rest_id));
+        let needs_placement =
+            opts.media_auto_expand || source.tweets.iter().any(|t| expanded.contains(&t.rest_id));
         if needs_placement {
             emit_placements_for_tweets(media_reg, source.tweets.iter(), wrap_width);
         }

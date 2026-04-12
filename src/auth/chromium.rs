@@ -211,12 +211,15 @@ async fn collect_keyring_secrets() -> Result<Vec<Vec<u8>>> {
         .await
         .map_err(|e| Error::Keyring(e.to_string()))?;
 
+    let label_futs: Vec<_> = items.iter().map(|item| item.get_label()).collect();
+    let labels: Vec<_> = futures::future::join_all(label_futs)
+        .await
+        .into_iter()
+        .map(|r| r.unwrap_or_default())
+        .collect();
+
     let mut out = Vec::new();
-    for item in items {
-        let label = item
-            .get_label()
-            .await
-            .map_err(|e| Error::Keyring(e.to_string()))?;
+    for (item, label) in items.iter().zip(labels.iter()) {
         let is_safe_storage = label.contains(SAFE_STORAGE_SUFFIX);
         let is_portal_blob = label.starts_with(PORTAL_SERVER);
         if !is_safe_storage && !is_portal_blob {

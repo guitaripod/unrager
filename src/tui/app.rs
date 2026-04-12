@@ -107,6 +107,7 @@ pub struct App {
     pub filter_classifier: Option<Classifier>,
     pub filter_verdicts: HashMap<String, FilterState>,
     pub filter_inflight: HashSet<String>,
+    pub filter_hidden_count: usize,
     pub translations: HashMap<String, String>,
     pub translation_inflight: HashSet<String>,
     pub app_config: AppConfig,
@@ -191,6 +192,7 @@ impl App {
             filter_classifier,
             filter_verdicts: HashMap::new(),
             filter_inflight: HashSet::new(),
+            filter_hidden_count: 0,
             translations: HashMap::new(),
             translation_inflight: HashSet::new(),
             app_config,
@@ -309,6 +311,7 @@ impl App {
         self.filter_verdicts
             .insert(rest_id.clone(), FilterState::Classified(verdict));
         if matches!(verdict, FilterDecision::Hide) {
+            self.filter_hidden_count += 1;
             self.remove_tweet_by_id(&rest_id);
         }
     }
@@ -996,6 +999,7 @@ impl App {
         self.inline_threads.clear();
         self.filter_verdicts.clear();
         self.filter_inflight.clear();
+        self.filter_hidden_count = 0;
         self.translations.clear();
         self.translation_inflight.clear();
         self.fetch_source(false);
@@ -1177,9 +1181,11 @@ impl App {
                 }
                 if matches!(self.filter_mode, FilterMode::On) && self.filter_classifier.is_some() {
                     if let Some(cache) = &self.filter_cache {
+                        let before = page.tweets.len();
                         page.tweets.retain(|t| {
                             !matches!(cache.get(&t.rest_id), Some(FilterDecision::Hide))
                         });
+                        self.filter_hidden_count += before - page.tweets.len();
                     }
                 }
                 let old_len = self.source.tweets.len();

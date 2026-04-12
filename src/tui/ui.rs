@@ -250,11 +250,14 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     }
     spans.push(Span::raw("  "));
     let (badge_text, badge_color) = if app.filter_classifier.is_none() {
-        ("[c —]", Color::DarkGray)
+        ("[c —]".to_string(), Color::DarkGray)
     } else {
         match app.filter_mode {
-            FilterMode::On => ("[c]", Color::Green),
-            FilterMode::Off => ("[c off]", Color::DarkGray),
+            FilterMode::On if app.filter_hidden_count > 0 => {
+                (format!("[c −{}]", app.filter_hidden_count), Color::Green)
+            }
+            FilterMode::On => ("[c]".to_string(), Color::Green),
+            FilterMode::Off => ("[c off]".to_string(), Color::DarkGray),
         }
     };
     spans.push(Span::styled(badge_text, Style::default().fg(badge_color)));

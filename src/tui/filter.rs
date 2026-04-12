@@ -12,10 +12,7 @@ use tokio::sync::Semaphore;
 use tracing::{debug, warn};
 
 const DEFAULT_CONFIG: &str = include_str!("filter_default.toml");
-const PROMPT_TOPICS_PLACEHOLDER: &str = "{TOPICS}";
-const PROMPT_GUIDANCE_PLACEHOLDER: &str = "{GUIDANCE}";
-const PROMPT_TEXT_PLACEHOLDER: &str = "{TEXT}";
-const PROMPT_TEMPLATE: &str = "You are a strict content filter. Default to HIDE. Only reply KEEP if the tweet clearly does NOT match any of the following criteria.
+const SYSTEM_TEMPLATE: &str = "You are a strict content filter. Default to HIDE. Only reply KEEP if the tweet clearly does NOT match any of the following criteria.
 
 HIDE if ANY of these are true:
 - The tweet's primary subject matches one of the topics below
@@ -23,9 +20,7 @@ HIDE if ANY of these are true:
 - The tweet uses outrage tactics: ALL CAPS, excessive punctuation, rage-bait framing, engagement farming
 {TOPICS}
 {GUIDANCE}
-Tweet: \"{TEXT}\"
-
-Reply with one word: HIDE or KEEP";
+Reply with exactly one word: HIDE or KEEP";
 
 const MAX_TEXT_CHARS: usize = 500;
 
@@ -114,7 +109,7 @@ fn hex16(bytes: &[u8]) -> String {
     out
 }
 
-pub fn build_prompt_prefix(cfg: &FilterConfig) -> String {
+pub fn build_system_prompt(cfg: &FilterConfig) -> String {
     let mut topics = String::new();
     for t in &cfg.drop_topics {
         if t.trim().is_empty() {
@@ -129,14 +124,9 @@ pub fn build_prompt_prefix(cfg: &FilterConfig) -> String {
     } else {
         format!("\n{}\n", cfg.extra_guidance.trim())
     };
-    PROMPT_TEMPLATE
-        .replace(PROMPT_TOPICS_PLACEHOLDER, topics.trim_end_matches('\n'))
-        .replace(PROMPT_GUIDANCE_PLACEHOLDER, guidance.trim_end_matches('\n'))
-}
-
-pub fn render_prompt(prefix: &str, text: &str) -> String {
-    let escaped = text.replace('"', "\\\"");
-    prefix.replace(PROMPT_TEXT_PLACEHOLDER, &escaped)
+    SYSTEM_TEMPLATE
+        .replace("{TOPICS}", topics.trim_end_matches('\n'))
+        .replace("{GUIDANCE}", guidance.trim_end_matches('\n'))
 }
 
 pub fn build_classification_text(t: &Tweet) -> String {
@@ -270,7 +260,7 @@ pub struct Classifier {
     http: reqwest::Client,
     ollama: OllamaConfig,
     sem: Arc<Semaphore>,
-    prompt_prefix: Arc<String>,
+    system_prompt: Arc<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -289,7 +279,7 @@ impl Classifier {
             http,
             ollama: cfg.ollama.clone(),
             sem: Arc::new(Semaphore::new(2)),
-            prompt_prefix: Arc::new(build_prompt_prefix(cfg)),
+            system_prompt: Arc::new(build_system_prompt(cfg)),
         }
     }
 
@@ -312,15 +302,17 @@ impl Classifier {
         let http = self.http.clone();
         let ollama = self.ollama.clone();
         let sem = self.sem.clone();
-        let prefix = self.prompt_prefix.clone();
+        let system_prompt = self.system_prompt.clone();
         tokio::spawn(async move {
             let _permit = sem.acquire_owned().await.ok();
             let started = std::time::Instant::now();
-            let prompt = render_prompt(&prefix, &payload.text);
-            let url = format!("{}/api/generate", ollama.host.trim_end_matches('/'));
+            let url = format!("{}/api/chat", ollama.host.trim_end_matches('/'));
             let body = serde_json::json!({
                 "model": ollama.model,
-                "prompt": prompt,
+                "messages": [
+                    { "role": "system", "content": *system_prompt },
+                    { "role": "user", "content": payload.text },
+                ],
                 "stream": false,
                 "think": false,
                 "options": { "temperature": 0, "num_predict": 10 },
@@ -332,12 +324,12 @@ impl Classifier {
             );
             let verdict = match http.post(&url).json(&body).send().await {
                 Ok(resp) if resp.status().is_success() => {
-                    match resp.json::<OllamaGenerateResponse>().await {
+                    match resp.json::<OllamaChatResponse>().await {
                         Ok(r) => {
-                            let parsed = parse_verdict(&r.response);
+                            let parsed = parse_verdict(&r.message.content);
                             debug!(
                                 rest_id = %payload.rest_id,
-                                raw = %r.response,
+                                raw = %r.message.content,
                                 parsed = ?parsed,
                                 elapsed_ms = started.elapsed().as_millis() as u64,
                                 "filter verdict",
@@ -372,8 +364,13 @@ impl Classifier {
 }
 
 #[derive(Debug, Deserialize)]
-struct OllamaGenerateResponse {
-    response: String,
+struct OllamaChatResponse {
+    message: OllamaChatMessage,
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaChatMessage {
+    content: String,
 }
 
 pub fn translate_async(rest_id: String, text: String, ollama: OllamaConfig, tx: EventTx) {
@@ -382,22 +379,22 @@ pub fn translate_async(rest_id: String, text: String, ollama: OllamaConfig, tx: 
             .timeout(Duration::from_secs(ollama.timeout_seconds))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
-        let url = format!("{}/api/generate", ollama.host.trim_end_matches('/'));
-        let prompt = format!(
-            "Translate the following to English. Output ONLY the translation, nothing else.\n\n{text}"
-        );
+        let url = format!("{}/api/chat", ollama.host.trim_end_matches('/'));
         let body = serde_json::json!({
             "model": ollama.model,
-            "prompt": prompt,
+            "messages": [
+                { "role": "system", "content": "Translate the following to English. Output ONLY the translation, nothing else." },
+                { "role": "user", "content": text },
+            ],
             "stream": false,
             "think": false,
             "options": { "temperature": 0, "num_predict": 512 },
         });
         match http.post(&url).json(&body).send().await {
             Ok(resp) if resp.status().is_success() => {
-                match resp.json::<OllamaGenerateResponse>().await {
+                match resp.json::<OllamaChatResponse>().await {
                     Ok(r) => {
-                        let translated = r.response.trim().to_string();
+                        let translated = r.message.content.trim().to_string();
                         let _ = tx.send(Event::TweetTranslated {
                             rest_id,
                             translated,
@@ -548,21 +545,13 @@ mod tests {
     }
 
     #[test]
-    fn prompt_prefix_has_topics() {
+    fn system_prompt_has_topics() {
         let c = cfg(vec!["war", "politics"], "keep humor");
-        let prefix = build_prompt_prefix(&c);
-        assert!(prefix.contains("- war"));
-        assert!(prefix.contains("- politics"));
-        assert!(prefix.contains("keep humor"));
-        assert!(prefix.contains("HIDE or KEEP"));
-    }
-
-    #[test]
-    fn render_prompt_escapes_quotes() {
-        let c = cfg(vec!["war"], "");
-        let prefix = build_prompt_prefix(&c);
-        let rendered = render_prompt(&prefix, "he said \"hi\"");
-        assert!(rendered.contains(r#"he said \"hi\""#));
+        let prompt = build_system_prompt(&c);
+        assert!(prompt.contains("- war"));
+        assert!(prompt.contains("- politics"));
+        assert!(prompt.contains("keep humor"));
+        assert!(prompt.contains("HIDE or KEEP"));
     }
 
     #[test]

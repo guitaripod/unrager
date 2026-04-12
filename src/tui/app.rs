@@ -201,10 +201,17 @@ impl App {
         self.filter_inflight.len()
     }
 
+    pub fn is_own_profile(&self) -> bool {
+        match (&self.self_handle, &self.source.kind) {
+            (Some(self_handle), Some(SourceKind::User { handle })) => {
+                self_handle.eq_ignore_ascii_case(handle)
+            }
+            _ => false,
+        }
+    }
+
     fn open_profile(&mut self) {
         if let Some(handle) = self.self_handle.clone() {
-            self.metrics = MetricsStyle::Visible;
-            self.display_names = DisplayNameStyle::Visible;
             self.switch_source(SourceKind::User { handle });
             return;
         }
@@ -428,8 +435,6 @@ impl App {
             }
             Event::SelfHandleResolved { handle } => {
                 self.self_handle = Some(handle.clone());
-                self.metrics = MetricsStyle::Visible;
-                self.display_names = DisplayNameStyle::Visible;
                 self.switch_source(SourceKind::User { handle });
             }
             Event::Quit => self.running = false,

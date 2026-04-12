@@ -87,10 +87,19 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     let source_active = app.active == ActivePane::Source;
     let detail_active = app.active == ActivePane::Detail;
+    let own_profile = app.is_own_profile();
     let opts = RenderOpts {
         timestamps: app.timestamps,
-        metrics: app.metrics,
-        display_names: app.display_names,
+        metrics: if own_profile {
+            MetricsStyle::Visible
+        } else {
+            app.metrics
+        },
+        display_names: if own_profile {
+            DisplayNameStyle::Visible
+        } else {
+            app.display_names
+        },
         is_dark: app.is_dark,
         media_enabled: app.media.supported,
         media_auto_expand: app.media_auto_expand,

@@ -19,6 +19,16 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
+## Releasing a new version
+
+1. Bump `version` in `Cargo.toml`
+2. `cargo check` to update `Cargo.lock`
+3. Commit: `chore: bump version to X.Y.Z`
+4. Tag (no `v` prefix): `git tag X.Y.Z`
+5. Push both: `git push origin master --tags`
+
+The tag must always point at the final commit for that release. If post-release fixes land before the next version, move the tag: `git tag -d X.Y.Z && git tag X.Y.Z && git push origin X.Y.Z --force`.
+
 ## Architecture
 
 - `src/main.rs` — clap dispatch: bare `unrager` → TUI, subcommands → one-shot CLI

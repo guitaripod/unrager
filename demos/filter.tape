@@ -1,26 +1,27 @@
-# Rage filter in action: default on, then toggle off to show what was hidden.
+# Filter toggle — tight clip.
 Output demos/out/filter.gif
-Output demos/out/filter.mp4
 
 Set Shell "bash"
 Set FontSize 14
-Set Width 1600
-Set Height 960
-Set Padding 20
+Set Width 1400
+Set Height 850
+Set Padding 16
 Set Margin 0
 Set Theme "Catppuccin Mocha"
-Set TypingSpeed 60ms
+Set TypingSpeed 50ms
 
 Hide
 Type "UNRAGER_DISABLE_KITTY=1 ./target/release/unrager"
 Enter
-Sleep 6s
+Sleep 7s
 Show
+
+Sleep 800ms
 Screenshot demos/out/filter-on.png
 Type "c"
-Sleep 2s
+Sleep 1500ms
 Screenshot demos/out/filter-off.png
 Type "c"
-Sleep 2s
+Sleep 1200ms
 Type "q"
-Sleep 400ms
+Sleep 200ms

@@ -1,135 +1,219 @@
-# unrager
+<p align="center">
+  <h1 align="center">unrager</h1>
+  <p align="center">
+    A calm Twitter/X client for the terminal.<br>
+    Local LLM drops rage-bait before it reaches your eyes.
+  </p>
+  <p align="center">
+    <a href="https://github.com/guitaripod/unrager/actions"><img src="https://img.shields.io/github/actions/workflow/status/guitaripod/unrager/ci.yml?branch=master&style=flat-square&label=ci" alt="CI"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT License"></a>
+    <img src="https://img.shields.io/badge/rust-1.85%2B-orange?style=flat-square&logo=rust" alt="Rust 1.85+">
+  </p>
+</p>
 
-A calm Twitter/X client for the terminal, with a local-LLM filter that drops inflammatory content before it ever reaches your eyes.
+<p align="center">
+  <img src="assets/hero.gif" alt="unrager TUI demo" width="700">
+</p>
 
-Two modes in one binary. Run `unrager` with no arguments to launch the interactive TUI; pass a subcommand (`whoami`, `home`, `read`, `search`, etc.) for a one-shot CLI call.
+## What is this
+
+`unrager` is a Rust TUI + CLI for reading and posting on Twitter/X. It reads your timeline using the same GraphQL API the web client uses (free, no API key), posts via the official X API v2 (safe, pay-per-use), and — the whole point — pipes every incoming tweet through a local [Ollama](https://ollama.com) model that silently removes anything matching your rage-filter rubric before you ever see it.
+
+Two modes, one binary:
 
 ```
-unrager             # TUI
-unrager home -n 20  # one-shot CLI
-unrager tweet "..."  # post via official API
+unrager               # launches the TUI
+unrager home -n 20    # one-shot CLI
+unrager tweet "..."   # post via official API
 ```
 
-## What it does
-
-- **Reads** your home timeline, threads, mentions, bookmarks, and search from the same GraphQL endpoints X's web client uses, authenticated with cookies pulled directly from your logged-in Chromium-family browser. Free, unquota'd, full personalization.
-- **Filters** every tweet in a root feed through a local [Ollama](https://ollama.com) `gemma4` model (or any model you configure) against a user-editable rubric in `~/.config/unrager/filter.toml`. Matches are physically removed from the feed. Verdicts cache to SQLite so reloads are instant and rubric edits invalidate the cache automatically. Toggle on/off with `c`.
-- **Writes** tweets and replies via the official X API v2 over OAuth 2.0 PKCE on pay-per-use billing. No ban risk on your main account — cookie-auth writes are where X's anti-bot ML lives, and we avoid that entirely.
-- **Renders** media inline via the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) when running in a compatible terminal (Ghostty, Kitty, WezTerm). Falls back to colored badges elsewhere.
-
-## TUI features
-
-- Split detail pane: focal tweet + replies in one scrollable list
-- Color-hashed `@handles` (FNV-1a → 20-color palette, deterministic and consistent across body mentions)
-- Zebra-striped rows, terminal-theme-aware body text (OSC 11 background probe at startup)
-- Word-wrapped body lines, variable-height cards, scroll look-ahead
-- Compact relative timestamps, hidden zero-count stats
-- Persistent per-session preferences (metrics visibility, display names, timestamps style) in `session.json`
-- Inline thread toggle (`X`) in the detail pane
-- In-place body expansion (`x`), open in browser (`o`), yank URL (`y`) / JSON (`Y`)
-- Command palette (`:`) with `:home`, `:user`, `:search`, `:mentions`, `:bookmarks`, `:read`, `:thread`
-- History back/forward (`[` / `]`)
-- `?` overlay for the full key reference
-
-## Demos
-
-Scriptable VHS tapes live in [`demos/`](demos/). Each `.tape` produces a GIF, MP4, and PNG screenshots into `demos/out/`. See [`demos/README.md`](demos/README.md) for how to regenerate.
-
-| file | what it shows |
-|---|---|
-| `demos/home.tape` | launch + home feed + scroll |
-| `demos/filter.tape` | `c` toggle — filter on vs off |
-| `demos/detail.tape` | detail pane navigation |
-| `demos/expand.tape` | `x` body expansion |
-| `demos/help.tape` | `?` overlay |
-| `demos/command.tape` | `:user`, `:search` |
-| `demos/overview.tape` | the grand tour |
-
-Note: VHS renders through xterm.js which doesn't speak the kitty graphics protocol. The demos force `UNRAGER_DISABLE_KITTY=1` so the TUI falls back to colored header icons instead of leaking placeholder cells. For a real media demo, screen-record a live Ghostty window with `kooha`, `wf-recorder`, or OBS.
-
-## Architecture
-
-Hybrid, by necessity.
-
-- **Reads** use the same GraphQL endpoints X's web client uses, authenticated with cookies pulled from your local Chromium-family browser session. This path is free, unquota'd, and returns the exact same data you see in the web app.
-- **Writes** use the official X API v2 via OAuth 2.0 PKCE on pay-per-use billing. Every call to `/2/tweets` and every call to `/2/media/upload` is a separate "Content-create" request billed to your credit balance. A text-only tweet is 1 request; a tweet with 1 single-shot image is 2 requests; a tweet with a chunked video is (2 + N segments) upload calls + 1 tweet call. Zero account risk because this is the path X itself wants you to use.
-- **Filter** spawns classification tasks per tweet on page load through a `tokio::sync::Semaphore(2)`. Each hits `POST http://localhost:11434/api/generate` with `think: false`, `temperature: 0`, `num_predict: 10`. Verdicts are cached to SQLite keyed by `(tweet_id, rubric_hash)`; rubric edits automatically invalidate without re-classifying anything.
-
-See the commit history and `src/` for the code.
-
-## Requirements
-
-- Linux with a Secret Service provider (`kwalletd6` on KDE, `gnome-keyring` on GNOME)
-- A Chromium-family browser with an active X login. Auto-detected in order: Vivaldi, Vivaldi Snapshot, Chromium, Chrome (stable/beta/dev), Brave, Edge Dev, Opera. Override with `UNRAGER_COOKIES_PATH=/absolute/path/to/Cookies` for any other profile.
-- Rust 1.85+ (edition 2024)
-- Optional, for the rage filter: Ollama running locally with a model pulled. Default is `gemma4:latest`, configurable in `~/.config/unrager/filter.toml`.
-- Optional, for writes: an X developer account with OAuth 2.0 configured as a Native App, plus pay-per-use credits at [console.x.com](https://console.x.com).
-
-## Install
+## Quick start
 
 ```sh
+# 1. Build
 cargo install --path .
+
+# 2. Launch (reads cookies from your logged-in browser automatically)
+unrager
+
+# 3. Optional: enable the rage filter
+#    Install Ollama (https://ollama.com), pull a model, and go:
+ollama pull gemma4
+unrager   # filter is on by default when Ollama is reachable
 ```
 
-Or build and run directly:
+## Features
 
-```sh
-cargo run --release
-```
+**Rage filter** — every tweet classified by a local LLM against a user-editable rubric (`~/.config/unrager/filter.toml`). Matching tweets are physically removed from the feed. Verdicts cache to SQLite so reloads are instant. Toggle with `c`.
 
-## Commands
+<p align="center">
+  <img src="assets/filter.gif" alt="filter toggle" width="700">
+</p>
+
+**Color-hashed handles** — each `@handle` gets a deterministic color (FNV-1a hash → 20-color palette). Same color in the header, in body mentions, everywhere. Scan the feed by person at a glance.
+
+**Inline media** — photos render inside the terminal via the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) on Ghostty, Kitty, and WezTerm. Multiple images display side-by-side. Falls back to colored `▣`/`▶`/`↻` badges on other terminals.
+
+**Split detail pane** — `Enter`/`l` opens a tweet. Focal tweet + all replies in one scrollable list. `X` expands inline threads without pushing onto the focus stack.
+
+**Everything else** — zebra-striped rows, theme-aware body text (auto-detects light/dark via OSC 11), word-wrapped cards, scroll look-ahead, compact timestamps (`2m` / `5h` / `3d`), hidden zero-count stats, persistent session preferences, `?` help overlay, command palette (`:home`, `:user`, `:search`, `:mentions`, `:bookmarks`), history (`[`/`]`), expand in place (`x`), open in browser (`o`), yank URL (`y`) / JSON (`Y`).
+
+<details>
+<summary><strong>Key bindings</strong></summary>
+
+| Key | Action |
+|---|---|
+| `j` / `k` / `↓` / `↑` | Move selection |
+| `g` / `G` | Top / bottom |
+| `Ctrl-d` / `Ctrl-u` | Half-page down / up |
+| `Enter` / `l` | Open tweet into detail pane |
+| `h` / `←` | Back to source list |
+| `q` / `Esc` | Pop detail or quit |
+| `Tab` | Swap active pane |
+| `,` / `.` | Narrow / widen split |
+| `:` | Command palette |
+| `?` | Help overlay |
+| `F` | Toggle For You / Following |
+| `c` | Toggle rage filter |
+| `x` | Expand / collapse tweet body |
+| `X` | Inline thread replies (detail pane) |
+| `I` | Toggle media auto-expand |
+| `M` | Toggle retweet / like / view counts |
+| `N` | Toggle display names |
+| `t` | Toggle relative / absolute timestamps |
+| `o` | Open tweet in browser |
+| `m` | Open media externally |
+| `y` / `Y` | Yank URL / JSON to clipboard |
+| `r` | Reload source |
+| `u` | Jump to next unread |
+| `U` | Mark all as read |
+| `]` / `[` | History forward / back |
+| `Ctrl-c` | Quit immediately |
+
+</details>
+
+<details>
+<summary><strong>CLI commands</strong></summary>
 
 ### Read-only (no cost, no API key)
 
 | Command | Purpose |
 |---|---|
 | `unrager whoami` | Confirm which account your cookies belong to |
-| `unrager read <id\|url>` | Fetch a single tweet by ID or URL |
+| `unrager read <id\|url>` | Fetch a single tweet |
 | `unrager thread <id\|url>` | Full conversation thread |
-| `unrager home [--following]` | Home timeline (For You or Following) |
-| `unrager user <@handle>` | A user's recent tweets |
-| `unrager search "<query>"` | Live search (any X query operator works) |
-| `unrager mentions [--user @h]` | Tweets that mention you (or another handle) |
-| `unrager bookmarks "<query>"` | Search within your bookmarks |
+| `unrager home [--following]` | Home timeline |
+| `unrager user <@handle>` | A user's tweets |
+| `unrager search "<query>"` | Live search |
+| `unrager mentions [--user @h]` | Mentions feed |
+| `unrager bookmarks "<query>"` | Search bookmarks |
 
-Every read command accepts `-n <count>`, `--json`, and `--max-pages <n>`.
+All accept `-n <count>`, `--json`, `--max-pages <n>`.
 
-### Write (requires OAuth 2.0 setup and credits)
+### Write (requires OAuth 2.0 + credits)
 
 | Command | Purpose |
 |---|---|
-| `unrager auth login` | Run the OAuth 2.0 PKCE flow (browser pops, free) |
-| `unrager auth status` | Show cached token state |
-| `unrager auth logout` | Delete the cached token file |
-| `unrager tweet "<text>" [--dry-run]` | Post a new tweet (~$0.01) |
-| `unrager reply <id\|url> "<text>" [--dry-run]` | Reply to a tweet (~$0.01) |
+| `unrager auth login` | OAuth 2.0 PKCE flow (free) |
+| `unrager auth status` | Show token state |
+| `unrager auth logout` | Delete cached tokens |
+| `unrager tweet "<text>" [--dry-run]` | Post a tweet |
+| `unrager reply <id\|url> "<text>" [--dry-run]` | Reply to a tweet |
 
-`--dry-run` prints the exact JSON payload that would be sent, with zero network writes. JSON goes to stdout, cost preview to stderr.
+`--dry-run` prints the payload without sending.
 
-## Configuration
+</details>
+
+## Setup
+
+<details>
+<summary><strong>Requirements</strong></summary>
+
+- **Linux** with a Secret Service provider (`kwalletd6` on KDE, `gnome-keyring` on GNOME)
+- **Chromium-family browser** logged into X. Auto-detected: Vivaldi, Chromium, Chrome, Brave, Edge Dev, Opera. Override with `UNRAGER_COOKIES_PATH`.
+- **Rust 1.85+** (edition 2024)
+- **Ollama** (optional, for the rage filter) — any model works, default `gemma4:latest`
+- **X developer account** (optional, for writes) — OAuth 2.0 Native App + pay-per-use credits at [console.x.com](https://console.x.com)
+
+</details>
+
+<details>
+<summary><strong>Configuration files</strong></summary>
 
 | File | Purpose |
 |---|---|
-| `~/.config/unrager/session.json` | TUI session state (current source, selection, toggles) |
-| `~/.config/unrager/tokens.json` | OAuth 2.0 access/refresh tokens (mode `0600`) |
-| `~/.config/unrager/filter.toml` | Rage filter rubric (auto-created on first launch) |
-| `~/.cache/unrager/seen.db` | SQLite store of read tweets (for unread counter) |
-| `~/.cache/unrager/filter.db` | SQLite store of filter verdicts |
+| `~/.config/unrager/session.json` | TUI session (source, selection, toggles) |
+| `~/.config/unrager/tokens.json` | OAuth 2.0 tokens (mode `0600`) |
+| `~/.config/unrager/filter.toml` | Rage filter rubric (auto-created) |
+| `~/.cache/unrager/seen.db` | Read-tracking SQLite |
+| `~/.cache/unrager/filter.db` | Filter verdict cache |
 
-Both config and cache directories are created with mode `0700` on first access.
+Directories are created with mode `0700` on first access.
 
-## Security
+</details>
 
-1. **Browser cookies** (`auth_token`, `ct0`, `twid`) are read at runtime from whichever Chromium-family browser the autodetector finds first, decrypted in memory using a key retrieved from the system Secret Service, and never written to disk. Never logged, never printed, never in error messages. The temporary copy of the `Cookies` SQLite file is created with `tempfile` and deleted on drop.
-2. **OAuth 2.0 tokens** are stored in `~/.config/unrager/tokens.json` mode `0600`, written via temp-file-then-rename so a crash during write can't leave a truncated file.
-3. **OAuth 2.0 Client ID** is embedded as a `const` in `src/auth/oauth.rs`. This is not a secret — it's the public identifier for a PKCE public client. If you fork and ship your own binary, replace the constant with your own Native App ID.
-4. **Filter classification** runs entirely locally against Ollama. Tweet text never leaves your machine unless you explicitly post it.
+<details>
+<summary><strong>Rage filter rubric</strong></summary>
 
-## Legal
+On first launch, `~/.config/unrager/filter.toml` is created with a default set of topics to filter (american politics, war, gender wars, nationalism, doom headlines, etc.). Edit freely — the verdict cache invalidates automatically when the rubric changes.
 
-This project is not affiliated with, endorsed by, or sponsored by X Corp. It uses X's web GraphQL endpoints in the same way X's own web client does, with the same credentials your browser already holds. Read-only use from a logged-in human operator is the intended use case. Do not use this tool to scrape at scale, run unattended bots, or circumvent account restrictions — you will lose your account and the authors cannot help you recover it.
+```toml
+drop_topics = [
+    "american electoral politics, presidents, congress, partisan fights",
+    "war, military conflict, battlefield footage, casualty counts",
+    "gender wars, men-vs-women discourse, trad-vs-feminist fights",
+    # ... add your own
+]
+extra_guidance = "Keep technical, scientific, art, music, sports, personal-life, and humor tweets..."
 
-The official X API is used only for posting tweets and replies, under the terms of your own X Developer Agreement.
+[ollama]
+model = "gemma4:latest"
+host = "http://localhost:11434"
+timeout_seconds = 20
+```
+
+If Ollama is unreachable, the filter disables itself and all tweets show normally.
+
+</details>
+
+<details>
+<summary><strong>Write path setup</strong></summary>
+
+Posting uses the official X API v2 (not cookie auth), so your account is never at risk.
+
+1. Create a developer account at [developer.x.com](https://developer.x.com)
+2. Register a Native App (PKCE, no client secret)
+3. Set the callback URL to `http://127.0.0.1:8765/callback`
+4. Load ~$10 of pay-per-use credits at [console.x.com](https://console.x.com)
+5. Run `unrager auth login` — opens your browser for the OAuth flow
+6. Post: `unrager tweet "hello from unrager"`
+
+If you fork this repo, replace the Client ID constant in `src/auth/oauth.rs` with your own.
+
+</details>
+
+## Architecture
+
+```
+Reads:   browser cookies → GraphQL (same endpoints as x.com web client) → free, unlimited
+Writes:  OAuth 2.0 PKCE → official X API v2 → pay-per-use, zero ban risk
+Filter:  tweet text → local Ollama → HIDE/KEEP → SQLite cache
+Media:   fetch → downscale → kitty graphics transmit → Unicode placeholders
+```
+
+<details>
+<summary><strong>Security model</strong></summary>
+
+1. **Browser cookies** — read at runtime, decrypted in memory via Secret Service, never written to disk or logged
+2. **OAuth tokens** — stored at `~/.config/unrager/tokens.json` mode `0600`, written via atomic temp-file rename
+3. **Client ID** — embedded as a `const`, safe per PKCE design (no client secret)
+4. **Filter** — runs entirely locally, tweet text never leaves your machine
+
+</details>
+
+## Demos
+
+Scriptable [VHS](https://github.com/charmbracelet/vhs) tapes in [`demos/`](demos/) — regenerate with `vhs demos/<tape>.tape`. See [`demos/README.md`](demos/README.md) for details.
 
 ## Contributing
 
@@ -141,8 +225,10 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-CI runs the same three checks on push and PR.
+## Legal
+
+Not affiliated with X Corp. Uses X's web GraphQL endpoints the same way the web client does. Do not use this to scrape at scale or run bots.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+[MIT](LICENSE)

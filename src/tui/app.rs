@@ -403,6 +403,7 @@ impl App {
                     self.spinner_frame = self.spinner_frame.wrapping_add(1);
                 }
                 self.tick_status();
+                self.mark_current_seen();
             }
             Event::Key(key) => self.handle_key(key),
             Event::Resize(_, _) => {
@@ -1011,6 +1012,9 @@ impl App {
         self.source.loading = false;
         match result {
             Ok(mut page) => {
+                if matches!(kind, SourceKind::Home { following: false }) {
+                    page.tweets.retain(|t| !self.seen.is_seen(&t.rest_id));
+                }
                 if matches!(self.filter_mode, FilterMode::On) && self.filter_classifier.is_some() {
                     if let Some(cache) = &self.filter_cache {
                         page.tweets.retain(|t| {

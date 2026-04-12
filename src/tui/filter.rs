@@ -12,15 +12,10 @@ use tokio::sync::Semaphore;
 use tracing::{debug, warn};
 
 const DEFAULT_CONFIG: &str = include_str!("filter_default.toml");
-const SYSTEM_TEMPLATE: &str = "You are a strict content filter. Default to HIDE. Only reply KEEP if the tweet clearly does NOT match any of the following criteria.
-
-HIDE if ANY of these are true:
-- The tweet's primary subject matches one of the topics below
-- The author belongs to one of the categories below
-- The tweet uses outrage tactics: ALL CAPS, excessive punctuation, rage-bait framing, engagement farming
+const SYSTEM_TEMPLATE: &str = "HIDE or KEEP? HIDE the tweet if it is about, or written by someone from, any of these categories. When in doubt, HIDE.
 {TOPICS}
 {GUIDANCE}
-Reply with exactly one word: HIDE or KEEP";
+One word answer:";
 
 const MAX_TEXT_CHARS: usize = 500;
 
@@ -315,7 +310,7 @@ impl Classifier {
                 ],
                 "stream": false,
                 "think": false,
-                "options": { "temperature": 0, "num_predict": 10 },
+                "options": { "temperature": 0, "num_predict": 3 },
             });
             debug!(
                 rest_id = %payload.rest_id,

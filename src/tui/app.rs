@@ -1017,7 +1017,15 @@ impl App {
         match result {
             Ok(mut page) => {
                 if matches!(kind, SourceKind::Home { following: false }) {
-                    page.tweets.retain(|t| !self.seen.is_seen(&t.rest_id));
+                    let unseen: Vec<_> = page
+                        .tweets
+                        .iter()
+                        .filter(|t| !self.seen.is_seen(&t.rest_id))
+                        .cloned()
+                        .collect();
+                    if !unseen.is_empty() {
+                        page.tweets = unseen;
+                    }
                 }
                 if matches!(self.filter_mode, FilterMode::On) && self.filter_classifier.is_some() {
                     if let Some(cache) = &self.filter_cache {

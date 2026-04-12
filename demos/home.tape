@@ -12,9 +12,11 @@ Set Theme "Catppuccin Mocha"
 Set TypingSpeed 60ms
 Set PlaybackSpeed 1.0
 
+Hide
 Type "UNRAGER_DISABLE_KITTY=1 ./target/release/unrager"
 Enter
 Sleep 5s
+Show
 Screenshot demos/out/home-initial.png
 Type "jjjjj"
 Sleep 800ms

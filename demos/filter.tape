@@ -11,9 +11,11 @@ Set Margin 0
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 60ms
 
+Hide
 Type "UNRAGER_DISABLE_KITTY=1 ./target/release/unrager"
 Enter
 Sleep 6s
+Show
 Screenshot demos/out/filter-on.png
 Type "c"
 Sleep 2s

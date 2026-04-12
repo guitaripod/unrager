@@ -11,9 +11,11 @@ Set Margin 0
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 60ms
 
+Hide
 Type "UNRAGER_DISABLE_KITTY=1 ./target/release/unrager"
 Enter
 Sleep 6s
+Show
 
 # Scroll the feed
 Type "jjjjjj"
@@ -34,6 +36,7 @@ Type "jj"
 Sleep 300ms
 Enter
 Sleep 3s
+Show
 Type "jjj"
 Sleep 800ms
 Type "h"

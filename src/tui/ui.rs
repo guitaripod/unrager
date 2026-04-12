@@ -167,6 +167,29 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 }
 
+pub fn emit_media_placements(app: &App, terminal_width: u16) {
+    if !app.media.supported {
+        return;
+    }
+    let wrap_width = (terminal_width as usize).saturating_sub(4);
+
+    let needs_source = app.media_auto_expand
+        || app
+            .source
+            .tweets
+            .iter()
+            .any(|t| app.expanded_bodies.contains(&t.rest_id));
+    if needs_source {
+        emit_placements_for_tweets(&app.media, app.source.tweets.iter(), wrap_width);
+    }
+
+    if let Some(FocusEntry::Tweet(detail)) = app.focus_stack.last() {
+        let focal_iter = std::iter::once(&detail.tweet);
+        let replies_iter = detail.replies.iter();
+        emit_placements_for_tweets(&app.media, focal_iter.chain(replies_iter), wrap_width);
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct FilterRenderCtx {
     pub mode: FilterMode,
@@ -300,14 +323,6 @@ fn draw_source_list(
 
     apply_scroll_padding(&mut source.list_state, &items, area.height);
 
-    if opts.media_enabled {
-        let needs_placement =
-            opts.media_auto_expand || source.tweets.iter().any(|t| expanded.contains(&t.rest_id));
-        if needs_placement {
-            emit_placements_for_tweets(media_reg, source.tweets.iter(), wrap_width);
-        }
-    }
-
     let list = List::new(items)
         .block(block_with_focus(&title, active))
         .highlight_style(highlight_style(active))
@@ -385,12 +400,6 @@ fn draw_detail(
     }
 
     apply_scroll_padding(&mut detail.list_state, &items, area.height);
-
-    if opts.media_enabled {
-        let focal_iter = std::iter::once(&detail.tweet);
-        let replies_iter = detail.replies.iter();
-        emit_placements_for_tweets(media_reg, focal_iter.chain(replies_iter), wrap_width);
-    }
 
     let list = List::new(items)
         .block(block_with_focus(&title, active))

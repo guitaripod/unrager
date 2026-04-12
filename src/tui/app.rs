@@ -396,6 +396,7 @@ impl App {
         match event {
             Event::Render => {
                 terminal.draw(|frame| ui::draw(frame, self))?;
+                ui::emit_media_placements(self, terminal.size()?.width);
             }
             Event::Tick => {
                 self.last_tick = Instant::now();
@@ -408,6 +409,7 @@ impl App {
             Event::Key(key) => self.handle_key(key),
             Event::Resize(_, _) => {
                 terminal.draw(|frame| ui::draw(frame, self))?;
+                ui::emit_media_placements(self, terminal.size()?.width);
             }
             Event::TimelineLoaded {
                 kind,

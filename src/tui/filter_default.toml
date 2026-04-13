@@ -3,16 +3,22 @@
 
 drop_topics = [
     "american electoral politics, presidents, congress, partisan fights",
-    "war, military conflict, battlefield footage, casualty counts",
+    "war, military conflict, battlefield footage, casualty counts, geopolitical saber-rattling",
     "gender wars, men-vs-women discourse, trad-vs-feminist fights",
     "trans and LGBTQ culture-war framing",
     "uber-nationalism, flag-waving identity politics of any country",
     "migrants and refugees in europe framed as a crisis or threat",
     "systemic abuse framing (institutional predators, coverups, mass-victim narratives)",
     "race-based outrage, racial grievance framing",
-    "doom headlines about imminent collapse, recession, apocalypse",
+    "economic fearmongering: tariff panic, inflation doom, market-crash prophecies, recession scaremongering, trade-war catastrophizing",
+    "contrarian dunking on AI companies (Anthropic, OpenAI, Google, etc.), Claude-bashing, performative AI safety panic, AGI doomerism, AI-will-steal-all-jobs alarmism, anecdotal LLM failure stories ('I asked ChatGPT/Claude/Gemini to do X and it couldn't'), screenshot-of-bad-output dunking",
+    "crypto and NFT shilling, pump-and-dump hype, rug-pull drama",
+    "celebrity and influencer cancellation drama, parasocial outrage",
+    "rage-bait reply farming, ratio threads, deliberately inflammatory hot takes designed to farm engagement",
+    "politicians, heads of state, government officials, EU commissioners, members of parliament — any tweet BY or primarily ABOUT a political figure",
+    "X/Twitter creator payouts, ad revenue sharing, monetization complaints, impressions-farming-for-money discourse, payout screenshots",
 ]
-extra_guidance = "KEEP technical, scientific, art, music, sports, personal-life, and humor tweets that only mention these topics in passing. HIDE if the topic IS the point of the tweet."
+extra_guidance = "KEEP technical, scientific, art, music, sports, personal-life, and humor tweets that only mention these topics in passing. KEEP genuine AI research, product announcements, and thoughtful critique. HIDE if the topic IS the point of the tweet."
 
 [ollama]
 model = "gemma4:latest"

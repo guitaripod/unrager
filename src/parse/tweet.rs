@@ -239,3 +239,206 @@ fn parse_media(legacy: &Value) -> Vec<Media> {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn minimal_tweet_json(rest_id: &str, text: &str) -> Value {
+        json!({
+            "__typename": "Tweet",
+            "rest_id": rest_id,
+            "core": {
+                "user_results": {
+                    "result": {
+                        "rest_id": "100",
+                        "legacy": {
+                            "screen_name": "testuser",
+                            "name": "Test User",
+                            "verified": false,
+                            "followers_count": 500,
+                            "friends_count": 200
+                        },
+                        "is_blue_verified": false
+                    }
+                }
+            },
+            "legacy": {
+                "full_text": text,
+                "created_at": "Mon Jan 01 12:00:00 +0000 2024",
+                "reply_count": 3,
+                "retweet_count": 7,
+                "favorite_count": 42,
+                "quote_count": 1,
+                "lang": "en"
+            },
+            "views": { "count": "1000" }
+        })
+    }
+
+    #[test]
+    fn parse_basic_tweet() {
+        let v = minimal_tweet_json("111", "hello world");
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(tweet.rest_id, "111");
+        assert_eq!(tweet.text, "hello world");
+        assert_eq!(tweet.author.handle, "testuser");
+        assert_eq!(tweet.author.name, "Test User");
+        assert_eq!(tweet.author.followers, 500);
+        assert_eq!(tweet.reply_count, 3);
+        assert_eq!(tweet.retweet_count, 7);
+        assert_eq!(tweet.like_count, 42);
+        assert_eq!(tweet.quote_count, 1);
+        assert_eq!(tweet.view_count, Some(1000));
+        assert_eq!(tweet.lang.as_deref(), Some("en"));
+        assert!(tweet.in_reply_to_tweet_id.is_none());
+        assert!(tweet.quoted_tweet.is_none());
+        assert!(tweet.media.is_empty());
+    }
+
+    #[test]
+    fn parse_visibility_wrapper() {
+        let inner = minimal_tweet_json("222", "wrapped");
+        let v = json!({
+            "__typename": "TweetWithVisibilityResults",
+            "tweet": inner
+        });
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(tweet.rest_id, "222");
+        assert_eq!(tweet.text, "wrapped");
+    }
+
+    #[test]
+    fn parse_tombstone() {
+        let v = json!({
+            "__typename": "TweetTombstone",
+            "tombstone": { "text": { "text": "This Tweet was deleted" } }
+        });
+        let err = parse_tweet_result(&v).unwrap_err();
+        assert!(err.to_string().contains("tombstone"));
+        assert!(err.to_string().contains("deleted"));
+    }
+
+    #[test]
+    fn parse_unavailable() {
+        let v = json!({
+            "__typename": "TweetUnavailable",
+            "reason": "Suspended"
+        });
+        let err = parse_tweet_result(&v).unwrap_err();
+        assert!(err.to_string().contains("unavailable"));
+        assert!(err.to_string().contains("Suspended"));
+    }
+
+    #[test]
+    fn parse_quoted_tweet() {
+        let mut v = minimal_tweet_json("333", "look at this");
+        let qt = minimal_tweet_json("444", "the original");
+        v["quoted_status_result"] = json!({ "result": qt });
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(tweet.rest_id, "333");
+        let qt = tweet.quoted_tweet.unwrap();
+        assert_eq!(qt.rest_id, "444");
+        assert_eq!(qt.text, "the original");
+    }
+
+    #[test]
+    fn parse_note_tweet() {
+        let mut v = minimal_tweet_json("555", "short fallback");
+        v["note_tweet"] = json!({
+            "note_tweet_results": {
+                "result": {
+                    "text": "this is the long-form note tweet text that exceeds 280 chars"
+                }
+            }
+        });
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert!(tweet.text.starts_with("this is the long-form"));
+    }
+
+    #[test]
+    fn parse_media_photo_and_video() {
+        let mut v = minimal_tweet_json("666", "media tweet");
+        v["legacy"]["extended_entities"] = json!({
+            "media": [
+                {
+                    "type": "photo",
+                    "media_url_https": "https://pbs.twimg.com/media/abc.jpg",
+                    "ext_alt_text": "a photo"
+                },
+                {
+                    "type": "video",
+                    "media_url_https": "https://pbs.twimg.com/media/def.mp4",
+                    "ext_alt_text": null
+                },
+                {
+                    "type": "animated_gif",
+                    "media_url_https": "https://pbs.twimg.com/media/ghi.mp4"
+                }
+            ]
+        });
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(tweet.media.len(), 3);
+        assert!(matches!(tweet.media[0].kind, MediaKind::Photo));
+        assert_eq!(tweet.media[0].alt_text.as_deref(), Some("a photo"));
+        assert!(matches!(tweet.media[1].kind, MediaKind::Video));
+        assert!(tweet.media[1].alt_text.is_none());
+        assert!(matches!(tweet.media[2].kind, MediaKind::AnimatedGif));
+    }
+
+    #[test]
+    fn parse_html_entities_decoded() {
+        let v = minimal_tweet_json(
+            "777",
+            "1 &lt; 2 &amp; 3 &gt; 0 &quot;ok&quot; it&#39;s fine",
+        );
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(tweet.text, "1 < 2 & 3 > 0 \"ok\" it's fine");
+    }
+
+    #[test]
+    fn parse_reply_fields() {
+        let mut v = minimal_tweet_json("888", "replying");
+        v["legacy"]["in_reply_to_status_id_str"] = json!("777");
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(tweet.in_reply_to_tweet_id.as_deref(), Some("777"));
+    }
+
+    #[test]
+    fn parse_verified_author() {
+        let mut v = minimal_tweet_json("999", "verified");
+        v["core"]["user_results"]["result"]["is_blue_verified"] = json!(true);
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert!(tweet.author.verified);
+    }
+
+    #[test]
+    fn parse_tweet_result_by_rest_id_wrapper() {
+        let inner = minimal_tweet_json("1001", "via rest_id");
+        let response = json!({
+            "data": {
+                "tweetResult": {
+                    "result": inner
+                }
+            }
+        });
+        let tweet = parse_tweet_result_by_rest_id(&response).unwrap();
+        assert_eq!(tweet.rest_id, "1001");
+    }
+
+    #[test]
+    fn parse_missing_view_count() {
+        let mut v = minimal_tweet_json("1002", "no views");
+        v.as_object_mut().unwrap().remove("views");
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert!(tweet.view_count.is_none());
+    }
+
+    #[test]
+    fn parse_unknown_typename_errors() {
+        let v = json!({ "__typename": "SomethingNew" });
+        let err = parse_tweet_result(&v).unwrap_err();
+        assert!(err.to_string().contains("SomethingNew"));
+    }
+}

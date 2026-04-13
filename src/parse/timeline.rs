@@ -115,3 +115,228 @@ fn collect_tweet_from_item_content(item_content: &Value, tweets: &mut Vec<Tweet>
         tweets.push(tweet);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn tweet_node(rest_id: &str, text: &str) -> Value {
+        json!({
+            "__typename": "Tweet",
+            "rest_id": rest_id,
+            "core": {
+                "user_results": {
+                    "result": {
+                        "rest_id": "1",
+                        "legacy": {
+                            "screen_name": "u",
+                            "name": "U",
+                            "verified": false,
+                            "followers_count": 0,
+                            "friends_count": 0
+                        },
+                        "is_blue_verified": false
+                    }
+                }
+            },
+            "legacy": {
+                "full_text": text,
+                "created_at": "Mon Jan 01 00:00:00 +0000 2024",
+                "reply_count": 0,
+                "retweet_count": 0,
+                "favorite_count": 0,
+                "quote_count": 0
+            }
+        })
+    }
+
+    fn tweet_entry(entry_id: &str, rest_id: &str, text: &str) -> Value {
+        json!({
+            "entryId": entry_id,
+            "content": {
+                "entryType": "TimelineTimelineItem",
+                "itemContent": {
+                    "itemType": "TimelineTweet",
+                    "tweet_results": {
+                        "result": tweet_node(rest_id, text)
+                    }
+                }
+            }
+        })
+    }
+
+    fn cursor_entry(entry_id: &str, cursor_type: &str, value: &str) -> Value {
+        json!({
+            "entryId": entry_id,
+            "content": {
+                "entryType": "TimelineTimelineCursor",
+                "cursorType": cursor_type,
+                "value": value
+            }
+        })
+    }
+
+    #[test]
+    fn walk_basic_entries_and_cursors() {
+        let instructions = vec![json!({
+            "type": "TimelineAddEntries",
+            "entries": [
+                tweet_entry("tweet-1", "1001", "first"),
+                tweet_entry("tweet-2", "1002", "second"),
+                cursor_entry("cursor-bottom", "Bottom", "abc123"),
+                cursor_entry("cursor-top", "Top", "xyz789")
+            ]
+        })];
+        let page = walk(&instructions);
+        assert_eq!(page.tweets.len(), 2);
+        assert_eq!(page.tweets[0].rest_id, "1001");
+        assert_eq!(page.tweets[1].rest_id, "1002");
+        assert_eq!(page.next_cursor.as_deref(), Some("abc123"));
+        assert_eq!(page.top_cursor.as_deref(), Some("xyz789"));
+    }
+
+    #[test]
+    fn walk_filters_promoted_tweets() {
+        let promoted = json!({
+            "entryId": "promoted-1",
+            "content": {
+                "entryType": "TimelineTimelineItem",
+                "itemContent": {
+                    "itemType": "TimelineTweet",
+                    "promotedMetadata": { "advertiser_id": "99" },
+                    "tweet_results": {
+                        "result": tweet_node("ad", "buy stuff")
+                    }
+                }
+            }
+        });
+        let instructions = vec![json!({
+            "type": "TimelineAddEntries",
+            "entries": [
+                tweet_entry("tweet-1", "1001", "organic"),
+                promoted
+            ]
+        })];
+        let page = walk(&instructions);
+        assert_eq!(page.tweets.len(), 1);
+        assert_eq!(page.tweets[0].rest_id, "1001");
+    }
+
+    #[test]
+    fn walk_timeline_module() {
+        let instructions = vec![json!({
+            "type": "TimelineAddToModule",
+            "moduleItems": [
+                {
+                    "item": {
+                        "itemContent": {
+                            "itemType": "TimelineTweet",
+                            "tweet_results": {
+                                "result": tweet_node("2001", "in module")
+                            }
+                        }
+                    }
+                }
+            ]
+        })];
+        let page = walk(&instructions);
+        assert_eq!(page.tweets.len(), 1);
+        assert_eq!(page.tweets[0].rest_id, "2001");
+    }
+
+    #[test]
+    fn walk_replace_entry() {
+        let instructions = vec![json!({
+            "type": "TimelineReplaceEntry",
+            "entry": tweet_entry("tweet-1", "3001", "replaced")
+        })];
+        let page = walk(&instructions);
+        assert_eq!(page.tweets.len(), 1);
+        assert_eq!(page.tweets[0].text, "replaced");
+    }
+
+    #[test]
+    fn walk_pin_entry() {
+        let instructions = vec![json!({
+            "type": "TimelinePinEntry",
+            "entry": tweet_entry("tweet-1", "4001", "pinned")
+        })];
+        let page = walk(&instructions);
+        assert_eq!(page.tweets.len(), 1);
+        assert_eq!(page.tweets[0].text, "pinned");
+    }
+
+    #[test]
+    fn walk_typename_fallback_for_entry_type() {
+        let instructions = vec![json!({
+            "type": "TimelineAddEntries",
+            "entries": [{
+                "entryId": "t-1",
+                "content": {
+                    "__typename": "TimelineTimelineItem",
+                    "itemContent": {
+                        "itemType": "TimelineTweet",
+                        "tweet_results": {
+                            "result": tweet_node("5001", "typename fallback")
+                        }
+                    }
+                }
+            }]
+        })];
+        let page = walk(&instructions);
+        assert_eq!(page.tweets.len(), 1);
+    }
+
+    #[test]
+    fn walk_cursor_bottom_fallback_from_entry_id() {
+        let instructions = vec![json!({
+            "type": "TimelineAddEntries",
+            "entries": [{
+                "entryId": "cursor-bottom-0",
+                "content": {
+                    "entryType": "SomeOtherType",
+                    "value": "fallback_cursor"
+                }
+            }]
+        })];
+        let page = walk(&instructions);
+        assert_eq!(page.next_cursor.as_deref(), Some("fallback_cursor"));
+    }
+
+    #[test]
+    fn walk_empty_instructions() {
+        let page = walk(&[]);
+        assert!(page.tweets.is_empty());
+        assert!(page.next_cursor.is_none());
+        assert!(page.top_cursor.is_none());
+    }
+
+    #[test]
+    fn walk_module_in_entries() {
+        let instructions = vec![json!({
+            "type": "TimelineAddEntries",
+            "entries": [{
+                "entryId": "module-1",
+                "content": {
+                    "entryType": "TimelineTimelineModule",
+                    "items": [
+                        {
+                            "item": {
+                                "itemContent": {
+                                    "itemType": "TimelineTweet",
+                                    "tweet_results": {
+                                        "result": tweet_node("6001", "in module entry")
+                                    }
+                                }
+                            }
+                        }
+                    ]
+                }
+            }]
+        })];
+        let page = walk(&instructions);
+        assert_eq!(page.tweets.len(), 1);
+        assert_eq!(page.tweets[0].rest_id, "6001");
+    }
+}

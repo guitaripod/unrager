@@ -253,21 +253,23 @@ pub fn transmit_image(id: u32, rgba: &[u8], w: u32, h: u32, _place_cols: u16, _p
     let encoded = STANDARD.encode(rgba);
     let bytes = encoded.as_bytes();
     let chunk_size = 4096;
-    let mut out = std::io::stdout().lock();
     let total_chunks = bytes.len().div_ceil(chunk_size).max(1);
+    let mut payload = Vec::with_capacity(encoded.len() + total_chunks * 64);
     for (i, chunk) in bytes.chunks(chunk_size).enumerate() {
         let is_last = i + 1 == total_chunks;
         let m = if is_last { 0 } else { 1 };
         let chunk_str = std::str::from_utf8(chunk).unwrap_or("");
         if i == 0 {
             let _ = write!(
-                out,
+                payload,
                 "\x1b_Ga=t,f=32,s={w},v={h},i={id},q=2,m={m};{chunk_str}\x1b\\"
             );
         } else {
-            let _ = write!(out, "\x1b_Gm={m},q=2;{chunk_str}\x1b\\");
+            let _ = write!(payload, "\x1b_Gm={m},q=2;{chunk_str}\x1b\\");
         }
     }
+    let mut out = std::io::stdout().lock();
+    let _ = out.write_all(&payload);
     let _ = out.flush();
 }
 

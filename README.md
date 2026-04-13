@@ -63,7 +63,7 @@ Photos render inside the terminal via the [kitty graphics protocol](https://sw.k
 
 ### Split detail pane
 
-`Enter`/`l` opens a tweet into a split view. Focal tweet + all replies in one scrollable list. Navigate with `j`/`k`, push deeper with `Enter` on a reply, pop back with `h`/`q`. `X` expands inline threads without leaving the current view.
+`Enter`/`l` opens a tweet into a split view. Focal tweet + all replies in one scrollable list. Navigate with `j`/`k`, push deeper with `Enter` on a reply, pop back with `h`/`q`. `X` expands inline threads without leaving the current view. Press `s` to cycle reply sort order (newest, likes, replies, retweets, views) — persists across all detail views and sessions.
 
 <p align="center">
   <img src="assets/detail.png" alt="detail pane showing a tweet thread" width="800">
@@ -111,6 +111,7 @@ Photos render inside the terminal via the [kitty graphics protocol](https://sw.k
 | `t` | Toggle relative / absolute timestamps |
 | `p` | Own profile (tweets with full metrics) |
 | `P` | Open own profile in browser |
+| `s` | Cycle reply sort in detail pane (newest/likes/replies/RTs/views) |
 | `R` | Toggle tweets / replies on user profile |
 | `o` | Open tweet in browser |
 | `O` | Open tweet author's profile in browser |

@@ -19,6 +19,8 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
+Always run the CI gate after making changes, without waiting to be asked. Then `cargo install --path .` so the user can immediately run the updated binary.
+
 ## Releasing a new version
 
 1. Bump `version` in `Cargo.toml`

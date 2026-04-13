@@ -1,7 +1,7 @@
 use crate::model::Tweet;
 use crate::tui::app::{
-    ActivePane, App, DisplayNameStyle, InlineThread, InputMode, MetricsStyle, SPINNER_FRAMES,
-    TimestampStyle,
+    ActivePane, App, DisplayNameStyle, InlineThread, InputMode, MetricsStyle, ReplySortOrder,
+    SPINNER_FRAMES, TimestampStyle,
 };
 use crate::tui::filter::FilterMode;
 use crate::tui::focus::FocusEntry;
@@ -146,6 +146,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             detail_opts,
             detail_active,
             &app.translations,
+            app.reply_sort,
         );
     } else {
         draw_source_list(
@@ -368,6 +369,7 @@ fn draw_detail(
     opts: RenderOpts,
     active: bool,
     translations: &HashMap<String, String>,
+    reply_sort: ReplySortOrder,
 ) {
     let Some(FocusEntry::Tweet(detail)) = entry else {
         return;
@@ -380,7 +382,12 @@ fn draw_detail(
     } else if detail.replies.is_empty() {
         String::new()
     } else {
-        format!(" · {} replies", detail.replies.len())
+        let sort_label = if matches!(reply_sort, ReplySortOrder::Newest) {
+            String::new()
+        } else {
+            format!(" by {}", reply_sort.label())
+        };
+        format!(" · {} replies{}", detail.replies.len(), sort_label)
     };
     let title = format!("tweet @{}{}", detail.tweet.author.handle, reply_suffix);
 
@@ -1192,7 +1199,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
 
 fn draw_help_overlay(frame: &mut Frame, area: Rect) {
     let w = area.width.min(72);
-    let h = area.height.saturating_sub(2).min(52);
+    let h = area.height.saturating_sub(2).min(53);
     let x = (area.width.saturating_sub(w)) / 2;
     let y = (area.height.saturating_sub(h)) / 2;
     let popup = Rect {
@@ -1252,6 +1259,9 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect) {
         Line::from("  P              open own profile in browser"),
         Line::from("  T              translate selected tweet to English (toggle)"),
         Line::from("  c              toggle rage filter (LLM hides inflammatory topics)"),
+        Line::from(
+            "  s              cycle reply sort order (detail pane: newest/likes/replies/RTs/views)",
+        ),
         Line::from("  x              expand / collapse selected tweet body"),
         Line::from("  X              toggle inline thread replies (detail pane only)"),
         Line::from("  Ctrl-d / Ctrl-u  half-page down / up"),

@@ -74,6 +74,39 @@ pub enum FeedMode {
     Originals,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplySortOrder {
+    #[default]
+    Newest,
+    Likes,
+    Replies,
+    Retweets,
+    Views,
+}
+
+impl ReplySortOrder {
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Newest => Self::Likes,
+            Self::Likes => Self::Replies,
+            Self::Replies => Self::Retweets,
+            Self::Retweets => Self::Views,
+            Self::Views => Self::Newest,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Newest => "newest",
+            Self::Likes => "likes",
+            Self::Replies => "replies",
+            Self::Retweets => "retweets",
+            Self::Views => "views",
+        }
+    }
+}
+
 pub struct App {
     pub running: bool,
     pub mode: InputMode,
@@ -110,6 +143,7 @@ pub struct App {
     pub filter_hidden_count: usize,
     pub translations: HashMap<String, String>,
     pub translation_inflight: HashSet<String>,
+    pub reply_sort: ReplySortOrder,
     pub app_config: AppConfig,
     pub(super) client: Arc<GqlClient>,
     pub(super) tx: EventTx,
@@ -155,6 +189,10 @@ impl App {
             .as_ref()
             .and_then(|s| s.feed_mode)
             .unwrap_or(FeedMode::All);
+        let loaded_reply_sort = loaded
+            .as_ref()
+            .and_then(|s| s.reply_sort)
+            .unwrap_or_default();
 
         let mut source = Source::new(initial_kind.clone());
         source.set_selected(initial_selected);
@@ -185,6 +223,7 @@ impl App {
             media: MediaRegistry::new(),
             media_auto_expand: false,
             feed_mode: loaded_feed_mode,
+            reply_sort: loaded_reply_sort,
             self_handle: None,
             filter_mode: FilterMode::On,
             filter_cfg,
@@ -359,6 +398,7 @@ impl App {
             display_names: Some(self.display_names),
             timestamps: Some(self.timestamps),
             feed_mode: Some(self.feed_mode),
+            reply_sort: Some(self.reply_sort),
         };
         if let Err(e) = session::save(&self.session_path, &state) {
             tracing::warn!("failed to save session: {e}");
@@ -799,6 +839,15 @@ impl App {
         }
     }
 
+    fn cycle_reply_sort(&mut self) {
+        self.reply_sort = self.reply_sort.cycle();
+        if let Some(FocusEntry::Tweet(detail)) = self.focus_stack.last_mut() {
+            detail.sort_replies(self.reply_sort);
+        }
+        self.set_status(format!("replies sorted by {}", self.reply_sort.label()));
+        self.save_session();
+    }
+
     fn open_tweet_in_browser(&mut self) {
         let Some(tweet) = self.selected_tweet() else {
             return;
@@ -935,6 +984,7 @@ impl App {
             (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, _) => {
                 self.active = ActivePane::Source;
             }
+            (KeyCode::Char('s'), KeyModifiers::NONE) => self.cycle_reply_sort(),
             (KeyCode::Enter, _) | (KeyCode::Char('l'), KeyModifiers::NONE) => {
                 if let Some(reply) = self.top_detail().and_then(|d| d.selected_reply()).cloned() {
                     self.push_tweet(reply);
@@ -1102,6 +1152,7 @@ impl App {
         let replies_snapshot: Vec<Tweet> = match result {
             Ok(page) => {
                 detail.apply_page(page);
+                detail.sort_replies(self.reply_sort);
                 detail.replies.clone()
             }
             Err(e) => {

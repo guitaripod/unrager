@@ -4,6 +4,7 @@ use crate::gql::endpoints;
 use crate::gql::query_ids::Operation;
 use crate::model::Tweet;
 use crate::parse::timeline::{self, TimelinePage};
+use crate::tui::app::ReplySortOrder;
 use ratatui::widgets::ListState;
 use serde_json::Value;
 
@@ -88,6 +89,22 @@ impl TweetDetail {
         let total = self.total_items();
         if total > 0 {
             self.list_state.select(Some(total - 1));
+        }
+    }
+
+    pub fn sort_replies(&mut self, order: ReplySortOrder) {
+        match order {
+            ReplySortOrder::Newest => self.replies.sort_by(|a, b| b.created_at.cmp(&a.created_at)),
+            ReplySortOrder::Likes => self.replies.sort_by(|a, b| b.like_count.cmp(&a.like_count)),
+            ReplySortOrder::Replies => self
+                .replies
+                .sort_by(|a, b| b.reply_count.cmp(&a.reply_count)),
+            ReplySortOrder::Retweets => self
+                .replies
+                .sort_by(|a, b| b.retweet_count.cmp(&a.retweet_count)),
+            ReplySortOrder::Views => self
+                .replies
+                .sort_by(|a, b| b.view_count.unwrap_or(0).cmp(&a.view_count.unwrap_or(0))),
         }
     }
 

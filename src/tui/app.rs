@@ -1222,35 +1222,16 @@ impl App {
         self.source.loading = false;
         match result {
             Ok(mut page) => {
-                if matches!(kind, SourceKind::Home { following: false }) {
-                    let unseen: Vec<_> = page
-                        .tweets
-                        .iter()
-                        .filter(|t| !self.seen.is_seen(&t.rest_id))
-                        .cloned()
-                        .collect();
-                    if !unseen.is_empty() {
-                        page.tweets = unseen;
-                    }
-                }
-                if matches!(self.feed_mode, FeedMode::Originals)
-                    && matches!(kind, SourceKind::Home { .. })
-                {
-                    page.tweets.retain(|t| {
-                        t.in_reply_to_tweet_id.is_none()
-                            && t.quoted_tweet.is_none()
-                            && !t.text.starts_with("RT @")
-                    });
-                }
-                if matches!(self.filter_mode, FilterMode::On) && self.filter_classifier.is_some() {
-                    if let Some(cache) = &self.filter_cache {
-                        let before = page.tweets.len();
-                        page.tweets.retain(|t| {
-                            !matches!(cache.get(&t.rest_id), Some(FilterDecision::Hide))
-                        });
-                        self.filter_hidden_count += before - page.tweets.len();
-                    }
-                }
+                let hidden = filter_incoming_page(
+                    &mut page,
+                    &kind,
+                    self.feed_mode,
+                    self.filter_mode,
+                    self.filter_classifier.is_some(),
+                    self.filter_cache.as_ref(),
+                    &self.seen,
+                );
+                self.filter_hidden_count += hidden;
                 let old_len = self.source.tweets.len();
                 if append {
                     self.source.append(page);
@@ -1326,6 +1307,45 @@ fn build_reply_tree(root_id: &str, tweets: &[Tweet]) -> Vec<(usize, Tweet)> {
     result
 }
 
+fn filter_incoming_page(
+    page: &mut TimelinePage,
+    kind: &SourceKind,
+    feed_mode: FeedMode,
+    filter_mode: FilterMode,
+    has_classifier: bool,
+    filter_cache: Option<&FilterCache>,
+    seen: &SeenStore,
+) -> usize {
+    if matches!(kind, SourceKind::Home { following: false }) {
+        let unseen: Vec<_> = page
+            .tweets
+            .iter()
+            .filter(|t| !seen.is_seen(&t.rest_id))
+            .cloned()
+            .collect();
+        if !unseen.is_empty() {
+            page.tweets = unseen;
+        }
+    }
+    if matches!(feed_mode, FeedMode::Originals) && matches!(kind, SourceKind::Home { .. }) {
+        page.tweets.retain(|t| {
+            t.in_reply_to_tweet_id.is_none()
+                && t.quoted_tweet.is_none()
+                && !t.text.starts_with("RT @")
+        });
+    }
+    let mut hidden = 0;
+    if matches!(filter_mode, FilterMode::On) && has_classifier {
+        if let Some(cache) = filter_cache {
+            let before = page.tweets.len();
+            page.tweets
+                .retain(|t| !matches!(cache.get(&t.rest_id), Some(FilterDecision::Hide)));
+            hidden = before - page.tweets.len();
+        }
+    }
+    hidden
+}
+
 fn init_filter_stack(
     config_dir: &std::path::Path,
     cache_dir: &std::path::Path,
@@ -1350,4 +1370,339 @@ fn init_filter_stack(
     };
     let classifier = Classifier::new(&cfg);
     (Some(cfg), Some(cache), Some(classifier))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::User;
+    use chrono::Utc;
+    use tempfile::NamedTempFile;
+
+    fn make_tweet(id: &str, text: &str) -> Tweet {
+        Tweet {
+            rest_id: id.to_string(),
+            author: User {
+                rest_id: "1".to_string(),
+                handle: "test".to_string(),
+                name: "Test".to_string(),
+                verified: false,
+                followers: 0,
+                following: 0,
+            },
+            created_at: Utc::now(),
+            text: text.to_string(),
+            reply_count: 0,
+            retweet_count: 0,
+            like_count: 0,
+            quote_count: 0,
+            view_count: None,
+            lang: None,
+            in_reply_to_tweet_id: None,
+            quoted_tweet: None,
+            media: vec![],
+            url: format!("https://x.com/test/status/{id}"),
+        }
+    }
+
+    fn make_page(tweets: Vec<Tweet>) -> TimelinePage {
+        TimelinePage {
+            tweets,
+            next_cursor: None,
+            top_cursor: None,
+        }
+    }
+
+    fn fresh_seen() -> (NamedTempFile, SeenStore) {
+        let tmp = NamedTempFile::new().unwrap();
+        let store = SeenStore::open(tmp.path()).unwrap();
+        (tmp, store)
+    }
+
+    #[test]
+    fn filter_seen_on_home_for_you() {
+        let (_tmp, mut seen) = fresh_seen();
+        seen.mark_seen("1");
+        seen.mark_seen("2");
+        let mut page = make_page(vec![
+            make_tweet("1", "old"),
+            make_tweet("2", "old"),
+            make_tweet("3", "new"),
+        ]);
+        let kind = SourceKind::Home { following: false };
+        filter_incoming_page(
+            &mut page,
+            &kind,
+            FeedMode::All,
+            FilterMode::Off,
+            false,
+            None,
+            &seen,
+        );
+        assert_eq!(page.tweets.len(), 1);
+        assert_eq!(page.tweets[0].rest_id, "3");
+    }
+
+    #[test]
+    fn filter_seen_keeps_all_when_everything_seen() {
+        let (_tmp, mut seen) = fresh_seen();
+        seen.mark_seen("1");
+        seen.mark_seen("2");
+        let mut page = make_page(vec![make_tweet("1", "a"), make_tweet("2", "b")]);
+        let kind = SourceKind::Home { following: false };
+        filter_incoming_page(
+            &mut page,
+            &kind,
+            FeedMode::All,
+            FilterMode::Off,
+            false,
+            None,
+            &seen,
+        );
+        assert_eq!(page.tweets.len(), 2);
+    }
+
+    #[test]
+    fn filter_seen_skipped_on_following() {
+        let (_tmp, mut seen) = fresh_seen();
+        seen.mark_seen("1");
+        let mut page = make_page(vec![make_tweet("1", "seen"), make_tweet("2", "unseen")]);
+        let kind = SourceKind::Home { following: true };
+        filter_incoming_page(
+            &mut page,
+            &kind,
+            FeedMode::All,
+            FilterMode::Off,
+            false,
+            None,
+            &seen,
+        );
+        assert_eq!(page.tweets.len(), 2);
+    }
+
+    #[test]
+    fn filter_seen_skipped_on_non_home() {
+        let (_tmp, mut seen) = fresh_seen();
+        seen.mark_seen("1");
+        let mut page = make_page(vec![make_tweet("1", "seen")]);
+        let kind = SourceKind::User {
+            handle: "someone".into(),
+        };
+        filter_incoming_page(
+            &mut page,
+            &kind,
+            FeedMode::All,
+            FilterMode::Off,
+            false,
+            None,
+            &seen,
+        );
+        assert_eq!(page.tweets.len(), 1);
+    }
+
+    #[test]
+    fn filter_originals_removes_replies_quotes_rts() {
+        let (_tmp, seen) = fresh_seen();
+        let mut reply = make_tweet("1", "replying");
+        reply.in_reply_to_tweet_id = Some("0".into());
+        let mut quote = make_tweet("2", "quoting");
+        quote.quoted_tweet = Some(Box::new(make_tweet("99", "original")));
+        let rt = make_tweet("3", "RT @someone big news");
+        let original = make_tweet("4", "standalone thought");
+
+        let mut page = make_page(vec![reply, quote, rt, original]);
+        let kind = SourceKind::Home { following: false };
+        filter_incoming_page(
+            &mut page,
+            &kind,
+            FeedMode::Originals,
+            FilterMode::Off,
+            false,
+            None,
+            &seen,
+        );
+        assert_eq!(page.tweets.len(), 1);
+        assert_eq!(page.tweets[0].rest_id, "4");
+    }
+
+    #[test]
+    fn filter_originals_only_applies_to_home() {
+        let (_tmp, seen) = fresh_seen();
+        let mut reply = make_tweet("1", "replying");
+        reply.in_reply_to_tweet_id = Some("0".into());
+
+        let mut page = make_page(vec![reply]);
+        let kind = SourceKind::User {
+            handle: "someone".into(),
+        };
+        filter_incoming_page(
+            &mut page,
+            &kind,
+            FeedMode::Originals,
+            FilterMode::Off,
+            false,
+            None,
+            &seen,
+        );
+        assert_eq!(page.tweets.len(), 1);
+    }
+
+    #[test]
+    fn filter_cache_hides_tweets() {
+        let (_tmp, seen) = fresh_seen();
+        let cache_tmp = NamedTempFile::new().unwrap();
+        let mut cache = FilterCache::open(cache_tmp.path(), "test_hash".to_string()).unwrap();
+        cache.put("2", FilterDecision::Hide);
+        cache.put("3", FilterDecision::Keep);
+
+        let mut page = make_page(vec![
+            make_tweet("1", "uncached"),
+            make_tweet("2", "hidden"),
+            make_tweet("3", "kept"),
+        ]);
+        let kind = SourceKind::Home { following: false };
+        let hidden = filter_incoming_page(
+            &mut page,
+            &kind,
+            FeedMode::All,
+            FilterMode::On,
+            true,
+            Some(&cache),
+            &seen,
+        );
+        assert_eq!(hidden, 1);
+        assert_eq!(page.tweets.len(), 2);
+        assert_eq!(page.tweets[0].rest_id, "1");
+        assert_eq!(page.tweets[1].rest_id, "3");
+    }
+
+    #[test]
+    fn filter_cache_skipped_when_filter_off() {
+        let (_tmp, seen) = fresh_seen();
+        let cache_tmp = NamedTempFile::new().unwrap();
+        let mut cache = FilterCache::open(cache_tmp.path(), "test_hash".to_string()).unwrap();
+        cache.put("1", FilterDecision::Hide);
+
+        let mut page = make_page(vec![make_tweet("1", "should stay")]);
+        let kind = SourceKind::Home { following: false };
+        let hidden = filter_incoming_page(
+            &mut page,
+            &kind,
+            FeedMode::All,
+            FilterMode::Off,
+            true,
+            Some(&cache),
+            &seen,
+        );
+        assert_eq!(hidden, 0);
+        assert_eq!(page.tweets.len(), 1);
+    }
+
+    #[test]
+    fn filter_cache_skipped_when_no_classifier() {
+        let (_tmp, seen) = fresh_seen();
+        let cache_tmp = NamedTempFile::new().unwrap();
+        let mut cache = FilterCache::open(cache_tmp.path(), "test_hash".to_string()).unwrap();
+        cache.put("1", FilterDecision::Hide);
+
+        let mut page = make_page(vec![make_tweet("1", "should stay")]);
+        let kind = SourceKind::Home { following: false };
+        let hidden = filter_incoming_page(
+            &mut page,
+            &kind,
+            FeedMode::All,
+            FilterMode::On,
+            false,
+            Some(&cache),
+            &seen,
+        );
+        assert_eq!(hidden, 0);
+        assert_eq!(page.tweets.len(), 1);
+    }
+
+    #[test]
+    fn filter_pipeline_combined() {
+        let (_tmp, mut seen) = fresh_seen();
+        seen.mark_seen("1");
+        let cache_tmp = NamedTempFile::new().unwrap();
+        let mut cache = FilterCache::open(cache_tmp.path(), "test_hash".to_string()).unwrap();
+        cache.put("3", FilterDecision::Hide);
+
+        let mut reply = make_tweet("2", "replying");
+        reply.in_reply_to_tweet_id = Some("0".into());
+
+        let mut page = make_page(vec![
+            make_tweet("1", "seen"),
+            reply,
+            make_tweet("3", "hidden by filter"),
+            make_tweet("4", "survives"),
+        ]);
+        let kind = SourceKind::Home { following: false };
+        let hidden = filter_incoming_page(
+            &mut page,
+            &kind,
+            FeedMode::Originals,
+            FilterMode::On,
+            true,
+            Some(&cache),
+            &seen,
+        );
+        assert_eq!(hidden, 1);
+        assert_eq!(page.tweets.len(), 1);
+        assert_eq!(page.tweets[0].rest_id, "4");
+    }
+
+    #[test]
+    fn build_reply_tree_flat_replies() {
+        let replies = vec![
+            {
+                let mut t = make_tweet("a", "first reply");
+                t.in_reply_to_tweet_id = Some("root".into());
+                t.created_at = Utc::now() - chrono::Duration::seconds(2);
+                t
+            },
+            {
+                let mut t = make_tweet("b", "second reply");
+                t.in_reply_to_tweet_id = Some("root".into());
+                t.created_at = Utc::now() - chrono::Duration::seconds(1);
+                t
+            },
+        ];
+        let tree = build_reply_tree("root", &replies);
+        assert_eq!(tree.len(), 2);
+        assert_eq!(tree[0].0, 0);
+        assert_eq!(tree[0].1.rest_id, "b");
+        assert_eq!(tree[1].0, 0);
+        assert_eq!(tree[1].1.rest_id, "a");
+    }
+
+    #[test]
+    fn build_reply_tree_nested() {
+        let replies = vec![
+            {
+                let mut t = make_tweet("a", "reply to root");
+                t.in_reply_to_tweet_id = Some("root".into());
+                t.created_at = Utc::now();
+                t
+            },
+            {
+                let mut t = make_tweet("b", "reply to a");
+                t.in_reply_to_tweet_id = Some("a".into());
+                t.created_at = Utc::now();
+                t
+            },
+        ];
+        let tree = build_reply_tree("root", &replies);
+        assert_eq!(tree.len(), 2);
+        assert_eq!(tree[0].1.rest_id, "a");
+        assert_eq!(tree[0].0, 0);
+        assert_eq!(tree[1].1.rest_id, "b");
+        assert_eq!(tree[1].0, 1);
+    }
+
+    #[test]
+    fn build_reply_tree_empty() {
+        let tree = build_reply_tree("root", &[]);
+        assert!(tree.is_empty());
+    }
 }

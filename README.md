@@ -12,15 +12,19 @@
 </p>
 
 <p align="center">
-  <img src="assets/feed.png" alt="unrager home feed with split detail pane" width="800">
+  <img src="assets/feed.png" alt="unrager home feed with rage filter active" width="800">
 </p>
+
+Your home feed, minus the 12 tweets the LLM quietly ate. The `−12` in the status bar is all that remains of them.
 
 ## What is this
 
-`unrager` is a Rust TUI + CLI for reading and posting on Twitter/X. It reads your timeline using the same GraphQL API the web client uses (free, no API key), posts via the official X API v2 (safe, pay-per-use), and — the whole point — pipes every incoming tweet through a local [Ollama](https://ollama.com) model that silently removes anything matching your rage-filter rubric before you ever see it.
+`unrager` is a Rust TUI for reading Twitter/X without the engagement-optimized rage. It connects through the same GraphQL endpoints the web client uses (no API key, no cost), and pipes every incoming tweet through a local [Ollama](https://ollama.com) model that classifies it against your personal rubric. Tweets that match are physically removed from the feed before rendering — they never existed.
+
+It also has a CLI for one-shot reads and an OAuth 2.0 write path for posting.
 
 ```
-unrager               # launches the TUI
+unrager               # TUI
 unrager home -n 20    # one-shot CLI
 unrager tweet "..."   # post via official API
 ```
@@ -28,61 +32,70 @@ unrager tweet "..."   # post via official API
 ## Quick start
 
 ```sh
-# 1. Build
 cargo install --path .
-
-# 2. Launch (reads cookies from your logged-in browser automatically)
 unrager
 
-# 3. Optional: enable the rage filter
+# optional: enable the rage filter
 ollama pull gemma4
-unrager   # filter is on by default when Ollama is reachable
 ```
 
-## Features
+The TUI reads cookies from your logged-in browser automatically (Vivaldi, Chrome, Brave, Edge, Opera). The filter enables itself when Ollama is reachable and disables silently when it isn't.
 
-### Rage filter
+## The rage filter
 
-Every tweet classified by a local LLM against a user-editable rubric (`~/.config/unrager/filter.toml`). Matching tweets are physically removed from the feed — they never existed. Verdicts cache to SQLite so reloads are instant. Toggle with `c`. If Ollama is unreachable, the filter disables itself and everything shows normally.
+Every tweet is classified by a local LLM against a user-editable rubric (`~/.config/unrager/filter.toml`). Matching tweets are physically removed — not collapsed, not grayed out, gone. Verdicts cache to SQLite keyed by `(tweet_id, rubric_hash)`, so reloads are instant and editing the rubric invalidates automatically.
 
-### Originals mode
+```toml
+drop_topics = [
+    "american electoral politics, presidents, congress, partisan fights",
+    "war, military conflict, battlefield footage, casualty counts",
+    "gender wars, men-vs-women discourse, trad-vs-feminist fights",
+    # add your own
+]
+extra_guidance = "Keep technical, scientific, art, music, sports tweets..."
 
-Press `V` on a home feed to switch between **all tweets** and **originals only**. Originals mode hides replies, quote tweets, and retweets — showing only root tweets that represent someone's own standalone thought. The mode persists across sessions and applies to both For You and Following feeds.
+[ollama]
+model = "gemma4:latest"
+host = "http://localhost:11434"
+```
 
-### Translation
+Toggle with `c`. The status bar shows `−N` when the filter is actively hiding tweets.
 
-Press `T` on any tweet to translate it to English via the same local Ollama model used for rage filtering. Press `T` again to revert to the original text. A `[EN]` badge appears in the header of translated tweets. Translations are ephemeral — they live in memory for the current session only.
-
-### Inline media
-
-Photos render inside the terminal via the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) on Ghostty, Kitty, and WezTerm. Multiple images display side-by-side. Toggle with `I` for auto-expand or `x` per tweet. Falls back to colored `▣`/`▶`/`↻` badges on other terminals.
-
-<p align="center">
-  <img src="assets/media.png" alt="inline media rendering via kitty graphics" width="800">
-</p>
-
-### Split detail pane
-
-`Enter`/`l` opens a tweet into a split view. Focal tweet + all replies in one scrollable list. Navigate with `j`/`k`, push deeper with `Enter` on a reply, pop back with `h`/`q`. `X` expands inline threads without leaving the current view. Press `s` to cycle reply sort order (newest, likes, replies, retweets, views) — persists across all detail views and sessions.
+## Reading threads
 
 <p align="center">
-  <img src="assets/detail.png" alt="detail pane showing a tweet thread" width="800">
+  <img src="assets/detail.png" alt="split pane showing a tweet with replies sorted by likes" width="800">
 </p>
 
-### Everything else
+`Enter` opens a tweet into a split detail pane. The focal tweet and all its replies form one scrollable list. Push deeper into any reply with `Enter`, pop back with `h`. Press `s` to cycle reply sort order — newest, likes, replies, retweets, views — it persists across sessions. `X` expands inline thread replies without leaving the current view.
 
-- Color-hashed `@handles` — FNV-1a hash → 20-color palette, deterministic and consistent across body mentions
-- Zebra-striped rows, terminal-theme-aware body text (auto-detects light/dark via OSC 11)
-- Word-wrapped cards, scroll look-ahead, compact timestamps (`2m`/`5h`/`3d`)
-- Command palette (`:home`, `:user`, `:search`, `:mentions`, `:bookmarks`), history (`[`/`]`)
-- Read-tracking: cursor marks tweets as read; For You feed hides already-seen tweets, deduplicates on pagination
-- Share tweets: `y` yanks a [fixupx](https://fixupx.com) embed URL to clipboard, `o` opens in browser
-- Configurable browser command with `{}` URL placeholder for Chromium `--app={}` mode
-- Persistent session preferences, `?` help overlay with full key reference
+The left pane stays live. `Tab` swaps focus between panes, `,`/`.` adjusts the split width.
+
+## Search and translation
 
 <p align="center">
-  <img src="assets/help.png" alt="help overlay and search results" width="800">
+  <img src="assets/search.png" alt="search results for nvidia with multilingual content and translation" width="800">
 </p>
+
+`:search nvidia` pulls live results in every language. Press `T` on any tweet to translate it to English via the same local Ollama instance. Press `T` again to revert. Translations are ephemeral — in memory only.
+
+The command palette supports `:home`, `:user <handle>`, `:search <query>`, `:mentions`, `:bookmarks`, and `:read <id|url>`. History navigates with `]`/`[`.
+
+## Profile view
+
+<p align="center">
+  <img src="assets/profile.png" alt="own profile showing tweets with full metrics and expanded bodies" width="800">
+</p>
+
+`p` opens your own profile with full metrics forced visible. `:user <handle>` opens anyone's timeline. Press `R` to toggle between their tweets and replies. `V` switches between all tweets and originals only (hides replies, quotes, retweets).
+
+## Help overlay
+
+<p align="center">
+  <img src="assets/help.png" alt="scrollable help overlay showing iconography section" width="800">
+</p>
+
+`?` opens a scrollable help overlay with every keybinding and an iconography reference for all the glyphs used in the interface. Scroll with `j`/`k`, any other key closes it.
 
 <details>
 <summary><strong>Key bindings</strong></summary>
@@ -101,18 +114,19 @@ Photos render inside the terminal via the [kitty graphics protocol](https://sw.k
 | `?` | Help overlay |
 | `V` | Toggle all / originals on home feed |
 | `F` | Toggle For You / Following |
+| `R` | Toggle tweets / replies on user profile |
 | `T` | Translate selected tweet to English (toggle) |
 | `c` | Toggle rage filter |
 | `x` | Expand / collapse tweet body |
-| `X` | Inline thread replies (auto-opens detail from source) |
+| `X` | Inline thread replies |
 | `I` | Toggle media auto-expand |
-| `M` | Toggle retweet / like / view counts |
+| `M` | Toggle metric counts |
 | `N` | Toggle display names |
 | `t` | Toggle relative / absolute timestamps |
-| `p` | Own profile (tweets with full metrics) |
+| `s` | Cycle reply sort in detail pane |
+| `p` | Own profile |
 | `P` | Open own profile in browser |
-| `s` | Cycle reply sort in detail pane (newest/likes/replies/RTs/views) |
-| `R` | Toggle tweets / replies on user profile |
+| `n` | Open notifications in browser |
 | `o` | Open tweet in browser |
 | `O` | Open tweet author's profile in browser |
 | `m` | Open media externally |
@@ -126,8 +140,20 @@ Photos render inside the terminal via the [kitty graphics protocol](https://sw.k
 
 </details>
 
+## More
+
+- **Inline media** — photos render inside the terminal via the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) on Ghostty, Kitty, and WezTerm. Multiple images side-by-side. Toggle with `I`. Falls back to `▣`/`▶`/`↻` glyphs elsewhere.
+- **Originals mode** — `V` on home feeds hides replies, quotes, and retweets. `◇` appears in the status bar. Persists across sessions.
+- **Ambient notifications** — notification count polled in the background, summarized by the LLM into a natural-language whisper in the status bar. Press `n` to open in browser.
+- **Read tracking** — tweets mark as read on cursor. For You feed hides already-seen tweets and deduplicates across pages. `u` jumps to next unread.
+- **Color-hashed handles** — FNV-1a hash into a 20-color palette, consistent across every mention in every tweet body.
+- **Zebra striping** — alternating row backgrounds, auto-detects light/dark terminal theme via OSC 11.
+- **Share** — `y` copies a [fixupx](https://fixupx.com) embed URL, `o` opens in browser, `m` opens media externally.
+- **Configurable browser** — `config.toml` supports `{}` URL placeholder for Chromium `--app={}` kiosk mode.
+- **Session persistence** — source, selection, toggles, split width, feed mode, reply sort all survive restarts.
+
 <details>
-<summary><strong>CLI commands</strong></summary>
+<summary><strong>CLI</strong></summary>
 
 ### Read-only (no cost, no API key)
 
@@ -141,6 +167,7 @@ Photos render inside the terminal via the [kitty graphics protocol](https://sw.k
 | `unrager search "<query>"` | Live search |
 | `unrager mentions [--user @h]` | Mentions feed |
 | `unrager bookmarks "<query>"` | Search bookmarks |
+| `unrager notifs` | Recent notifications |
 
 All accept `-n <count>`, `--json`, `--max-pages <n>`.
 
@@ -164,13 +191,13 @@ All accept `-n <count>`, `--json`, `--max-pages <n>`.
 - **Linux** with a Secret Service provider (`kwalletd6` on KDE, `gnome-keyring` on GNOME)
 - **Chromium-family browser** logged into X — auto-detected: Vivaldi, Chromium, Chrome, Brave, Edge Dev, Opera. Override with `UNRAGER_COOKIES_PATH`.
 - **Rust 1.85+** (edition 2024)
-- **Ollama** (optional) — for the rage filter. Default model `gemma4:latest`, configurable in `filter.toml`.
-- **X developer account** (optional) — for writes. OAuth 2.0 Native App + pay-per-use credits at [console.x.com](https://console.x.com).
+- **Ollama** (optional) — for the rage filter and translation. Default model `gemma4:latest`, configurable in `filter.toml`.
+- **X developer account** (optional) — only for posting. OAuth 2.0 Native App + pay-per-use credits at [console.x.com](https://console.x.com).
 
 </details>
 
 <details>
-<summary><strong>Configuration files</strong></summary>
+<summary><strong>Configuration</strong></summary>
 
 | File | Purpose |
 |---|---|
@@ -180,30 +207,6 @@ All accept `-n <count>`, `--json`, `--max-pages <n>`.
 | `~/.config/unrager/filter.toml` | Rage filter rubric (auto-created) |
 | `~/.cache/unrager/seen.db` | Read-tracking SQLite |
 | `~/.cache/unrager/filter.db` | Filter verdict cache |
-
-Directories created with mode `0700`.
-
-</details>
-
-<details>
-<summary><strong>Rage filter rubric</strong></summary>
-
-On first launch, `~/.config/unrager/filter.toml` is created with defaults. Edit freely — the cache invalidates automatically when the rubric changes.
-
-```toml
-drop_topics = [
-    "american electoral politics, presidents, congress, partisan fights",
-    "war, military conflict, battlefield footage, casualty counts",
-    "gender wars, men-vs-women discourse, trad-vs-feminist fights",
-    # ... add your own
-]
-extra_guidance = "Keep technical, scientific, art, music, sports tweets..."
-
-[ollama]
-model = "gemma4:latest"
-host = "http://localhost:11434"
-timeout_seconds = 20
-```
 
 </details>
 
@@ -226,10 +229,10 @@ If you fork this repo, replace the Client ID in `src/auth/oauth.rs` with your ow
 ## Architecture
 
 ```
-Reads:   browser cookies → GraphQL (same endpoints as x.com) → free, unlimited
-Writes:  OAuth 2.0 PKCE → official X API v2 → pay-per-use, zero ban risk
-Filter:  tweet text → local Ollama → HIDE/KEEP → SQLite cache
-Media:   fetch → downscale → kitty graphics transmit → Unicode placeholders
+Reads:   browser cookies  ->  GraphQL (same endpoints as x.com)  ->  free, unlimited
+Writes:  OAuth 2.0 PKCE   ->  official X API v2                  ->  pay-per-use
+Filter:  tweet text        ->  local Ollama                       ->  HIDE/KEEP -> SQLite cache
+Media:   CDN fetch         ->  downscale 400px                    ->  kitty graphics transmit
 ```
 
 <details>

@@ -1416,6 +1416,9 @@ impl App {
                     &self.seen,
                 );
                 self.filter_hidden_count += hidden;
+                if matches!(kind, SourceKind::Home { following: true }) {
+                    page.tweets.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+                }
                 let old_len = self.source.tweets.len();
                 if append {
                     self.source.append(page);

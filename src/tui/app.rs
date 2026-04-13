@@ -735,7 +735,11 @@ impl App {
                     let client = self.client.clone();
                     let tx = self.tx.clone();
                     tokio::spawn(async move {
-                        let _ = whisper::fetch_mentions(&client, None).await;
+                        let _ = tokio::time::timeout(
+                            tokio::time::Duration::from_secs(10),
+                            whisper::fetch_mentions(&client, None),
+                        )
+                        .await;
                         match whisper::fetch_notifications(&client, None).await {
                             Ok(page) => {
                                 let _ = tx.send(Event::NotificationsLoaded {
@@ -1451,6 +1455,7 @@ impl App {
     }
 
     fn reload_source(&mut self) {
+        self.source.loading = false;
         self.source.cursor = None;
         self.source.exhausted = false;
         if self.source.is_notifications() {
@@ -1577,24 +1582,29 @@ impl App {
             None
         };
         tokio::spawn(async move {
-            let result = match whisper::fetch_notifications(&client, cursor.as_deref()).await {
-                Ok(mut page) => {
-                    if !append {
-                        if let Ok(mentions) = whisper::fetch_mentions(&client, None).await {
-                            let existing: std::collections::HashSet<String> =
-                                page.notifications.iter().map(|n| n.id.clone()).collect();
-                            for m in mentions.notifications {
-                                if !existing.contains(&m.id) {
-                                    page.notifications.push(m);
-                                }
+            let timeout = tokio::time::Duration::from_secs(15);
+            let fetch = async {
+                let mut page = whisper::fetch_notifications(&client, cursor.as_deref()).await?;
+                if !append {
+                    if let Ok(mentions) = whisper::fetch_mentions(&client, None).await {
+                        let existing: std::collections::HashSet<String> =
+                            page.notifications.iter().map(|n| n.id.clone()).collect();
+                        for m in mentions.notifications {
+                            if !existing.contains(&m.id) {
+                                page.notifications.push(m);
                             }
-                            page.notifications
-                                .sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
                         }
+                        page.notifications
+                            .sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
                     }
-                    Ok(page)
                 }
-                Err(e) => Err(e),
+                Ok(page)
+            };
+            let result = match tokio::time::timeout(timeout, fetch).await {
+                Ok(r) => r,
+                Err(_) => Err(crate::error::Error::GraphqlShape(
+                    "notification fetch timed out".into(),
+                )),
             };
             let _ = tx.send(Event::NotificationPageLoaded { result, append });
         });

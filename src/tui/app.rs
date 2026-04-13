@@ -716,12 +716,8 @@ impl App {
                 self.self_handle = Some(handle.clone());
                 self.switch_source(SourceKind::User { handle });
             }
-            Event::NotificationPageLoaded {
-                result,
-                mentions_cursor,
-                append,
-            } => {
-                self.handle_notification_page_loaded(result, mentions_cursor, append);
+            Event::NotificationPageLoaded { result, append } => {
+                self.handle_notification_page_loaded(result, append);
             }
             Event::WhisperPollTick => {
                 self.whisper.tick();
@@ -1574,57 +1570,20 @@ impl App {
         self.source.loading = true;
         let client = self.client.clone();
         let tx = self.tx.clone();
-        let all_cursor = if append {
+        let cursor = if append {
             self.source.cursor.clone()
         } else {
             None
         };
-        let mentions_cursor = if append {
-            self.source.mentions_cursor.clone()
-        } else {
-            None
-        };
         tokio::spawn(async move {
-            let all_result = whisper::fetch_notifications(&client, all_cursor.as_deref()).await;
-            let result = match all_result {
-                Ok(mut page) => {
-                    let mut m_cursor = None;
-                    if let Ok(mentions) =
-                        whisper::fetch_mentions(&client, mentions_cursor.as_deref()).await
-                    {
-                        m_cursor = mentions.next_cursor.clone();
-                        let existing: std::collections::HashSet<String> =
-                            page.notifications.iter().map(|n| n.id.clone()).collect();
-                        let new_mentions: Vec<_> = mentions
-                            .notifications
-                            .into_iter()
-                            .filter(|n| !existing.contains(&n.id))
-                            .collect();
-                        page.notifications.extend(new_mentions);
-                        page.notifications
-                            .sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-                    }
-                    let _ = tx.send(Event::NotificationPageLoaded {
-                        result: Ok(page),
-                        mentions_cursor: m_cursor,
-                        append,
-                    });
-                    return;
-                }
-                Err(e) => Err(e),
-            };
-            let _ = tx.send(Event::NotificationPageLoaded {
-                result,
-                mentions_cursor: None,
-                append,
-            });
+            let result = whisper::fetch_notifications(&client, cursor.as_deref()).await;
+            let _ = tx.send(Event::NotificationPageLoaded { result, append });
         });
     }
 
     fn handle_notification_page_loaded(
         &mut self,
         result: Result<crate::parse::notification::NotificationPage>,
-        mentions_cursor: Option<String>,
         append: bool,
     ) {
         if !self.source.is_notifications() {
@@ -1634,9 +1593,9 @@ impl App {
         match result {
             Ok(page) => {
                 if append {
-                    self.source.append_notifications(page, mentions_cursor);
+                    self.source.append_notifications(page);
                 } else {
-                    self.source.reset_with_notifications(page, mentions_cursor);
+                    self.source.reset_with_notifications(page);
                 }
                 self.error = None;
                 self.clear_status();

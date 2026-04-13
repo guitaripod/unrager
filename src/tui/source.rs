@@ -79,7 +79,6 @@ pub struct Source {
     pub tweets: Vec<Tweet>,
     pub notifications: Vec<RawNotification>,
     pub cursor: Option<String>,
-    pub mentions_cursor: Option<String>,
     pub loading: bool,
     pub exhausted: bool,
     pub list_state: ListState,
@@ -155,19 +154,14 @@ impl Source {
         }
     }
 
-    pub fn reset_with_notifications(
-        &mut self,
-        page: NotificationPage,
-        mentions_cursor: Option<String>,
-    ) {
+    pub fn reset_with_notifications(&mut self, page: NotificationPage) {
         self.notifications = page
             .notifications
             .into_iter()
             .filter(is_actionable_notification)
             .collect();
         self.cursor = page.next_cursor;
-        self.mentions_cursor = mentions_cursor;
-        self.exhausted = self.cursor.is_none() && self.mentions_cursor.is_none();
+        self.exhausted = self.cursor.is_none();
         let last = self.notifications.len().saturating_sub(1);
         let current = self.list_state.selected().unwrap_or(0).min(last);
         self.list_state = ListState::default();
@@ -177,11 +171,7 @@ impl Source {
         }
     }
 
-    pub fn append_notifications(
-        &mut self,
-        page: NotificationPage,
-        mentions_cursor: Option<String>,
-    ) {
+    pub fn append_notifications(&mut self, page: NotificationPage) {
         let existing: HashSet<&str> = self.notifications.iter().map(|n| n.id.as_str()).collect();
         let deduped: Vec<RawNotification> = page
             .notifications
@@ -192,10 +182,7 @@ impl Source {
         let incoming = deduped.len();
         self.notifications.extend(deduped);
         self.cursor = page.next_cursor;
-        if mentions_cursor.is_some() {
-            self.mentions_cursor = mentions_cursor;
-        }
-        if (self.cursor.is_none() && self.mentions_cursor.is_none()) || incoming == 0 {
+        if self.cursor.is_none() || incoming == 0 {
             self.exhausted = true;
         }
     }

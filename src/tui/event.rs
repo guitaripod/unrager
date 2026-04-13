@@ -71,7 +71,6 @@ pub enum Event {
     },
     NotificationPageLoaded {
         result: Result<crate::parse::notification::NotificationPage>,
-        mentions_cursor: Option<String>,
         append: bool,
     },
     WhisperPollTick,

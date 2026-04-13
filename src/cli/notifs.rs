@@ -10,18 +10,29 @@ pub struct Args {
 
     #[arg(long, help = "Dump the raw API response JSON")]
     pub raw: bool,
+
+    #[arg(long, help = "Fetch from mentions endpoint instead of all")]
+    pub mentions: bool,
 }
 
 pub async fn run(args: Args) -> Result<()> {
     let client = common::build_gql_client().await?;
 
     if args.raw {
-        let response = whisper::fetch_notifications_raw(&client, None).await?;
+        let response = if args.mentions {
+            whisper::fetch_mentions_raw(&client, None).await?
+        } else {
+            whisper::fetch_notifications_raw(&client, None).await?
+        };
         println!("{}", serde_json::to_string_pretty(&response)?);
         return Ok(());
     }
 
-    let page = whisper::fetch_notifications(&client, None).await?;
+    let page = if args.mentions {
+        whisper::fetch_mentions(&client, None).await?
+    } else {
+        whisper::fetch_notifications(&client, None).await?
+    };
 
     if args.json {
         let out: Vec<serde_json::Value> = page

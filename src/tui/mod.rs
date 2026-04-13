@@ -8,6 +8,7 @@ pub mod seen;
 pub mod session;
 pub mod source;
 pub mod ui;
+pub mod whisper;
 
 use crate::error::Result;
 use app::App;

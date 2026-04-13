@@ -16,6 +16,7 @@ use crate::tui::seen::SeenStore;
 use crate::tui::session::{self, SessionState};
 use crate::tui::source::{self, Source, SourceKind};
 use crate::tui::ui;
+use crate::tui::whisper::{self, NotifEntry, WhisperEntry, WhisperState};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::DefaultTerminal;
 use serde::{Deserialize, Serialize};
@@ -145,6 +146,7 @@ pub struct App {
     pub translation_inflight: HashSet<String>,
     pub reply_sort: ReplySortOrder,
     pub app_config: AppConfig,
+    pub whisper: WhisperState,
     pub(super) client: Arc<GqlClient>,
     pub(super) tx: EventTx,
     pub(super) pending_thread: Option<RequestId>,
@@ -207,6 +209,17 @@ impl App {
         let mut source = Source::new(initial_kind.clone());
         source.set_selected(initial_selected);
 
+        let mut whisper_state = WhisperState::new();
+        if let Some(ref s) = loaded {
+            if let Some(ref cursor) = s.whisper_cursor {
+                if let Ok(ts) = cursor.parse::<i64>() {
+                    whisper_state.watermark_ts = ts;
+                }
+            }
+        }
+
+        whisper::start_poll_loop(tx.clone());
+
         Ok(Self {
             running: true,
             mode: InputMode::Normal,
@@ -245,6 +258,7 @@ impl App {
             translations: HashMap::new(),
             translation_inflight: HashSet::new(),
             app_config,
+            whisper: whisper_state,
             client,
             tx,
             pending_thread: None,
@@ -397,6 +411,98 @@ impl App {
         self.set_status("translated");
     }
 
+    fn handle_notifications_loaded(
+        &mut self,
+        raw_notifs: Vec<crate::parse::notification::RawNotification>,
+        _top_cursor: Option<String>,
+    ) {
+        self.whisper.poll_inflight = false;
+
+        let first_poll = self.whisper.watermark_ts == 0;
+
+        let newest_ts = raw_notifs
+            .iter()
+            .map(|n| n.timestamp.timestamp_millis())
+            .max()
+            .unwrap_or(0);
+
+        if first_poll {
+            self.whisper.watermark_ts = newest_ts;
+            return;
+        }
+
+        let wm = self.whisper.watermark_ts;
+        let new_notifs: Vec<_> = raw_notifs
+            .into_iter()
+            .filter(|n| n.timestamp.timestamp_millis() > wm)
+            .collect();
+
+        if newest_ts > wm {
+            self.whisper.watermark_ts = newest_ts;
+        }
+
+        let entries: Vec<NotifEntry> = new_notifs.iter().map(NotifEntry::from_raw).collect();
+
+        let mut milestones = Vec::new();
+        for rn in &new_notifs {
+            if let (Some(tweet_id), Some(like_count), Some(created_at)) = (
+                &rn.target_tweet_id,
+                rn.target_tweet_like_count,
+                rn.target_tweet_created_at,
+            ) {
+                if let Some(milestone) = self
+                    .whisper
+                    .milestones
+                    .update(tweet_id, like_count, created_at)
+                {
+                    milestones.push((tweet_id.clone(), milestone, rn.target_tweet_snippet.clone()));
+                }
+            }
+        }
+        self.whisper.milestones.gc();
+
+        let llm_request = self.whisper.ingest(&entries, &milestones);
+
+        match llm_request {
+            whisper::LlmRequest::None => {}
+            whisper::LlmRequest::SingleWhisper(entry) => {
+                if !self.whisper.llm_inflight {
+                    if let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone()) {
+                        self.whisper.llm_inflight = true;
+                        whisper::whisper_llm_async(entry, ollama, self.tx.clone());
+                    } else {
+                        let text = whisper::build_heuristic_whisper(&entry);
+                        self.whisper.push_entry(WhisperEntry {
+                            text,
+                            created: Instant::now(),
+                            priority: entry.priority,
+                        });
+                    }
+                }
+            }
+            whisper::LlmRequest::SurgeSummary(surge_entries) => {
+                if !self.whisper.llm_inflight {
+                    if let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone()) {
+                        self.whisper.llm_inflight = true;
+                        whisper::surge_llm_async(surge_entries, ollama, self.tx.clone());
+                    } else {
+                        let text = whisper::build_heuristic_whisper(
+                            surge_entries.first().unwrap_or(&NotifEntry {
+                                kind: whisper::NotifKind::Other,
+                                actor_handle: String::new(),
+                                target_tweet_id: None,
+                                target_tweet_snippet: None,
+                                target_tweet_like_count: None,
+                                priority: 5,
+                            }),
+                        );
+                        self.whisper.text = text;
+                    }
+                }
+            }
+        }
+    }
+
     pub fn save_session(&self) {
         let Some(kind) = self.source.kind.clone() else {
             return;
@@ -409,6 +515,11 @@ impl App {
             timestamps: Some(self.timestamps),
             feed_mode: Some(self.feed_mode),
             reply_sort: Some(self.reply_sort),
+            whisper_cursor: if self.whisper.watermark_ts > 0 {
+                Some(self.whisper.watermark_ts.to_string())
+            } else {
+                None
+            },
         };
         if let Err(e) = session::save(&self.session_path, &state) {
             tracing::warn!("failed to save session: {e}");
@@ -555,6 +666,51 @@ impl App {
                 self.self_handle = Some(handle.clone());
                 self.switch_source(SourceKind::User { handle });
             }
+            Event::WhisperPollTick => {
+                self.whisper.tick();
+                if self.whisper.should_poll() {
+                    self.whisper.poll_inflight = true;
+                    self.whisper.last_poll = Some(Instant::now());
+                    let client = self.client.clone();
+                    let tx = self.tx.clone();
+                    tokio::spawn(async move {
+                        match whisper::fetch_notifications(&client, None).await {
+                            Ok(page) => {
+                                let _ = tx.send(Event::NotificationsLoaded {
+                                    notifications: page.notifications,
+                                    top_cursor: page.top_cursor,
+                                });
+                            }
+                            Err(e) => {
+                                let _ = tx.send(Event::NotificationsFailed { err: e.to_string() });
+                            }
+                        }
+                    });
+                }
+            }
+            Event::NotificationsLoaded {
+                notifications,
+                top_cursor,
+            } => {
+                self.handle_notifications_loaded(notifications, top_cursor);
+            }
+            Event::NotificationsFailed { err } => {
+                self.whisper.poll_inflight = false;
+                tracing::warn!("notification poll failed: {err}");
+            }
+            Event::WhisperTextReady { text } => {
+                self.whisper.llm_inflight = false;
+                self.whisper.push_entry(WhisperEntry {
+                    text,
+                    created: Instant::now(),
+                    priority: 1,
+                });
+            }
+            Event::WhisperSurgeReady { summary, sentiment } => {
+                self.whisper.llm_inflight = false;
+                self.whisper.surge_sentiment = Some(sentiment);
+                self.whisper.text = summary;
+            }
             Event::Quit => self.running = false,
             Event::FocusGained | Event::FocusLost => {}
         }
@@ -651,6 +807,7 @@ impl App {
             (KeyCode::Char('y'), KeyModifiers::NONE) => self.yank_url(),
             (KeyCode::Char('Y'), _) => self.yank_json(),
             (KeyCode::Char('R'), _) => self.toggle_user_replies(),
+            (KeyCode::Char('n'), KeyModifiers::NONE) => self.open_notifications_in_browser(),
             (KeyCode::Char('o'), KeyModifiers::NONE) => self.open_tweet_in_browser(),
             (KeyCode::Char('O'), _) => self.open_author_in_browser(),
             (KeyCode::Char('m'), KeyModifiers::NONE) => self.open_media_external(),
@@ -858,6 +1015,11 @@ impl App {
         }
         self.set_status(format!("replies sorted by {}", self.reply_sort.label()));
         self.save_session();
+    }
+
+    fn open_notifications_in_browser(&mut self) {
+        self.open_url("https://x.com/notifications");
+        self.whisper.clear();
     }
 
     fn open_tweet_in_browser(&mut self) {

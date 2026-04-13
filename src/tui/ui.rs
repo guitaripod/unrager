@@ -279,6 +279,21 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(Color::Cyan),
         ));
     }
+    if !app.whisper.text.is_empty() {
+        spans.push(Span::raw("  "));
+        let whisper_color = match app.whisper.phase {
+            crate::tui::whisper::WhisperPhase::Quiet => Color::DarkGray,
+            crate::tui::whisper::WhisperPhase::Active => Color::White,
+            crate::tui::whisper::WhisperPhase::Surge => Color::Yellow,
+            crate::tui::whisper::WhisperPhase::Cooling => Color::DarkGray,
+        };
+        spans.push(Span::styled(
+            app.whisper.text.clone(),
+            Style::default()
+                .fg(whisper_color)
+                .add_modifier(Modifier::ITALIC),
+        ));
+    }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -1200,6 +1215,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect) {
         Line::from("  r              reload current source"),
         Line::from("  y              yank fixupx URL to clipboard"),
         Line::from("  Y              yank selected tweet JSON to clipboard"),
+        Line::from("  n              open notifications in browser (clears whisper)"),
         Line::from("  o              open selected tweet in browser"),
         Line::from("  O              open tweet author's profile in browser"),
         Line::from("  m              open first media url externally"),

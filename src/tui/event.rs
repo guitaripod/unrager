@@ -1,4 +1,5 @@
 use crate::error::Result;
+use crate::parse::notification::RawNotification;
 use crate::parse::timeline::TimelinePage;
 use crate::tui::source::SourceKind;
 use crossterm::event::{Event as CtEvent, EventStream, KeyEvent};
@@ -67,6 +68,21 @@ pub enum Event {
     },
     SelfHandleResolved {
         handle: String,
+    },
+    WhisperPollTick,
+    NotificationsLoaded {
+        notifications: Vec<RawNotification>,
+        top_cursor: Option<String>,
+    },
+    NotificationsFailed {
+        err: String,
+    },
+    WhisperTextReady {
+        text: String,
+    },
+    WhisperSurgeReady {
+        summary: String,
+        sentiment: crate::tui::whisper::Sentiment,
     },
 }
 

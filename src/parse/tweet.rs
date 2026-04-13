@@ -184,7 +184,7 @@ fn extract_text(node: &Value, legacy: &Value) -> String {
     decode_html_entities(&raw)
 }
 
-fn decode_html_entities(s: &str) -> String {
+pub fn decode_html_entities(s: &str) -> String {
     s.replace("&amp;", "&")
         .replace("&lt;", "<")
         .replace("&gt;", ">")

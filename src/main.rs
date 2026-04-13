@@ -35,6 +35,7 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::User(args) => cli::user::run(args).await,
         Command::Search(args) => cli::search::run(args).await,
         Command::Mentions(args) => cli::mentions::run(args).await,
+        Command::Notifs(args) => cli::notifs::run(args).await,
         Command::Bookmarks(args) => cli::bookmarks::run(args).await,
         Command::Tweet(args) => cli::tweet::run(args).await,
         Command::Reply(args) => cli::reply::run(args).await,

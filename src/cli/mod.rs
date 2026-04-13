@@ -3,6 +3,7 @@ pub mod bookmarks;
 pub mod common;
 pub mod home;
 pub mod mentions;
+pub mod notifs;
 pub mod read;
 pub mod reply;
 pub mod search;
@@ -50,6 +51,9 @@ pub enum Command {
 
     #[command(about = "Tweets that mention you")]
     Mentions(mentions::Args),
+
+    #[command(about = "Your recent notifications")]
+    Notifs(notifs::Args),
 
     #[command(about = "Your bookmarked tweets")]
     Bookmarks(bookmarks::Args),

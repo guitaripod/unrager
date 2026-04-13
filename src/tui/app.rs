@@ -617,12 +617,13 @@ impl App {
             (KeyCode::Char('x'), KeyModifiers::NONE) => self.toggle_expand_selected(),
             (KeyCode::Char('I'), _) => {
                 self.media_auto_expand = !self.media_auto_expand;
-                let msg = if self.media_auto_expand {
-                    "media auto-expand on"
+                if self.media_auto_expand {
+                    let tweets = self.source.tweets.clone();
+                    self.queue_source_media(&tweets);
+                    self.set_status("media auto-expand on");
                 } else {
-                    "media auto-expand off"
-                };
-                self.set_status(msg);
+                    self.set_status("media auto-expand off");
+                }
             }
             (KeyCode::Char('X'), _) => {
                 if self.active == ActivePane::Source {
@@ -655,11 +656,12 @@ impl App {
     }
 
     fn toggle_expand_selected(&mut self) {
-        let Some(id) = self.selected_tweet().map(|t| t.rest_id.clone()) else {
+        let Some(tweet) = self.selected_tweet().cloned() else {
             return;
         };
-        if !self.expanded_bodies.remove(&id) {
-            self.expanded_bodies.insert(id);
+        if !self.expanded_bodies.remove(&tweet.rest_id) {
+            self.expanded_bodies.insert(tweet.rest_id.clone());
+            self.media.ensure_tweet_media(&tweet, &self.tx);
             self.set_status("expanded");
         } else {
             self.set_status("collapsed");
@@ -720,7 +722,9 @@ impl App {
                 Vec::new()
             }
         };
-        self.queue_thread_media(&replies_snapshot);
+        if self.media_auto_expand {
+            self.queue_thread_media(&replies_snapshot);
+        }
     }
 
     fn selected_tweet(&self) -> Option<&Tweet> {
@@ -1256,13 +1260,13 @@ impl App {
                 self.fetch_baseline = None;
                 self.error = None;
                 self.clear_status();
-                self.queue_source_media();
-                let new_slice: Vec<Tweet> = if append {
+                let new_tweets: Vec<Tweet> = if append {
                     self.source.tweets[old_len..].to_vec()
                 } else {
                     self.source.tweets.clone()
                 };
-                self.queue_filter_classification(new_slice);
+                self.queue_source_media(&new_tweets);
+                self.queue_filter_classification(new_tweets);
             }
             Err(e) => {
                 self.error = Some(e.to_string());
@@ -1271,12 +1275,11 @@ impl App {
         }
     }
 
-    fn queue_source_media(&mut self) {
-        if !self.media.supported {
+    fn queue_source_media(&mut self, tweets: &[Tweet]) {
+        if !self.media.supported || !self.media_auto_expand {
             return;
         }
-        let tweets: Vec<Tweet> = self.source.tweets.clone();
-        for t in &tweets {
+        for t in tweets {
             self.media.ensure_tweet_media(t, &self.tx);
         }
     }

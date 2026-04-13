@@ -146,6 +146,7 @@ pub struct App {
     pub translation_inflight: HashSet<String>,
     pub reply_sort: ReplySortOrder,
     pub app_config: AppConfig,
+    pub help_scroll: u16,
     pub whisper: WhisperState,
     pub(super) client: Arc<GqlClient>,
     pub(super) tx: EventTx,
@@ -258,6 +259,7 @@ impl App {
             translations: HashMap::new(),
             translation_inflight: HashSet::new(),
             app_config,
+            help_scroll: 0,
             whisper: whisper_state,
             client,
             tx,
@@ -723,7 +725,26 @@ impl App {
             return;
         }
         if matches!(self.mode, InputMode::Help) {
-            self.mode = InputMode::Normal;
+            match key.code {
+                KeyCode::Char('j') | KeyCode::Down => {
+                    self.help_scroll = self.help_scroll.saturating_add(1)
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.help_scroll = self.help_scroll.saturating_sub(1)
+                }
+                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.help_scroll = self.help_scroll.saturating_add(10);
+                }
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.help_scroll = self.help_scroll.saturating_sub(10);
+                }
+                KeyCode::Char('g') => self.help_scroll = 0,
+                KeyCode::Char('G') => self.help_scroll = u16::MAX,
+                _ => {
+                    self.mode = InputMode::Normal;
+                    self.help_scroll = 0;
+                }
+            }
             return;
         }
         match (key.code, key.modifiers) {
@@ -741,6 +762,7 @@ impl App {
             }
             (KeyCode::Char('?'), _) => {
                 self.mode = InputMode::Help;
+                self.help_scroll = 0;
             }
             (KeyCode::Char('t'), KeyModifiers::NONE) => {
                 self.timestamps = match self.timestamps {

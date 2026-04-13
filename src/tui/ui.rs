@@ -12,7 +12,7 @@ use crate::tui::seen::SeenStore;
 use crate::tui::source::{Source, SourceKind};
 use chrono::{DateTime, Utc};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Margin, Rect};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
@@ -175,7 +175,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_footer(frame, bottom, app);
 
     if app.mode == InputMode::Help {
-        draw_help_overlay(frame, frame.area());
+        draw_help_overlay(frame, frame.area(), app.help_scroll);
     }
 }
 
@@ -246,38 +246,32 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     if unread > 0 {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
-            format!("[{unread} unread]"),
+            format!("{unread}↑"),
             Style::default().fg(Color::Green),
         ));
     }
     if app.focus_stack.len() > 1 {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
-            format!("[stack: {}]", app.focus_stack.len()),
+            format!("{}◆", app.focus_stack.len()),
             Style::default().fg(Color::Magenta),
         ));
     }
-    spans.push(Span::raw("  "));
-    let (badge_text, badge_color) = if app.filter_classifier.is_none() {
-        ("[c —]".to_string(), Color::DarkGray)
-    } else {
-        match app.filter_mode {
-            FilterMode::On if app.filter_hidden_count > 0 => {
-                (format!("[c −{}]", app.filter_hidden_count), Color::Green)
-            }
-            FilterMode::On => ("[c]".to_string(), Color::Green),
-            FilterMode::Off => ("[c off]".to_string(), Color::DarkGray),
-        }
-    };
-    spans.push(Span::styled(badge_text, Style::default().fg(badge_color)));
+    if app.filter_classifier.is_some()
+        && app.filter_mode == FilterMode::On
+        && app.filter_hidden_count > 0
+    {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!("−{}", app.filter_hidden_count),
+            Style::default().fg(Color::Green),
+        ));
+    }
     if matches!(app.feed_mode, crate::tui::app::FeedMode::Originals)
         && matches!(app.source.kind, Some(SourceKind::Home { .. }))
     {
         spans.push(Span::raw("  "));
-        spans.push(Span::styled(
-            "[originals]",
-            Style::default().fg(Color::Cyan),
-        ));
+        spans.push(Span::styled("◇", Style::default().fg(Color::Cyan)));
     }
     if !app.whisper.text.is_empty() {
         spans.push(Span::raw("  "));
@@ -1164,9 +1158,9 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_help_overlay(frame: &mut Frame, area: Rect) {
+fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
     let w = area.width.min(72);
-    let h = area.height.saturating_sub(2).min(53);
+    let h = area.height.saturating_sub(2);
     let x = (area.width.saturating_sub(w)) / 2;
     let y = (area.height.saturating_sub(h)) / 2;
     let popup = Rect {
@@ -1178,68 +1172,115 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect) {
 
     frame.render_widget(Clear, popup);
 
+    let dim = Style::default().fg(Color::DarkGray);
+    let heading = Style::default()
+        .fg(Color::White)
+        .add_modifier(Modifier::BOLD);
+    let icon_style = Style::default().fg(Color::Yellow);
+
     let lines = vec![
-        Line::from(Span::styled(
-            "unrager — key bindings",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
+        Line::from(Span::styled("unrager", heading)),
         Line::from(""),
-        Line::from("NAVIGATION"),
+        Line::from(Span::styled("NAVIGATION", heading)),
         Line::from("  j / k / ↓ ↑    move selection"),
         Line::from("  g / G          top / bottom of the list"),
         Line::from("  Tab            swap active pane (when split)"),
         Line::from("  , / .          narrow / widen the source pane split"),
-        Line::from("  h / ←          go home (source pane); back to source (detail pane)"),
+        Line::from("  h / ←          go home (source); back (detail)"),
         Line::from("  Enter / l      open selected tweet into detail pane"),
-        Line::from("  q / Esc        pop detail pane; quit if stack is empty"),
+        Line::from("  q / Esc        pop detail pane; quit if stack empty"),
         Line::from(""),
-        Line::from("SOURCES"),
-        Line::from("  V              toggle all / originals on home (hides replies, quotes, RTs)"),
+        Line::from(Span::styled("SOURCES", heading)),
+        Line::from("  V              toggle all / originals on home"),
         Line::from("  F              toggle For You / Following on home"),
-        Line::from("  R              toggle tweets / replies on user profile (via search)"),
-        Line::from("  :home [following]          home For You / Following feed"),
-        Line::from("  :user <handle>              timeline of a user"),
+        Line::from("  R              toggle tweets / replies on profile"),
+        Line::from("  :home [following]           home feed"),
+        Line::from("  :user <handle>              user timeline"),
         Line::from("  :search <query> [!top|...]  live search"),
         Line::from("  :mentions [@handle]         mentions feed"),
-        Line::from("  :bookmarks <query>          search within your bookmarks"),
-        Line::from("  :read / :thread <id|url>    open a specific tweet"),
-        Line::from("  ] / [                       history forward / back"),
+        Line::from("  :bookmarks <query>          bookmark search"),
+        Line::from("  :read / :thread <id|url>    open a tweet"),
+        Line::from("  ] / [                       history fwd / back"),
         Line::from(""),
-        Line::from("READ TRACKING"),
-        Line::from("  u              jump to next unread in current source"),
-        Line::from("  U              mark all loaded tweets as read"),
+        Line::from(Span::styled("READ TRACKING", heading)),
+        Line::from("  u              jump to next unread"),
+        Line::from("  U              mark all loaded as read"),
         Line::from(""),
-        Line::from("ACTIONS"),
+        Line::from(Span::styled("ACTIONS", heading)),
         Line::from("  r              reload current source"),
         Line::from("  y              yank fixupx URL to clipboard"),
-        Line::from("  Y              yank selected tweet JSON to clipboard"),
-        Line::from("  n              open notifications in browser (clears whisper)"),
-        Line::from("  o              open selected tweet in browser"),
-        Line::from("  O              open tweet author's profile in browser"),
-        Line::from("  m              open first media url externally"),
+        Line::from("  Y              yank selected tweet JSON"),
+        Line::from("  n              open notifications in browser"),
+        Line::from("  o              open tweet in browser"),
+        Line::from("  O              open author profile in browser"),
+        Line::from("  m              open first media URL externally"),
         Line::from("  t              toggle relative / absolute timestamps"),
-        Line::from("  M              toggle retweet / like / view counts (replies always shown)"),
-        Line::from("  N              toggle display names (handle-only mode)"),
-        Line::from("  I              toggle media auto-expand (show images for all media tweets)"),
-        Line::from("  p              my profile (own tweets with full metrics)"),
+        Line::from("  M              toggle metric counts"),
+        Line::from("  N              toggle display names"),
+        Line::from("  I              toggle media auto-expand"),
+        Line::from("  p              my profile"),
         Line::from("  P              open own profile in browser"),
-        Line::from("  T              translate selected tweet to English (toggle)"),
-        Line::from("  c              toggle rage filter (LLM hides inflammatory topics)"),
-        Line::from(
-            "  s              cycle reply sort order (detail pane: newest/likes/replies/RTs/views)",
-        ),
-        Line::from("  x              expand / collapse selected tweet body"),
-        Line::from("  X              toggle inline thread replies (detail pane only)"),
+        Line::from("  T              translate tweet to English (toggle)"),
+        Line::from("  c              toggle rage filter"),
+        Line::from("  s              cycle reply sort order"),
+        Line::from("  x              expand / collapse tweet body"),
+        Line::from("  X              toggle inline thread replies"),
         Line::from("  Ctrl-d / Ctrl-u  half-page down / up"),
-        Line::from("  Ctrl-c           quit immediately from any mode"),
-        Line::from("  ?                show / hide this help"),
+        Line::from("  Ctrl-c           quit immediately"),
+        Line::from("  ?                toggle this help"),
         Line::from(""),
-        Line::from(Span::styled(
-            "press any key to close",
-            Style::default().fg(Color::DarkGray),
-        )),
+        Line::from(Span::styled("ICONOGRAPHY", heading)),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  ●  ", icon_style),
+            Span::raw("unread tweet"),
+        ]),
+        Line::from(vec![
+            Span::styled("  ⮎  ", icon_style),
+            Span::raw("tweet is a reply"),
+        ]),
+        Line::from(vec![
+            Span::styled("  ↳  ", icon_style),
+            Span::raw("replies"),
+        ]),
+        Line::from(vec![
+            Span::styled("  ⟲  ", icon_style),
+            Span::raw("retweets"),
+        ]),
+        Line::from(vec![Span::styled("  ♥  ", icon_style), Span::raw("likes")]),
+        Line::from(vec![Span::styled("  ◉  ", icon_style), Span::raw("views")]),
+        Line::from(vec![
+            Span::styled("  ▣  ", icon_style),
+            Span::raw("photo attached"),
+        ]),
+        Line::from(vec![
+            Span::styled("  ▶  ", icon_style),
+            Span::raw("video attached"),
+        ]),
+        Line::from(vec![
+            Span::styled("  ↻  ", icon_style),
+            Span::raw("gif attached"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  status bar", heading)),
+        Line::from(vec![
+            Span::styled("  N↑ ", Style::default().fg(Color::Green)),
+            Span::raw("N unread tweets loaded"),
+        ]),
+        Line::from(vec![
+            Span::styled("  −N ", Style::default().fg(Color::Green)),
+            Span::raw("N tweets hidden by rage filter"),
+        ]),
+        Line::from(vec![
+            Span::styled("  ◇  ", Style::default().fg(Color::Cyan)),
+            Span::raw("originals-only mode active"),
+        ]),
+        Line::from(vec![
+            Span::styled("  N◆ ", Style::default().fg(Color::Magenta)),
+            Span::raw("N detail panes stacked"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("j/k scroll  ·  any other key to close", dim)),
     ];
 
     let help = Paragraph::new(lines)
@@ -1247,10 +1288,11 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Yellow))
-                .title(" help "),
+                .title(" ? "),
         )
+        .scroll((scroll, 0))
         .wrap(Wrap { trim: false });
-    frame.render_widget(help, popup.inner(Margin::new(0, 0)));
+    frame.render_widget(help, popup);
 }
 
 #[cfg(test)]

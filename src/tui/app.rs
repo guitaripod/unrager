@@ -167,6 +167,16 @@ impl App {
 
         let (filter_cfg, filter_cache, filter_classifier) =
             init_filter_stack(&config_dir, &cache_dir);
+        let filter_classifier = match filter_classifier {
+            Some(c) => match c.health_check().await {
+                Ok(()) => Some(c),
+                Err(e) => {
+                    tracing::warn!("ollama unreachable: {e} — filter disabled");
+                    None
+                }
+            },
+            None => None,
+        };
 
         let loaded = session::load(&session_path);
         let (initial_kind, initial_selected) = loaded

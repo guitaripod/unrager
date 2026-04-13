@@ -81,6 +81,20 @@ The left pane stays live. `Tab` swaps focus between panes, `,`/`.` adjusts the s
 
 The command palette supports `:home`, `:user <handle>`, `:search <query>`, `:mentions`, `:notifs`, `:bookmarks`, and `:read <id|url>`. History navigates with `]`/`[`.
 
+## Notifications
+
+<p align="center">
+  <img src="assets/notifications.png" alt="notifications view showing likes, replies, retweets, and follows" width="800">
+</p>
+
+Press `n` or `:notifs` to browse notifications. Likes, retweets, follows, and quotes come from the main notifications feed; replies are merged from the mentions endpoint. Type icons stay vivid for scanning, handles keep their palette color. Press `x` to expand a snippet, `Enter` to open the target tweet in a threaded detail view.
+
+<p align="center">
+  <img src="assets/notifications-detail.png" alt="notifications with split detail pane showing a threaded conversation" width="800">
+</p>
+
+Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at the top of the list. Read tracking is separate from tweet seen state.
+
 ## Profile view
 
 <p align="center">

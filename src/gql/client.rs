@@ -110,6 +110,18 @@ impl GqlClient {
         self.parse(res).await
     }
 
+    pub async fn raw_get(&self, url: &str, query: &[(&str, &str)]) -> Result<Value> {
+        self.throttle().await;
+        let res = self
+            .http
+            .get(url)
+            .headers(self.headers()?)
+            .query(query)
+            .send()
+            .await?;
+        self.parse(res).await
+    }
+
     fn lookup_qid(&self, op: Operation) -> Option<QueryId> {
         self.store.lock().ok()?.get(op).cloned()
     }

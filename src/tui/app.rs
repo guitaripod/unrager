@@ -735,6 +735,7 @@ impl App {
                     let client = self.client.clone();
                     let tx = self.tx.clone();
                     tokio::spawn(async move {
+                        let _ = whisper::fetch_mentions(&client, None).await;
                         match whisper::fetch_notifications(&client, None).await {
                             Ok(page) => {
                                 let _ = tx.send(Event::NotificationsLoaded {
@@ -1576,7 +1577,25 @@ impl App {
             None
         };
         tokio::spawn(async move {
-            let result = whisper::fetch_notifications(&client, cursor.as_deref()).await;
+            let result = match whisper::fetch_notifications(&client, cursor.as_deref()).await {
+                Ok(mut page) => {
+                    if !append {
+                        if let Ok(mentions) = whisper::fetch_mentions(&client, None).await {
+                            let existing: std::collections::HashSet<String> =
+                                page.notifications.iter().map(|n| n.id.clone()).collect();
+                            for m in mentions.notifications {
+                                if !existing.contains(&m.id) {
+                                    page.notifications.push(m);
+                                }
+                            }
+                            page.notifications
+                                .sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+                        }
+                    }
+                    Ok(page)
+                }
+                Err(e) => Err(e),
+            };
             let _ = tx.send(Event::NotificationPageLoaded { result, append });
         });
     }

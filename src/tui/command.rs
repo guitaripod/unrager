@@ -59,6 +59,7 @@ pub fn parse(input: &str) -> Result<Command, ParseError> {
             };
             Ok(Command::SwitchSource(SourceKind::Mentions { target }))
         }
+        "notifs" | "notifications" => Ok(Command::SwitchSource(SourceKind::Notifications)),
         "bookmarks" | "bm" => {
             if tail.is_empty() {
                 return Err(ParseError(
@@ -172,6 +173,18 @@ mod tests {
             }
             _ => panic!("wrong variant"),
         }
+    }
+
+    #[test]
+    fn notifs_command() {
+        assert!(matches!(
+            parse(":notifs").unwrap(),
+            Command::SwitchSource(SourceKind::Notifications)
+        ));
+        assert!(matches!(
+            parse(":notifications").unwrap(),
+            Command::SwitchSource(SourceKind::Notifications)
+        ));
     }
 
     #[test]

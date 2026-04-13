@@ -9,6 +9,7 @@ pub struct RawNotification {
     pub id: String,
     pub notification_type: String,
     pub actors: Vec<User>,
+    pub others_count: Option<u64>,
     pub target_tweet_id: Option<String>,
     pub target_tweet_like_count: Option<u64>,
     pub target_tweet_created_at: Option<DateTime<Utc>>,
@@ -64,6 +65,110 @@ pub fn parse_response(response: &Value) -> Result<NotificationPage> {
         page.notifications
             .sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     }
+
+    Ok(page)
+}
+
+pub fn parse_mentions_response(response: &Value) -> Result<NotificationPage> {
+    let global = response
+        .get("globalObjects")
+        .ok_or_else(|| Error::GraphqlShape("missing globalObjects in mentions response".into()))?;
+
+    let tweets_map = global.get("tweets").and_then(Value::as_object);
+    let users_map = global.get("users").and_then(Value::as_object);
+
+    let mut page = NotificationPage::default();
+
+    let instructions = response
+        .pointer("/timeline/instructions")
+        .and_then(Value::as_array);
+
+    let Some(instructions) = instructions else {
+        return Ok(page);
+    };
+
+    for instr in instructions {
+        let Some(entries) = instr
+            .get("addEntries")
+            .and_then(|ae| ae.get("entries"))
+            .and_then(Value::as_array)
+        else {
+            continue;
+        };
+        for entry in entries {
+            let content = entry.get("content");
+            let Some(content) = content else { continue };
+
+            if let Some(op) = content.get("operation") {
+                if let Some(cursor) = op.get("cursor") {
+                    let cursor_type = cursor
+                        .get("cursorType")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    let value = cursor.get("value").and_then(Value::as_str);
+                    if let Some(v) = value {
+                        match cursor_type {
+                            "Bottom" => page.next_cursor = Some(v.to_string()),
+                            "Top" => page.top_cursor = Some(v.to_string()),
+                            _ => {}
+                        }
+                    }
+                }
+                continue;
+            }
+
+            let tweet_id = content
+                .pointer("/item/content/tweet/id")
+                .and_then(Value::as_str);
+            let Some(tweet_id) = tweet_id else { continue };
+
+            let entry_id = entry
+                .get("entryId")
+                .and_then(Value::as_str)
+                .unwrap_or(tweet_id);
+
+            let Some(tweets) = tweets_map else { continue };
+            let Some(tweet_obj) = tweets.get(tweet_id) else {
+                continue;
+            };
+
+            let user_id = tweet_obj.get("user_id_str").and_then(Value::as_str);
+            let actor = user_id
+                .and_then(|uid| users_map?.get(uid))
+                .and_then(|u| parse_v2_user(user_id.unwrap_or("0"), u).ok());
+
+            let created_at = tweet_obj
+                .get("created_at")
+                .and_then(Value::as_str)
+                .and_then(|s| {
+                    DateTime::parse_from_str(s, "%a %b %d %H:%M:%S %z %Y")
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .ok()
+                })
+                .unwrap_or_else(Utc::now);
+
+            let snippet = tweet_obj.get("full_text").and_then(Value::as_str).map(|t| {
+                let decoded = decode_html_entities(t);
+                let stripped = strip_leading_mentions(&decoded);
+                stripped.chars().take(80).collect::<String>()
+            });
+
+            page.notifications.push(RawNotification {
+                id: entry_id.to_string(),
+                notification_type: "Reply".to_string(),
+                actors: actor.into_iter().collect(),
+                others_count: None,
+                target_tweet_id: Some(tweet_id.to_string()),
+                target_tweet_like_count: None,
+                target_tweet_created_at: None,
+                target_tweet_snippet: snippet,
+                timestamp: created_at,
+            });
+        }
+    }
+
+    page.notifications
+        .sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
 
     Ok(page)
 }
@@ -141,6 +246,11 @@ fn build_notification(
         .and_then(Value::as_array);
     let actors = resolve_actors(user_actions, users_map);
 
+    let others_count = notif_obj
+        .pointer("/message/text")
+        .and_then(Value::as_str)
+        .and_then(extract_others_count);
+
     let target_tweet_ids = notif_obj
         .pointer("/template/aggregateUserActionsV1/targetObjects")
         .and_then(Value::as_array);
@@ -158,6 +268,7 @@ fn build_notification(
     Some(RawNotification {
         id: notif_id.to_string(),
         notification_type: notification_type.to_string(),
+        others_count,
         actors,
         target_tweet_id,
         target_tweet_like_count,
@@ -254,6 +365,17 @@ fn resolve_target_tweet(
     }
 
     (None, None, None, None)
+}
+
+fn extract_others_count(text: &str) -> Option<u64> {
+    let marker = "and ";
+    let idx = text.find(marker)?;
+    let after = &text[idx + marker.len()..];
+    let num_str: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if num_str.is_empty() {
+        return None;
+    }
+    num_str.parse().ok()
 }
 
 fn strip_leading_mentions(text: &str) -> &str {

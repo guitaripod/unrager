@@ -148,10 +148,13 @@ pub struct App {
     pub app_config: AppConfig,
     pub help_scroll: u16,
     pub whisper: WhisperState,
+    pub notif_seen: SeenStore,
+    pub notif_unread_badge: usize,
     pub(super) client: Arc<GqlClient>,
     pub(super) tx: EventTx,
     pub(super) pending_thread: Option<RequestId>,
     pub(super) pending_open: Option<RequestId>,
+    pub(super) pending_notif_scroll: Option<String>,
     pub(super) fetch_baseline: Option<usize>,
 }
 
@@ -164,6 +167,7 @@ impl App {
         let cache_dir = config::cache_dir()?;
         let config_dir = config::config_dir()?;
         let seen = SeenStore::open(&cache_dir.join("seen.db"))?;
+        let notif_seen = SeenStore::open(&cache_dir.join("notif_seen.db"))?;
         let session_path = config_dir.join("session.json");
 
         let app_config = AppConfig::load(&config_dir);
@@ -261,10 +265,13 @@ impl App {
             app_config,
             help_scroll: 0,
             whisper: whisper_state,
+            notif_seen,
+            notif_unread_badge: 0,
             client,
             tx,
             pending_thread: None,
             pending_open: None,
+            pending_notif_scroll: None,
             fetch_baseline: None,
         })
     }
@@ -420,6 +427,11 @@ impl App {
     ) {
         self.whisper.poll_inflight = false;
 
+        self.notif_unread_badge = raw_notifs
+            .iter()
+            .filter(|n| !self.notif_seen.is_seen(&n.id))
+            .count();
+
         let first_poll = self.whisper.watermark_ts == 0;
 
         let newest_ts = raw_notifs
@@ -548,22 +560,38 @@ impl App {
     }
 
     fn mark_current_seen(&mut self) {
-        if let Some(t) = self.source.tweets.get(self.source.selected()) {
+        if self.source.is_notifications() {
+            if let Some(n) = self.source.notifications.get(self.source.selected()) {
+                self.notif_seen.mark_seen(&n.id);
+            }
+        } else if let Some(t) = self.source.tweets.get(self.source.selected()) {
             self.seen.mark_seen(&t.rest_id);
         }
     }
 
     fn jump_next_unread(&mut self) {
         let start = self.source.selected() + 1;
-        for i in start..self.source.tweets.len() {
-            if !self.seen.is_seen(&self.source.tweets[i].rest_id) {
-                self.source.set_selected(i);
-                self.mark_current_seen();
-                self.maybe_load_more();
-                return;
+        if self.source.is_notifications() {
+            for i in start..self.source.notifications.len() {
+                if !self.notif_seen.is_seen(&self.source.notifications[i].id) {
+                    self.source.set_selected(i);
+                    self.mark_current_seen();
+                    self.maybe_load_more();
+                    return;
+                }
             }
+            self.set_status("no more unread notifications");
+        } else {
+            for i in start..self.source.tweets.len() {
+                if !self.seen.is_seen(&self.source.tweets[i].rest_id) {
+                    self.source.set_selected(i);
+                    self.mark_current_seen();
+                    self.maybe_load_more();
+                    return;
+                }
+            }
+            self.set_status("no more unread tweets in this source");
         }
-        self.set_status("no more unread tweets in this source");
     }
 
     fn maybe_load_more(&mut self) {
@@ -571,24 +599,44 @@ impl App {
             return;
         }
         if self.source.near_bottom() {
-            self.fetch_source(true);
+            if self.source.is_notifications() {
+                self.fetch_notifications_source(true);
+            } else {
+                self.fetch_source(true);
+            }
         }
     }
 
     fn mark_all_seen_in_source(&mut self) {
-        let ids: Vec<String> = self
-            .source
-            .tweets
-            .iter()
-            .map(|t| t.rest_id.clone())
-            .collect();
-        let n = ids.len();
-        self.seen.mark_all(ids);
-        self.set_status(format!("marked {n} tweets as read"));
+        if self.source.is_notifications() {
+            let ids: Vec<String> = self
+                .source
+                .notifications
+                .iter()
+                .map(|n| n.id.clone())
+                .collect();
+            let n = ids.len();
+            self.notif_seen.mark_all(ids);
+            self.set_status(format!("marked {n} notifications as read"));
+        } else {
+            let ids: Vec<String> = self
+                .source
+                .tweets
+                .iter()
+                .map(|t| t.rest_id.clone())
+                .collect();
+            let n = ids.len();
+            self.seen.mark_all(ids);
+            self.set_status(format!("marked {n} tweets as read"));
+        }
     }
 
     pub fn load_initial(&mut self) {
-        self.fetch_source(false);
+        if self.source.is_notifications() {
+            self.fetch_notifications_source(false);
+        } else {
+            self.fetch_source(false);
+        }
     }
 
     pub fn is_split(&self) -> bool {
@@ -668,9 +716,24 @@ impl App {
                 self.self_handle = Some(handle.clone());
                 self.switch_source(SourceKind::User { handle });
             }
+            Event::NotificationPageLoaded {
+                result,
+                mentions_cursor,
+                append,
+            } => {
+                self.handle_notification_page_loaded(result, mentions_cursor, append);
+            }
             Event::WhisperPollTick => {
                 self.whisper.tick();
-                if self.whisper.should_poll() {
+                let should_poll = self.whisper.should_poll();
+                if self.source.is_notifications()
+                    && self.source.selected() == 0
+                    && !self.source.loading
+                    && should_poll
+                {
+                    self.fetch_notifications_source(false);
+                }
+                if should_poll {
                     self.whisper.poll_inflight = true;
                     self.whisper.last_poll = Some(Instant::now());
                     let client = self.client.clone();
@@ -829,7 +892,9 @@ impl App {
             (KeyCode::Char('y'), KeyModifiers::NONE) => self.yank_url(),
             (KeyCode::Char('Y'), _) => self.yank_json(),
             (KeyCode::Char('R'), _) => self.toggle_user_replies(),
-            (KeyCode::Char('n'), KeyModifiers::NONE) => self.open_notifications_in_browser(),
+            (KeyCode::Char('n'), KeyModifiers::NONE) => {
+                self.switch_source(SourceKind::Notifications);
+            }
             (KeyCode::Char('o'), KeyModifiers::NONE) => self.open_tweet_in_browser(),
             (KeyCode::Char('O'), _) => self.open_author_in_browser(),
             (KeyCode::Char('m'), KeyModifiers::NONE) => self.open_media_external(),
@@ -918,7 +983,12 @@ impl App {
 
     fn selected_tweet(&self) -> Option<&Tweet> {
         match self.active {
-            ActivePane::Source => self.source.tweets.get(self.source.selected()),
+            ActivePane::Source => {
+                if self.source.is_notifications() {
+                    return None;
+                }
+                self.source.tweets.get(self.source.selected())
+            }
             ActivePane::Detail => {
                 let detail = self.top_detail()?;
                 detail.selected_reply().or(Some(&detail.tweet))
@@ -1039,11 +1109,6 @@ impl App {
         self.save_session();
     }
 
-    fn open_notifications_in_browser(&mut self) {
-        self.open_url("https://x.com/notifications");
-        self.whisper.clear();
-    }
-
     fn open_tweet_in_browser(&mut self) {
         let Some(tweet) = self.selected_tweet() else {
             return;
@@ -1124,7 +1189,10 @@ impl App {
                 self.mark_all_seen_in_source();
             }
             (KeyCode::Enter, _) | (KeyCode::Char('l'), KeyModifiers::NONE) => {
-                if let Some(tweet) = self.source.tweets.get(self.source.selected()).cloned() {
+                if self.source.is_notifications() {
+                    self.open_selected_notification();
+                } else if let Some(tweet) = self.source.tweets.get(self.source.selected()).cloned()
+                {
                     self.mark_current_seen();
                     self.push_tweet(tweet);
                 }
@@ -1237,6 +1305,7 @@ impl App {
     }
 
     fn replace_source(&mut self, kind: SourceKind) {
+        let is_notifs = matches!(kind, SourceKind::Notifications);
         self.source = Source::new(kind);
         self.error = None;
         self.focus_stack.clear();
@@ -1248,7 +1317,11 @@ impl App {
         self.filter_hidden_count = 0;
         self.translations.clear();
         self.translation_inflight.clear();
-        self.fetch_source(false);
+        if is_notifs {
+            self.fetch_notifications_source(false);
+        } else {
+            self.fetch_source(false);
+        }
         self.save_session();
     }
 
@@ -1345,10 +1418,16 @@ impl App {
         if detail.tweet.rest_id != focal_id {
             return;
         }
+        let scroll_target = self.pending_notif_scroll.take();
+        let reply_sort = self.reply_sort;
         let replies_snapshot: Vec<Tweet> = match result {
             Ok(page) => {
-                detail.apply_page(page);
-                detail.sort_replies(self.reply_sort);
+                if scroll_target.is_some() {
+                    apply_conversation_view(detail, page, scroll_target.as_deref());
+                } else {
+                    detail.apply_page(page);
+                    detail.sort_replies(reply_sort);
+                }
                 detail.replies.clone()
             }
             Err(e) => {
@@ -1363,7 +1442,11 @@ impl App {
     fn reload_source(&mut self) {
         self.source.cursor = None;
         self.source.exhausted = false;
-        self.fetch_source(false);
+        if self.source.is_notifications() {
+            self.fetch_notifications_source(false);
+        } else {
+            self.fetch_source(false);
+        }
     }
 
     fn fetch_source(&mut self, append: bool) {
@@ -1469,6 +1552,167 @@ impl App {
             self.media.ensure_tweet_media(t, &self.tx);
         }
     }
+
+    fn fetch_notifications_source(&mut self, append: bool) {
+        if self.source.loading {
+            return;
+        }
+        self.source.loading = true;
+        let client = self.client.clone();
+        let tx = self.tx.clone();
+        let all_cursor = if append {
+            self.source.cursor.clone()
+        } else {
+            None
+        };
+        let mentions_cursor = if append {
+            self.source.mentions_cursor.clone()
+        } else {
+            None
+        };
+        tokio::spawn(async move {
+            let all_result = whisper::fetch_notifications(&client, all_cursor.as_deref()).await;
+            let result = match all_result {
+                Ok(mut page) => {
+                    let mut m_cursor = None;
+                    if let Ok(mentions) =
+                        whisper::fetch_mentions(&client, mentions_cursor.as_deref()).await
+                    {
+                        m_cursor = mentions.next_cursor.clone();
+                        let existing: std::collections::HashSet<String> =
+                            page.notifications.iter().map(|n| n.id.clone()).collect();
+                        let new_mentions: Vec<_> = mentions
+                            .notifications
+                            .into_iter()
+                            .filter(|n| !existing.contains(&n.id))
+                            .collect();
+                        page.notifications.extend(new_mentions);
+                        page.notifications
+                            .sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+                    }
+                    let _ = tx.send(Event::NotificationPageLoaded {
+                        result: Ok(page),
+                        mentions_cursor: m_cursor,
+                        append,
+                    });
+                    return;
+                }
+                Err(e) => Err(e),
+            };
+            let _ = tx.send(Event::NotificationPageLoaded {
+                result,
+                mentions_cursor: None,
+                append,
+            });
+        });
+    }
+
+    fn handle_notification_page_loaded(
+        &mut self,
+        result: Result<crate::parse::notification::NotificationPage>,
+        mentions_cursor: Option<String>,
+        append: bool,
+    ) {
+        if !self.source.is_notifications() {
+            return;
+        }
+        self.source.loading = false;
+        match result {
+            Ok(page) => {
+                if append {
+                    self.source.append_notifications(page, mentions_cursor);
+                } else {
+                    self.source.reset_with_notifications(page, mentions_cursor);
+                }
+                self.error = None;
+                self.clear_status();
+            }
+            Err(e) => {
+                self.error = Some(e.to_string());
+                self.clear_status();
+            }
+        }
+    }
+
+    fn open_selected_notification(&mut self) {
+        let Some(notif) = self
+            .source
+            .notifications
+            .get(self.source.selected())
+            .cloned()
+        else {
+            return;
+        };
+        self.notif_seen.mark_seen(&notif.id);
+
+        match notif.notification_type.as_str() {
+            "Like" | "Reply" | "Quote" | "Mention" | "Retweet" => {
+                if let Some(tweet_id) = notif.target_tweet_id {
+                    self.pending_notif_scroll = Some(tweet_id.clone());
+                    self.open_tweet_by_id(tweet_id);
+                } else {
+                    self.set_status("no target tweet for this notification");
+                }
+            }
+            "Follow" => {
+                if let Some(actor) = notif.actors.first() {
+                    let handle = actor.handle.clone();
+                    self.switch_source(SourceKind::User { handle });
+                } else {
+                    self.set_status("no actor for this follow notification");
+                }
+            }
+            _ => {
+                self.set_status("nothing to open for this notification");
+            }
+        }
+    }
+}
+
+fn apply_conversation_view(detail: &mut TweetDetail, page: TimelinePage, scroll_to: Option<&str>) {
+    detail.loading = false;
+    let tweets_by_id: HashMap<String, Tweet> = page
+        .tweets
+        .into_iter()
+        .map(|t| (t.rest_id.clone(), t))
+        .collect();
+
+    let mut root_id = detail.tweet.rest_id.clone();
+    let mut visited = HashSet::new();
+    while visited.insert(root_id.clone()) {
+        if let Some(t) = tweets_by_id.get(&root_id) {
+            if let Some(ref parent_id) = t.in_reply_to_tweet_id {
+                if tweets_by_id.contains_key(parent_id) {
+                    root_id = parent_id.clone();
+                    continue;
+                }
+            }
+        }
+        break;
+    }
+
+    if let Some(root) = tweets_by_id.get(&root_id).cloned() {
+        detail.tweet = root;
+    }
+
+    let mut conversation: Vec<Tweet> = tweets_by_id
+        .into_values()
+        .filter(|t| t.rest_id != detail.tweet.rest_id)
+        .collect();
+    conversation.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+
+    let scroll_idx = scroll_to
+        .and_then(|target| {
+            conversation
+                .iter()
+                .position(|t| t.rest_id == target)
+                .map(|i| i + 1)
+        })
+        .unwrap_or(0);
+
+    detail.replies = conversation;
+    detail.list_state = ratatui::widgets::ListState::default();
+    detail.list_state.select(Some(scroll_idx));
 }
 
 fn build_reply_tree(root_id: &str, tweets: &[Tweet]) -> Vec<(usize, Tweet)> {

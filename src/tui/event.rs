@@ -69,6 +69,11 @@ pub enum Event {
     SelfHandleResolved {
         handle: String,
     },
+    NotificationPageLoaded {
+        result: Result<crate::parse::notification::NotificationPage>,
+        mentions_cursor: Option<String>,
+        append: bool,
+    },
     WhisperPollTick,
     NotificationsLoaded {
         notifications: Vec<RawNotification>,

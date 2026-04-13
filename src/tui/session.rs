@@ -90,6 +90,25 @@ mod tests {
     }
 
     #[test]
+    fn roundtrip_notifications() {
+        let tmp = NamedTempFile::new().unwrap();
+        let state = SessionState {
+            source_kind: SourceKind::Notifications,
+            selected: 3,
+            metrics: None,
+            display_names: None,
+            timestamps: None,
+            feed_mode: None,
+            reply_sort: None,
+            whisper_cursor: Some("1234567890".into()),
+        };
+        save(tmp.path(), &state).unwrap();
+        let loaded = load(tmp.path()).unwrap();
+        assert!(matches!(loaded.source_kind, SourceKind::Notifications));
+        assert_eq!(loaded.selected, 3);
+    }
+
+    #[test]
     fn missing_file_returns_none() {
         assert!(load(Path::new("/tmp/definitely-not-a-real-file-xyz-9999.json")).is_none());
     }

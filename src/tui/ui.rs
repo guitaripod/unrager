@@ -1,4 +1,5 @@
 use crate::model::Tweet;
+use crate::parse::notification::RawNotification;
 use crate::tui::app::{
     ActivePane, App, DisplayNameStyle, InlineThread, InputMode, MetricsStyle, ReplySortOrder,
     SPINNER_FRAMES, TimestampStyle,
@@ -141,6 +142,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             left,
             &mut app.source,
             &ctx,
+            &app.notif_seen,
             app.error.as_deref(),
             source_active,
             filter_ctx,
@@ -166,6 +168,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             main,
             &mut app.source,
             &ctx,
+            &app.notif_seen,
             app.error.as_deref(),
             true,
             filter_ctx,
@@ -229,20 +232,34 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(Color::Yellow),
         ));
     }
-    if app.source.exhausted && !app.source.tweets.is_empty() {
+    if app.source.exhausted && !app.source.is_empty() {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
-            "[end of timeline]",
+            if app.source.is_notifications() {
+                "[end of notifications]"
+            } else {
+                "[end of timeline]"
+            },
             Style::default().fg(Color::DarkGray),
         ));
     }
-    let ids: Vec<String> = app
-        .source
-        .tweets
-        .iter()
-        .map(|t| t.rest_id.clone())
-        .collect();
-    let unread = app.seen.count_unseen(&ids);
+    let unread = if app.source.is_notifications() {
+        let ids: Vec<String> = app
+            .source
+            .notifications
+            .iter()
+            .map(|n| n.id.clone())
+            .collect();
+        app.notif_seen.count_unseen(&ids)
+    } else {
+        let ids: Vec<String> = app
+            .source
+            .tweets
+            .iter()
+            .map(|t| t.rest_id.clone())
+            .collect();
+        app.seen.count_unseen(&ids)
+    };
     if unread > 0 {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
@@ -272,6 +289,15 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     {
         spans.push(Span::raw("  "));
         spans.push(Span::styled("◇", Style::default().fg(Color::Cyan)));
+    }
+    if !app.source.is_notifications() && app.notif_unread_badge > 0 {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!("{}n", app.notif_unread_badge),
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        ));
     }
     if !app.whisper.text.is_empty() {
         spans.push(Span::raw("  "));
@@ -303,11 +329,13 @@ fn block_with_focus(title: &str, active: bool) -> Block<'_> {
         .title(format!(" {title} "))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_source_list(
     frame: &mut Frame,
     area: Rect,
     source: &mut Source,
     ctx: &RenderContext,
+    notif_seen: &SeenStore,
     error: Option<&str>,
     active: bool,
     filter_ctx: FilterRenderCtx,
@@ -322,9 +350,15 @@ fn draw_source_list(
         base_title
     };
 
-    if source.tweets.is_empty() {
+    if source.is_empty() {
         let msg = if source.loading {
-            "loading timeline…"
+            if source.is_notifications() {
+                "loading notifications…"
+            } else {
+                "loading timeline…"
+            }
+        } else if source.is_notifications() {
+            error.unwrap_or("no notifications")
         } else {
             error.unwrap_or("no tweets")
         };
@@ -334,21 +368,39 @@ fn draw_source_list(
     }
 
     let wrap_width = (area.width as usize).saturating_sub(4);
-    let items: Vec<ListItem> = source
-        .tweets
-        .iter()
-        .enumerate()
-        .map(|(i, t)| {
-            let is_seen = ctx.seen.is_seen(&t.rest_id);
-            let is_expanded = ctx.expanded.contains(&t.rest_id);
-            let lines = tweet_lines(t, ctx, is_seen, false, wrap_width, is_expanded);
-            let mut item = ListItem::new(lines);
-            if i % 2 == 1 {
-                item = item.style(Style::default().bg(ZEBRA_BG));
-            }
-            item
-        })
-        .collect();
+
+    let items: Vec<ListItem> = if source.is_notifications() {
+        source
+            .notifications
+            .iter()
+            .enumerate()
+            .map(|(i, n)| {
+                let seen = notif_seen.is_seen(&n.id);
+                let lines = notification_lines(n, seen, wrap_width);
+                let mut item = ListItem::new(lines);
+                if i % 2 == 1 {
+                    item = item.style(Style::default().bg(ZEBRA_BG));
+                }
+                item
+            })
+            .collect()
+    } else {
+        source
+            .tweets
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let is_seen = ctx.seen.is_seen(&t.rest_id);
+                let is_expanded = ctx.expanded.contains(&t.rest_id);
+                let lines = tweet_lines(t, ctx, is_seen, false, wrap_width, is_expanded);
+                let mut item = ListItem::new(lines);
+                if i % 2 == 1 {
+                    item = item.style(Style::default().bg(ZEBRA_BG));
+                }
+                item
+            })
+            .collect()
+    };
 
     apply_scroll_padding(&mut source.list_state, &items, area.height);
 
@@ -358,6 +410,142 @@ fn draw_source_list(
         .highlight_symbol(highlight_symbol(active));
 
     frame.render_stateful_widget(list, area, &mut source.list_state);
+}
+
+fn notification_lines(n: &RawNotification, seen: bool, wrap_width: usize) -> Vec<Line<'static>> {
+    let mut lines = Vec::with_capacity(2);
+
+    let dim = seen;
+    let meta_color = if dim {
+        Color::Indexed(239)
+    } else {
+        Color::DarkGray
+    };
+
+    let (icon, icon_color) = match n.notification_type.as_str() {
+        "Like" => ("♥", Color::Red),
+        "Retweet" => ("⟲", Color::Green),
+        "Follow" => ("→", Color::Blue),
+        "Reply" => ("↳", Color::Yellow),
+        "Quote" => ("❝", Color::Magenta),
+        "Mention" => ("@", Color::Cyan),
+        "Milestone" => ("★", Color::Yellow),
+        _ => ("·", meta_color),
+    };
+
+    let verb = match n.notification_type.as_str() {
+        "Like" => "liked",
+        "Retweet" => "retweeted",
+        "Reply" => "replied",
+        "Quote" => "quoted",
+        "Mention" => "mentioned you",
+        "Follow" => "followed you",
+        _ => &n.notification_type.to_lowercase(),
+    };
+
+    let bullet = if dim { "  " } else { "● " };
+    let bullet_style = if dim {
+        Style::default()
+    } else {
+        Style::default().fg(Color::Green)
+    };
+
+    let mut header: Vec<Span<'static>> = vec![
+        Span::styled(bullet.to_string(), bullet_style),
+        Span::styled(
+            format!("{icon}  "),
+            Style::default().fg(icon_color).add_modifier(Modifier::BOLD),
+        ),
+    ];
+
+    if !n.actors.is_empty() {
+        let first = &n.actors[0];
+        let mut handle_style = Style::default().fg(handle_color(&first.handle));
+        if !dim {
+            handle_style = handle_style.add_modifier(Modifier::BOLD);
+        }
+        header.push(Span::styled(first.handle.clone(), handle_style));
+
+        let others = n
+            .others_count
+            .unwrap_or((n.actors.len() as u64).saturating_sub(1));
+        if others == 0 {
+        } else if n.actors.len() >= 2 && others == 1 {
+            header.push(Span::styled(", ", Style::default().fg(meta_color)));
+            let second = &n.actors[1];
+            let mut h2_style = Style::default().fg(handle_color(&second.handle));
+            if !dim {
+                h2_style = h2_style.add_modifier(Modifier::BOLD);
+            }
+            header.push(Span::styled(second.handle.clone(), h2_style));
+        } else {
+            header.push(Span::styled(
+                format!(" +{others}"),
+                Style::default().fg(meta_color),
+            ));
+        }
+
+        header.push(Span::styled(
+            format!(" {verb}"),
+            Style::default().fg(if dim {
+                Color::Indexed(242)
+            } else {
+                Color::Gray
+            }),
+        ));
+    } else {
+        header.push(Span::styled(
+            verb.to_string(),
+            Style::default().fg(if dim {
+                Color::Indexed(242)
+            } else {
+                Color::Gray
+            }),
+        ));
+    }
+
+    if n.notification_type == "Follow" {
+        if let Some(a) = n.actors.first() {
+            if a.followers > 0 {
+                header.push(Span::styled(
+                    format!("  {}", short_count(a.followers)),
+                    Style::default().fg(meta_color),
+                ));
+            }
+        }
+    }
+
+    header.push(Span::styled(
+        format!(" · {}", relative_time(n.timestamp)),
+        Style::default().fg(meta_color),
+    ));
+
+    lines.push(Line::from(header));
+
+    if let Some(snippet) = &n.target_tweet_snippet {
+        let snippet_style = if dim {
+            Style::default().fg(Color::Indexed(239))
+        } else {
+            Style::default().fg(Color::Indexed(245))
+        };
+        let indent = "    ";
+        let inner_width = wrap_width.saturating_sub(indent.len() + 2);
+        let wrapped = wrap_text(snippet, inner_width);
+        for (i, line) in wrapped.iter().enumerate() {
+            let text = if i == 0 && wrapped.len() == 1 {
+                format!("{indent}\"{line}\"")
+            } else if i == 0 {
+                format!("{indent}\"{line}")
+            } else if i == wrapped.len() - 1 {
+                format!("{indent} {line}\"")
+            } else {
+                format!("{indent} {line}")
+            };
+            lines.push(Line::from(Span::styled(text, snippet_style)));
+        }
+    }
+
+    lines
 }
 
 fn draw_detail(
@@ -1139,7 +1327,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
                 .add_modifier(Modifier::BOLD),
         ));
     } else {
-        let count = app.source.tweets.len();
+        let count = app.source.len();
         let sel = if count > 0 {
             app.source.selected() + 1
         } else {
@@ -1198,6 +1386,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  :user <handle>              user timeline"),
         Line::from("  :search <query> [!top|...]  live search"),
         Line::from("  :mentions [@handle]         mentions feed"),
+        Line::from("  :notifs                     notifications"),
         Line::from("  :bookmarks <query>          bookmark search"),
         Line::from("  :read / :thread <id|url>    open a tweet"),
         Line::from("  ] / [                       history fwd / back"),
@@ -1210,7 +1399,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  r              reload current source"),
         Line::from("  y              yank fixupx URL to clipboard"),
         Line::from("  Y              yank selected tweet JSON"),
-        Line::from("  n              open notifications in browser"),
+        Line::from("  n              open notifications"),
         Line::from("  o              open tweet in browser"),
         Line::from("  O              open author profile in browser"),
         Line::from("  m              open first media URL externally"),

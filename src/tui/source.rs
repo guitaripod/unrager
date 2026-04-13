@@ -3,6 +3,7 @@ use crate::gql::GqlClient;
 use crate::gql::endpoints;
 use crate::gql::query_ids::Operation;
 use crate::model::Tweet;
+use crate::parse::notification::{NotificationPage, RawNotification};
 use crate::parse::timeline::{self, TimelinePage};
 use ratatui::widgets::ListState;
 use serde::{Deserialize, Serialize};
@@ -30,6 +31,7 @@ pub enum SourceKind {
     Bookmarks {
         query: String,
     },
+    Notifications,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,6 +68,7 @@ impl SourceKind {
             Self::Mentions { target: None } => "mentions".into(),
             Self::Mentions { target: Some(h) } => format!("mentions: @{h}"),
             Self::Bookmarks { query } => format!("bookmarks: {query}"),
+            Self::Notifications => "notifications".into(),
         }
     }
 }
@@ -74,7 +77,9 @@ impl SourceKind {
 pub struct Source {
     pub kind: Option<SourceKind>,
     pub tweets: Vec<Tweet>,
+    pub notifications: Vec<RawNotification>,
     pub cursor: Option<String>,
+    pub mentions_cursor: Option<String>,
     pub loading: bool,
     pub exhausted: bool,
     pub list_state: ListState,
@@ -96,6 +101,22 @@ impl Source {
             .as_ref()
             .map(SourceKind::title)
             .unwrap_or_else(|| "(empty)".to_string())
+    }
+
+    pub fn is_notifications(&self) -> bool {
+        matches!(self.kind, Some(SourceKind::Notifications))
+    }
+
+    pub fn len(&self) -> usize {
+        if self.is_notifications() {
+            self.notifications.len()
+        } else {
+            self.tweets.len()
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub fn selected(&self) -> usize {
@@ -134,12 +155,57 @@ impl Source {
         }
     }
 
+    pub fn reset_with_notifications(
+        &mut self,
+        page: NotificationPage,
+        mentions_cursor: Option<String>,
+    ) {
+        self.notifications = page
+            .notifications
+            .into_iter()
+            .filter(is_actionable_notification)
+            .collect();
+        self.cursor = page.next_cursor;
+        self.mentions_cursor = mentions_cursor;
+        self.exhausted = self.cursor.is_none() && self.mentions_cursor.is_none();
+        let last = self.notifications.len().saturating_sub(1);
+        let current = self.list_state.selected().unwrap_or(0).min(last);
+        self.list_state = ListState::default();
+        self.list_state.select(Some(current));
+        if !self.notifications.is_empty() {
+            *self.list_state.offset_mut() = 0;
+        }
+    }
+
+    pub fn append_notifications(
+        &mut self,
+        page: NotificationPage,
+        mentions_cursor: Option<String>,
+    ) {
+        let existing: HashSet<&str> = self.notifications.iter().map(|n| n.id.as_str()).collect();
+        let deduped: Vec<RawNotification> = page
+            .notifications
+            .into_iter()
+            .filter(is_actionable_notification)
+            .filter(|n| !existing.contains(n.id.as_str()))
+            .collect();
+        let incoming = deduped.len();
+        self.notifications.extend(deduped);
+        self.cursor = page.next_cursor;
+        if mentions_cursor.is_some() {
+            self.mentions_cursor = mentions_cursor;
+        }
+        if (self.cursor.is_none() && self.mentions_cursor.is_none()) || incoming == 0 {
+            self.exhausted = true;
+        }
+    }
+
     pub fn select_next(&mut self) {
-        if self.tweets.is_empty() {
+        if self.is_empty() {
             return;
         }
         let current = self.selected();
-        if current + 1 < self.tweets.len() {
+        if current + 1 < self.len() {
             self.set_selected(current + 1);
         }
     }
@@ -152,11 +218,11 @@ impl Source {
     }
 
     pub fn advance(&mut self, delta: isize) {
-        if self.tweets.is_empty() {
+        if self.is_empty() {
             return;
         }
         let current = self.selected() as isize;
-        let next = (current + delta).clamp(0, self.tweets.len() as isize - 1) as usize;
+        let next = (current + delta).clamp(0, self.len() as isize - 1) as usize;
         self.set_selected(next);
     }
 
@@ -166,17 +232,24 @@ impl Source {
     }
 
     pub fn jump_bottom(&mut self) {
-        if !self.tweets.is_empty() {
-            self.set_selected(self.tweets.len() - 1);
+        if !self.is_empty() {
+            self.set_selected(self.len() - 1);
         }
     }
 
     pub fn near_bottom(&self) -> bool {
-        if self.tweets.is_empty() {
+        if self.is_empty() {
             return true;
         }
-        self.selected() + 5 >= self.tweets.len()
+        self.selected() + 5 >= self.len()
     }
+}
+
+fn is_actionable_notification(n: &RawNotification) -> bool {
+    !matches!(
+        n.notification_type.as_str(),
+        "Recommendation" | "System" | "Trending" | "Topic" | "Spaces" | "Community" | "List"
+    )
 }
 
 pub async fn fetch_page(
@@ -199,6 +272,9 @@ pub async fn fetch_page(
             fetch_search(client, &query, "Latest", cursor).await
         }
         SourceKind::Bookmarks { query } => fetch_bookmarks(client, query, cursor).await,
+        SourceKind::Notifications => Err(Error::GraphqlShape(
+            "use fetch_notifications for notification source".into(),
+        )),
     }
 }
 

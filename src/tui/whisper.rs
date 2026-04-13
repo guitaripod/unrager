@@ -446,6 +446,7 @@ fn build_heuristic_surge(entries: &[NotifEntry]) -> String {
 }
 
 const NOTIFICATIONS_URL: &str = "https://x.com/i/api/2/notifications/all.json";
+const MENTIONS_URL: &str = "https://x.com/i/api/2/notifications/mentions.json";
 
 fn notification_params(cursor: Option<&str>) -> (Vec<(&str, &str)>, Option<String>) {
     let params: Vec<(&str, &str)> = vec![
@@ -504,6 +505,25 @@ pub async fn fetch_notifications_raw(
         params.push(("cursor", c));
     }
     client.raw_get(NOTIFICATIONS_URL, &params).await
+}
+
+pub async fn fetch_mentions(
+    client: &GqlClient,
+    cursor: Option<&str>,
+) -> Result<notification::NotificationPage> {
+    let response = fetch_mentions_raw(client, cursor).await?;
+    notification::parse_mentions_response(&response)
+}
+
+pub async fn fetch_mentions_raw(
+    client: &GqlClient,
+    cursor: Option<&str>,
+) -> Result<serde_json::Value> {
+    let (mut params, cursor_owned) = notification_params(cursor);
+    if let Some(ref c) = cursor_owned {
+        params.push(("cursor", c));
+    }
+    client.raw_get(MENTIONS_URL, &params).await
 }
 
 pub fn start_poll_loop(tx: EventTx) {

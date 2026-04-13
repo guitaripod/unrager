@@ -789,7 +789,6 @@ impl App {
                 if let Some(mut stdin) = child.stdin.take() {
                     let _ = stdin.write_all(text.as_bytes());
                 }
-                let _ = child.wait();
                 self.set_status(note.to_string());
             }
             Err(e) => self.error = Some(format!("clipboard failed: {e}")),

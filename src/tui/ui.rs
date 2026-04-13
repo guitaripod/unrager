@@ -71,6 +71,15 @@ pub struct RenderOpts {
     pub media_auto_expand: bool,
 }
 
+pub struct RenderContext<'a> {
+    pub opts: RenderOpts,
+    pub seen: &'a SeenStore,
+    pub expanded: &'a HashSet<String>,
+    pub inline_threads: &'a HashMap<String, InlineThread>,
+    pub media_reg: &'a MediaRegistry,
+    pub translations: &'a HashMap<String, String>,
+}
+
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let [top, main, bottom] = Layout::vertical([
         Constraint::Length(1),
@@ -110,6 +119,15 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         enabled: filter_enabled,
     };
 
+    let ctx = RenderContext {
+        opts,
+        seen: &app.seen,
+        expanded: &app.expanded_bodies,
+        inline_threads: &app.inline_threads,
+        media_reg: &app.media,
+        translations: &app.translations,
+    };
+
     if app.is_split() {
         let left_pct = app.split_pct;
         let right_pct = 100 - left_pct;
@@ -122,30 +140,24 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             frame,
             left,
             &mut app.source,
-            &app.seen,
-            &app.expanded_bodies,
-            &app.media,
+            &ctx,
             app.error.as_deref(),
-            opts,
             source_active,
             filter_ctx,
-            &app.translations,
         );
-        let detail_opts = RenderOpts {
-            metrics: MetricsStyle::Visible,
-            ..opts
+        let detail_ctx = RenderContext {
+            opts: RenderOpts {
+                metrics: MetricsStyle::Visible,
+                ..opts
+            },
+            ..ctx
         };
         draw_detail(
             frame,
             right,
             app.focus_stack.last_mut(),
-            &app.seen,
-            &app.expanded_bodies,
-            &app.inline_threads,
-            &app.media,
-            detail_opts,
+            &detail_ctx,
             detail_active,
-            &app.translations,
             app.reply_sort,
         );
     } else {
@@ -153,14 +165,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             frame,
             main,
             &mut app.source,
-            &app.seen,
-            &app.expanded_bodies,
-            &app.media,
+            &ctx,
             app.error.as_deref(),
-            opts,
             true,
             filter_ctx,
-            &app.translations,
         );
     }
 
@@ -286,19 +294,14 @@ fn block_with_focus(title: &str, active: bool) -> Block<'_> {
         .title(format!(" {title} "))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn draw_source_list(
     frame: &mut Frame,
     area: Rect,
     source: &mut Source,
-    seen: &SeenStore,
-    expanded: &HashSet<String>,
-    media_reg: &MediaRegistry,
+    ctx: &RenderContext,
     error: Option<&str>,
-    opts: RenderOpts,
     active: bool,
     filter_ctx: FilterRenderCtx,
-    translations: &HashMap<String, String>,
 ) {
     let base_title = source.title();
     let title = if matches!(filter_ctx.mode, FilterMode::On)
@@ -327,18 +330,9 @@ fn draw_source_list(
         .iter()
         .enumerate()
         .map(|(i, t)| {
-            let is_seen = seen.is_seen(&t.rest_id);
-            let is_expanded = expanded.contains(&t.rest_id);
-            let lines = tweet_lines(
-                t,
-                opts,
-                is_seen,
-                false,
-                wrap_width,
-                is_expanded,
-                media_reg,
-                translations,
-            );
+            let is_seen = ctx.seen.is_seen(&t.rest_id);
+            let is_expanded = ctx.expanded.contains(&t.rest_id);
+            let lines = tweet_lines(t, ctx, is_seen, false, wrap_width, is_expanded);
             let mut item = ListItem::new(lines);
             if i % 2 == 1 {
                 item = item.style(Style::default().bg(ZEBRA_BG));
@@ -357,18 +351,12 @@ fn draw_source_list(
     frame.render_stateful_widget(list, area, &mut source.list_state);
 }
 
-#[allow(clippy::too_many_arguments)]
 fn draw_detail(
     frame: &mut Frame,
     area: Rect,
     entry: Option<&mut FocusEntry>,
-    seen: &SeenStore,
-    expanded: &HashSet<String>,
-    inline_threads: &HashMap<String, InlineThread>,
-    media_reg: &MediaRegistry,
-    opts: RenderOpts,
+    ctx: &RenderContext,
     active: bool,
-    translations: &HashMap<String, String>,
     reply_sort: ReplySortOrder,
 ) {
     let Some(FocusEntry::Tweet(detail)) = entry else {
@@ -393,41 +381,16 @@ fn draw_detail(
 
     let wrap_width = (area.width as usize).saturating_sub(4);
 
-    let focal_lines = tweet_lines(
-        &detail.tweet,
-        opts,
-        false,
-        false,
-        wrap_width,
-        true,
-        media_reg,
-        translations,
-    );
+    let focal_lines = tweet_lines(&detail.tweet, ctx, false, false, wrap_width, true);
     let mut items: Vec<ListItem> = Vec::with_capacity(1 + detail.replies.len());
     items.push(ListItem::new(focal_lines));
 
     for (i, t) in detail.replies.iter().enumerate() {
-        let is_seen = seen.is_seen(&t.rest_id);
-        let is_expanded = expanded.contains(&t.rest_id);
-        let mut lines = tweet_lines(
-            t,
-            opts,
-            is_seen,
-            true,
-            wrap_width,
-            is_expanded,
-            media_reg,
-            translations,
-        );
-        if let Some(thread) = inline_threads.get(&t.rest_id) {
-            append_inline_thread(
-                &mut lines,
-                thread,
-                opts,
-                wrap_width,
-                media_reg,
-                translations,
-            );
+        let is_seen = ctx.seen.is_seen(&t.rest_id);
+        let is_expanded = ctx.expanded.contains(&t.rest_id);
+        let mut lines = tweet_lines(t, ctx, is_seen, true, wrap_width, is_expanded);
+        if let Some(thread) = ctx.inline_threads.get(&t.rest_id) {
+            append_inline_thread(&mut lines, thread, ctx, wrap_width);
         }
         let mut item = ListItem::new(lines);
         if i % 2 == 0 {
@@ -536,18 +499,16 @@ const GLYPH_PHOTO: &str = "▣";
 const GLYPH_VIDEO: &str = "▶";
 const GLYPH_GIF: &str = "↻";
 
-#[allow(clippy::too_many_arguments)]
 fn tweet_lines(
     t: &Tweet,
-    opts: RenderOpts,
+    ctx: &RenderContext,
     seen: bool,
     in_reply_context: bool,
     wrap_width: usize,
     expanded: bool,
-    media_reg: &MediaRegistry,
-    translations: &HashMap<String, String>,
 ) -> Vec<Line<'static>> {
-    let translated_text = translations.get(&t.rest_id);
+    let opts = ctx.opts;
+    let translated_text = ctx.translations.get(&t.rest_id);
     let photo_count = t
         .media
         .iter()
@@ -746,7 +707,7 @@ fn tweet_lines(
                 let (cell_cols, cell_rows) = media::layout_for(vis, qt_wrap.saturating_add(2));
                 let ready_ids: Vec<Option<u32>> = qt_photos[..vis]
                     .iter()
-                    .map(|url| match media_reg.get(url) {
+                    .map(|url| match ctx.media_reg.get(url) {
                         Some(MediaEntry::Ready { id_expanded, .. }) => Some(*id_expanded),
                         _ => None,
                     })
@@ -786,13 +747,13 @@ fn tweet_lines(
 
         let ready_ids: Vec<Option<u32>> = slice
             .iter()
-            .map(|url| match media_reg.get(url) {
+            .map(|url| match ctx.media_reg.get(url) {
                 Some(MediaEntry::Ready { id_expanded, .. }) => Some(*id_expanded),
                 _ => None,
             })
             .collect();
         let any_not_ready = ready_ids.iter().any(|o| o.is_none());
-        let first_state = media_reg.get(slice[0]);
+        let first_state = ctx.media_reg.get(slice[0]);
 
         if any_not_ready {
             match first_state {
@@ -865,10 +826,8 @@ where
 fn append_inline_thread(
     lines: &mut Vec<Line<'static>>,
     thread: &InlineThread,
-    opts: RenderOpts,
+    ctx: &RenderContext,
     wrap_width: usize,
-    media_reg: &MediaRegistry,
-    translations: &HashMap<String, String>,
 ) {
     lines.push(Line::from(Span::styled(
         "  ── replies ──",
@@ -898,16 +857,7 @@ fn append_inline_thread(
     for (depth, reply) in &thread.replies {
         let indent_cols = 4 + depth * 2;
         let child_wrap = wrap_width.saturating_sub(indent_cols);
-        let reply_lines = tweet_lines(
-            reply,
-            opts,
-            false,
-            true,
-            child_wrap,
-            false,
-            media_reg,
-            translations,
-        );
+        let reply_lines = tweet_lines(reply, ctx, false, true, child_wrap, false);
         let gutter_str: String = format!("  {:>width$}│ ", "", width = depth * 2);
         for mut line in reply_lines {
             let gutter = Span::styled(gutter_str.clone(), Style::default().fg(Color::DarkGray));
@@ -1289,7 +1239,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect) {
 
 #[cfg(test)]
 mod tests {
-    use super::strip_leading_mentions;
+    use super::{short_count, strip_leading_mentions, wrap_text};
 
     #[test]
     fn strips_single_mention() {
@@ -1325,5 +1275,78 @@ mod tests {
     #[test]
     fn handles_underscore_in_handle() {
         assert_eq!(strip_leading_mentions("@some_user hi there"), "hi there");
+    }
+
+    #[test]
+    fn wrap_empty_string() {
+        assert_eq!(wrap_text("", 40), vec![""]);
+    }
+
+    #[test]
+    fn wrap_short_line_unchanged() {
+        assert_eq!(wrap_text("hello world", 40), vec!["hello world"]);
+    }
+
+    #[test]
+    fn wrap_breaks_at_word_boundary() {
+        assert_eq!(wrap_text("hello world foo", 11), vec!["hello world", "foo"]);
+    }
+
+    #[test]
+    fn wrap_word_exactly_at_width() {
+        assert_eq!(wrap_text("abcde fghij", 5), vec!["abcde", "fghij"]);
+    }
+
+    #[test]
+    fn wrap_word_wider_than_width() {
+        assert_eq!(wrap_text("abcdefghij", 4), vec!["abcd", "efgh", "ij"]);
+    }
+
+    #[test]
+    fn wrap_mixed_long_and_short() {
+        assert_eq!(
+            wrap_text("hi abcdefghij bye", 5),
+            vec!["hi", "abcde", "fghij", "bye"]
+        );
+    }
+
+    #[test]
+    fn wrap_cjk_double_width() {
+        assert_eq!(wrap_text("你好世界", 4), vec!["你好", "世界"]);
+    }
+
+    #[test]
+    fn wrap_cjk_odd_boundary() {
+        assert_eq!(wrap_text("a你好b", 3), vec!["a你", "好b"]);
+    }
+
+    #[test]
+    fn wrap_preserves_multiple_words() {
+        let result = wrap_text("the quick brown fox jumps over the lazy dog", 15);
+        assert_eq!(
+            result,
+            vec!["the quick brown", "fox jumps over", "the lazy dog"]
+        );
+    }
+
+    #[test]
+    fn short_count_below_thousand() {
+        assert_eq!(short_count(0), "0");
+        assert_eq!(short_count(1), "1");
+        assert_eq!(short_count(999), "999");
+    }
+
+    #[test]
+    fn short_count_thousands() {
+        assert_eq!(short_count(1000), "1.0K");
+        assert_eq!(short_count(1500), "1.5K");
+        assert_eq!(short_count(999_999), "1000.0K");
+    }
+
+    #[test]
+    fn short_count_millions() {
+        assert_eq!(short_count(1_000_000), "1.0M");
+        assert_eq!(short_count(1_500_000), "1.5M");
+        assert_eq!(short_count(42_300_000), "42.3M");
     }
 }

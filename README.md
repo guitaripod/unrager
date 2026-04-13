@@ -79,7 +79,7 @@ The left pane stays live. `Tab` swaps focus between panes, `,`/`.` adjusts the s
 
 `:search nvidia` pulls live results in every language. Press `T` on any tweet to translate it to English via the same local Ollama instance. Press `T` again to revert. Translations are ephemeral — in memory only.
 
-The command palette supports `:home`, `:user <handle>`, `:search <query>`, `:mentions`, `:bookmarks`, and `:read <id|url>`. History navigates with `]`/`[`.
+The command palette supports `:home`, `:user <handle>`, `:search <query>`, `:mentions`, `:notifs`, `:bookmarks`, and `:read <id|url>`. History navigates with `]`/`[`.
 
 ## Profile view
 
@@ -126,7 +126,7 @@ The command palette supports `:home`, `:user <handle>`, `:search <query>`, `:men
 | `s` | Cycle reply sort in detail pane |
 | `p` | Own profile |
 | `P` | Open own profile in browser |
-| `n` | Open notifications in browser |
+| `n` | Open notifications view |
 | `o` | Open tweet in browser |
 | `O` | Open tweet author's profile in browser |
 | `m` | Open media externally |
@@ -144,7 +144,7 @@ The command palette supports `:home`, `:user <handle>`, `:search <query>`, `:men
 
 - **Inline media** — photos render inside the terminal via the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) on Ghostty, Kitty, and WezTerm. Multiple images side-by-side. Toggle with `I`. Falls back to `▣`/`▶`/`↻` glyphs elsewhere.
 - **Originals mode** — `V` on home feeds hides replies, quotes, and retweets. `◇` appears in the status bar. Persists across sessions.
-- **Ambient notifications** — notification count polled in the background, summarized by the LLM into a natural-language whisper in the status bar. Press `n` to open in browser.
+- **Notifications view** — press `n` or `:notifs` to browse notifications in a dedicated feed. Enter opens the target tweet or navigates to the actor's profile. Ambient whisper continues in the status bar independently.
 - **Read tracking** — tweets mark as read on cursor. For You feed hides already-seen tweets and deduplicates across pages. `u` jumps to next unread.
 - **Color-hashed handles** — FNV-1a hash into a 20-color palette, consistent across every mention in every tweet body.
 - **Zebra striping** — alternating row backgrounds, auto-detects light/dark terminal theme via OSC 11.

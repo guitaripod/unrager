@@ -7,6 +7,7 @@ use crate::parse::timeline::{self, TimelinePage};
 use crate::tui::app::ReplySortOrder;
 use ratatui::widgets::ListState;
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug)]
 pub struct TweetDetail {
@@ -146,4 +147,55 @@ pub async fn fetch_thread(client: &GqlClient, focal_tweet_id: &str) -> Result<Ti
         .ok_or_else(|| Error::GraphqlShape("missing thread instructions".into()))?;
 
     Ok(timeline::walk(instructions))
+}
+
+const MAX_RECURSIVE_FETCHES: usize = 20;
+
+pub async fn fetch_thread_recursive(
+    client: &GqlClient,
+    focal_tweet_id: &str,
+) -> Result<TimelinePage> {
+    let mut all_tweets: HashMap<String, Tweet> = HashMap::new();
+    let mut fetched: HashSet<String> = HashSet::new();
+    let mut queue: Vec<String> = vec![focal_tweet_id.to_string()];
+
+    while let Some(tweet_id) = queue.pop() {
+        if !fetched.insert(tweet_id.clone()) {
+            continue;
+        }
+        if fetched.len() > MAX_RECURSIVE_FETCHES {
+            break;
+        }
+        let page = match fetch_thread(client, &tweet_id).await {
+            Ok(p) => p,
+            Err(e) => {
+                if fetched.len() == 1 {
+                    return Err(e);
+                }
+                continue;
+            }
+        };
+        for tweet in page.tweets {
+            all_tweets.entry(tweet.rest_id.clone()).or_insert(tweet);
+        }
+
+        let has_child: HashSet<&str> = all_tweets
+            .values()
+            .filter_map(|t| t.in_reply_to_tweet_id.as_deref())
+            .collect();
+        for tweet in all_tweets.values() {
+            if tweet.reply_count > 0
+                && !has_child.contains(tweet.rest_id.as_str())
+                && !fetched.contains(&tweet.rest_id)
+            {
+                queue.push(tweet.rest_id.clone());
+            }
+        }
+    }
+
+    Ok(TimelinePage {
+        tweets: all_tweets.into_values().collect(),
+        next_cursor: None,
+        top_cursor: None,
+    })
 }

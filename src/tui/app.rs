@@ -29,7 +29,7 @@ pub const DEFAULT_STATUS: &str = "? for help";
 #[derive(Debug, Default)]
 pub struct InlineThread {
     pub loading: bool,
-    pub replies: Vec<Tweet>,
+    pub replies: Vec<(usize, Tweet)>,
     pub error: Option<String>,
 }
 
@@ -687,7 +687,7 @@ impl App {
         let tx = self.tx.clone();
         let focal_id = id;
         tokio::spawn(async move {
-            let result = focus::fetch_thread(&client, &focal_id).await;
+            let result = focus::fetch_thread_recursive(&client, &focal_id).await;
             let _ = tx.send(Event::InlineThreadLoaded { focal_id, result });
         });
     }
@@ -699,20 +699,19 @@ impl App {
         entry.loading = false;
         let replies_snapshot: Vec<Tweet> = match result {
             Ok(page) => {
-                entry.replies = page
+                let all_tweets: Vec<Tweet> = page
                     .tweets
                     .into_iter()
-                    .filter(|t| {
-                        t.rest_id != focal_id
-                            && t.in_reply_to_tweet_id.as_deref() == Some(focal_id.as_str())
-                    })
+                    .filter(|t| t.rest_id != focal_id)
                     .collect();
+                let tree = build_reply_tree(&focal_id, &all_tweets);
+                let n = tree.len();
+                entry.replies = tree;
                 entry.error = None;
-                let n = entry.replies.len();
                 self.set_status(format!("thread loaded ({n} replies)"));
                 self.inline_threads
                     .get(&focal_id)
-                    .map(|e| e.replies.clone())
+                    .map(|e| e.replies.iter().map(|(_, t)| t.clone()).collect())
                     .unwrap_or_default()
             }
             Err(e) => {
@@ -1290,6 +1289,29 @@ impl App {
             self.media.ensure_tweet_media(t, &self.tx);
         }
     }
+}
+
+fn build_reply_tree(root_id: &str, tweets: &[Tweet]) -> Vec<(usize, Tweet)> {
+    let mut children: HashMap<&str, Vec<&Tweet>> = HashMap::new();
+    for t in tweets {
+        if let Some(parent) = t.in_reply_to_tweet_id.as_deref() {
+            children.entry(parent).or_default().push(t);
+        }
+    }
+    for group in children.values_mut() {
+        group.sort_by_key(|t| t.created_at);
+    }
+    let mut result = Vec::new();
+    let mut stack: Vec<(&str, usize)> = vec![(root_id, 0)];
+    while let Some((parent_id, depth)) = stack.pop() {
+        if let Some(kids) = children.get(parent_id) {
+            for kid in kids.iter().rev() {
+                result.push((depth, (*kid).clone()));
+                stack.push((&kid.rest_id, depth + 1));
+            }
+        }
+    }
+    result
 }
 
 fn init_filter_stack(

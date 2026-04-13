@@ -895,8 +895,9 @@ fn append_inline_thread(
         )));
         return;
     }
-    let child_wrap = wrap_width.saturating_sub(4);
-    for reply in &thread.replies {
+    for (depth, reply) in &thread.replies {
+        let indent_cols = 4 + depth * 2;
+        let child_wrap = wrap_width.saturating_sub(indent_cols);
         let reply_lines = tweet_lines(
             reply,
             opts,
@@ -907,8 +908,9 @@ fn append_inline_thread(
             media_reg,
             translations,
         );
+        let gutter_str: String = format!("  {:>width$}│ ", "", width = depth * 2);
         for mut line in reply_lines {
-            let gutter = Span::styled("  │ ", Style::default().fg(Color::DarkGray));
+            let gutter = Span::styled(gutter_str.clone(), Style::default().fg(Color::DarkGray));
             let mut new_spans = vec![gutter];
             new_spans.append(&mut line.spans);
             lines.push(Line::from(new_spans));

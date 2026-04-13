@@ -877,13 +877,18 @@ impl App {
                 }
             }
             (KeyCode::Char('X'), _) => {
-                if self.active == ActivePane::Source {
-                    if let Some(tweet) = self.source.tweets.get(self.source.selected()).cloned() {
-                        self.mark_current_seen();
-                        self.push_tweet(tweet);
+                if self.active == ActivePane::Source && self.source.is_notifications() {
+                    self.open_selected_notification();
+                } else {
+                    if self.active == ActivePane::Source {
+                        if let Some(tweet) = self.source.tweets.get(self.source.selected()).cloned()
+                        {
+                            self.mark_current_seen();
+                            self.push_tweet(tweet);
+                        }
                     }
+                    self.toggle_inline_thread();
                 }
-                self.toggle_inline_thread();
             }
             (KeyCode::Char('p'), KeyModifiers::NONE) => self.open_profile(),
             (KeyCode::Char('P'), _) => self.open_own_profile_in_browser(),
@@ -910,6 +915,18 @@ impl App {
     }
 
     fn toggle_expand_selected(&mut self) {
+        if self.source.is_notifications() && self.active == ActivePane::Source {
+            if let Some(notif) = self.source.notifications.get(self.source.selected()) {
+                let id = notif.id.clone();
+                if !self.expanded_bodies.remove(&id) {
+                    self.expanded_bodies.insert(id);
+                    self.set_status("expanded");
+                } else {
+                    self.set_status("collapsed");
+                }
+            }
+            return;
+        }
         let Some(tweet) = self.selected_tweet().cloned() else {
             return;
         };

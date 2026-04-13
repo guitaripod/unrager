@@ -150,7 +150,7 @@ pub fn parse_mentions_response(response: &Value) -> Result<NotificationPage> {
             let snippet = tweet_obj.get("full_text").and_then(Value::as_str).map(|t| {
                 let decoded = decode_html_entities(t);
                 let stripped = strip_leading_mentions(&decoded);
-                stripped.chars().take(80).collect::<String>()
+                stripped.to_string()
             });
 
             page.notifications.push(RawNotification {
@@ -358,7 +358,7 @@ fn resolve_target_tweet(
         let snippet = tweet_obj.get("full_text").and_then(Value::as_str).map(|t| {
             let decoded = decode_html_entities(t);
             let stripped = strip_leading_mentions(&decoded);
-            stripped.chars().take(80).collect::<String>()
+            stripped.to_string()
         });
 
         return (Some(tweet_id.to_string()), like_count, created_at, snippet);

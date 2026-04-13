@@ -376,7 +376,8 @@ fn draw_source_list(
             .enumerate()
             .map(|(i, n)| {
                 let seen = notif_seen.is_seen(&n.id);
-                let lines = notification_lines(n, seen, wrap_width);
+                let is_expanded = ctx.expanded.contains(&n.id);
+                let lines = notification_lines(n, seen, wrap_width, is_expanded);
                 let mut item = ListItem::new(lines);
                 if i % 2 == 1 {
                     item = item.style(Style::default().bg(ZEBRA_BG));
@@ -412,7 +413,12 @@ fn draw_source_list(
     frame.render_stateful_widget(list, area, &mut source.list_state);
 }
 
-fn notification_lines(n: &RawNotification, seen: bool, wrap_width: usize) -> Vec<Line<'static>> {
+fn notification_lines(
+    n: &RawNotification,
+    seen: bool,
+    wrap_width: usize,
+    expanded: bool,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::with_capacity(2);
 
     let dim = seen;
@@ -531,13 +537,19 @@ fn notification_lines(n: &RawNotification, seen: bool, wrap_width: usize) -> Vec
         let indent = "    ";
         let inner_width = wrap_width.saturating_sub(indent.len() + 2);
         let wrapped = wrap_text(snippet, inner_width);
-        for (i, line) in wrapped.iter().enumerate() {
-            let text = if i == 0 && wrapped.len() == 1 {
+        let max_lines = if expanded { wrapped.len() } else { 2 };
+        let truncated = wrapped.len() > max_lines;
+        let display = &wrapped[..max_lines.min(wrapped.len())];
+        for (i, line) in display.iter().enumerate() {
+            let is_last = i == display.len() - 1;
+            let text = if i == 0 && is_last && !truncated {
                 format!("{indent}\"{line}\"")
             } else if i == 0 {
                 format!("{indent}\"{line}")
-            } else if i == wrapped.len() - 1 {
+            } else if is_last && !truncated {
                 format!("{indent} {line}\"")
+            } else if is_last && truncated {
+                format!("{indent} {line}…\"")
             } else {
                 format!("{indent} {line}")
             };

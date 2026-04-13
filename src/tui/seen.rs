@@ -37,27 +37,37 @@ impl SeenStore {
     pub fn mark_seen(&mut self, tweet_id: &str) {
         if self.cache.insert(tweet_id.to_string()) {
             let now = chrono::Utc::now().timestamp();
-            let _ = self.conn.execute(
+            if let Err(e) = self.conn.execute(
                 "INSERT OR IGNORE INTO seen (tweet_id, seen_at) VALUES (?1, ?2)",
                 params![tweet_id, now],
-            );
+            ) {
+                tracing::warn!("seen db write failed: {e}");
+            }
         }
     }
 
     pub fn mark_all(&mut self, tweet_ids: impl IntoIterator<Item = String>) {
         let now = chrono::Utc::now().timestamp();
-        let Ok(tx) = self.conn.transaction() else {
-            return;
+        let tx = match self.conn.transaction() {
+            Ok(tx) => tx,
+            Err(e) => {
+                tracing::warn!("seen db transaction failed: {e}");
+                return;
+            }
         };
         for id in tweet_ids {
             if self.cache.insert(id.clone()) {
-                let _ = tx.execute(
+                if let Err(e) = tx.execute(
                     "INSERT OR IGNORE INTO seen (tweet_id, seen_at) VALUES (?1, ?2)",
                     params![id, now],
-                );
+                ) {
+                    tracing::warn!("seen db batch write failed: {e}");
+                }
             }
         }
-        let _ = tx.commit();
+        if let Err(e) = tx.commit() {
+            tracing::warn!("seen db commit failed: {e}");
+        }
     }
 
     pub fn count_unseen(&self, tweet_ids: &[String]) -> usize {

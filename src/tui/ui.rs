@@ -874,8 +874,7 @@ fn tweet_lines(
     let has_photo_media = photo_count > 0;
     let first_media_kind = t.media.first().map(|m| m.kind);
 
-    let effective_expanded =
-        expanded || (opts.media_auto_expand && opts.media_enabled && has_photo_media);
+    let effective_expanded = expanded || opts.media_auto_expand;
 
     let dot = if seen {
         Span::raw("  ")

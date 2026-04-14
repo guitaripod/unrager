@@ -61,12 +61,19 @@ Do NOT force-push tags that already have a release. If post-release fixes are ne
 
 **Render-time overrides**: the `p` (profile) key doesn't mutate global toggles. `is_own_profile()` is checked when building `RenderOpts` so metrics/names are forced visible only for that source.
 
+## Logging
+
+Daily rolling log file at `~/.cache/unrager/unrager.log.YYYY-MM-DD` via `tracing-appender`. Default level is `info` for the file (captures notification fetch lifecycle, filter decisions, milestone crossings); `--debug` upgrades file output to `debug`. Stderr stays at `warn`.
+
+When debugging a silent failure — a fetch that seems stuck, missing data, a TUI action that does nothing — check the log file first: `tail -f ~/.cache/unrager/unrager.log.$(date +%Y-%m-%d)`. Add `tracing::info!`/`tracing::debug!` calls around any new async work you introduce. Events that deserve logging: spawn start, completion with counts, error paths, silent "skip" branches (loading locks, stale guards). Never use `println!`/`eprintln!` from within the TUI loop — it corrupts the render.
+
 ## Config and data paths
 
 - `~/.config/unrager/session.json` — TUI state
 - `~/.config/unrager/tokens.json` — OAuth tokens (0600)
 - `~/.config/unrager/config.toml` — general settings (browser command, etc.)
 - `~/.config/unrager/filter.toml` — rage filter rubric (auto-created)
+- `~/.cache/unrager/unrager.log.YYYY-MM-DD` — rolling log file
 - `~/.cache/unrager/seen.db` — read tracking
 - `~/.cache/unrager/filter.db` — filter verdict cache
 

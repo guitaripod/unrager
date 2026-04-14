@@ -143,6 +143,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             &mut app.source,
             &ctx,
             &app.notif_seen,
+            app.notif_actor_cursor,
             app.error.as_deref(),
             source_active,
             filter_ctx,
@@ -169,6 +170,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             &mut app.source,
             &ctx,
             &app.notif_seen,
+            app.notif_actor_cursor,
             app.error.as_deref(),
             true,
             filter_ctx,
@@ -336,6 +338,7 @@ fn draw_source_list(
     source: &mut Source,
     ctx: &RenderContext,
     notif_seen: &SeenStore,
+    notif_actor_cursor: Option<usize>,
     error: Option<&str>,
     active: bool,
     filter_ctx: FilterRenderCtx,
@@ -377,7 +380,12 @@ fn draw_source_list(
             .map(|(i, n)| {
                 let seen = notif_seen.is_seen(&n.id);
                 let is_expanded = ctx.expanded.contains(&n.id);
-                let lines = notification_lines(n, seen, wrap_width, is_expanded);
+                let actor_cursor = if i == source.selected() {
+                    notif_actor_cursor
+                } else {
+                    None
+                };
+                let lines = notification_lines(n, seen, wrap_width, is_expanded, actor_cursor);
                 let mut item = ListItem::new(lines);
                 if i % 2 == 1 {
                     item = item.style(Style::default().bg(ZEBRA_BG));
@@ -418,6 +426,7 @@ fn notification_lines(
     seen: bool,
     wrap_width: usize,
     expanded: bool,
+    actor_cursor: Option<usize>,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::with_capacity(2);
 
@@ -554,6 +563,46 @@ fn notification_lines(
                 format!("{indent} {line}")
             };
             lines.push(Line::from(Span::styled(text, snippet_style)));
+        }
+    }
+
+    if expanded && n.notification_type == "Follow" && n.actors.len() > 1 {
+        let detail_style = if dim {
+            Style::default().fg(Color::Indexed(242))
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        for (i, actor) in n.actors.iter().enumerate() {
+            let is_cursor = actor_cursor == Some(i);
+            let marker = if is_cursor {
+                Span::styled(
+                    "  ▶ → ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                Span::styled("    → ", Style::default().fg(Color::Blue))
+            };
+            let mut row: Vec<Span<'static>> = vec![marker];
+            let mut h_style = Style::default().fg(handle_color(&actor.handle));
+            if !dim || is_cursor {
+                h_style = h_style.add_modifier(Modifier::BOLD);
+            }
+            row.push(Span::styled(actor.handle.clone(), h_style));
+            if actor.verified {
+                row.push(Span::styled(" ✓", Style::default().fg(Color::Blue)));
+            }
+            if !actor.name.is_empty() {
+                row.push(Span::styled(format!("  {}", actor.name), detail_style));
+            }
+            if actor.followers > 0 {
+                row.push(Span::styled(
+                    format!("  {}", short_count(actor.followers)),
+                    Style::default().fg(meta_color),
+                ));
+            }
+            lines.push(Line::from(row));
         }
     }
 

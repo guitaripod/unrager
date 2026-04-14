@@ -150,6 +150,7 @@ pub struct App {
     pub whisper: WhisperState,
     pub notif_seen: SeenStore,
     pub notif_unread_badge: usize,
+    pub notif_actor_cursor: Option<usize>,
     pub(super) client: Arc<GqlClient>,
     pub(super) tx: EventTx,
     pub(super) pending_thread: Option<RequestId>,
@@ -267,6 +268,7 @@ impl App {
             whisper: whisper_state,
             notif_seen,
             notif_unread_badge: 0,
+            notif_actor_cursor: None,
             client,
             tx,
             pending_thread: None,
@@ -719,6 +721,9 @@ impl App {
             Event::NotificationPageLoaded { result, append } => {
                 self.handle_notification_page_loaded(result, append);
             }
+            Event::UserTimelineLoaded { result } => {
+                self.handle_user_timeline_loaded(result);
+            }
             Event::WhisperPollTick => {
                 self.whisper.tick();
                 let should_poll = self.whisper.should_poll();
@@ -912,14 +917,46 @@ impl App {
         }
     }
 
+    fn actor_count_for_current_notif(&self) -> Option<usize> {
+        if !self.source.is_notifications() {
+            return None;
+        }
+        let notif = self.source.notifications.get(self.source.selected())?;
+        if notif.notification_type != "Follow"
+            || notif.actors.len() < 2
+            || !self.expanded_bodies.contains(&notif.id)
+        {
+            return None;
+        }
+        Some(notif.actors.len())
+    }
+
+    fn step_actor_cursor(&mut self, delta: isize) -> bool {
+        let Some(count) = self.actor_count_for_current_notif() else {
+            return false;
+        };
+        let current = self.notif_actor_cursor.unwrap_or(0) as isize;
+        let next = current + delta;
+        if next < 0 || next >= count as isize {
+            return false;
+        }
+        self.notif_actor_cursor = Some(next as usize);
+        true
+    }
+
     fn toggle_expand_selected(&mut self) {
         if self.source.is_notifications() && self.active == ActivePane::Source {
             if let Some(notif) = self.source.notifications.get(self.source.selected()) {
                 let id = notif.id.clone();
+                let is_multi_follow = notif.notification_type == "Follow" && notif.actors.len() > 1;
                 if !self.expanded_bodies.remove(&id) {
                     self.expanded_bodies.insert(id);
+                    if is_multi_follow {
+                        self.notif_actor_cursor = Some(0);
+                    }
                     self.set_status("expanded");
                 } else {
+                    self.notif_actor_cursor = None;
                     self.set_status("collapsed");
                 }
             }
@@ -1181,11 +1218,19 @@ impl App {
     fn handle_key_source(&mut self, key: KeyEvent) {
         match (key.code, key.modifiers) {
             (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => {
+                if self.step_actor_cursor(1) {
+                    return;
+                }
+                self.notif_actor_cursor = None;
                 self.source.select_next();
                 self.mark_current_seen();
                 self.maybe_load_more();
             }
             (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => {
+                if self.step_actor_cursor(-1) {
+                    return;
+                }
+                self.notif_actor_cursor = None;
                 self.source.select_prev();
                 self.mark_current_seen();
             }
@@ -1332,6 +1377,7 @@ impl App {
         self.filter_hidden_count = 0;
         self.translations.clear();
         self.translation_inflight.clear();
+        self.notif_actor_cursor = None;
         if is_notifs {
             self.fetch_notifications_source(false);
         } else {
@@ -1571,8 +1617,10 @@ impl App {
 
     fn fetch_notifications_source(&mut self, append: bool) {
         if self.source.loading {
+            tracing::debug!("notification fetch skipped: already loading");
             return;
         }
+        tracing::info!(append, "notification fetch started");
         self.source.loading = true;
         let client = self.client.clone();
         let tx = self.tx.clone();
@@ -1616,11 +1664,18 @@ impl App {
         append: bool,
     ) {
         if !self.source.is_notifications() {
+            tracing::debug!("notification page arrived but source changed, discarding");
             return;
         }
         self.source.loading = false;
         match result {
             Ok(page) => {
+                tracing::info!(
+                    count = page.notifications.len(),
+                    has_cursor = page.next_cursor.is_some(),
+                    append,
+                    "notification page loaded"
+                );
                 if append {
                     self.source.append_notifications(page);
                 } else {
@@ -1629,7 +1684,8 @@ impl App {
                 self.error = None;
                 self.clear_status();
             }
-            Err(e) => {
+            Err(ref e) => {
+                tracing::warn!("notification fetch failed: {e}");
                 self.error = Some(e.to_string());
                 self.clear_status();
             }
@@ -1657,15 +1713,56 @@ impl App {
                 }
             }
             "Follow" => {
-                if let Some(actor) = notif.actors.first() {
-                    let handle = actor.handle.clone();
-                    self.switch_source(SourceKind::User { handle });
+                let idx = self.notif_actor_cursor.unwrap_or(0);
+                if let Some(actor) = notif.actors.get(idx) {
+                    self.open_user_in_detail(actor.handle.clone(), Some(actor.rest_id.clone()));
                 } else {
                     self.set_status("no actor for this follow notification");
                 }
             }
             _ => {
                 self.set_status("nothing to open for this notification");
+            }
+        }
+    }
+
+    fn open_user_in_detail(&mut self, handle: String, user_id: Option<String>) {
+        self.set_status(format!("loading @{handle}…"));
+        let client = self.client.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = match user_id {
+                Some(id) => crate::tui::source::fetch_user_tweets_by_id(&client, &id, None).await,
+                None => {
+                    crate::tui::source::fetch_page(&client, &SourceKind::User { handle }, None)
+                        .await
+                }
+            };
+            let _ = tx.send(Event::UserTimelineLoaded { result });
+        });
+    }
+
+    fn handle_user_timeline_loaded(&mut self, result: Result<TimelinePage>) {
+        match result {
+            Ok(page) => {
+                let mut tweets = page.tweets.into_iter();
+                let Some(focal) = tweets.next() else {
+                    self.set_status("no tweets from this user");
+                    return;
+                };
+                self.media.ensure_tweet_media(&focal, &self.tx);
+                let mut detail = TweetDetail::new(focal);
+                detail.loading = false;
+                detail.replies = tweets.collect();
+                for t in &detail.replies {
+                    self.media.ensure_tweet_media(t, &self.tx);
+                }
+                self.focus_stack.push(FocusEntry::Tweet(detail));
+                self.active = ActivePane::Detail;
+                self.clear_status();
+            }
+            Err(e) => {
+                self.error = Some(e.to_string());
             }
         }
     }

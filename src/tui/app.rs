@@ -123,6 +123,7 @@ pub struct App {
     pub last_tick: Instant,
     pub terminal_focused: bool,
     pub last_render_at: Option<Instant>,
+    pub dirty: bool,
     pub seen: SeenStore,
     pub session_path: PathBuf,
     pub timestamps: TimestampStyle,
@@ -243,6 +244,7 @@ impl App {
             last_tick: Instant::now(),
             terminal_focused: true,
             last_render_at: None,
+            dirty: true,
             seen,
             session_path,
             timestamps: loaded_timestamps,
@@ -686,18 +688,26 @@ impl App {
     }
 
     pub fn handle_event(&mut self, event: Event, terminal: &mut DefaultTerminal) -> Result<()> {
+        if !matches!(event, Event::Render) {
+            self.dirty = true;
+        }
         match event {
             Event::Render => {
                 const BLURRED_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
-                let skip = !self.terminal_focused
+                if !self.dirty {
+                    return Ok(());
+                }
+                let defer = !self.terminal_focused
                     && self
                         .last_render_at
                         .is_some_and(|t| t.elapsed() < BLURRED_MIN_INTERVAL);
-                if !skip {
-                    terminal.draw(|frame| ui::draw(frame, self))?;
-                    ui::emit_media_placements(self, terminal.size()?.width);
-                    self.last_render_at = Some(Instant::now());
+                if defer {
+                    return Ok(());
                 }
+                terminal.draw(|frame| ui::draw(frame, self))?;
+                ui::emit_media_placements(self, terminal.size()?.width);
+                self.last_render_at = Some(Instant::now());
+                self.dirty = false;
             }
             Event::Tick => {
                 self.last_tick = Instant::now();
@@ -785,7 +795,6 @@ impl App {
                         self.fetch_notifications_source(false, true);
                     } else if matches!(self.source.kind, Some(SourceKind::Home { following: true }))
                     {
-                        tracing::info!("home following silent auto-poll");
                         self.fetch_source(false, true);
                     }
                 }

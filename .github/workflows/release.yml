@@ -11,8 +11,12 @@ env:
 
 jobs:
   check:
-    name: check / fmt / clippy / test
-    runs-on: ubuntu-latest
+    name: fmt / clippy / test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -28,9 +32,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-check-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Install system deps
+      - name: Install libdbus (Linux only)
+        if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y libdbus-1-dev pkg-config
@@ -39,14 +44,152 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --all-targets
 
+  build:
+    name: build ${{ matrix.target }}
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            use_cross: false
+          - os: ubuntu-22.04
+            target: aarch64-unknown-linux-gnu
+            use_cross: true
+          - os: macos-14
+            target: aarch64-apple-darwin
+            use_cross: false
+          - os: macos-14
+            target: x86_64-apple-darwin
+            use_cross: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-build-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install libdbus (native Linux build)
+        if: matrix.os == 'ubuntu-22.04' && !matrix.use_cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Install cross
+        if: matrix.use_cross
+        run: cargo install cross --locked
+
+      - name: Build (native)
+        if: ${{ !matrix.use_cross }}
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build (cross)
+        if: matrix.use_cross
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf "../../../unrager-${{ github.ref_name }}-${{ matrix.target }}.tar.gz" unrager
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unrager-${{ matrix.target }}
+          path: unrager-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+          retention-days: 7
+
+  linux-validate:
+    name: validate on ${{ matrix.distro }}
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        distro:
+          - debian:12
+          - ubuntu:22.04
+          - ubuntu:24.04
+          - fedora:40
+          - fedora:41
+          - archlinux:latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: unrager-x86_64-unknown-linux-gnu
+          path: ./artifact
+
+      - name: Run binary inside ${{ matrix.distro }}
+        run: |
+          docker run --rm -v "$PWD/artifact:/artifact:ro" ${{ matrix.distro }} sh -c '
+            set -eux
+            cd /tmp
+            tar xzf /artifact/*.tar.gz
+            ./unrager --version
+            ./unrager --help > /dev/null
+            ./unrager whoami 2>&1 | grep -qE "no Chromium-family cookie store|no x.com session" && echo "whoami error path OK"
+          '
+
+  macos-validate:
+    name: validate on ${{ matrix.os }}
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-15
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: unrager-${{ matrix.target }}
+          path: ./artifact
+
+      - name: Run binary
+        run: |
+          set -eux
+          cd /tmp
+          tar xzf "$GITHUB_WORKSPACE/artifact"/*.tar.gz
+          xattr -d com.apple.quarantine ./unrager 2>/dev/null || true
+          ./unrager --version
+          ./unrager --help > /dev/null
+          ./unrager whoami 2>&1 | grep -qE "no Chromium-family cookie store|no x.com session|User interaction is not allowed" && echo "whoami error path OK"
+
   release:
     name: create github release
-    needs: check
+    needs: [linux-validate, macos-validate]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: ./dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
 
       - name: Create release
         env:
@@ -54,4 +197,5 @@ jobs:
         run: |
           gh release create "${{ github.ref_name }}" \
             --title "${{ github.ref_name }}" \
-            --generate-notes
+            --generate-notes \
+            dist/*.tar.gz dist/SHA256SUMS

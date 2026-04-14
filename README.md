@@ -32,14 +32,16 @@ unrager tweet "..."   # post via official API
 ## Quick start
 
 ```sh
-cargo install --path .
+curl -fsSL https://raw.githubusercontent.com/guitaripod/unrager/master/install.sh | bash
 unrager
 
 # optional: enable the rage filter
 ollama pull gemma4
 ```
 
-The TUI reads cookies from your logged-in browser automatically (Vivaldi, Chrome, Brave, Edge, Opera). The filter enables itself when Ollama is reachable and disables silently when it isn't.
+Works on macOS (Apple Silicon + Intel) and Linux (x86_64 + aarch64). Builds from source via `cargo install --path .` on any platform with Rust 1.85+.
+
+The TUI reads cookies from your logged-in browser automatically (Vivaldi, Chrome, Brave, Edge, Opera, Arc). The filter enables itself when Ollama is reachable and disables silently when it isn't.
 
 ## The rage filter
 
@@ -202,9 +204,9 @@ All accept `-n <count>`, `--json`, `--max-pages <n>`.
 <details>
 <summary><strong>Requirements</strong></summary>
 
-- **Linux** with a Secret Service provider (`kwalletd6` on KDE, `gnome-keyring` on GNOME)
-- **Chromium-family browser** logged into X — auto-detected: Vivaldi, Chromium, Chrome, Brave, Edge Dev, Opera. Override with `UNRAGER_COOKIES_PATH`.
-- **Rust 1.85+** (edition 2024)
+- **macOS** (stores the cookie key in your login Keychain) or **Linux** with a Secret Service provider (`kwalletd6` on KDE, `gnome-keyring` on GNOME)
+- **Chromium-family browser** logged into X — auto-detected: Vivaldi, Chrome, Chromium, Brave, Edge (all channels), Opera, Arc. Override with `UNRAGER_COOKIES_PATH`.
+- **Rust 1.85+** (edition 2024) — only if building from source
 - **Ollama** (optional) — for the rage filter and translation. Default model `gemma4:latest`, configurable in `filter.toml`.
 - **X developer account** (optional) — only for posting. OAuth 2.0 Native App + pay-per-use credits at [console.x.com](https://console.x.com).
 
@@ -213,7 +215,9 @@ All accept `-n <count>`, `--json`, `--max-pages <n>`.
 <details>
 <summary><strong>Configuration</strong></summary>
 
-| File | Purpose |
+Config paths are platform-native: Linux uses `~/.config/unrager/` + `~/.cache/unrager/`, macOS uses `~/Library/Application Support/unrager/` + `~/Library/Caches/unrager/`.
+
+| File (Linux) | Purpose |
 |---|---|
 | `~/.config/unrager/config.toml` | General settings (browser command, etc.) |
 | `~/.config/unrager/session.json` | TUI session (source, selection, toggles) |

@@ -939,8 +939,8 @@ impl App {
             (KeyCode::Char('o'), KeyModifiers::NONE) => self.open_tweet_in_browser(),
             (KeyCode::Char('O'), _) => self.open_author_in_browser(),
             (KeyCode::Char('m'), KeyModifiers::NONE) => self.open_media_external(),
-            (KeyCode::Char('q'), KeyModifiers::NONE) => self.pop_or_quit(),
-            (KeyCode::Esc, _) => self.pop_or_quit(),
+            (KeyCode::Char('q'), KeyModifiers::NONE) => self.back_out(true),
+            (KeyCode::Esc, _) => self.back_out(false),
             (KeyCode::Char(']'), _) => self.history_forward(),
             (KeyCode::Char('['), _) => self.history_back(),
             _ => match self.active {
@@ -1483,14 +1483,26 @@ impl App {
         }
     }
 
-    fn pop_or_quit(&mut self) {
+    fn back_out(&mut self, can_quit: bool) {
         if self.focus_stack.pop().is_some() {
             self.pending_thread = None;
             if self.focus_stack.is_empty() {
                 self.active = ActivePane::Source;
             }
+            return;
+        }
+        let on_home_following =
+            matches!(self.source.kind, Some(SourceKind::Home { following: true }));
+        if on_home_following {
+            if can_quit {
+                self.running = false;
+            }
+            return;
+        }
+        if self.history_cursor > 0 {
+            self.history_back();
         } else {
-            self.running = false;
+            self.switch_source(SourceKind::Home { following: true });
         }
     }
 

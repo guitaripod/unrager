@@ -634,11 +634,30 @@ impl App {
     }
 
     pub fn load_initial(&mut self) {
+        self.spawn_self_handle_resolve();
         if self.source.is_notifications() {
             self.fetch_notifications_source(false);
         } else {
             self.fetch_source(false);
         }
+    }
+
+    fn spawn_self_handle_resolve(&self) {
+        if self.self_handle.is_some() {
+            return;
+        }
+        let client = self.client.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            match source::fetch_self_handle(&client).await {
+                Ok(handle) => {
+                    let _ = tx.send(Event::SelfHandleBackgroundResolved { handle });
+                }
+                Err(e) => {
+                    tracing::warn!("background self handle resolve failed: {e}");
+                }
+            }
+        });
     }
 
     pub fn is_split(&self) -> bool {
@@ -719,6 +738,10 @@ impl App {
             Event::SelfHandleResolved { handle } => {
                 self.self_handle = Some(handle.clone());
                 self.switch_source(SourceKind::User { handle });
+            }
+            Event::SelfHandleBackgroundResolved { handle } => {
+                tracing::info!(%handle, "self handle resolved in background");
+                self.self_handle = Some(handle);
             }
             Event::NotificationPageLoaded { result, append } => {
                 self.handle_notification_page_loaded(result, append);

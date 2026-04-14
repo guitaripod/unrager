@@ -69,6 +69,9 @@ pub enum Event {
     SelfHandleResolved {
         handle: String,
     },
+    SelfHandleBackgroundResolved {
+        handle: String,
+    },
     UserTimelineLoaded {
         result: Result<crate::parse::timeline::TimelinePage>,
     },

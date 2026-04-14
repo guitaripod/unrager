@@ -1,6 +1,7 @@
 use crate::error::{Error, Result};
 use crate::model::User;
-use crate::parse::tweet::decode_html_entities;
+use crate::parse::tweet::{decode_html_entities, parse_tweet_result};
+use crate::parse::user::parse_user_result;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
@@ -24,252 +25,186 @@ pub struct NotificationPage {
     pub top_cursor: Option<String>,
 }
 
-pub fn parse_response(response: &Value) -> Result<NotificationPage> {
-    let global = response.get("globalObjects").ok_or_else(|| {
-        Error::GraphqlShape("missing globalObjects in notification response".into())
+pub fn parse_notifications_timeline(response: &Value) -> Result<NotificationPage> {
+    let instructions = find_instructions(response).ok_or_else(|| {
+        Error::GraphqlShape(
+            "NotificationsTimeline: could not locate timeline.instructions in response".into(),
+        )
     })?;
 
-    let notif_map = global
-        .get("notifications")
-        .and_then(Value::as_object)
-        .ok_or_else(|| Error::GraphqlShape("missing globalObjects.notifications".into()))?;
-    let tweets_map = global.get("tweets").and_then(Value::as_object);
-    let users_map = global.get("users").and_then(Value::as_object);
-
     let mut page = NotificationPage::default();
-
-    let instructions = response
-        .pointer("/timeline/instructions")
-        .and_then(Value::as_array);
-
-    if let Some(instructions) = instructions {
-        for instr in instructions {
-            if let Some(entries) = instr
-                .get("addEntries")
-                .and_then(|ae| ae.get("entries"))
-                .and_then(Value::as_array)
-            {
-                for entry in entries {
-                    parse_timeline_entry(entry, notif_map, tweets_map, users_map, &mut page);
-                }
-            }
-        }
-    }
-
-    if page.notifications.is_empty() && !notif_map.is_empty() {
-        for (notif_id, notif_obj) in notif_map {
-            if let Some(rn) = build_notification(notif_id, notif_obj, tweets_map, users_map) {
-                page.notifications.push(rn);
-            }
-        }
-        page.notifications
-            .sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-    }
-
-    Ok(page)
-}
-
-pub fn parse_mentions_response(response: &Value) -> Result<NotificationPage> {
-    let global = response
-        .get("globalObjects")
-        .ok_or_else(|| Error::GraphqlShape("missing globalObjects in mentions response".into()))?;
-
-    let tweets_map = global.get("tweets").and_then(Value::as_object);
-    let users_map = global.get("users").and_then(Value::as_object);
-
-    let mut page = NotificationPage::default();
-
-    let instructions = response
-        .pointer("/timeline/instructions")
-        .and_then(Value::as_array);
-
-    let Some(instructions) = instructions else {
-        return Ok(page);
-    };
+    let mut reply_count = 0usize;
+    let mut grouped_count = 0usize;
+    let mut skipped = 0usize;
 
     for instr in instructions {
-        let Some(entries) = instr
-            .get("addEntries")
-            .and_then(|ae| ae.get("entries"))
-            .and_then(Value::as_array)
-        else {
+        let itype = instr.get("type").and_then(Value::as_str).unwrap_or("");
+        if itype != "TimelineAddEntries" {
+            continue;
+        }
+        let Some(entries) = instr.get("entries").and_then(Value::as_array) else {
             continue;
         };
         for entry in entries {
-            let content = entry.get("content");
-            let Some(content) = content else { continue };
+            let entry_id = entry
+                .get("entryId")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let Some(content) = entry.get("content") else {
+                skipped += 1;
+                continue;
+            };
 
-            if let Some(op) = content.get("operation") {
-                if let Some(cursor) = op.get("cursor") {
-                    let cursor_type = cursor
-                        .get("cursorType")
-                        .and_then(Value::as_str)
-                        .unwrap_or("");
-                    let value = cursor.get("value").and_then(Value::as_str);
-                    if let Some(v) = value {
-                        match cursor_type {
-                            "Bottom" => page.next_cursor = Some(v.to_string()),
-                            "Top" => page.top_cursor = Some(v.to_string()),
-                            _ => {}
-                        }
-                    }
+            if let Some(cursor) = extract_cursor(content) {
+                match cursor.0.as_str() {
+                    "Top" => page.top_cursor = Some(cursor.1),
+                    "Bottom" => page.next_cursor = Some(cursor.1),
+                    _ => {}
                 }
                 continue;
             }
 
-            let tweet_id = content
-                .pointer("/item/content/tweet/id")
-                .and_then(Value::as_str);
-            let Some(tweet_id) = tweet_id else { continue };
-
-            let entry_id = entry
-                .get("entryId")
+            let item_typename = content
+                .pointer("/itemContent/__typename")
                 .and_then(Value::as_str)
-                .unwrap_or(tweet_id);
+                .unwrap_or("");
 
-            let Some(tweets) = tweets_map else { continue };
-            let Some(tweet_obj) = tweets.get(tweet_id) else {
-                continue;
-            };
-
-            let user_id = tweet_obj.get("user_id_str").and_then(Value::as_str);
-            let actor = user_id
-                .and_then(|uid| users_map?.get(uid))
-                .and_then(|u| parse_v2_user(user_id.unwrap_or("0"), u).ok());
-
-            let created_at = tweet_obj
-                .get("created_at")
-                .and_then(Value::as_str)
-                .and_then(|s| {
-                    DateTime::parse_from_str(s, "%a %b %d %H:%M:%S %z %Y")
-                        .map(|dt| dt.with_timezone(&Utc))
-                        .ok()
-                })
-                .unwrap_or_else(Utc::now);
-
-            let snippet = tweet_obj.get("full_text").and_then(Value::as_str).map(|t| {
-                let decoded = decode_html_entities(t);
-                let stripped = strip_leading_mentions(&decoded);
-                stripped.to_string()
-            });
-
-            page.notifications.push(RawNotification {
-                id: entry_id.to_string(),
-                notification_type: "Reply".to_string(),
-                actors: actor.into_iter().collect(),
-                others_count: None,
-                target_tweet_id: Some(tweet_id.to_string()),
-                target_tweet_like_count: None,
-                target_tweet_created_at: None,
-                target_tweet_snippet: snippet,
-                timestamp: created_at,
-            });
+            match item_typename {
+                "TimelineTweet" => {
+                    if let Some(rn) = build_tweet_entry(&entry_id, content) {
+                        reply_count += 1;
+                        page.notifications.push(rn);
+                    } else {
+                        skipped += 1;
+                        tracing::debug!(entry_id = %entry_id, "TimelineTweet entry failed to parse");
+                    }
+                }
+                "TimelineNotification" => {
+                    if let Some(rn) = build_grouped_entry(&entry_id, content) {
+                        grouped_count += 1;
+                        page.notifications.push(rn);
+                    } else {
+                        skipped += 1;
+                        tracing::debug!(entry_id = %entry_id, "TimelineNotification entry failed to parse");
+                    }
+                }
+                other => {
+                    skipped += 1;
+                    tracing::debug!(entry_id = %entry_id, kind = %other, "unknown notifications entry, skipped");
+                }
+            }
         }
     }
 
     page.notifications
         .sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
 
+    let mut type_counts: std::collections::BTreeMap<&str, usize> =
+        std::collections::BTreeMap::new();
+    for n in &page.notifications {
+        *type_counts.entry(n.notification_type.as_str()).or_insert(0) += 1;
+    }
+    tracing::info!(
+        total = page.notifications.len(),
+        replies = reply_count,
+        grouped = grouped_count,
+        skipped,
+        has_top_cursor = page.top_cursor.is_some(),
+        has_bottom_cursor = page.next_cursor.is_some(),
+        types = ?type_counts,
+        "notifications timeline parsed"
+    );
+
     Ok(page)
 }
 
-fn parse_timeline_entry(
-    entry: &Value,
-    notif_map: &serde_json::Map<String, Value>,
-    tweets_map: Option<&serde_json::Map<String, Value>>,
-    users_map: Option<&serde_json::Map<String, Value>>,
-    page: &mut NotificationPage,
-) {
-    let sort_index = entry.get("sortIndex").and_then(Value::as_str).unwrap_or("");
-
-    let content = entry.get("content");
-    let Some(content) = content else { return };
-
-    let operation = content.get("operation");
-    if let Some(op) = operation {
-        if let Some(cursor) = op.get("cursor") {
-            let cursor_type = cursor
-                .get("cursorType")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            let value = cursor.get("value").and_then(Value::as_str);
-            if let Some(v) = value {
-                match cursor_type {
-                    "Bottom" => page.next_cursor = Some(v.to_string()),
-                    "Top" => page.top_cursor = Some(v.to_string()),
-                    _ => {}
-                }
-            }
-        }
-        return;
-    }
-
-    let notif_id = content
-        .pointer("/notification/id")
-        .and_then(Value::as_str)
-        .or_else(|| content.get("id").and_then(Value::as_str))
-        .unwrap_or(sort_index);
-
-    if notif_id.is_empty() {
-        return;
-    }
-
-    if let Some(notif_obj) = notif_map.get(notif_id) {
-        if let Some(rn) = build_notification(notif_id, notif_obj, tweets_map, users_map) {
-            page.notifications.push(rn);
+fn find_instructions(response: &Value) -> Option<&Vec<Value>> {
+    let candidates = [
+        "/data/viewer_v2/user_results/result/notification_timeline/timeline/instructions",
+        "/data/viewer/user_results/result/notification_timeline/timeline/instructions",
+        "/data/notification_timeline/timeline/instructions",
+        "/data/viewer_v2/notification_timeline/timeline/instructions",
+    ];
+    for path in candidates {
+        if let Some(arr) = response.pointer(path).and_then(Value::as_array) {
+            return Some(arr);
         }
     }
+    None
 }
 
-fn build_notification(
-    notif_id: &str,
-    notif_obj: &Value,
-    tweets_map: Option<&serde_json::Map<String, Value>>,
-    users_map: Option<&serde_json::Map<String, Value>>,
-) -> Option<RawNotification> {
-    let icon_name = notif_obj
-        .pointer("/icon/id")
+fn extract_cursor(content: &Value) -> Option<(String, String)> {
+    let entry_type = content
+        .get("entryType")
         .and_then(Value::as_str)
-        .unwrap_or("");
-
-    let notification_type = classify_type(icon_name);
-
-    let timestamp_ms = notif_obj
-        .get("timestampMs")
+        .unwrap_or_default();
+    let typename = content
+        .get("__typename")
         .and_then(Value::as_str)
-        .and_then(|s| s.parse::<i64>().ok())
-        .unwrap_or(0);
-    let timestamp = DateTime::from_timestamp_millis(timestamp_ms).unwrap_or_else(Utc::now);
+        .unwrap_or_default();
+    if entry_type != "TimelineTimelineCursor" && typename != "TimelineTimelineCursor" {
+        return None;
+    }
+    let cursor_type = content
+        .get("cursorType")
+        .and_then(Value::as_str)?
+        .to_string();
+    let value = content.get("value").and_then(Value::as_str)?.to_string();
+    Some((cursor_type, value))
+}
 
-    let user_actions = notif_obj
-        .pointer("/template/aggregateUserActionsV1/fromUsers")
-        .and_then(Value::as_array);
-    let actors = resolve_actors(user_actions, users_map);
+fn build_tweet_entry(entry_id: &str, content: &Value) -> Option<RawNotification> {
+    let result = content.pointer("/itemContent/tweet_results/result")?;
+    let tweet = parse_tweet_result(result).ok()?;
 
-    let others_count = notif_obj
-        .pointer("/message/text")
-        .and_then(Value::as_str)
-        .and_then(extract_others_count);
-
-    let target_tweet_ids = notif_obj
-        .pointer("/template/aggregateUserActionsV1/targetObjects")
-        .and_then(Value::as_array);
-    let (target_tweet_id, target_tweet_like_count, target_tweet_created_at, target_tweet_snippet) =
-        resolve_target_tweet(target_tweet_ids, tweets_map);
-
-    tracing::debug!(
-        notif_id,
-        notification_type,
-        actors = actors.len(),
-        target_tweet_id = target_tweet_id.as_deref().unwrap_or("none"),
-        "notification entry"
-    );
+    let is_mention = tweet.in_reply_to_tweet_id.is_none();
+    let notification_type = if is_mention { "Mention" } else { "Reply" }.to_string();
 
     Some(RawNotification {
-        id: notif_id.to_string(),
-        notification_type: notification_type.to_string(),
-        others_count,
+        id: entry_id.to_string(),
+        notification_type,
+        actors: vec![tweet.author.clone()],
+        others_count: None,
+        target_tweet_id: Some(tweet.rest_id.clone()),
+        target_tweet_like_count: Some(tweet.like_count),
+        target_tweet_created_at: Some(tweet.created_at),
+        target_tweet_snippet: Some(tweet.text.clone()),
+        timestamp: tweet.created_at,
+    })
+}
+
+fn build_grouped_entry(entry_id: &str, content: &Value) -> Option<RawNotification> {
+    let item = content.get("itemContent")?;
+
+    let icon = item
+        .get("notification_icon")
+        .and_then(Value::as_str)
+        .or_else(|| item.pointer("/icon/id").and_then(Value::as_str))
+        .unwrap_or("");
+    let element = content
+        .pointer("/clientEventInfo/element")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let notification_type = classify_type(icon, element);
+
+    let timestamp = parse_notification_timestamp(item).unwrap_or_else(Utc::now);
+
+    let actors = extract_actors(item);
+    let others_count = item
+        .pointer("/rich_message/text")
+        .and_then(Value::as_str)
+        .or_else(|| item.pointer("/message/text").and_then(Value::as_str))
+        .and_then(extract_others_count);
+
+    let (target_tweet_id, target_tweet_like_count, target_tweet_created_at, target_tweet_snippet) =
+        extract_target_tweet(item);
+
+    Some(RawNotification {
+        id: entry_id.to_string(),
+        notification_type,
         actors,
+        others_count,
         target_tweet_id,
         target_tweet_like_count,
         target_tweet_created_at,
@@ -278,15 +213,49 @@ fn build_notification(
     })
 }
 
-fn classify_type(icon_name: &str) -> &str {
-    match icon_name {
+fn parse_notification_timestamp(item: &Value) -> Option<DateTime<Utc>> {
+    let v = item.get("timestamp_ms")?;
+    if let Some(s) = v.as_str() {
+        if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+            return Some(dt.with_timezone(&Utc));
+        }
+        if let Ok(ms) = s.parse::<i64>() {
+            return DateTime::from_timestamp_millis(ms);
+        }
+    }
+    if let Some(ms) = v.as_i64() {
+        return DateTime::from_timestamp_millis(ms);
+    }
+    None
+}
+
+fn classify_type(icon_id: &str, element: &str) -> String {
+    let by_element = match element {
+        "users_liked_your_tweet"
+        | "users_liked_your_retweet"
+        | "user_liked_your_tweet"
+        | "user_liked_multiple_tweets" => Some("Like"),
+        "users_retweeted_your_tweet"
+        | "users_retweeted_your_retweet"
+        | "user_retweeted_your_tweet"
+        | "user_retweeted_multiple_tweets" => Some("Retweet"),
+        "users_followed_you" | "user_followed_you" => Some("Follow"),
+        "user_replied_to_your_tweet" | "users_replied_to_your_tweet" => Some("Reply"),
+        "user_quoted_your_tweet" | "users_quoted_your_tweet" => Some("Quote"),
+        "user_mentioned_you" | "users_mentioned_you" => Some("Mention"),
+        _ => None,
+    };
+    if let Some(t) = by_element {
+        return t.to_string();
+    }
+    match icon_id {
         "heart_icon" => "Like",
         "retweet_icon" => "Retweet",
         "person_icon" => "Follow",
-        "reply_icon" => "Reply",
+        "reply_icon" | "conversation_bubble_icon" => "Reply",
         "quote_icon" => "Quote",
         "mention_icon" | "at_icon" => "Mention",
-        "conversation_bubble_icon" => "Reply",
+        "milestone_icon" => "Milestone",
         "bell_icon" | "recommendation_icon" | "magic_rec_icon" | "alert_bell_icon" => {
             "Recommendation"
         }
@@ -294,74 +263,67 @@ fn classify_type(icon_name: &str) -> &str {
         "list_icon" => "List",
         "communities_icon" | "community_icon" => "Community",
         "spaces_icon" | "space_icon" | "microphone_icon" | "live_icon" => "Spaces",
-        "milestone_icon" => "Milestone",
         "trending_icon" | "lightning_bolt_icon" | "news_icon" => "Trending",
         "birdwatch_icon" => "CommunityNote",
         "histogram_icon" => "Poll",
         "topic_icon" => "Topic",
         _ => "Other",
     }
+    .to_string()
 }
 
-fn resolve_actors(
-    from_users: Option<&Vec<Value>>,
-    users_map: Option<&serde_json::Map<String, Value>>,
-) -> Vec<User> {
+fn extract_actors(item: &Value) -> Vec<User> {
+    let from_users = item
+        .pointer("/template/from_users")
+        .or_else(|| item.pointer("/template/aggregate_user_actions_v1/from_users"))
+        .or_else(|| item.pointer("/template/aggregateUserActionsV1/fromUsers"))
+        .and_then(Value::as_array);
     let Some(from_users) = from_users else {
-        return Vec::new();
-    };
-    let Some(users_map) = users_map else {
         return Vec::new();
     };
     from_users
         .iter()
         .filter_map(|fu| {
-            let user_id = fu.pointer("/user/id").and_then(Value::as_str)?;
-            let user_obj = users_map.get(user_id)?;
-            parse_v2_user(user_id, user_obj).ok()
+            let result = fu
+                .pointer("/user_results/result")
+                .or_else(|| fu.pointer("/userResults/result"))?;
+            parse_user_result(result)
         })
         .collect()
 }
 
-fn resolve_target_tweet(
-    target_objects: Option<&Vec<Value>>,
-    tweets_map: Option<&serde_json::Map<String, Value>>,
+fn extract_target_tweet(
+    item: &Value,
 ) -> (
     Option<String>,
     Option<u64>,
     Option<DateTime<Utc>>,
     Option<String>,
 ) {
-    let Some(targets) = target_objects else {
-        return (None, None, None, None);
-    };
-    let Some(tweets_map) = tweets_map else {
+    let targets = item
+        .pointer("/template/target_objects")
+        .or_else(|| item.pointer("/template/aggregate_user_actions_v1/target_objects"))
+        .or_else(|| item.pointer("/template/aggregateUserActionsV1/targetObjects"))
+        .and_then(Value::as_array);
+    let Some(targets) = targets else {
         return (None, None, None, None);
     };
 
     for target in targets {
-        let tweet_id = target.pointer("/tweet/id").and_then(Value::as_str);
-        let Some(tweet_id) = tweet_id else { continue };
-        let Some(tweet_obj) = tweets_map.get(tweet_id) else {
+        let result = target
+            .pointer("/tweet_results/result")
+            .or_else(|| target.pointer("/tweetResults/result"));
+        let Some(result) = result else { continue };
+        let Ok(tweet) = parse_tweet_result(result) else {
             continue;
         };
-
-        let like_count = tweet_obj.get("favorite_count").and_then(Value::as_u64);
-        let created_at = tweet_obj
-            .get("created_at")
-            .and_then(Value::as_str)
-            .and_then(|s| {
-                DateTime::parse_from_str(s, "%a %b %d %H:%M:%S %z %Y")
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .ok()
-            });
-        let snippet = tweet_obj.get("full_text").and_then(Value::as_str).map(|t| {
-            let decoded = decode_html_entities(t);
-            let stripped = strip_leading_mentions(&decoded);
-            stripped.to_string()
-        });
-
-        return (Some(tweet_id.to_string()), like_count, created_at, snippet);
+        let snippet = decode_html_entities(&tweet.text);
+        return (
+            Some(tweet.rest_id),
+            Some(tweet.like_count),
+            Some(tweet.created_at),
+            Some(snippet),
+        );
     }
 
     (None, None, None, None)
@@ -378,53 +340,125 @@ fn extract_others_count(text: &str) -> Option<u64> {
     num_str.parse().ok()
 }
 
-fn strip_leading_mentions(text: &str) -> &str {
-    let mut rest = text;
-    loop {
-        rest = rest.trim_start();
-        if let Some(after_at) = rest.strip_prefix('@') {
-            match after_at.find(|c: char| !c.is_alphanumeric() && c != '_') {
-                Some(0) => break,
-                Some(end) => rest = &after_at[end..],
-                None => return "",
-            }
-        } else {
-            break;
-        }
-    }
-    rest
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
 
-fn parse_v2_user(user_id: &str, obj: &Value) -> Result<User> {
-    let handle = obj
-        .get("screen_name")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let name = obj
-        .get("name")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let verified = obj
-        .get("ext_is_blue_verified")
-        .and_then(Value::as_bool)
-        .or_else(|| obj.get("verified").and_then(Value::as_bool))
-        .unwrap_or(false);
-    let followers = obj
-        .get("followers_count")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let following = obj
-        .get("friends_count")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    Ok(User {
-        rest_id: user_id.to_string(),
-        handle,
-        name,
-        verified,
-        followers,
-        following,
-    })
+    #[test]
+    fn parses_tweet_entry_as_reply() {
+        let response = json!({
+            "data": {
+                "viewer_v2": {
+                    "user_results": {
+                        "result": {
+                            "notification_timeline": {
+                                "timeline": {
+                                    "instructions": [{
+                                        "type": "TimelineAddEntries",
+                                        "entries": [{
+                                            "entryId": "tweet-123",
+                                            "sortIndex": "1",
+                                            "content": {
+                                                "entryType": "TimelineTimelineItem",
+                                                "itemContent": {
+                                                    "__typename": "TimelineTweet",
+                                                    "tweet_results": {
+                                                        "result": {
+                                                            "__typename": "Tweet",
+                                                            "rest_id": "123",
+                                                            "core": {
+                                                                "user_results": {
+                                                                    "result": {
+                                                                        "__typename": "User",
+                                                                        "rest_id": "u1",
+                                                                        "is_blue_verified": false,
+                                                                        "core": {
+                                                                            "screen_name": "alice",
+                                                                            "name": "Alice"
+                                                                        },
+                                                                        "legacy": {
+                                                                            "followers_count": 0,
+                                                                            "friends_count": 0
+                                                                        }
+                                                                    }
+                                                                }
+                                                            },
+                                                            "legacy": {
+                                                                "created_at": "Tue Apr 14 06:58:00 +0000 2026",
+                                                                "full_text": "hello",
+                                                                "in_reply_to_status_id_str": "99",
+                                                                "reply_count": 0,
+                                                                "retweet_count": 0,
+                                                                "favorite_count": 0,
+                                                                "quote_count": 0,
+                                                                "entities": {}
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }]
+                                    }]
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        let page = parse_notifications_timeline(&response).unwrap();
+        assert_eq!(page.notifications.len(), 1);
+        assert_eq!(page.notifications[0].notification_type, "Reply");
+        assert_eq!(page.notifications[0].actors[0].handle, "alice");
+    }
+
+    #[test]
+    fn parses_cursor_entries() {
+        let response = json!({
+            "data": {
+                "viewer_v2": {
+                    "user_results": {
+                        "result": {
+                            "notification_timeline": {
+                                "timeline": {
+                                    "instructions": [{
+                                        "type": "TimelineAddEntries",
+                                        "entries": [
+                                            {
+                                                "entryId": "cursor-top-0",
+                                                "content": {
+                                                    "entryType": "TimelineTimelineCursor",
+                                                    "cursorType": "Top",
+                                                    "value": "TOP_CUR"
+                                                }
+                                            },
+                                            {
+                                                "entryId": "cursor-bottom-0",
+                                                "content": {
+                                                    "entryType": "TimelineTimelineCursor",
+                                                    "cursorType": "Bottom",
+                                                    "value": "BOT_CUR"
+                                                }
+                                            }
+                                        ]
+                                    }]
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        let page = parse_notifications_timeline(&response).unwrap();
+        assert_eq!(page.top_cursor.as_deref(), Some("TOP_CUR"));
+        assert_eq!(page.next_cursor.as_deref(), Some("BOT_CUR"));
+    }
+
+    #[test]
+    fn classify_by_element_wins_over_icon() {
+        assert_eq!(classify_type("heart_icon", "users_followed_you"), "Follow");
+        assert_eq!(classify_type("", "users_liked_your_tweet"), "Like");
+        assert_eq!(classify_type("reply_icon", ""), "Reply");
+    }
 }

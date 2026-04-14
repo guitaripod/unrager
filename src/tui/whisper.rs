@@ -445,85 +445,28 @@ fn build_heuristic_surge(entries: &[NotifEntry]) -> String {
     format!("surge: {}", parts.join(", "))
 }
 
-const NOTIFICATIONS_URL: &str = "https://x.com/i/api/2/notifications/all.json";
-const MENTIONS_URL: &str = "https://x.com/i/api/2/notifications/mentions.json";
-
-fn notification_params(cursor: Option<&str>) -> (Vec<(&str, &str)>, Option<String>) {
-    let params: Vec<(&str, &str)> = vec![
-        ("include_profile_interstitial_type", "1"),
-        ("include_blocking", "1"),
-        ("include_blocked_by", "1"),
-        ("include_followed_by", "1"),
-        ("include_want_retweets", "1"),
-        ("include_mute_edge", "1"),
-        ("include_can_dm", "1"),
-        ("include_can_media_tag", "1"),
-        ("include_ext_is_blue_verified", "1"),
-        ("include_ext_verified_type", "1"),
-        ("include_ext_profile_image_shape", "1"),
-        ("skip_status", "1"),
-        ("cards_platform", "Web-12"),
-        ("include_cards", "1"),
-        ("include_ext_alt_text", "true"),
-        ("include_ext_limited_action_results", "true"),
-        ("include_quote_count", "true"),
-        ("include_reply_count", "1"),
-        ("tweet_mode", "extended"),
-        ("include_ext_views", "true"),
-        ("include_entities", "true"),
-        ("include_user_entities", "true"),
-        ("include_ext_media_color", "true"),
-        ("include_ext_media_availability", "true"),
-        ("include_ext_sensitive_media_warning", "true"),
-        ("include_ext_trusted_friends_metadata", "true"),
-        ("send_error_codes", "true"),
-        ("simple_quoted_tweet", "true"),
-        ("count", "40"),
-        ("requestContext", "launch"),
-        (
-            "ext",
-            "mediaStats,highlightedLabel,hasNftAvatar,voiceInfo,birdwatchPivot,superFollowMetadata,unmentionInfo,editControl",
-        ),
-    ];
-    (params, cursor.map(str::to_string))
-}
+const NOTIFICATIONS_PAGE_SIZE: u32 = 40;
 
 pub async fn fetch_notifications(
     client: &GqlClient,
     cursor: Option<&str>,
 ) -> Result<notification::NotificationPage> {
     let response = fetch_notifications_raw(client, cursor).await?;
-    notification::parse_response(&response)
+    notification::parse_notifications_timeline(&response)
 }
 
 pub async fn fetch_notifications_raw(
     client: &GqlClient,
     cursor: Option<&str>,
 ) -> Result<serde_json::Value> {
-    let (mut params, cursor_owned) = notification_params(cursor);
-    if let Some(ref c) = cursor_owned {
-        params.push(("cursor", c));
-    }
-    client.raw_get(NOTIFICATIONS_URL, &params).await
-}
+    use crate::gql::endpoints;
+    use crate::gql::query_ids::Operation;
 
-pub async fn fetch_mentions(
-    client: &GqlClient,
-    cursor: Option<&str>,
-) -> Result<notification::NotificationPage> {
-    let response = fetch_mentions_raw(client, cursor).await?;
-    notification::parse_mentions_response(&response)
-}
-
-pub async fn fetch_mentions_raw(
-    client: &GqlClient,
-    cursor: Option<&str>,
-) -> Result<serde_json::Value> {
-    let (mut params, cursor_owned) = notification_params(cursor);
-    if let Some(ref c) = cursor_owned {
-        params.push(("cursor", c));
-    }
-    client.raw_get(MENTIONS_URL, &params).await
+    let variables = endpoints::notifications_timeline_variables(NOTIFICATIONS_PAGE_SIZE, cursor);
+    let features = endpoints::notifications_timeline_features();
+    client
+        .get(Operation::NotificationsTimeline, &variables, &features)
+        .await
 }
 
 pub fn start_poll_loop(tx: EventTx) {

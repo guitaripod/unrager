@@ -61,7 +61,7 @@ model = "gemma4:latest"
 host = "http://localhost:11434"
 ```
 
-Toggle with `c`. The status bar shows `−N` when the filter is actively hiding tweets.
+Toggle with `c`. The status bar shows `−N` when the filter is actively hiding tweets, or `filter⌀` (dim) when Ollama isn't reachable or no `gemma4` model is installed — `unrager doctor` explains why.
 
 ## Reading threads
 
@@ -176,6 +176,7 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 | Command | Purpose |
 |---|---|
 | `unrager whoami` | Confirm which account your cookies belong to |
+| `unrager doctor` | Check cookies, Ollama, and gemma4 setup |
 | `unrager read <id\|url>` | Fetch a single tweet |
 | `unrager thread <id\|url>` | Full conversation thread |
 | `unrager home [--following]` | Home timeline |
@@ -256,7 +257,7 @@ Media:   CDN fetch         ->  downscale 400px                    ->  kitty grap
 <details>
 <summary><strong>Security model</strong></summary>
 
-1. **Browser cookies** — read at runtime, decrypted in memory via Secret Service, never written to disk or logged
+1. **Browser cookies** — read at runtime, decrypted in memory using the OS credential store (macOS Keychain, Linux Secret Service), never written to disk or logged
 2. **OAuth tokens** — `~/.config/unrager/tokens.json` mode `0600`, atomic writes
 3. **Client ID** — embedded `const`, safe per PKCE design (no client secret)
 4. **Filter** — runs entirely locally, tweet text never leaves your machine

@@ -56,7 +56,7 @@ pub struct OllamaConfig {
 }
 
 fn default_keep_alive() -> String {
-    "30s".to_string()
+    "10s".to_string()
 }
 
 impl FilterConfig {

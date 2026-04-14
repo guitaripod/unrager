@@ -5,7 +5,7 @@ use crate::gql::query_ids::Operation;
 use crate::model::{Tweet, User};
 use crate::parse::timeline::{self, TimelinePage};
 use crate::tui::app::ReplySortOrder;
-use ratatui::widgets::ListState;
+use crate::tui::source::PaneState;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
@@ -15,19 +15,17 @@ pub struct TweetDetail {
     pub replies: Vec<Tweet>,
     pub loading: bool,
     pub error: Option<String>,
-    pub list_state: ListState,
+    pub state: PaneState,
 }
 
 impl TweetDetail {
     pub fn new(tweet: Tweet) -> Self {
-        let mut list_state = ListState::default();
-        list_state.select(Some(0));
         Self {
             tweet,
             replies: Vec::new(),
             loading: true,
             error: None,
-            list_state,
+            state: PaneState::default(),
         }
     }
 
@@ -41,8 +39,7 @@ impl TweetDetail {
                 t.rest_id != focal_id && t.in_reply_to_tweet_id.as_deref() == Some(&focal_id)
             })
             .collect();
-        self.list_state = ListState::default();
-        self.list_state.select(Some(0));
+        self.state = PaneState::default();
     }
 
     pub fn total_items(&self) -> usize {
@@ -50,7 +47,7 @@ impl TweetDetail {
     }
 
     pub fn selected(&self) -> usize {
-        self.list_state.selected().unwrap_or(0)
+        self.state.selected
     }
 
     pub fn select_next(&mut self) {
@@ -60,14 +57,14 @@ impl TweetDetail {
         }
         let current = self.selected();
         if current + 1 < total {
-            self.list_state.select(Some(current + 1));
+            self.state.selected = current + 1;
         }
     }
 
     pub fn select_prev(&mut self) {
         let current = self.selected();
         if current > 0 {
-            self.list_state.select(Some(current - 1));
+            self.state.selected = current - 1;
         }
     }
 
@@ -78,18 +75,17 @@ impl TweetDetail {
         }
         let current = self.selected() as isize;
         let next = (current + delta).clamp(0, total - 1) as usize;
-        self.list_state.select(Some(next));
+        self.state.selected = next;
     }
 
     pub fn jump_top(&mut self) {
-        self.list_state.select(Some(0));
-        *self.list_state.offset_mut() = 0;
+        self.state = PaneState::default();
     }
 
     pub fn jump_bottom(&mut self) {
         let total = self.total_items();
         if total > 0 {
-            self.list_state.select(Some(total - 1));
+            self.state.selected = total - 1;
         }
     }
 
@@ -127,13 +123,11 @@ pub struct LikersView {
     pub loading: bool,
     pub exhausted: bool,
     pub error: Option<String>,
-    pub list_state: ListState,
+    pub state: PaneState,
 }
 
 impl LikersView {
     pub fn new(tweet_id: String, title: String) -> Self {
-        let mut list_state = ListState::default();
-        list_state.select(Some(0));
         Self {
             tweet_id,
             title,
@@ -142,12 +136,12 @@ impl LikersView {
             loading: true,
             exhausted: false,
             error: None,
-            list_state,
+            state: PaneState::default(),
         }
     }
 
     pub fn selected(&self) -> usize {
-        self.list_state.selected().unwrap_or(0)
+        self.state.selected
     }
 
     pub fn select_next(&mut self) {
@@ -156,14 +150,14 @@ impl LikersView {
         }
         let current = self.selected();
         if current + 1 < self.users.len() {
-            self.list_state.select(Some(current + 1));
+            self.state.selected = current + 1;
         }
     }
 
     pub fn select_prev(&mut self) {
         let current = self.selected();
         if current > 0 {
-            self.list_state.select(Some(current - 1));
+            self.state.selected = current - 1;
         }
     }
 
@@ -173,17 +167,16 @@ impl LikersView {
         }
         let current = self.selected() as isize;
         let next = (current + delta).clamp(0, self.users.len() as isize - 1) as usize;
-        self.list_state.select(Some(next));
+        self.state.selected = next;
     }
 
     pub fn jump_top(&mut self) {
-        self.list_state.select(Some(0));
-        *self.list_state.offset_mut() = 0;
+        self.state = PaneState::default();
     }
 
     pub fn jump_bottom(&mut self) {
         if !self.users.is_empty() {
-            self.list_state.select(Some(self.users.len() - 1));
+            self.state.selected = self.users.len() - 1;
         }
     }
 

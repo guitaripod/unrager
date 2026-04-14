@@ -3589,6 +3589,7 @@ dependencies = [
  "futures",
  "hmac",
  "image",
+ "libc",
  "mime_guess",
  "pbkdf2",
  "rand 0.9.3",

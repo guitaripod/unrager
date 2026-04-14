@@ -554,17 +554,16 @@ impl App {
         };
         self.source.tweets.remove(idx);
         if self.source.tweets.is_empty() {
-            self.source.list_state.select(None);
+            self.source.state = crate::tui::source::PaneState::default();
             return;
         }
-        if let Some(sel) = self.source.list_state.selected() {
-            let new_sel = if idx < sel {
-                sel - 1
-            } else {
-                sel.min(self.source.tweets.len() - 1)
-            };
-            self.source.list_state.select(Some(new_sel));
-        }
+        let sel = self.source.state.selected;
+        let new_sel = if idx < sel {
+            sel - 1
+        } else {
+            sel.min(self.source.tweets.len() - 1)
+        };
+        self.source.set_selected(new_sel);
     }
 
     fn mark_current_seen(&mut self) {
@@ -739,12 +738,11 @@ impl App {
             Event::InlineThreadLoaded { focal_id, result } => {
                 self.handle_inline_thread_loaded(focal_id, result);
             }
-            Event::MediaLoaded {
-                url,
-                id,
-                id_expanded,
-            } => {
-                self.media.mark_ready(&url, id, id_expanded);
+            Event::MediaLoadedKitty { url, id, w, h } => {
+                self.media.mark_ready_kitty(&url, id, w, h);
+            }
+            Event::MediaLoadedPixels { url, pixels, w, h } => {
+                self.media.mark_ready_pixels(&url, pixels, w, h);
             }
             Event::MediaFailed { url, err } => {
                 self.media.mark_failed(&url, err);
@@ -1736,7 +1734,7 @@ impl App {
     }
 
     fn queue_source_media(&mut self, tweets: &[Tweet]) {
-        if !self.media.supported || !self.media_auto_expand {
+        if !self.media.supported() || !self.media_auto_expand {
             return;
         }
         for t in tweets {
@@ -1745,7 +1743,7 @@ impl App {
     }
 
     fn queue_thread_media(&mut self, replies: &[Tweet]) {
-        if !self.media.supported {
+        if !self.media.supported() {
             return;
         }
         for t in replies {
@@ -2044,8 +2042,7 @@ fn apply_conversation_view(detail: &mut TweetDetail, page: TimelinePage, scroll_
         .unwrap_or(0);
 
     detail.replies = conversation;
-    detail.list_state = ratatui::widgets::ListState::default();
-    detail.list_state.select(Some(scroll_idx));
+    detail.state = crate::tui::source::PaneState::with_selected(scroll_idx);
 }
 
 fn build_reply_tree(root_id: &str, tweets: &[Tweet]) -> Vec<(usize, Tweet)> {

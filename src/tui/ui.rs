@@ -6,60 +6,173 @@ use crate::tui::app::{
 };
 use crate::tui::filter::FilterMode;
 use crate::tui::focus::FocusEntry;
-use crate::tui::media::{
-    self, MediaEntry, MediaRegistry, media_badge_failed, media_badge_loading, placeholder_row_span,
-};
+use crate::tui::media::{self, MediaEntry, MediaRegistry, media_badge_failed, media_badge_loading};
 use crate::tui::seen::SeenStore;
+use crate::tui::source::PaneState;
 use crate::tui::source::{Source, SourceKind};
 use chrono::{DateTime, Utc};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
-const SCROLL_LOOKAHEAD: usize = 3;
-
-fn last_visible_index(items: &[ListItem<'_>], offset: usize, inner_h: usize) -> usize {
-    let mut rows = 0usize;
-    let mut last = offset;
-    for (i, item) in items.iter().enumerate().skip(offset) {
-        let h = item.height().max(1);
-        if rows + h > inner_h {
-            break;
-        }
-        rows += h;
-        last = i;
-    }
-    last
+pub struct PaneItem {
+    pub lines: Vec<Line<'static>>,
+    pub zebra: bool,
 }
 
-fn apply_scroll_padding(state: &mut ListState, items: &[ListItem<'_>], area_height: u16) {
-    if items.is_empty() {
-        return;
-    }
-    let inner = area_height.saturating_sub(2) as usize;
-    if inner == 0 {
-        return;
-    }
-    let sel = state.selected().unwrap_or(0);
-    if sel >= items.len() {
-        return;
-    }
-    let mut off = state.offset().min(sel);
-    let target_sel = (sel + SCROLL_LOOKAHEAD).min(items.len().saturating_sub(1));
-    loop {
-        let lv = last_visible_index(items, off, inner);
-        if lv >= target_sel {
-            break;
+impl PaneItem {
+    pub fn new(lines: Vec<Line<'static>>) -> Self {
+        Self {
+            lines,
+            zebra: false,
         }
-        if off >= sel {
-            break;
-        }
-        off += 1;
     }
-    *state.offset_mut() = off;
+
+    pub fn with_zebra(mut self, zebra: bool) -> Self {
+        self.zebra = zebra;
+        self
+    }
+}
+
+fn highlight_bg(active: bool) -> Color {
+    if active {
+        Color::Indexed(24)
+    } else {
+        Color::Indexed(238)
+    }
+}
+
+fn apply_line_bg(line: &mut Line<'static>, bg: Color) {
+    line.style = line.style.bg(bg);
+    for span in line.spans.iter_mut() {
+        if span.style.bg.is_none() {
+            span.style = span.style.bg(bg);
+        }
+    }
+}
+
+fn apply_line_modifier(line: &mut Line<'static>, modifier: Modifier) {
+    line.style = line.style.add_modifier(modifier);
+}
+
+fn pad_line_to_width(line: &mut Line<'static>, target_width: u16, bg: Color) {
+    use unicode_width::UnicodeWidthStr;
+    let current: usize = line
+        .spans
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+        .sum();
+    let target = target_width as usize;
+    if current < target {
+        let pad = " ".repeat(target - current);
+        line.spans.push(Span::styled(pad, Style::default().bg(bg)));
+    }
+}
+
+fn prepend_selection_marker(line: &mut Line<'static>, active: bool, highlight_bg: Color) {
+    let (marker_text, marker_style) = if active {
+        (
+            "▶ ",
+            Style::default()
+                .fg(Color::Cyan)
+                .bg(highlight_bg)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        ("· ", Style::default().fg(Color::DarkGray).bg(highlight_bg))
+    };
+    let marker = Span::styled(marker_text, marker_style);
+
+    if let Some(first) = line.spans.first_mut() {
+        let content = first.content.as_ref();
+        if content.starts_with("  ") {
+            let rest: String = content.chars().skip(2).collect();
+            first.content = Cow::Owned(rest);
+        }
+    }
+    line.spans.insert(0, marker);
+}
+
+fn render_scrollable(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    items: Vec<PaneItem>,
+    state: &mut PaneState,
+    selected: Option<usize>,
+    active: bool,
+) {
+    let block = block_with_focus(title, active);
+    let inner = block.inner(area);
+    let inner_h = inner.height;
+
+    let mut spans: Vec<(u16, u16)> = Vec::with_capacity(items.len());
+    let mut cursor: u16 = 0;
+    for item in &items {
+        let h = item.lines.len() as u16;
+        spans.push((cursor, h));
+        cursor = cursor.saturating_add(h);
+    }
+    let total_h = cursor;
+
+    let sel = selected.unwrap_or(0).min(items.len().saturating_sub(1));
+    let (sel_start, sel_h) = spans.get(sel).copied().unwrap_or((0, 0));
+    let sel_end = sel_start.saturating_add(sel_h);
+
+    let mut scroll = state.scroll;
+    if inner_h > 0 {
+        if sel_start < scroll {
+            scroll = sel_start;
+        }
+        if sel_end > scroll.saturating_add(inner_h) {
+            scroll = if sel_h >= inner_h {
+                sel_start
+            } else {
+                sel_end.saturating_sub(inner_h)
+            };
+        }
+    }
+    let max_scroll = total_h.saturating_sub(inner_h);
+    if scroll > max_scroll {
+        scroll = max_scroll;
+    }
+    state.scroll = scroll;
+
+    let hl_bg = highlight_bg(active);
+    let row_width = inner.width;
+
+    let mut flat: Vec<Line<'static>> = Vec::with_capacity(total_h as usize);
+    for (i, item) in items.into_iter().enumerate() {
+        let is_selected = selected == Some(i);
+        let bg = if is_selected {
+            Some(hl_bg)
+        } else if item.zebra {
+            Some(ZEBRA_BG)
+        } else {
+            None
+        };
+        let mut item_lines = item.lines;
+        for (j, line) in item_lines.iter_mut().enumerate() {
+            if let Some(bg) = bg {
+                apply_line_bg(line, bg);
+                if is_selected && active {
+                    apply_line_modifier(line, Modifier::BOLD);
+                }
+                if is_selected && j == 0 {
+                    prepend_selection_marker(line, active, bg);
+                }
+                pad_line_to_width(line, row_width, bg);
+            }
+        }
+        flat.extend(item_lines);
+    }
+
+    let para = Paragraph::new(flat).block(block).scroll((state.scroll, 0));
+    frame.render_widget(para, area);
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -70,6 +183,7 @@ pub struct RenderOpts {
     pub is_dark: bool,
     pub media_enabled: bool,
     pub media_auto_expand: bool,
+    pub media_max_rows: usize,
 }
 
 pub struct RenderContext<'a> {
@@ -99,6 +213,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let source_active = app.active == ActivePane::Source;
     let detail_active = app.active == ActivePane::Detail;
     let own_profile = app.is_own_profile();
+    let pane_h = frame.area().height.saturating_sub(2) as usize;
     let opts = RenderOpts {
         timestamps: app.timestamps,
         metrics: if own_profile {
@@ -112,8 +227,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             app.display_names
         },
         is_dark: app.is_dark,
-        media_enabled: app.media.supported,
+        media_enabled: app.media.supported(),
         media_auto_expand: app.media_auto_expand,
+        media_max_rows: (pane_h.saturating_sub(4) / 2).clamp(6, 24),
     };
     let filter_ctx = FilterRenderCtx {
         mode: filter_mode,
@@ -183,29 +299,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     if app.mode == InputMode::Help {
         draw_help_overlay(frame, frame.area(), app.help_scroll);
-    }
-}
-
-pub fn emit_media_placements(app: &App, terminal_width: u16) {
-    if !app.media.supported {
-        return;
-    }
-    let wrap_width = (terminal_width as usize).saturating_sub(4);
-
-    let needs_source = app.media_auto_expand
-        || app
-            .source
-            .tweets
-            .iter()
-            .any(|t| app.expanded_bodies.contains(&t.rest_id));
-    if needs_source {
-        emit_placements_for_tweets(&app.media, app.source.tweets.iter(), wrap_width);
-    }
-
-    if let Some(FocusEntry::Tweet(detail)) = app.focus_stack.last() {
-        let focal_iter = std::iter::once(&detail.tweet);
-        let replies_iter = detail.replies.iter();
-        emit_placements_for_tweets(&app.media, focal_iter.chain(replies_iter), wrap_width);
     }
 }
 
@@ -379,8 +472,9 @@ fn draw_source_list(
     }
 
     let wrap_width = (area.width as usize).saturating_sub(4);
+    let selected = source.selected();
 
-    let items: Vec<ListItem> = if source.is_notifications() {
+    let items: Vec<PaneItem> = if source.is_notifications() {
         source
             .notifications
             .iter()
@@ -388,17 +482,13 @@ fn draw_source_list(
             .map(|(i, n)| {
                 let seen = notif_seen.is_seen(&n.id);
                 let is_expanded = ctx.expanded.contains(&n.id);
-                let actor_cursor = if i == source.selected() {
+                let actor_cursor = if i == selected {
                     notif_actor_cursor
                 } else {
                     None
                 };
                 let lines = notification_lines(n, seen, wrap_width, is_expanded, actor_cursor);
-                let mut item = ListItem::new(lines);
-                if i % 2 == 1 {
-                    item = item.style(Style::default().bg(ZEBRA_BG));
-                }
-                item
+                PaneItem::new(lines).with_zebra(i % 2 == 1)
             })
             .collect()
     } else {
@@ -410,23 +500,20 @@ fn draw_source_list(
                 let is_seen = ctx.seen.is_seen(&t.rest_id);
                 let is_expanded = ctx.expanded.contains(&t.rest_id);
                 let lines = tweet_lines(t, ctx, is_seen, false, wrap_width, is_expanded);
-                let mut item = ListItem::new(lines);
-                if i % 2 == 1 {
-                    item = item.style(Style::default().bg(ZEBRA_BG));
-                }
-                item
+                PaneItem::new(lines).with_zebra(i % 2 == 1)
             })
             .collect()
     };
 
-    apply_scroll_padding(&mut source.list_state, &items, area.height);
-
-    let list = List::new(items)
-        .block(block_with_focus(&title, active))
-        .highlight_style(highlight_style(active))
-        .highlight_symbol(highlight_symbol(active));
-
-    frame.render_stateful_widget(list, area, &mut source.list_state);
+    render_scrollable(
+        frame,
+        area,
+        &title,
+        items,
+        &mut source.state,
+        Some(selected),
+        active,
+    );
 }
 
 fn notification_lines(
@@ -663,7 +750,8 @@ fn draw_likers_detail(
         return;
     }
 
-    let items: Vec<ListItem> = view
+    let selected = view.selected();
+    let items: Vec<PaneItem> = view
         .users
         .iter()
         .enumerate()
@@ -692,20 +780,19 @@ fn draw_likers_detail(
                     Style::default().fg(Color::DarkGray),
                 ));
             }
-            let mut item = ListItem::new(Line::from(row));
-            if i % 2 == 1 {
-                item = item.style(Style::default().bg(ZEBRA_BG));
-            }
-            item
+            PaneItem::new(vec![Line::from(row)]).with_zebra(i % 2 == 1)
         })
         .collect();
 
-    apply_scroll_padding(&mut view.list_state, &items, area.height);
-    let list = List::new(items)
-        .block(block_with_focus(&title, active))
-        .highlight_style(highlight_style(active))
-        .highlight_symbol(highlight_symbol(active));
-    frame.render_stateful_widget(list, area, &mut view.list_state);
+    render_scrollable(
+        frame,
+        area,
+        &title,
+        items,
+        &mut view.state,
+        Some(selected),
+        active,
+    );
 }
 
 fn draw_tweet_detail(
@@ -734,9 +821,10 @@ fn draw_tweet_detail(
 
     let wrap_width = (area.width as usize).saturating_sub(4);
 
+    let selected = detail.selected();
     let focal_lines = tweet_lines(&detail.tweet, ctx, false, false, wrap_width, true);
-    let mut items: Vec<ListItem> = Vec::with_capacity(1 + detail.replies.len());
-    items.push(ListItem::new(focal_lines));
+    let mut items: Vec<PaneItem> = Vec::with_capacity(1 + detail.replies.len());
+    items.push(PaneItem::new(focal_lines));
 
     for (i, t) in detail.replies.iter().enumerate() {
         let is_seen = ctx.seen.is_seen(&t.rest_id);
@@ -745,48 +833,31 @@ fn draw_tweet_detail(
         if let Some(thread) = ctx.inline_threads.get(&t.rest_id) {
             append_inline_thread(&mut lines, thread, ctx, wrap_width);
         }
-        let mut item = ListItem::new(lines);
-        if i % 2 == 0 {
-            item = item.style(Style::default().bg(ZEBRA_BG));
-        }
-        items.push(item);
+        items.push(PaneItem::new(lines).with_zebra(i % 2 == 0));
     }
 
     if detail.replies.is_empty() && detail.loading {
-        items.push(ListItem::new(Line::from(Span::styled(
+        items.push(PaneItem::new(vec![Line::from(Span::styled(
             "  loading replies…",
             Style::default().fg(Color::Yellow),
-        ))));
+        ))]));
     }
     if let Some(err) = &detail.error {
-        items.push(ListItem::new(Line::from(Span::styled(
+        items.push(PaneItem::new(vec![Line::from(Span::styled(
             format!("  error: {err}"),
             Style::default().fg(Color::Red),
-        ))));
+        ))]));
     }
 
-    apply_scroll_padding(&mut detail.list_state, &items, area.height);
-
-    let list = List::new(items)
-        .block(block_with_focus(&title, active))
-        .highlight_style(highlight_style(active))
-        .highlight_symbol(highlight_symbol(active));
-
-    frame.render_stateful_widget(list, area, &mut detail.list_state);
-}
-
-fn highlight_style(active: bool) -> Style {
-    if active {
-        Style::default()
-            .bg(Color::Indexed(24))
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().bg(Color::Indexed(238))
-    }
-}
-
-fn highlight_symbol(active: bool) -> &'static str {
-    if active { "▶ " } else { "· " }
+    render_scrollable(
+        frame,
+        area,
+        &title,
+        items,
+        &mut detail.state,
+        Some(selected),
+        active,
+    );
 }
 
 fn author_spans(handle: &str, verified: bool, name: &str, show_name: bool) -> Vec<Span<'static>> {
@@ -1054,30 +1125,21 @@ fn tweet_lines(
                 .filter(|m| matches!(m.kind, crate::model::MediaKind::Photo))
                 .map(|m| m.url.as_str())
                 .collect();
-            if !qt_photos.is_empty() {
-                let vis = qt_photos.len().min(4);
-                let (cell_cols, cell_rows) = media::layout_for(vis, qt_wrap.saturating_add(2));
-                let ready_ids: Vec<Option<u32>> = qt_photos[..vis]
-                    .iter()
-                    .map(|url| match ctx.media_reg.get(url) {
-                        Some(MediaEntry::Ready { id_expanded, .. }) => Some(*id_expanded),
-                        _ => None,
-                    })
-                    .collect();
-                if ready_ids.iter().all(|o| o.is_some()) {
-                    for row in 0..cell_rows {
-                        let mut spans: Vec<Span<'static>> =
-                            vec![Span::raw("  "), gutter_mid.clone()];
-                        for (i, maybe_id) in ready_ids.iter().enumerate() {
-                            if i > 0 {
-                                spans.push(Span::raw("  "));
-                            }
-                            if let Some(id) = maybe_id {
-                                spans.push(placeholder_row_span(*id, row, cell_cols));
-                            }
-                        }
-                        lines.push(Line::from(spans));
-                    }
+            let qt_indent = Span::styled("  │ ", Style::default().fg(Color::DarkGray));
+            let qt_max_cols = image_max_cols(qt_wrap);
+            for url in &qt_photos {
+                match render_image_lines(
+                    ctx.media_reg,
+                    url,
+                    qt_max_cols,
+                    ctx.opts.media_max_rows,
+                    &qt_indent,
+                ) {
+                    Some(img_lines) => lines.extend(img_lines),
+                    None => match ctx.media_reg.get(url) {
+                        Some(MediaEntry::Failed(_)) => lines.push(media_badge_failed()),
+                        _ => lines.push(media_badge_loading()),
+                    },
                 }
             }
         }
@@ -1093,86 +1155,132 @@ fn tweet_lines(
             .map(|m| m.url.as_str())
             .collect();
         let visible_count = photo_urls.len().min(4);
-        let slice = &photo_urls[..visible_count];
         let overflow = photo_urls.len().saturating_sub(visible_count);
-        let (cell_cols, cell_rows) = media::layout_for(visible_count, wrap_width);
-
-        let ready_ids: Vec<Option<u32>> = slice
-            .iter()
-            .map(|url| match ctx.media_reg.get(url) {
-                Some(MediaEntry::Ready { id_expanded, .. }) => Some(*id_expanded),
-                _ => None,
-            })
-            .collect();
-        let any_not_ready = ready_ids.iter().any(|o| o.is_none());
-        let first_state = ctx.media_reg.get(slice[0]);
-
-        if any_not_ready {
-            match first_state {
-                Some(MediaEntry::Failed(_)) => lines.push(media_badge_failed()),
-                _ => lines.push(media_badge_loading()),
+        let max_cols = image_max_cols(wrap_width);
+        for url in &photo_urls[..visible_count] {
+            match render_image_lines(
+                ctx.media_reg,
+                url,
+                max_cols,
+                ctx.opts.media_max_rows,
+                &indent,
+            ) {
+                Some(img_lines) => lines.extend(img_lines),
+                None => match ctx.media_reg.get(url) {
+                    Some(MediaEntry::Failed(_)) => lines.push(media_badge_failed()),
+                    _ => lines.push(media_badge_loading()),
+                },
             }
-        } else {
-            for row in 0..cell_rows {
-                let mut spans: Vec<Span<'static>> = vec![indent.clone()];
-                for (i, maybe_id) in ready_ids.iter().enumerate() {
-                    if i > 0 {
-                        spans.push(Span::raw("  "));
-                    }
-                    if let Some(id) = maybe_id {
-                        spans.push(placeholder_row_span(*id, row, cell_cols));
-                    }
-                }
-                lines.push(Line::from(spans));
-            }
-            if overflow > 0 {
-                lines.push(Line::from(vec![
-                    indent.clone(),
-                    Span::styled(
-                        format!("[+{overflow} more]"),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                ]));
-            }
+        }
+        if overflow > 0 {
+            lines.push(Line::from(vec![
+                indent.clone(),
+                Span::styled(
+                    format!("[+{overflow} more]"),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
         }
     }
 
     lines
 }
 
-fn emit_placements_for_tweets<'a, I>(registry: &MediaRegistry, tweets: I, wrap_width: usize)
-where
-    I: IntoIterator<Item = &'a Tweet>,
-{
-    if !registry.supported {
+fn image_max_cols(wrap_width: usize) -> usize {
+    wrap_width.saturating_sub(4).clamp(10, 80)
+}
+
+fn render_image_lines(
+    registry: &MediaRegistry,
+    url: &str,
+    max_cols: usize,
+    max_rows: usize,
+    indent: &Span<'static>,
+) -> Option<Vec<Line<'static>>> {
+    match registry.get(url)? {
+        MediaEntry::ReadyKitty { id, w, h } => {
+            let cell = registry.cell_size()?;
+            let (nc, nr) = media::kitty_image_cells(cell, *w, *h, max_cols as u32);
+            let (c, r) = media::fit_cells_to_pane(nc, nr, max_cols as u32, max_rows as u32);
+            if c == 0 || r == 0 {
+                return None;
+            }
+            Some(media::placeholder_lines(*id, r, c, indent))
+        }
+        MediaEntry::ReadyPixels { pixels, w, h } => Some(media::render_sextants(
+            pixels, *w, *h, max_cols, max_rows, indent,
+        )),
+        _ => None,
+    }
+}
+
+pub fn emit_media_placements(app: &App, terminal_width: u16) {
+    if !app.media.is_kitty() {
         return;
     }
-    use std::io::Write;
-    let mut out = std::io::stdout().lock();
-    for tweet in tweets {
-        let photo_count = tweet
-            .media
+    let Some(cell) = app.media.cell_size() else {
+        return;
+    };
+
+    let terminal_h = ratatui::crossterm::terminal::size()
+        .map(|(_, h)| h)
+        .unwrap_or(40);
+    let pane_h = terminal_h.saturating_sub(2) as usize;
+    let max_rows = (pane_h.saturating_sub(4) / 2).clamp(6, 24);
+
+    let (source_wrap, detail_wrap) = if app.is_split() {
+        let left = (terminal_width as u32 * app.split_pct as u32 / 100) as u16;
+        let right = terminal_width.saturating_sub(left);
+        ((left as usize), Some(right as usize))
+    } else {
+        (terminal_width as usize, None)
+    };
+
+    let needs_source = app.media_auto_expand
+        || app
+            .source
+            .tweets
             .iter()
-            .filter(|m| matches!(m.kind, crate::model::MediaKind::Photo))
-            .count();
-        if photo_count == 0 {
+            .any(|t| app.expanded_bodies.contains(&t.rest_id));
+    if needs_source {
+        for tweet in app.source.tweets.iter() {
+            emit_placement_for_tweet(&app.media, cell, tweet, source_wrap, max_rows);
+        }
+    }
+
+    if let Some(FocusEntry::Tweet(detail)) = app.focus_stack.last() {
+        let wrap = detail_wrap.unwrap_or(source_wrap);
+        emit_placement_for_tweet(&app.media, cell, &detail.tweet, wrap, max_rows);
+        for reply in &detail.replies {
+            emit_placement_for_tweet(&app.media, cell, reply, wrap, max_rows);
+        }
+    }
+}
+
+fn emit_placement_for_tweet(
+    registry: &MediaRegistry,
+    cell: media::CellSize,
+    tweet: &Tweet,
+    wrap_width: usize,
+    max_rows: usize,
+) {
+    let max_cols = image_max_cols(wrap_width);
+    for media_item in tweet.media.iter().take(4) {
+        if !matches!(media_item.kind, crate::model::MediaKind::Photo) {
             continue;
         }
-        let visible = photo_count.min(4);
-        let (cols, rows) = media::layout_for(visible, wrap_width);
-        for media in &tweet.media {
-            if !matches!(media.kind, crate::model::MediaKind::Photo) {
-                continue;
-            }
-            if let Some(MediaEntry::Ready { id_expanded, .. }) = registry.get(&media.url) {
-                let _ = write!(
-                    out,
-                    "\x1b_Ga=p,U=1,i={id_expanded},c={cols},r={rows},q=2\x1b\\"
-                );
+        if let Some(MediaEntry::ReadyKitty { id, w, h }) = registry.get(&media_item.url) {
+            let (nc, nr) = media::kitty_image_cells(cell, *w, *h, max_cols as u32);
+            let (c, r) = media::fit_cells_to_pane(nc, nr, max_cols as u32, max_rows as u32);
+            if c > 0 && r > 0 {
+                media::emit_kitty_placement(*id, c, r);
             }
         }
     }
-    let _ = out.flush();
+    if let Some(qt) = &tweet.quoted_tweet {
+        let qt_wrap = wrap_width.saturating_sub(4);
+        emit_placement_for_tweet(registry, cell, qt, qt_wrap, max_rows);
+    }
 }
 
 fn append_inline_thread(

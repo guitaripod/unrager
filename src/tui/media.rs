@@ -55,42 +55,124 @@ const DIACRITICS: [char; 297] = [
     '\u{1D244}',
 ];
 
-pub const COMPACT_COLS: u16 = 14;
-pub const COMPACT_ROWS: u16 = 5;
-pub const EXPANDED_COLS: u16 = 40;
-pub const EXPANDED_ROWS: u16 = 12;
+#[derive(Debug, Clone, Copy)]
+pub struct CellSize {
+    pub w: u32,
+    pub h: u32,
+}
 
-pub fn layout_for(count: usize, wrap_width: usize) -> (usize, usize) {
-    let inner = wrap_width.saturating_sub(4);
-    match count {
-        0 => (0, 0),
-        1 => (inner.clamp(10, 40), 12),
-        2 => {
-            let per = inner.saturating_sub(2) / 2;
-            (per.clamp(8, 22), 10)
-        }
-        3 => {
-            let per = inner.saturating_sub(4) / 3;
-            (per.clamp(6, 16), 8)
-        }
-        _ => {
-            let per = inner.saturating_sub(6) / 4;
-            (per.clamp(6, 12), 6)
+impl CellSize {
+    pub fn aspect(&self) -> f32 {
+        self.h as f32 / self.w as f32
+    }
+}
+
+pub fn detect_cell_size() -> Option<CellSize> {
+    if let Ok(ws) = crossterm::terminal::window_size() {
+        if ws.rows > 0 && ws.columns > 0 && ws.width > 0 && ws.height > 0 {
+            let w = ws.width as u32 / ws.columns as u32;
+            let h = ws.height as u32 / ws.rows as u32;
+            if w > 0 && h > 0 {
+                tracing::info!(w, h, source = "ioctl", "detected cell pixel size");
+                return Some(CellSize { w, h });
+            }
         }
     }
+    if let Some(cs) = query_cell_pixels_csi() {
+        tracing::info!(
+            w = cs.w,
+            h = cs.h,
+            source = "csi_16t",
+            "detected cell pixel size"
+        );
+        return Some(cs);
+    }
+    tracing::warn!("cell pixel size unknown; using default aspect");
+    None
+}
+
+fn query_cell_pixels_csi() -> Option<CellSize> {
+    use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+    use std::io::{Read, Write};
+    use std::os::unix::io::AsRawFd;
+
+    enable_raw_mode().ok()?;
+    let result = (|| -> Option<CellSize> {
+        {
+            let mut out = std::io::stdout().lock();
+            out.write_all(b"\x1b[16t").ok()?;
+            out.flush().ok()?;
+        }
+        let stdin = std::io::stdin();
+        let fd = stdin.as_raw_fd();
+        let mut pfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ret = unsafe { libc::poll(&mut pfd, 1, 200) };
+        if ret <= 0 {
+            return None;
+        }
+        let mut buf = [0u8; 64];
+        let mut handle = stdin.lock();
+        let n = handle.read(&mut buf).ok()?;
+        let s = std::str::from_utf8(&buf[..n]).ok()?;
+        let s = s.strip_prefix("\x1b[6;")?;
+        let s = s.strip_suffix('t')?;
+        let mut parts = s.split(';');
+        let h: u32 = parts.next()?.parse().ok()?;
+        let w: u32 = parts.next()?.parse().ok()?;
+        if w > 0 && h > 0 {
+            Some(CellSize { w, h })
+        } else {
+            None
+        }
+    })();
+    let _ = disable_raw_mode();
+    result
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum MediaMode {
+    Kitty { cell: CellSize },
+    Halfblocks,
+    Disabled,
 }
 
 #[derive(Debug, Clone)]
 pub enum MediaEntry {
     Loading,
-    Ready { id_compact: u32, id_expanded: u32 },
+    ReadyKitty {
+        id: u32,
+        w: u32,
+        h: u32,
+    },
+    ReadyPixels {
+        pixels: Arc<Vec<u8>>,
+        w: u32,
+        h: u32,
+    },
     Failed(String),
-    Unsupported { kind: MediaKind },
+    Unsupported {
+        kind: MediaKind,
+    },
+}
+
+impl MediaEntry {
+    pub fn dims(&self) -> Option<(u32, u32)> {
+        match self {
+            MediaEntry::ReadyKitty { w, h, .. } | MediaEntry::ReadyPixels { w, h, .. } => {
+                Some((*w, *h))
+            }
+            _ => None,
+        }
+    }
 }
 
 pub struct MediaRegistry {
     pub entries: HashMap<String, MediaEntry>,
-    pub supported: bool,
+    pub mode: MediaMode,
     next_id: u32,
     semaphore: Arc<Semaphore>,
     insertion_order: VecDeque<String>,
@@ -104,13 +186,39 @@ impl Default for MediaRegistry {
 
 impl MediaRegistry {
     pub fn new() -> Self {
+        let mode = if std::env::var("UNRAGER_DISABLE_IMAGES").ok().as_deref() == Some("1") {
+            MediaMode::Disabled
+        } else if detect_kitty_support() {
+            match detect_cell_size() {
+                Some(cell) => MediaMode::Kitty { cell },
+                None => MediaMode::Halfblocks,
+            }
+        } else {
+            MediaMode::Halfblocks
+        };
+        tracing::info!(?mode, "media mode selected");
         Self {
             entries: HashMap::new(),
-            supported: detect_kitty_support(),
+            mode,
             next_id: 1,
             semaphore: Arc::new(Semaphore::new(4)),
             insertion_order: VecDeque::new(),
         }
+    }
+
+    pub fn supported(&self) -> bool {
+        !matches!(self.mode, MediaMode::Disabled)
+    }
+
+    pub fn cell_size(&self) -> Option<CellSize> {
+        match self.mode {
+            MediaMode::Kitty { cell } => Some(cell),
+            _ => None,
+        }
+    }
+
+    pub fn is_kitty(&self) -> bool {
+        matches!(self.mode, MediaMode::Kitty { .. })
     }
 
     pub fn get(&self, url: &str) -> Option<&MediaEntry> {
@@ -120,64 +228,67 @@ impl MediaRegistry {
     fn insert_entry(&mut self, url: String, entry: MediaEntry) {
         self.insertion_order.push_back(url.clone());
         self.entries.insert(url, entry);
-        self.evict_if_over_cap();
-    }
-
-    fn evict_if_over_cap(&mut self) {
         while self.entries.len() > MAX_MEDIA_ENTRIES {
-            let Some(url) = self.insertion_order.pop_front() else {
-                return;
+            let Some(old) = self.insertion_order.pop_front() else {
+                break;
             };
-            if let Some(MediaEntry::Ready {
-                id_compact,
-                id_expanded,
-            }) = self.entries.remove(&url)
-            {
-                delete_image(id_compact);
-                delete_image(id_expanded);
+            if let Some(MediaEntry::ReadyKitty { id, .. }) = self.entries.remove(&old) {
+                delete_image(id);
             }
         }
     }
 
     pub fn ensure_tweet_media(&mut self, tweet: &Tweet, tx: &EventTx) {
-        if !self.supported {
+        if !self.supported() {
             return;
         }
         if let Some(qt) = &tweet.quoted_tweet {
             self.ensure_tweet_media(qt, tx);
         }
+        let is_kitty = self.is_kitty();
         for media in &tweet.media {
             if self.entries.contains_key(&media.url) {
                 continue;
             }
             match media.kind {
                 MediaKind::Photo => {
-                    let id_compact = self.next_id;
-                    self.next_id += 1;
-                    let id_expanded = self.next_id;
-                    self.next_id += 1;
                     self.insert_entry(media.url.clone(), MediaEntry::Loading);
                     let url = media.url.clone();
                     let sem = self.semaphore.clone();
                     let tx = tx.clone();
-                    tokio::spawn(async move {
-                        let _permit = sem.acquire_owned().await.ok();
-                        match fetch_and_transmit(id_compact, id_expanded, &url).await {
-                            Ok(()) => {
-                                let _ = tx.send(Event::MediaLoaded {
-                                    url,
-                                    id: id_compact,
-                                    id_expanded,
-                                });
+                    if is_kitty {
+                        let id = self.next_id;
+                        self.next_id += 1;
+                        tokio::spawn(async move {
+                            let _permit = sem.acquire_owned().await.ok();
+                            match fetch_and_transmit_kitty(id, &url).await {
+                                Ok((w, h)) => {
+                                    let _ = tx.send(Event::MediaLoadedKitty { url, id, w, h });
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(Event::MediaFailed {
+                                        url,
+                                        err: e.to_string(),
+                                    });
+                                }
                             }
-                            Err(e) => {
-                                let _ = tx.send(Event::MediaFailed {
-                                    url,
-                                    err: e.to_string(),
-                                });
+                        });
+                    } else {
+                        tokio::spawn(async move {
+                            let _permit = sem.acquire_owned().await.ok();
+                            match fetch_and_decode(&url).await {
+                                Ok((pixels, w, h)) => {
+                                    let _ = tx.send(Event::MediaLoadedPixels { url, pixels, w, h });
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(Event::MediaFailed {
+                                        url,
+                                        err: e.to_string(),
+                                    });
+                                }
                             }
-                        }
-                    });
+                        });
+                    }
                 }
                 MediaKind::Video | MediaKind::AnimatedGif => {
                     self.insert_entry(
@@ -189,14 +300,14 @@ impl MediaRegistry {
         }
     }
 
-    pub fn mark_ready(&mut self, url: &str, id_compact: u32, id_expanded: u32) {
-        self.entries.insert(
-            url.to_string(),
-            MediaEntry::Ready {
-                id_compact,
-                id_expanded,
-            },
-        );
+    pub fn mark_ready_kitty(&mut self, url: &str, id: u32, w: u32, h: u32) {
+        self.entries
+            .insert(url.to_string(), MediaEntry::ReadyKitty { id, w, h });
+    }
+
+    pub fn mark_ready_pixels(&mut self, url: &str, pixels: Arc<Vec<u8>>, w: u32, h: u32) {
+        self.entries
+            .insert(url.to_string(), MediaEntry::ReadyPixels { pixels, w, h });
     }
 
     pub fn mark_failed(&mut self, url: &str, err: String) {
@@ -211,8 +322,17 @@ fn delete_image(id: u32) {
     let _ = out.flush();
 }
 
+pub fn cleanup_all() {
+    let mut out = std::io::stdout().lock();
+    let _ = write!(out, "\x1b_Ga=d,d=A,q=2\x1b\\");
+    let _ = out.flush();
+}
+
 fn detect_kitty_support() -> bool {
     if std::env::var("UNRAGER_DISABLE_KITTY").is_ok() {
+        return false;
+    }
+    if std::env::var("UNRAGER_FORCE_HALFBLOCKS").is_ok() {
         return false;
     }
     if std::env::var("KITTY_WINDOW_ID").is_ok() {
@@ -230,14 +350,22 @@ fn detect_kitty_support() -> bool {
             return true;
         }
     }
+    if let Ok(konsole) = std::env::var("KONSOLE_VERSION") {
+        if let Ok(ver) = konsole.parse::<u32>() {
+            if ver >= 220370 {
+                return true;
+            }
+        }
+    }
     false
 }
 
-async fn fetch_and_transmit(
-    id_compact: u32,
-    id_expanded: u32,
+const SRC_MAX_DIM: u32 = 800;
+
+async fn fetch_and_transmit_kitty(
+    id: u32,
     url: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(u32, u32), Box<dyn std::error::Error + Send + Sync>> {
     let bytes = reqwest::Client::new()
         .get(url)
         .send()
@@ -248,40 +376,51 @@ async fn fetch_and_transmit(
     let (raw, w, h) =
         tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, u32, u32), image::ImageError> {
             let img = image::load_from_memory(&bytes)?;
-            let img = downscale_for_transmit(img);
+            let img = downscale(img, SRC_MAX_DIM);
             let rgba = img.to_rgba8();
-            let dims = rgba.dimensions();
-            Ok((rgba.into_raw(), dims.0, dims.1))
+            let (w, h) = rgba.dimensions();
+            Ok((rgba.into_raw(), w, h))
         })
         .await??;
-    let raw = Arc::new(raw);
-    let raw_a = raw.clone();
-    tokio::task::spawn_blocking(move || {
-        transmit_image(id_compact, &raw_a, w, h, COMPACT_COLS, COMPACT_ROWS);
-    })
-    .await?;
-    let raw_b = raw.clone();
-    tokio::task::spawn_blocking(move || {
-        transmit_image(id_expanded, &raw_b, w, h, EXPANDED_COLS, EXPANDED_ROWS);
-    })
-    .await?;
-    Ok(())
+    tokio::task::spawn_blocking(move || transmit_image(id, &raw, w, h)).await?;
+    Ok((w, h))
 }
 
-fn downscale_for_transmit(img: image::DynamicImage) -> image::DynamicImage {
+async fn fetch_and_decode(
+    url: &str,
+) -> Result<(Arc<Vec<u8>>, u32, u32), Box<dyn std::error::Error + Send + Sync>> {
+    let bytes = reqwest::Client::new()
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .bytes()
+        .await?;
+    let (raw, w, h) =
+        tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, u32, u32), image::ImageError> {
+            let img = image::load_from_memory(&bytes)?;
+            let img = downscale(img, 512);
+            let rgba = img.to_rgba8();
+            let (w, h) = rgba.dimensions();
+            Ok((rgba.into_raw(), w, h))
+        })
+        .await??;
+    Ok((Arc::new(raw), w, h))
+}
+
+fn downscale(img: image::DynamicImage, max_dim: u32) -> image::DynamicImage {
     use image::GenericImageView;
-    const MAX_DIM: u32 = 400;
     let (w, h) = img.dimensions();
-    if w <= MAX_DIM && h <= MAX_DIM {
+    if w <= max_dim && h <= max_dim {
         return img;
     }
-    let scale = (MAX_DIM as f32 / w as f32).min(MAX_DIM as f32 / h as f32);
-    let new_w = (w as f32 * scale).round() as u32;
-    let new_h = (h as f32 * scale).round() as u32;
-    img.resize_exact(new_w, new_h, image::imageops::FilterType::Triangle)
+    let scale = (max_dim as f32 / w as f32).min(max_dim as f32 / h as f32);
+    let new_w = ((w as f32 * scale).round() as u32).max(1);
+    let new_h = ((h as f32 * scale).round() as u32).max(1);
+    img.resize_exact(new_w, new_h, image::imageops::FilterType::Lanczos3)
 }
 
-pub fn transmit_image(id: u32, rgba: &[u8], w: u32, h: u32, _place_cols: u16, _place_rows: u16) {
+fn transmit_image(id: u32, rgba: &[u8], w: u32, h: u32) {
     let encoded = STANDARD.encode(rgba);
     let bytes = encoded.as_bytes();
     let chunk_size = 4096;
@@ -305,10 +444,68 @@ pub fn transmit_image(id: u32, rgba: &[u8], w: u32, h: u32, _place_cols: u16, _p
     let _ = out.flush();
 }
 
-pub fn cleanup_all() {
+pub fn kitty_image_cells(cell: CellSize, img_w: u32, img_h: u32, max_cols: u32) -> (u32, u32) {
+    if img_w == 0 || img_h == 0 || cell.w == 0 || cell.h == 0 {
+        return (0, 0);
+    }
+    let natural_cols = img_w.div_ceil(cell.w);
+    let natural_rows = img_h.div_ceil(cell.h);
+    if natural_cols <= max_cols {
+        return (natural_cols.max(1), natural_rows.max(1));
+    }
+    let scale = max_cols as f32 / natural_cols as f32;
+    let cols = max_cols;
+    let rows = (natural_rows as f32 * scale).round().max(1.0) as u32;
+    (cols, rows)
+}
+
+pub fn fit_cells_to_pane(cols: u32, rows: u32, max_cols: u32, max_rows: u32) -> (u32, u32) {
+    if cols == 0 || rows == 0 {
+        return (0, 0);
+    }
+    let mut c = cols.min(max_cols);
+    let mut r = (rows as u64 * c as u64 / cols as u64) as u32;
+    if r > max_rows {
+        r = max_rows;
+        c = (cols as u64 * r as u64 / rows as u64) as u32;
+    }
+    (c.max(1), r.max(1))
+}
+
+pub fn emit_kitty_placement(id: u32, cols: u32, rows: u32) {
     let mut out = std::io::stdout().lock();
-    let _ = write!(out, "\x1b_Ga=d,d=A,q=2\x1b\\");
+    let _ = write!(out, "\x1b_Ga=p,U=1,i={id},c={cols},r={rows},q=2\x1b\\");
     let _ = out.flush();
+}
+
+pub fn placeholder_lines(
+    id: u32,
+    rows: u32,
+    cols: u32,
+    indent: &Span<'static>,
+) -> Vec<Line<'static>> {
+    let rows = (rows as usize).min(DIACRITICS.len());
+    let cols = (cols as usize).min(DIACRITICS.len());
+    let color = id_color(id);
+    let style = Style::default().fg(color);
+    let mut out = Vec::with_capacity(rows);
+    for r in 0..rows {
+        let spans: Vec<Span<'static>> = vec![indent.clone(), placeholder_row(r, cols, style)];
+        out.push(Line::from(spans));
+    }
+    out
+}
+
+fn placeholder_row(row: usize, cols: usize, style: Style) -> Span<'static> {
+    let row = row.min(DIACRITICS.len() - 1);
+    let row_dia = DIACRITICS[row];
+    let mut s = String::with_capacity(cols * 9);
+    for &col_dia in DIACRITICS.iter().take(cols) {
+        s.push(PLACEHOLDER);
+        s.push(row_dia);
+        s.push(col_dia);
+    }
+    Span::styled(s, style)
 }
 
 fn id_color(id: u32) -> Color {
@@ -319,34 +516,133 @@ fn id_color(id: u32) -> Color {
     )
 }
 
-pub fn placeholder_lines(id: u32, rows: usize, cols: usize) -> Vec<Line<'static>> {
-    let rows = rows.min(DIACRITICS.len());
-    let cols = cols.min(DIACRITICS.len());
-    let color = id_color(id);
-    let style = Style::default().fg(color);
+fn rgba_at(rgba: &[u8], w: u32, x: u32, y: u32) -> (u8, u8, u8) {
+    let idx = ((y * w + x) * 4) as usize;
+    (rgba[idx], rgba[idx + 1], rgba[idx + 2])
+}
+
+fn brightness(p: (u8, u8, u8)) -> u32 {
+    p.0 as u32 + p.1 as u32 + p.2 as u32
+}
+
+fn avg_color(pixels: &[(u8, u8, u8)]) -> Option<(u8, u8, u8)> {
+    if pixels.is_empty() {
+        return None;
+    }
+    let n = pixels.len() as u32;
+    let (r, g, b) = pixels.iter().fold((0u32, 0u32, 0u32), |acc, p| {
+        (acc.0 + p.0 as u32, acc.1 + p.1 as u32, acc.2 + p.2 as u32)
+    });
+    Some(((r / n) as u8, (g / n) as u8, (b / n) as u8))
+}
+
+#[rustfmt::skip]
+const SEXTANT_CHARS: [&str; 64] = [
+    " ",
+    "🬀","🬁","🬂","🬃","🬄","🬅","🬆","🬇","🬈","🬉","🬊","🬋","🬌","🬍","🬎","🬏","🬐","🬑","🬒","🬓",
+    "▌",
+    "🬔","🬕","🬖","🬗","🬘","🬙","🬚","🬛","🬜","🬝","🬞","🬟","🬠","🬡","🬢","🬣","🬤","🬥","🬦","🬧",
+    "▐",
+    "🬨","🬩","🬪","🬫","🬬","🬭","🬮","🬯","🬰","🬱","🬲","🬳","🬴","🬵","🬶","🬷","🬸","🬹","🬺","🬻",
+    "█",
+];
+
+fn sextant_char(mask: u8) -> &'static str {
+    SEXTANT_CHARS[(mask & 0x3F) as usize]
+}
+
+fn fit_grid_halfblocks(aspect: f32, max_cols: usize, max_rows: usize) -> (usize, usize) {
+    if max_cols == 0 || max_rows == 0 {
+        return (0, 0);
+    }
+    let ideal_rows = (max_cols as f32 * aspect / 2.0).round().max(1.0) as usize;
+    if ideal_rows <= max_rows {
+        (max_cols, ideal_rows)
+    } else {
+        let cols = ((max_rows as f32 * 2.0 / aspect).round().max(1.0) as usize).min(max_cols);
+        (cols, max_rows)
+    }
+}
+
+pub fn render_sextants(
+    pixels: &[u8],
+    src_w: u32,
+    src_h: u32,
+    max_cols: usize,
+    max_rows: usize,
+    indent: &Span<'static>,
+) -> Vec<Line<'static>> {
+    if max_cols == 0 || max_rows == 0 || src_w == 0 || src_h == 0 {
+        return vec![];
+    }
+    let aspect = src_h as f32 / src_w as f32;
+    let (cols, rows) = fit_grid_halfblocks(aspect, max_cols, max_rows);
+    if cols == 0 || rows == 0 {
+        return vec![];
+    }
+    let target_w = (cols as u32).saturating_mul(2).max(2);
+    let target_h = (rows as u32).saturating_mul(3).max(3);
+
+    let src = image::RgbaImage::from_raw(src_w, src_h, pixels.to_vec());
+    let Some(src) = src else {
+        return vec![];
+    };
+    let resized = image::imageops::resize(
+        &src,
+        target_w,
+        target_h,
+        image::imageops::FilterType::Lanczos3,
+    );
+    let rgba = resized.as_raw();
+
     let mut out = Vec::with_capacity(rows);
-    for r in 0..rows {
-        out.push(Line::from(placeholder_row(id, r, cols, style)));
+    for y in 0..rows {
+        let mut spans: Vec<Span<'static>> = Vec::with_capacity(cols + 1);
+        spans.push(indent.clone());
+        for x in 0..cols {
+            let px = x as u32 * 2;
+            let py = y as u32 * 3;
+            let sub = [
+                rgba_at(rgba, target_w, px, py),
+                rgba_at(rgba, target_w, px + 1, py),
+                rgba_at(rgba, target_w, px, py + 1),
+                rgba_at(rgba, target_w, px + 1, py + 1),
+                rgba_at(rgba, target_w, px, py + 2),
+                rgba_at(rgba, target_w, px + 1, py + 2),
+            ];
+            let bs: [u32; 6] = [
+                brightness(sub[0]),
+                brightness(sub[1]),
+                brightness(sub[2]),
+                brightness(sub[3]),
+                brightness(sub[4]),
+                brightness(sub[5]),
+            ];
+            let avg = bs.iter().sum::<u32>() / 6;
+            let mut fg_pix: Vec<(u8, u8, u8)> = Vec::with_capacity(6);
+            let mut bg_pix: Vec<(u8, u8, u8)> = Vec::with_capacity(6);
+            let mut mask = 0u8;
+            for i in 0..6 {
+                if bs[i] >= avg {
+                    fg_pix.push(sub[i]);
+                    mask |= 1 << i;
+                } else {
+                    bg_pix.push(sub[i]);
+                }
+            }
+            let fg = avg_color(&fg_pix).unwrap_or((0, 0, 0));
+            let bg = avg_color(&bg_pix).unwrap_or(fg);
+
+            spans.push(Span::styled(
+                sextant_char(mask),
+                Style::default()
+                    .fg(Color::Rgb(fg.0, fg.1, fg.2))
+                    .bg(Color::Rgb(bg.0, bg.1, bg.2)),
+            ));
+        }
+        out.push(Line::from(spans));
     }
     out
-}
-
-pub fn placeholder_row_span(id: u32, row: usize, cols: usize) -> Span<'static> {
-    let style = Style::default().fg(id_color(id));
-    placeholder_row(id, row, cols, style)
-}
-
-fn placeholder_row(_id: u32, row: usize, cols: usize, style: Style) -> Span<'static> {
-    let cols = cols.min(DIACRITICS.len());
-    let row = row.min(DIACRITICS.len() - 1);
-    let row_dia = DIACRITICS[row];
-    let mut s = String::with_capacity(cols * 9);
-    for &col_dia in DIACRITICS.iter().take(cols) {
-        s.push(PLACEHOLDER);
-        s.push(row_dia);
-        s.push(col_dia);
-    }
-    Span::styled(s, style)
 }
 
 pub fn media_badge_loading() -> Line<'static> {

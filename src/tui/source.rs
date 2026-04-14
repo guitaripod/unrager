@@ -5,12 +5,26 @@ use crate::gql::query_ids::Operation;
 use crate::model::Tweet;
 use crate::parse::notification::{NotificationPage, RawNotification};
 use crate::parse::timeline::{self, TimelinePage};
-use ratatui::widgets::ListState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashSet;
 
 const PAGE_SIZE: u32 = 20;
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PaneState {
+    pub selected: usize,
+    pub scroll: u16,
+}
+
+impl PaneState {
+    pub fn with_selected(selected: usize) -> Self {
+        Self {
+            selected,
+            scroll: 0,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -82,16 +96,14 @@ pub struct Source {
     pub loading: bool,
     pub silent_refreshing: bool,
     pub exhausted: bool,
-    pub list_state: ListState,
+    pub state: PaneState,
 }
 
 impl Source {
     pub fn new(kind: SourceKind) -> Self {
-        let mut list_state = ListState::default();
-        list_state.select(Some(0));
         Self {
             kind: Some(kind),
-            list_state,
+            state: PaneState::default(),
             ..Self::default()
         }
     }
@@ -120,11 +132,11 @@ impl Source {
     }
 
     pub fn selected(&self) -> usize {
-        self.list_state.selected().unwrap_or(0)
+        self.state.selected
     }
 
     pub fn set_selected(&mut self, index: usize) {
-        self.list_state.select(Some(index));
+        self.state.selected = index;
     }
 
     pub fn reset_with(&mut self, page: TimelinePage) {
@@ -132,12 +144,8 @@ impl Source {
         self.cursor = page.next_cursor;
         self.exhausted = self.cursor.is_none();
         let last = self.tweets.len().saturating_sub(1);
-        let current = self.list_state.selected().unwrap_or(0).min(last);
-        self.list_state = ListState::default();
-        self.list_state.select(Some(current));
-        if !self.tweets.is_empty() {
-            *self.list_state.offset_mut() = 0;
-        }
+        let current = self.state.selected.min(last);
+        self.state = PaneState::with_selected(current);
     }
 
     pub fn append(&mut self, page: TimelinePage) {
@@ -164,12 +172,8 @@ impl Source {
         self.cursor = page.next_cursor;
         self.exhausted = self.cursor.is_none();
         let last = self.notifications.len().saturating_sub(1);
-        let current = self.list_state.selected().unwrap_or(0).min(last);
-        self.list_state = ListState::default();
-        self.list_state.select(Some(current));
-        if !self.notifications.is_empty() {
-            *self.list_state.offset_mut() = 0;
-        }
+        let current = self.state.selected.min(last);
+        self.state = PaneState::with_selected(current);
     }
 
     pub fn append_notifications(&mut self, page: NotificationPage) {
@@ -215,8 +219,7 @@ impl Source {
     }
 
     pub fn jump_top(&mut self) {
-        self.set_selected(0);
-        *self.list_state.offset_mut() = 0;
+        self.state = PaneState::default();
     }
 
     pub fn jump_bottom(&mut self) {

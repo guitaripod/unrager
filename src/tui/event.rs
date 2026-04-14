@@ -46,10 +46,17 @@ pub enum Event {
         focal_id: String,
         result: Result<TimelinePage>,
     },
-    MediaLoaded {
+    MediaLoadedKitty {
         url: String,
         id: u32,
-        id_expanded: u32,
+        w: u32,
+        h: u32,
+    },
+    MediaLoadedPixels {
+        url: String,
+        pixels: std::sync::Arc<Vec<u8>>,
+        w: u32,
+        h: u32,
     },
     MediaFailed {
         url: String,

@@ -602,7 +602,7 @@ impl App {
         }
         if self.source.near_bottom() {
             if self.source.is_notifications() {
-                self.fetch_notifications_source(true);
+                self.fetch_notifications_source(true, false);
             } else {
                 self.fetch_source(true);
             }
@@ -636,7 +636,7 @@ impl App {
     pub fn load_initial(&mut self) {
         self.spawn_self_handle_resolve();
         if self.source.is_notifications() {
-            self.fetch_notifications_source(false);
+            self.fetch_notifications_source(false, false);
         } else {
             self.fetch_source(false);
         }
@@ -743,8 +743,12 @@ impl App {
                 tracing::info!(%handle, "self handle resolved in background");
                 self.self_handle = Some(handle);
             }
-            Event::NotificationPageLoaded { result, append } => {
-                self.handle_notification_page_loaded(result, append);
+            Event::NotificationPageLoaded {
+                result,
+                append,
+                silent,
+            } => {
+                self.handle_notification_page_loaded(result, append, silent);
             }
             Event::UserTimelineLoaded { result } => {
                 self.handle_user_timeline_loaded(result);
@@ -762,9 +766,10 @@ impl App {
                 if self.source.is_notifications()
                     && self.source.selected() == 0
                     && !self.source.loading
+                    && !self.source.silent_refreshing
                     && should_poll
                 {
-                    self.fetch_notifications_source(false);
+                    self.fetch_notifications_source(false, true);
                 }
                 if should_poll {
                     self.whisper.poll_inflight = true;
@@ -772,11 +777,6 @@ impl App {
                     let client = self.client.clone();
                     let tx = self.tx.clone();
                     tokio::spawn(async move {
-                        let _ = tokio::time::timeout(
-                            tokio::time::Duration::from_secs(10),
-                            whisper::fetch_mentions(&client, None),
-                        )
-                        .await;
                         match whisper::fetch_notifications(&client, None).await {
                             Ok(page) => {
                                 let _ = tx.send(Event::NotificationsLoaded {
@@ -1251,6 +1251,9 @@ impl App {
     }
 
     fn handle_key_source(&mut self, key: KeyEvent) {
+        if self.source.is_notifications() && !self.source.fresh_ids.is_empty() {
+            self.source.clear_fresh();
+        }
         match (key.code, key.modifiers) {
             (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => {
                 if self.step_actor_cursor(1) {
@@ -1456,7 +1459,7 @@ impl App {
         self.translation_inflight.clear();
         self.notif_actor_cursor = None;
         if is_notifs {
-            self.fetch_notifications_source(false);
+            self.fetch_notifications_source(false, false);
         } else {
             self.fetch_source(false);
         }
@@ -1591,10 +1594,12 @@ impl App {
 
     fn reload_source(&mut self) {
         self.source.loading = false;
+        self.source.silent_refreshing = false;
         self.source.cursor = None;
         self.source.exhausted = false;
+        self.source.clear_fresh();
         if self.source.is_notifications() {
-            self.fetch_notifications_source(false);
+            self.fetch_notifications_source(false, false);
         } else {
             self.fetch_source(false);
         }
@@ -1704,13 +1709,17 @@ impl App {
         }
     }
 
-    fn fetch_notifications_source(&mut self, append: bool) {
-        if self.source.loading {
+    fn fetch_notifications_source(&mut self, append: bool, silent: bool) {
+        if self.source.loading || self.source.silent_refreshing {
             tracing::debug!("notification fetch skipped: already loading");
             return;
         }
-        tracing::info!(append, "notification fetch started");
-        self.source.loading = true;
+        tracing::info!(append, silent, "notification fetch started");
+        if silent {
+            self.source.silent_refreshing = true;
+        } else {
+            self.source.loading = true;
+        }
         let client = self.client.clone();
         let tx = self.tx.clone();
         let cursor = if append {
@@ -1720,30 +1729,18 @@ impl App {
         };
         tokio::spawn(async move {
             let timeout = tokio::time::Duration::from_secs(15);
-            let fetch = async {
-                let mut page = whisper::fetch_notifications(&client, cursor.as_deref()).await?;
-                if !append {
-                    if let Ok(mentions) = whisper::fetch_mentions(&client, None).await {
-                        let existing: std::collections::HashSet<String> =
-                            page.notifications.iter().map(|n| n.id.clone()).collect();
-                        for m in mentions.notifications {
-                            if !existing.contains(&m.id) {
-                                page.notifications.push(m);
-                            }
-                        }
-                        page.notifications
-                            .sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-                    }
-                }
-                Ok(page)
-            };
+            let fetch = whisper::fetch_notifications(&client, cursor.as_deref());
             let result = match tokio::time::timeout(timeout, fetch).await {
                 Ok(r) => r,
                 Err(_) => Err(crate::error::Error::GraphqlShape(
                     "notification fetch timed out".into(),
                 )),
             };
-            let _ = tx.send(Event::NotificationPageLoaded { result, append });
+            let _ = tx.send(Event::NotificationPageLoaded {
+                result,
+                append,
+                silent,
+            });
         });
     }
 
@@ -1751,32 +1748,49 @@ impl App {
         &mut self,
         result: Result<crate::parse::notification::NotificationPage>,
         append: bool,
+        silent: bool,
     ) {
         if !self.source.is_notifications() {
             tracing::debug!("notification page arrived but source changed, discarding");
+            if silent {
+                self.source.silent_refreshing = false;
+            } else {
+                self.source.loading = false;
+            }
             return;
         }
-        self.source.loading = false;
+        if silent {
+            self.source.silent_refreshing = false;
+        } else {
+            self.source.loading = false;
+        }
         match result {
             Ok(page) => {
                 tracing::info!(
                     count = page.notifications.len(),
                     has_cursor = page.next_cursor.is_some(),
                     append,
+                    silent,
                     "notification page loaded"
                 );
                 if append {
                     self.source.append_notifications(page);
                 } else {
-                    self.source.reset_with_notifications(page);
+                    self.source.reset_with_notifications(page, silent);
                 }
                 self.error = None;
-                self.clear_status();
+                if !silent {
+                    self.clear_status();
+                }
             }
             Err(ref e) => {
-                tracing::warn!("notification fetch failed: {e}");
-                self.error = Some(e.to_string());
-                self.clear_status();
+                if silent {
+                    tracing::warn!("silent notification refresh failed: {e}");
+                } else {
+                    tracing::warn!("notification fetch failed: {e}");
+                    self.error = Some(e.to_string());
+                    self.clear_status();
+                }
             }
         }
     }

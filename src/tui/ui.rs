@@ -381,13 +381,15 @@ fn draw_source_list(
             .enumerate()
             .map(|(i, n)| {
                 let seen = notif_seen.is_seen(&n.id);
+                let is_fresh = source.is_fresh(&n.id);
                 let is_expanded = ctx.expanded.contains(&n.id);
                 let actor_cursor = if i == source.selected() {
                     notif_actor_cursor
                 } else {
                     None
                 };
-                let lines = notification_lines(n, seen, wrap_width, is_expanded, actor_cursor);
+                let lines =
+                    notification_lines(n, seen, is_fresh, wrap_width, is_expanded, actor_cursor);
                 let mut item = ListItem::new(lines);
                 if i % 2 == 1 {
                     item = item.style(Style::default().bg(ZEBRA_BG));
@@ -426,6 +428,7 @@ fn draw_source_list(
 fn notification_lines(
     n: &RawNotification,
     seen: bool,
+    fresh: bool,
     wrap_width: usize,
     expanded: bool,
     actor_cursor: Option<usize>,
@@ -460,11 +463,17 @@ fn notification_lines(
         _ => &n.notification_type.to_lowercase(),
     };
 
-    let bullet = if dim { "  " } else { "● " };
-    let bullet_style = if dim {
-        Style::default()
+    let (bullet, bullet_style) = if fresh {
+        (
+            "▸ ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else if dim {
+        ("  ", Style::default())
     } else {
-        Style::default().fg(Color::Green)
+        ("● ", Style::default().fg(Color::Green))
     };
 
     let mut header: Vec<Span<'static>> = vec![

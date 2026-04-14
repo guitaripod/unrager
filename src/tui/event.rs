@@ -83,6 +83,7 @@ pub enum Event {
     NotificationPageLoaded {
         result: Result<crate::parse::notification::NotificationPage>,
         append: bool,
+        silent: bool,
     },
     WhisperPollTick,
     NotificationsLoaded {

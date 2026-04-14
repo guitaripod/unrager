@@ -1,6 +1,6 @@
 [package]
 name = "unrager"
-version = "0.8.10"
+version = "0.8.11"
 edition = "2024"
 rust-version = "1.85"
 description = "A calm Twitter/X CLI with a local-LLM rage filter"

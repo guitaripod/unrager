@@ -3576,7 +3576,7 @@ checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
 
 [[package]]
 name = "unrager"
-version = "0.8.10"
+version = "0.8.11"
 dependencies = [
  "aes",
  "anyhow",

@@ -1115,7 +1115,7 @@ fn append_inline_thread(
     for (depth, reply) in &thread.replies {
         let indent_cols = 4 + depth * 2;
         let child_wrap = wrap_width.saturating_sub(indent_cols);
-        let reply_lines = tweet_lines(reply, ctx, false, true, child_wrap, false);
+        let reply_lines = tweet_lines(reply, ctx, false, true, child_wrap, true);
         let gutter_str: String = format!("  {:>width$}│ ", "", width = depth * 2);
         for mut line in reply_lines {
             let gutter = Span::styled(gutter_str.clone(), Style::default().fg(Color::DarkGray));

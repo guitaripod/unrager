@@ -883,13 +883,13 @@ impl App {
                 }
             }
             (KeyCode::Char('X'), _) => {
-                if self.active == ActivePane::Source {
+                if self.active == ActivePane::Source && !self.source.is_notifications() {
                     if let Some(tweet) = self.source.tweets.get(self.source.selected()).cloned() {
                         self.mark_current_seen();
                         self.push_tweet(tweet);
                     }
-                }
-                if !self.source.is_notifications() {
+                    self.toggle_inline_thread();
+                } else if self.active == ActivePane::Detail {
                     self.toggle_inline_thread();
                 }
             }
@@ -982,6 +982,10 @@ impl App {
             self.set_status("thread collapsed");
             return;
         }
+        self.expanded_bodies.insert(id.clone());
+        if let Some(tweet) = self.selected_tweet().cloned() {
+            self.media.ensure_tweet_media(&tweet, &self.tx);
+        }
         self.inline_threads.insert(
             id.clone(),
             InlineThread {
@@ -1028,9 +1032,7 @@ impl App {
                 Vec::new()
             }
         };
-        if self.media_auto_expand {
-            self.queue_thread_media(&replies_snapshot);
-        }
+        self.queue_thread_media(&replies_snapshot);
     }
 
     fn selected_tweet(&self) -> Option<&Tweet> {

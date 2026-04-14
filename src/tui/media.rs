@@ -4,10 +4,12 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::Write;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
+
+const MAX_MEDIA_ENTRIES: usize = 128;
 
 const PLACEHOLDER: char = '\u{10EEEE}';
 
@@ -91,6 +93,7 @@ pub struct MediaRegistry {
     pub supported: bool,
     next_id: u32,
     semaphore: Arc<Semaphore>,
+    insertion_order: VecDeque<String>,
 }
 
 impl Default for MediaRegistry {
@@ -106,11 +109,34 @@ impl MediaRegistry {
             supported: detect_kitty_support(),
             next_id: 1,
             semaphore: Arc::new(Semaphore::new(4)),
+            insertion_order: VecDeque::new(),
         }
     }
 
     pub fn get(&self, url: &str) -> Option<&MediaEntry> {
         self.entries.get(url)
+    }
+
+    fn insert_entry(&mut self, url: String, entry: MediaEntry) {
+        self.insertion_order.push_back(url.clone());
+        self.entries.insert(url, entry);
+        self.evict_if_over_cap();
+    }
+
+    fn evict_if_over_cap(&mut self) {
+        while self.entries.len() > MAX_MEDIA_ENTRIES {
+            let Some(url) = self.insertion_order.pop_front() else {
+                return;
+            };
+            if let Some(MediaEntry::Ready {
+                id_compact,
+                id_expanded,
+            }) = self.entries.remove(&url)
+            {
+                delete_image(id_compact);
+                delete_image(id_expanded);
+            }
+        }
     }
 
     pub fn ensure_tweet_media(&mut self, tweet: &Tweet, tx: &EventTx) {
@@ -126,11 +152,11 @@ impl MediaRegistry {
             }
             match media.kind {
                 MediaKind::Photo => {
-                    self.entries.insert(media.url.clone(), MediaEntry::Loading);
                     let id_compact = self.next_id;
                     self.next_id += 1;
                     let id_expanded = self.next_id;
                     self.next_id += 1;
+                    self.insert_entry(media.url.clone(), MediaEntry::Loading);
                     let url = media.url.clone();
                     let sem = self.semaphore.clone();
                     let tx = tx.clone();
@@ -154,7 +180,7 @@ impl MediaRegistry {
                     });
                 }
                 MediaKind::Video | MediaKind::AnimatedGif => {
-                    self.entries.insert(
+                    self.insert_entry(
                         media.url.clone(),
                         MediaEntry::Unsupported { kind: media.kind },
                     );
@@ -177,6 +203,12 @@ impl MediaRegistry {
         self.entries
             .insert(url.to_string(), MediaEntry::Failed(err));
     }
+}
+
+fn delete_image(id: u32) {
+    let mut out = std::io::stdout().lock();
+    let _ = write!(out, "\x1b_Ga=d,d=i,i={id},q=2\x1b\\");
+    let _ = out.flush();
 }
 
 fn detect_kitty_support() -> bool {

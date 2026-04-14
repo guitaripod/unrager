@@ -2,7 +2,7 @@ use crate::error::{Error, Result};
 use crate::gql::GqlClient;
 use crate::gql::endpoints;
 use crate::gql::query_ids::Operation;
-use crate::model::Tweet;
+use crate::model::{Tweet, User};
 use crate::parse::timeline::{self, TimelinePage};
 use crate::tui::app::ReplySortOrder;
 use ratatui::widgets::ListState;
@@ -119,14 +119,98 @@ impl TweetDetail {
 }
 
 #[derive(Debug)]
+pub struct LikersView {
+    pub tweet_id: String,
+    pub title: String,
+    pub users: Vec<User>,
+    pub cursor: Option<String>,
+    pub loading: bool,
+    pub exhausted: bool,
+    pub error: Option<String>,
+    pub list_state: ListState,
+}
+
+impl LikersView {
+    pub fn new(tweet_id: String, title: String) -> Self {
+        let mut list_state = ListState::default();
+        list_state.select(Some(0));
+        Self {
+            tweet_id,
+            title,
+            users: Vec::new(),
+            cursor: None,
+            loading: true,
+            exhausted: false,
+            error: None,
+            list_state,
+        }
+    }
+
+    pub fn selected(&self) -> usize {
+        self.list_state.selected().unwrap_or(0)
+    }
+
+    pub fn select_next(&mut self) {
+        if self.users.is_empty() {
+            return;
+        }
+        let current = self.selected();
+        if current + 1 < self.users.len() {
+            self.list_state.select(Some(current + 1));
+        }
+    }
+
+    pub fn select_prev(&mut self) {
+        let current = self.selected();
+        if current > 0 {
+            self.list_state.select(Some(current - 1));
+        }
+    }
+
+    pub fn advance(&mut self, delta: isize) {
+        if self.users.is_empty() {
+            return;
+        }
+        let current = self.selected() as isize;
+        let next = (current + delta).clamp(0, self.users.len() as isize - 1) as usize;
+        self.list_state.select(Some(next));
+    }
+
+    pub fn jump_top(&mut self) {
+        self.list_state.select(Some(0));
+        *self.list_state.offset_mut() = 0;
+    }
+
+    pub fn jump_bottom(&mut self) {
+        if !self.users.is_empty() {
+            self.list_state.select(Some(self.users.len() - 1));
+        }
+    }
+
+    pub fn near_bottom(&self) -> bool {
+        if self.users.is_empty() {
+            return true;
+        }
+        self.selected() + 5 >= self.users.len()
+    }
+
+    pub fn selected_user(&self) -> Option<&User> {
+        self.users.get(self.selected())
+    }
+}
+
+#[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum FocusEntry {
     Tweet(TweetDetail),
+    Likers(LikersView),
 }
 
 impl FocusEntry {
     pub fn focal_id(&self) -> &str {
         match self {
             Self::Tweet(d) => &d.tweet.rest_id,
+            Self::Likers(l) => &l.tweet_id,
         }
     }
 }
@@ -198,4 +282,64 @@ pub async fn fetch_thread_recursive(
         next_cursor: None,
         top_cursor: None,
     })
+}
+
+#[derive(Debug, Default)]
+pub struct LikersPage {
+    pub users: Vec<User>,
+    pub next_cursor: Option<String>,
+}
+
+pub async fn fetch_likers(
+    client: &GqlClient,
+    tweet_id: &str,
+    cursor: Option<&str>,
+) -> Result<LikersPage> {
+    let response = client
+        .get(
+            Operation::Favoriters,
+            &endpoints::favoriters_variables(tweet_id, 50, cursor),
+            &endpoints::favoriters_features(),
+        )
+        .await?;
+
+    let instructions = response
+        .pointer("/data/favoriters_timeline/timeline/instructions")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::GraphqlShape("missing favoriters instructions".into()))?;
+
+    let mut page = LikersPage::default();
+    for instr in instructions {
+        let instr_type = instr.get("type").and_then(Value::as_str).unwrap_or("");
+        match instr_type {
+            "TimelineAddEntries" | "TimelineReplaceEntry" => {
+                let entries = instr.get("entries").and_then(Value::as_array);
+                let Some(entries) = entries else { continue };
+                for entry in entries {
+                    let entry_id = entry.get("entryId").and_then(Value::as_str).unwrap_or("");
+                    if entry_id.starts_with("cursor-bottom-") {
+                        if let Some(v) = entry.pointer("/content/value").and_then(Value::as_str) {
+                            page.next_cursor = Some(v.to_string());
+                        }
+                        continue;
+                    }
+                    if entry_id.starts_with("cursor-top-") {
+                        continue;
+                    }
+                    let user_result = entry
+                        .pointer("/content/itemContent/user_results/result")
+                        .or_else(|| entry.pointer("/content/item/itemContent/user_results/result"));
+                    let Some(user_result) = user_result else {
+                        continue;
+                    };
+                    if let Some(u) = crate::parse::user::parse_user_result(user_result) {
+                        page.users.push(u);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(page)
 }

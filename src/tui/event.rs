@@ -72,6 +72,11 @@ pub enum Event {
     UserTimelineLoaded {
         result: Result<crate::parse::timeline::TimelinePage>,
     },
+    LikersPageLoaded {
+        tweet_id: String,
+        result: Result<crate::tui::focus::LikersPage>,
+        append: bool,
+    },
     NotificationPageLoaded {
         result: Result<crate::parse::notification::NotificationPage>,
         append: bool,

@@ -646,8 +646,9 @@ impl App {
     }
 
     pub fn top_detail(&self) -> Option<&TweetDetail> {
-        self.focus_stack.last().map(|entry| match entry {
-            FocusEntry::Tweet(d) => d,
+        self.focus_stack.last().and_then(|entry| match entry {
+            FocusEntry::Tweet(d) => Some(d),
+            FocusEntry::Likers(_) => None,
         })
     }
 
@@ -657,6 +658,7 @@ impl App {
             || self.pending_open.is_some()
             || self.focus_stack.last().is_some_and(|e| match e {
                 FocusEntry::Tweet(d) => d.loading,
+                FocusEntry::Likers(l) => l.loading,
             })
     }
 
@@ -723,6 +725,13 @@ impl App {
             }
             Event::UserTimelineLoaded { result } => {
                 self.handle_user_timeline_loaded(result);
+            }
+            Event::LikersPageLoaded {
+                tweet_id,
+                result,
+                append,
+            } => {
+                self.handle_likers_page_loaded(tweet_id, result, append);
             }
             Event::WhisperPollTick => {
                 self.whisper.tick();
@@ -900,6 +909,7 @@ impl App {
             (KeyCode::Char('y'), KeyModifiers::NONE) => self.yank_url(),
             (KeyCode::Char('Y'), _) => self.yank_json(),
             (KeyCode::Char('R'), _) => self.toggle_user_replies(),
+            (KeyCode::Char('L'), _) => self.show_likers_for_selected(),
             (KeyCode::Char('n'), KeyModifiers::NONE) => {
                 self.switch_source(SourceKind::Notifications);
             }
@@ -1278,46 +1288,88 @@ impl App {
     fn handle_key_detail(&mut self, key: KeyEvent) {
         match (key.code, key.modifiers) {
             (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => {
-                if let Some(FocusEntry::Tweet(d)) = self.focus_stack.last_mut() {
-                    d.select_next();
+                match self.focus_stack.last_mut() {
+                    Some(FocusEntry::Tweet(d)) => d.select_next(),
+                    Some(FocusEntry::Likers(l)) => {
+                        l.select_next();
+                        self.maybe_load_more_likers();
+                    }
+                    None => {}
                 }
             }
             (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => {
-                if let Some(FocusEntry::Tweet(d)) = self.focus_stack.last_mut() {
-                    d.select_prev();
+                match self.focus_stack.last_mut() {
+                    Some(FocusEntry::Tweet(d)) => d.select_prev(),
+                    Some(FocusEntry::Likers(l)) => l.select_prev(),
+                    None => {}
                 }
             }
-            (KeyCode::Char('g'), KeyModifiers::NONE) => {
-                if let Some(FocusEntry::Tweet(d)) = self.focus_stack.last_mut() {
-                    d.jump_top();
-                }
-            }
+            (KeyCode::Char('g'), KeyModifiers::NONE) => match self.focus_stack.last_mut() {
+                Some(FocusEntry::Tweet(d)) => d.jump_top(),
+                Some(FocusEntry::Likers(l)) => l.jump_top(),
+                None => {}
+            },
             (KeyCode::Char('G'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
-                if let Some(FocusEntry::Tweet(d)) = self.focus_stack.last_mut() {
-                    d.jump_bottom();
+                match self.focus_stack.last_mut() {
+                    Some(FocusEntry::Tweet(d)) => d.jump_bottom(),
+                    Some(FocusEntry::Likers(l)) => {
+                        l.jump_bottom();
+                        self.maybe_load_more_likers();
+                    }
+                    None => {}
                 }
             }
-            (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
-                if let Some(FocusEntry::Tweet(d)) = self.focus_stack.last_mut() {
-                    d.advance(10);
+            (KeyCode::Char('d'), KeyModifiers::CONTROL) => match self.focus_stack.last_mut() {
+                Some(FocusEntry::Tweet(d)) => d.advance(10),
+                Some(FocusEntry::Likers(l)) => {
+                    l.advance(10);
+                    self.maybe_load_more_likers();
                 }
-            }
-            (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
-                if let Some(FocusEntry::Tweet(d)) = self.focus_stack.last_mut() {
-                    d.advance(-10);
-                }
-            }
+                None => {}
+            },
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) => match self.focus_stack.last_mut() {
+                Some(FocusEntry::Tweet(d)) => d.advance(-10),
+                Some(FocusEntry::Likers(l)) => l.advance(-10),
+                None => {}
+            },
             (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, _) => {
                 self.active = ActivePane::Source;
             }
             (KeyCode::Char('s'), KeyModifiers::NONE) => self.cycle_reply_sort(),
             (KeyCode::Enter, _) | (KeyCode::Char('l'), KeyModifiers::NONE) => {
-                if let Some(reply) = self.top_detail().and_then(|d| d.selected_reply()).cloned() {
-                    self.push_tweet(reply);
+                match self.focus_stack.last() {
+                    Some(FocusEntry::Tweet(_)) => {
+                        if let Some(reply) =
+                            self.top_detail().and_then(|d| d.selected_reply()).cloned()
+                        {
+                            self.push_tweet(reply);
+                        }
+                    }
+                    Some(FocusEntry::Likers(l)) => {
+                        if let Some(user) = l.selected_user().cloned() {
+                            self.open_user_in_detail(user.handle, Some(user.rest_id));
+                        }
+                    }
+                    None => {}
                 }
             }
             _ => {}
         }
+    }
+
+    fn maybe_load_more_likers(&mut self) {
+        let Some(FocusEntry::Likers(view)) = self.focus_stack.last() else {
+            return;
+        };
+        if view.loading || view.exhausted || view.cursor.is_none() || !view.near_bottom() {
+            return;
+        }
+        let tweet_id = view.tweet_id.clone();
+        let cursor = view.cursor.clone();
+        if let Some(FocusEntry::Likers(v)) = self.focus_stack.last_mut() {
+            v.loading = true;
+        }
+        self.fetch_likers_page(tweet_id, cursor, true);
     }
 
     fn handle_key_command(&mut self, key: KeyEvent) {
@@ -1765,6 +1817,93 @@ impl App {
             }
             Err(e) => {
                 self.error = Some(e.to_string());
+            }
+        }
+    }
+
+    fn show_likers_for_selected(&mut self) {
+        let tweet = match self.active {
+            ActivePane::Source => {
+                if self.source.is_notifications() {
+                    self.set_status("L works on tweets, not notifications");
+                    return;
+                }
+                self.source.tweets.get(self.source.selected()).cloned()
+            }
+            ActivePane::Detail => self.selected_tweet().cloned(),
+        };
+        let Some(tweet) = tweet else {
+            return;
+        };
+        let Some(ref self_handle) = self.self_handle else {
+            self.set_status("self handle not resolved yet");
+            return;
+        };
+        if !tweet.author.handle.eq_ignore_ascii_case(self_handle) {
+            self.set_status("likers only visible on your own tweets");
+            return;
+        }
+        let tweet_id = tweet.rest_id.clone();
+        let title = format!("likers · {} likes", tweet.like_count);
+        let view = crate::tui::focus::LikersView::new(tweet_id.clone(), title);
+        self.focus_stack.push(FocusEntry::Likers(view));
+        self.active = ActivePane::Detail;
+        self.fetch_likers_page(tweet_id, None, false);
+    }
+
+    fn fetch_likers_page(&mut self, tweet_id: String, cursor: Option<String>, append: bool) {
+        let client = self.client.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result =
+                crate::tui::focus::fetch_likers(&client, &tweet_id, cursor.as_deref()).await;
+            let _ = tx.send(Event::LikersPageLoaded {
+                tweet_id,
+                result,
+                append,
+            });
+        });
+    }
+
+    fn handle_likers_page_loaded(
+        &mut self,
+        tweet_id: String,
+        result: Result<crate::tui::focus::LikersPage>,
+        append: bool,
+    ) {
+        let Some(FocusEntry::Likers(view)) = self.focus_stack.last_mut() else {
+            return;
+        };
+        if view.tweet_id != tweet_id {
+            return;
+        }
+        view.loading = false;
+        match result {
+            Ok(page) => {
+                if append {
+                    let existing: std::collections::HashSet<String> =
+                        view.users.iter().map(|u| u.rest_id.clone()).collect();
+                    for u in page.users {
+                        if !existing.contains(&u.rest_id) {
+                            view.users.push(u);
+                        }
+                    }
+                } else {
+                    view.users = page.users;
+                }
+                view.cursor = page.next_cursor;
+                view.exhausted = view.cursor.is_none();
+                view.error = None;
+                tracing::info!(
+                    tweet_id = %view.tweet_id,
+                    total = view.users.len(),
+                    append,
+                    "likers loaded"
+                );
+            }
+            Err(e) => {
+                tracing::warn!("likers fetch failed: {e}");
+                view.error = Some(e.to_string());
             }
         }
     }

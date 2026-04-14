@@ -74,6 +74,7 @@ pub struct RenderOpts {
 
 pub struct RenderContext<'a> {
     pub opts: RenderOpts,
+    pub raw_display_names: DisplayNameStyle,
     pub seen: &'a SeenStore,
     pub expanded: &'a HashSet<String>,
     pub inline_threads: &'a HashMap<String, InlineThread>,
@@ -122,6 +123,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     let ctx = RenderContext {
         opts,
+        raw_display_names: app.display_names,
         seen: &app.seen,
         expanded: &app.expanded_bodies,
         inline_threads: &app.inline_threads,
@@ -617,10 +619,98 @@ fn draw_detail(
     active: bool,
     reply_sort: ReplySortOrder,
 ) {
-    let Some(FocusEntry::Tweet(detail)) = entry else {
+    let Some(entry) = entry else {
         return;
     };
+    match entry {
+        FocusEntry::Tweet(detail) => {
+            draw_tweet_detail(frame, area, detail, ctx, active, reply_sort)
+        }
+        FocusEntry::Likers(view) => {
+            draw_likers_detail(frame, area, view, ctx.raw_display_names, active)
+        }
+    }
+}
 
+fn draw_likers_detail(
+    frame: &mut Frame,
+    area: Rect,
+    view: &mut crate::tui::focus::LikersView,
+    display_names: DisplayNameStyle,
+    active: bool,
+) {
+    let title = if view.loading && view.users.is_empty() {
+        format!("{} · loading…", view.title)
+    } else {
+        format!("{} · {}", view.title, view.users.len())
+    };
+
+    if view.users.is_empty() {
+        let msg = if view.loading {
+            "loading likers…"
+        } else if let Some(err) = &view.error {
+            err.as_str()
+        } else {
+            "no likers"
+        };
+        let body = Paragraph::new(msg).block(block_with_focus(&title, active));
+        frame.render_widget(body, area);
+        return;
+    }
+
+    let items: Vec<ListItem> = view
+        .users
+        .iter()
+        .enumerate()
+        .map(|(i, user)| {
+            let mut row: Vec<Span<'static>> = vec![
+                Span::raw("  "),
+                Span::styled(
+                    user.handle.clone(),
+                    Style::default()
+                        .fg(handle_color(&user.handle))
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ];
+            if user.verified {
+                row.push(Span::styled(" ✓", Style::default().fg(Color::Blue)));
+            }
+            if matches!(display_names, DisplayNameStyle::Visible) && !user.name.is_empty() {
+                row.push(Span::styled(
+                    format!("  {}", user.name),
+                    Style::default().fg(Color::Gray),
+                ));
+            }
+            if user.followers > 0 {
+                row.push(Span::styled(
+                    format!("  {} followers", short_count(user.followers)),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+            let mut item = ListItem::new(Line::from(row));
+            if i % 2 == 1 {
+                item = item.style(Style::default().bg(ZEBRA_BG));
+            }
+            item
+        })
+        .collect();
+
+    apply_scroll_padding(&mut view.list_state, &items, area.height);
+    let list = List::new(items)
+        .block(block_with_focus(&title, active))
+        .highlight_style(highlight_style(active))
+        .highlight_symbol(highlight_symbol(active));
+    frame.render_stateful_widget(list, area, &mut view.list_state);
+}
+
+fn draw_tweet_detail(
+    frame: &mut Frame,
+    area: Rect,
+    detail: &mut crate::tui::focus::TweetDetail,
+    ctx: &RenderContext,
+    active: bool,
+    reply_sort: ReplySortOrder,
+) {
     let reply_suffix = if detail.loading {
         " [loading replies…]".to_string()
     } else if detail.replies.is_empty() && detail.error.is_none() {
@@ -1443,6 +1533,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  V              toggle all / originals on home"),
         Line::from("  F              toggle For You / Following on home"),
         Line::from("  R              toggle tweets / replies on profile"),
+        Line::from("  L              who liked this tweet (own tweets only)"),
         Line::from("  :home [following]           home feed"),
         Line::from("  :user <handle>              user timeline"),
         Line::from("  :search <query> [!top|...]  live search"),

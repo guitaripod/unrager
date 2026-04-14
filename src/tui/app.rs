@@ -604,7 +604,7 @@ impl App {
             if self.source.is_notifications() {
                 self.fetch_notifications_source(true, false);
             } else {
-                self.fetch_source(true);
+                self.fetch_source(true, false);
             }
         }
     }
@@ -638,7 +638,7 @@ impl App {
         if self.source.is_notifications() {
             self.fetch_notifications_source(false, false);
         } else {
-            self.fetch_source(false);
+            self.fetch_source(false, false);
         }
     }
 
@@ -704,7 +704,8 @@ impl App {
                 kind,
                 result,
                 append,
-            } => self.handle_timeline_loaded(kind, result, append),
+                silent,
+            } => self.handle_timeline_loaded(kind, result, append, silent),
             Event::ThreadLoaded {
                 request_id,
                 focal_id,
@@ -763,13 +764,18 @@ impl App {
             Event::WhisperPollTick => {
                 self.whisper.tick();
                 let should_poll = self.whisper.should_poll();
-                if self.source.is_notifications()
+                if should_poll
                     && self.source.selected() == 0
                     && !self.source.loading
                     && !self.source.silent_refreshing
-                    && should_poll
                 {
-                    self.fetch_notifications_source(false, true);
+                    if self.source.is_notifications() {
+                        self.fetch_notifications_source(false, true);
+                    } else if matches!(self.source.kind, Some(SourceKind::Home { following: true }))
+                    {
+                        tracing::info!("home following silent auto-poll");
+                        self.fetch_source(false, true);
+                    }
                 }
                 if should_poll {
                     self.whisper.poll_inflight = true;
@@ -1461,7 +1467,7 @@ impl App {
         if is_notifs {
             self.fetch_notifications_source(false, false);
         } else {
-            self.fetch_source(false);
+            self.fetch_source(false, false);
         }
         self.save_session();
     }
@@ -1601,18 +1607,22 @@ impl App {
         if self.source.is_notifications() {
             self.fetch_notifications_source(false, false);
         } else {
-            self.fetch_source(false);
+            self.fetch_source(false, false);
         }
     }
 
-    fn fetch_source(&mut self, append: bool) {
+    fn fetch_source(&mut self, append: bool, silent: bool) {
         let Some(kind) = self.source.kind.clone() else {
             return;
         };
-        if self.source.loading {
+        if self.source.loading || self.source.silent_refreshing {
             return;
         }
-        self.source.loading = true;
+        if silent {
+            self.source.silent_refreshing = true;
+        } else {
+            self.source.loading = true;
+        }
         if self.fetch_baseline.is_none() {
             self.fetch_baseline = Some(self.source.tweets.len());
         }
@@ -1629,6 +1639,7 @@ impl App {
                 kind,
                 result,
                 append,
+                silent,
             });
         });
     }
@@ -1638,11 +1649,21 @@ impl App {
         kind: SourceKind,
         result: Result<TimelinePage>,
         append: bool,
+        silent: bool,
     ) {
         if self.source.kind.as_ref() != Some(&kind) {
+            if silent {
+                self.source.silent_refreshing = false;
+            } else {
+                self.source.loading = false;
+            }
             return;
         }
-        self.source.loading = false;
+        if silent {
+            self.source.silent_refreshing = false;
+        } else {
+            self.source.loading = false;
+        }
         match result {
             Ok(mut page) => {
                 let hidden = filter_incoming_page(
@@ -1670,7 +1691,7 @@ impl App {
                     && matches!(kind, SourceKind::Home { .. })
                 {
                     self.source.exhausted = false;
-                    self.fetch_source(true);
+                    self.fetch_source(true, silent);
                     return;
                 }
                 self.fetch_baseline = None;

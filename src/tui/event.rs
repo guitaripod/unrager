@@ -35,6 +35,7 @@ pub enum Event {
         kind: SourceKind,
         result: Result<TimelinePage>,
         append: bool,
+        silent: bool,
     },
     ThreadLoaded {
         request_id: RequestId,

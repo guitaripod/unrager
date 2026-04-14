@@ -9,40 +9,110 @@ use std::path::{Path, PathBuf};
 
 use super::XSession;
 
+#[cfg(target_os = "linux")]
+use super::linux as backend;
+#[cfg(target_os = "macos")]
+use super::macos as backend;
+
 type Aes128CbcDec = cbc::Decryptor<Aes128>;
 
 const COOKIES_PATH_ENV: &str = "UNRAGER_COOKIES_PATH";
-const SAFE_STORAGE_SUFFIX: &str = "Safe Storage";
-const PORTAL_SERVER: &str = "xdg-desktop-portal";
-const PEANUTS_PASSWORD: &[u8] = b"peanuts";
 const PBKDF2_SALT: &[u8] = b"saltysalt";
-const PBKDF2_ITERATIONS: u32 = 1;
 const PBKDF2_KEY_LEN: usize = 16;
-const V11_PREFIX: &[u8] = b"v11";
 const AES_IV: [u8; 16] = [0x20; 16];
 const INTEGRITY_PREFIX_LEN: usize = 32;
 
 const COOKIE_NAMES: &[&str] = &["auth_token", "ct0", "twid"];
 
-const BROWSER_CANDIDATES: &[(&str, &[&str])] = &[
-    ("Vivaldi", &["vivaldi", "Default", "Cookies"]),
-    (
-        "Vivaldi Snapshot",
-        &["vivaldi-snapshot", "Default", "Cookies"],
-    ),
-    ("Chromium", &["chromium", "Default", "Cookies"]),
-    ("Chrome", &["google-chrome", "Default", "Cookies"]),
-    ("Chrome Beta", &["google-chrome-beta", "Default", "Cookies"]),
-    (
-        "Chrome Dev",
-        &["google-chrome-unstable", "Default", "Cookies"],
-    ),
-    (
-        "Brave",
-        &["BraveSoftware", "Brave-Browser", "Default", "Cookies"],
-    ),
-    ("Edge Dev", &["microsoft-edge-dev", "Default", "Cookies"]),
-    ("Opera", &["opera", "Default", "Cookies"]),
+pub struct Browser {
+    pub label: &'static str,
+    pub linux_roots: &'static [&'static str],
+    pub macos_roots: &'static [&'static str],
+    pub macos_keychain_service: &'static str,
+    pub macos_keychain_account: &'static str,
+}
+
+const BROWSERS: &[Browser] = &[
+    Browser {
+        label: "Vivaldi",
+        linux_roots: &["vivaldi", "vivaldi-snapshot"],
+        macos_roots: &["Vivaldi", "Vivaldi Snapshot"],
+        macos_keychain_service: "Vivaldi Safe Storage",
+        macos_keychain_account: "Vivaldi",
+    },
+    Browser {
+        label: "Chrome",
+        linux_roots: &[
+            "google-chrome",
+            "google-chrome-beta",
+            "google-chrome-unstable",
+        ],
+        macos_roots: &[
+            "Google/Chrome",
+            "Google/Chrome Beta",
+            "Google/Chrome Dev",
+            "Google/Chrome Canary",
+        ],
+        macos_keychain_service: "Chrome Safe Storage",
+        macos_keychain_account: "Chrome",
+    },
+    Browser {
+        label: "Chromium",
+        linux_roots: &["chromium"],
+        macos_roots: &["Chromium"],
+        macos_keychain_service: "Chromium Safe Storage",
+        macos_keychain_account: "Chromium",
+    },
+    Browser {
+        label: "Brave",
+        linux_roots: &[
+            "BraveSoftware/Brave-Browser",
+            "BraveSoftware/Brave-Browser-Beta",
+            "BraveSoftware/Brave-Browser-Nightly",
+        ],
+        macos_roots: &[
+            "BraveSoftware/Brave-Browser",
+            "BraveSoftware/Brave-Browser-Beta",
+            "BraveSoftware/Brave-Browser-Nightly",
+        ],
+        macos_keychain_service: "Brave Safe Storage",
+        macos_keychain_account: "Brave",
+    },
+    Browser {
+        label: "Microsoft Edge",
+        linux_roots: &[
+            "microsoft-edge",
+            "microsoft-edge-beta",
+            "microsoft-edge-dev",
+            "microsoft-edge-canary",
+        ],
+        macos_roots: &[
+            "Microsoft Edge",
+            "Microsoft Edge Beta",
+            "Microsoft Edge Dev",
+            "Microsoft Edge Canary",
+        ],
+        macos_keychain_service: "Microsoft Edge Safe Storage",
+        macos_keychain_account: "Microsoft Edge",
+    },
+    Browser {
+        label: "Opera",
+        linux_roots: &["opera"],
+        macos_roots: &[
+            "com.operasoftware.Opera",
+            "com.operasoftware.OperaDeveloper",
+            "com.operasoftware.OperaNext",
+        ],
+        macos_keychain_service: "Opera Safe Storage",
+        macos_keychain_account: "Opera",
+    },
+    Browser {
+        label: "Arc",
+        linux_roots: &[],
+        macos_roots: &["Arc/User Data"],
+        macos_keychain_service: "Arc Safe Storage",
+        macos_keychain_account: "Arc",
+    },
 ];
 
 pub async fn load_session() -> Result<XSession> {
@@ -88,38 +158,42 @@ fn save_cached_session(session: &XSession) {
 }
 
 async fn extract_session_from_browser() -> Result<XSession> {
-    let paths = candidate_paths()?;
-    let passwords = candidate_passwords().await;
-    tracing::debug!(
-        "trying {} cookie paths against {} candidate passwords",
-        paths.len(),
-        passwords.len()
-    );
+    let candidates = candidate_paths()?;
+    tracing::debug!("checking {} candidate cookie paths", candidates.len());
 
     let mut tried = Vec::new();
-    for (label, path) in &paths {
+    for Candidate { browser, path } in &candidates {
         if !path.exists() {
             continue;
         }
-        tried.push(format!("{label} ({})", path.display()));
+        tried.push(format!("{} ({})", browser.label, path.display()));
         let encrypted = match read_encrypted_cookies(path) {
             Ok(rows) if rows.len() == COOKIE_NAMES.len() => rows,
             Ok(_) => {
-                tracing::debug!("{label} has no .x.com session");
+                tracing::debug!("{} {} has no .x.com session", browser.label, path.display());
                 continue;
             }
             Err(e) => {
-                tracing::debug!("{label} cookies unreadable: {e}");
+                tracing::debug!(
+                    "{} {} cookies unreadable: {e}",
+                    browser.label,
+                    path.display()
+                );
                 continue;
             }
         };
+        let passwords = backend::candidate_passwords(browser).await;
+        if passwords.is_empty() {
+            tracing::debug!("{} has no candidate passwords", browser.label);
+            continue;
+        }
         match decrypt_all(&encrypted, &passwords) {
             Ok(session) => {
-                tracing::debug!("loaded session from {label}");
+                tracing::debug!("loaded session from {} {}", browser.label, path.display());
                 return Ok(session);
             }
             Err(e) => {
-                tracing::debug!("{label} decrypt failed: {e}");
+                tracing::debug!("{} {} decrypt failed: {e}", browser.label, path.display());
             }
         }
     }
@@ -131,23 +205,70 @@ async fn extract_session_from_browser() -> Result<XSession> {
     }
 }
 
-fn candidate_paths() -> Result<Vec<(String, PathBuf)>> {
+struct Candidate {
+    browser: &'static Browser,
+    path: PathBuf,
+}
+
+fn candidate_paths() -> Result<Vec<Candidate>> {
     if let Some(override_path) = std::env::var_os(COOKIES_PATH_ENV) {
-        return Ok(vec![("override".into(), PathBuf::from(override_path))]);
+        return Ok(vec![Candidate {
+            browser: &BROWSERS[0],
+            path: PathBuf::from(override_path),
+        }]);
     }
+
     let base = BaseDirs::new().ok_or_else(|| Error::Config("HOME not set".into()))?;
     let config = base.config_dir();
-    let paths = BROWSER_CANDIDATES
-        .iter()
-        .map(|(label, parts)| {
-            let mut p = config.to_path_buf();
-            for part in *parts {
-                p.push(part);
+
+    let mut out = Vec::new();
+    for browser in BROWSERS {
+        let roots = browser_roots(browser);
+        for root in roots {
+            let root_path = config.join(root);
+            if !root_path.exists() {
+                continue;
             }
-            ((*label).to_string(), p)
-        })
-        .collect();
-    Ok(paths)
+            for profile in profile_dirs(&root_path) {
+                for rel in ["Network/Cookies", "Cookies"] {
+                    out.push(Candidate {
+                        browser,
+                        path: profile.join(rel),
+                    });
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn browser_roots(browser: &Browser) -> &'static [&'static str] {
+    #[cfg(target_os = "linux")]
+    {
+        browser.linux_roots
+    }
+    #[cfg(target_os = "macos")]
+    {
+        browser.macos_roots
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        &[]
+    }
+}
+
+fn profile_dirs(root: &Path) -> Vec<PathBuf> {
+    let mut out = vec![root.to_path_buf(), root.join("Default")];
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if name.starts_with("Profile ") {
+                out.push(entry.path());
+            }
+        }
+    }
+    out
 }
 
 fn read_encrypted_cookies(path: &Path) -> Result<Vec<(String, Vec<u8>)>> {
@@ -219,69 +340,9 @@ fn decrypt_all(encrypted: &[(String, Vec<u8>)], passwords: &[Vec<u8>]) -> Result
     }
 }
 
-async fn candidate_passwords() -> Vec<Vec<u8>> {
-    let mut out = Vec::new();
-    match collect_keyring_secrets().await {
-        Ok(secrets) => {
-            tracing::debug!("collected {} keyring secrets", secrets.len());
-            out.extend(secrets);
-        }
-        Err(e) => {
-            tracing::warn!("keyring enumeration failed: {e}");
-        }
-    }
-    out.push(PEANUTS_PASSWORD.to_vec());
-    out
-}
-
-async fn collect_keyring_secrets() -> Result<Vec<Vec<u8>>> {
-    let ss = secret_service::SecretService::connect(secret_service::EncryptionType::Plain)
-        .await
-        .map_err(|e| Error::Keyring(e.to_string()))?;
-
-    let collection = ss
-        .get_default_collection()
-        .await
-        .map_err(|e| Error::Keyring(e.to_string()))?;
-    collection
-        .unlock()
-        .await
-        .map_err(|e| Error::Keyring(e.to_string()))?;
-
-    let items = collection
-        .get_all_items()
-        .await
-        .map_err(|e| Error::Keyring(e.to_string()))?;
-
-    let label_futs: Vec<_> = items.iter().map(|item| item.get_label()).collect();
-    let labels: Vec<_> = futures::future::join_all(label_futs)
-        .await
-        .into_iter()
-        .map(|r| r.unwrap_or_default())
-        .collect();
-
-    let mut out = Vec::new();
-    for (item, label) in items.iter().zip(labels.iter()) {
-        let is_safe_storage = label.contains(SAFE_STORAGE_SUFFIX);
-        let is_portal_blob = label.starts_with(PORTAL_SERVER);
-        if !is_safe_storage && !is_portal_blob {
-            continue;
-        }
-        let secret = item
-            .get_secret()
-            .await
-            .map_err(|e| Error::Keyring(e.to_string()))?;
-        if !secret.is_empty() {
-            tracing::debug!("keyring candidate: {label:?} ({} bytes)", secret.len());
-            out.push(secret);
-        }
-    }
-    Ok(out)
-}
-
 fn derive_key(password: &[u8]) -> Option<[u8; PBKDF2_KEY_LEN]> {
     let mut key = [0u8; PBKDF2_KEY_LEN];
-    pbkdf2::pbkdf2::<Hmac<Sha1>>(password, PBKDF2_SALT, PBKDF2_ITERATIONS, &mut key).ok()?;
+    pbkdf2::pbkdf2::<Hmac<Sha1>>(password, PBKDF2_SALT, backend::ITERS, &mut key).ok()?;
     Some(key)
 }
 
@@ -300,7 +361,7 @@ fn try_all(encrypted: &[u8], passwords: &[Vec<u8>]) -> Result<([u8; PBKDF2_KEY_L
 }
 
 fn decrypt_and_extract(encrypted: &[u8], key: &[u8; PBKDF2_KEY_LEN]) -> Result<String> {
-    let plain = decrypt_v11(encrypted, key)?;
+    let plain = decrypt_aes_cbc(encrypted, key)?;
 
     if !plain.is_empty() && is_printable(&plain) {
         return Ok(String::from_utf8_lossy(&plain).into_owned());
@@ -315,13 +376,13 @@ fn decrypt_and_extract(encrypted: &[u8], key: &[u8; PBKDF2_KEY_LEN]) -> Result<S
     ))
 }
 
-fn decrypt_v11(encrypted: &[u8], key: &[u8; PBKDF2_KEY_LEN]) -> Result<Vec<u8>> {
-    if !encrypted.starts_with(V11_PREFIX) {
+fn decrypt_aes_cbc(encrypted: &[u8], key: &[u8; PBKDF2_KEY_LEN]) -> Result<Vec<u8>> {
+    if !encrypted.starts_with(backend::PREFIX) {
         return Err(Error::CookieDecrypt(
-            "encrypted value missing v11 prefix; unsupported Chromium encryption version",
+            "encrypted value missing expected version prefix",
         ));
     }
-    let body = &encrypted[V11_PREFIX.len()..];
+    let body = &encrypted[backend::PREFIX.len()..];
     if body.is_empty() || body.len() % 16 != 0 {
         return Err(Error::CookieDecrypt(
             "ciphertext length not a multiple of 16",

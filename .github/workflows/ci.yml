@@ -12,7 +12,11 @@ env:
 jobs:
   check:
     name: check / fmt / clippy / test
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -33,6 +37,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Install system deps for secret-service
+        if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y libdbus-1-dev pkg-config

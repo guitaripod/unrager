@@ -14,7 +14,7 @@ const MILESTONES: &[u64] = &[
 ];
 const MILESTONE_MAX_AGE: Duration = Duration::from_secs(48 * 3600);
 
-const QUIET_INTERVAL: Duration = Duration::from_secs(120);
+const QUIET_INTERVAL: Duration = Duration::from_secs(60);
 const ACTIVE_INTERVAL: Duration = Duration::from_secs(60);
 const SURGE_INTERVAL: Duration = Duration::from_secs(30);
 const COOLING_INTERVAL: Duration = Duration::from_secs(60);

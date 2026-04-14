@@ -539,9 +539,9 @@ fn notification_lines(
 
     if let Some(snippet) = &n.target_tweet_snippet {
         let snippet_style = if dim {
-            Style::default().fg(Color::Indexed(239))
+            Style::default().fg(Color::Indexed(241))
         } else {
-            Style::default().fg(Color::Indexed(245))
+            Style::default().fg(Color::Indexed(252))
         };
         let indent = "    ";
         let inner_width = wrap_width.saturating_sub(indent.len() + 2);
@@ -844,7 +844,7 @@ fn tweet_lines(
         Color::Black
     };
     let body_base_style = if seen {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(Color::Indexed(241))
     } else {
         Style::default()
             .fg(primary_color)

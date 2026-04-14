@@ -121,6 +121,8 @@ pub struct App {
     pub status_until: Option<Instant>,
     pub error: Option<String>,
     pub last_tick: Instant,
+    pub terminal_focused: bool,
+    pub last_render_at: Option<Instant>,
     pub seen: SeenStore,
     pub session_path: PathBuf,
     pub timestamps: TimestampStyle,
@@ -239,6 +241,8 @@ impl App {
             status_until: None,
             error: None,
             last_tick: Instant::now(),
+            terminal_focused: true,
+            last_render_at: None,
             seen,
             session_path,
             timestamps: loaded_timestamps,
@@ -684,8 +688,16 @@ impl App {
     pub fn handle_event(&mut self, event: Event, terminal: &mut DefaultTerminal) -> Result<()> {
         match event {
             Event::Render => {
-                terminal.draw(|frame| ui::draw(frame, self))?;
-                ui::emit_media_placements(self, terminal.size()?.width);
+                const BLURRED_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+                let skip = !self.terminal_focused
+                    && self
+                        .last_render_at
+                        .is_some_and(|t| t.elapsed() < BLURRED_MIN_INTERVAL);
+                if !skip {
+                    terminal.draw(|frame| ui::draw(frame, self))?;
+                    ui::emit_media_placements(self, terminal.size()?.width);
+                    self.last_render_at = Some(Instant::now());
+                }
             }
             Event::Tick => {
                 self.last_tick = Instant::now();
@@ -821,7 +833,12 @@ impl App {
                 self.whisper.text = summary;
             }
             Event::Quit => self.running = false,
-            Event::FocusGained | Event::FocusLost => {}
+            Event::FocusGained => {
+                self.terminal_focused = true;
+            }
+            Event::FocusLost => {
+                self.terminal_focused = false;
+            }
         }
         Ok(())
     }

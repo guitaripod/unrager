@@ -179,10 +179,10 @@ impl App {
         let (filter_cfg, filter_cache, filter_classifier) =
             init_filter_stack(&config_dir, &cache_dir);
         let filter_classifier = match filter_classifier {
-            Some(c) => match c.health_check().await {
+            Some(mut c) => match c.init().await {
                 Ok(()) => Some(c),
                 Err(e) => {
-                    tracing::warn!("ollama unreachable: {e} — filter disabled");
+                    tracing::warn!("ollama init failed: {e} — filter disabled");
                     None
                 }
             },

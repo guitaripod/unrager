@@ -284,7 +284,7 @@ impl Classifier {
         }
     }
 
-    pub async fn health_check(&self) -> Result<()> {
+    pub async fn init(&mut self) -> Result<()> {
         let url = format!("{}/api/tags", self.ollama.host.trim_end_matches('/'));
         let resp = self
             .http
@@ -296,6 +296,29 @@ impl Classifier {
         if !resp.status().is_success() {
             return Err(Error::Config(format!("ollama status {}", resp.status())));
         }
+        let tags: OllamaTagsResponse = resp
+            .json()
+            .await
+            .map_err(|e| Error::Config(format!("ollama /api/tags parse: {e}")))?;
+        let available: Vec<String> = tags.models.into_iter().map(|m| m.name).collect();
+        if available.is_empty() {
+            return Err(Error::Config(
+                "ollama has no models installed (run `ollama pull gemma4`)".into(),
+            ));
+        }
+        if available.iter().any(|n| n == &self.ollama.model) {
+            tracing::info!("filter using configured model {}", self.ollama.model);
+            return Ok(());
+        }
+        let fallback = pick_fallback_model(&available).ok_or_else(|| {
+            Error::Config("no gemma4 model installed in ollama (run `ollama pull gemma4`)".into())
+        })?;
+        tracing::warn!(
+            "configured model {:?} not installed; falling back to {:?}",
+            self.ollama.model,
+            fallback
+        );
+        self.ollama.model = fallback;
         Ok(())
     }
 
@@ -373,6 +396,21 @@ struct OllamaChatResponse {
 #[derive(Debug, Deserialize)]
 struct OllamaChatMessage {
     content: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaTagsResponse {
+    #[serde(default)]
+    models: Vec<OllamaTagsModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaTagsModel {
+    name: String,
+}
+
+fn pick_fallback_model(available: &[String]) -> Option<String> {
+    available.iter().find(|n| n.starts_with("gemma4")).cloned()
 }
 
 pub fn translate_async(rest_id: String, text: String, ollama: OllamaConfig, tx: EventTx) {
@@ -482,6 +520,30 @@ mod tests {
         let a = cfg(vec!["war"], "keep humor");
         let b = cfg(vec!["war"], "hide everything");
         assert_ne!(a.rubric_hash(), b.rubric_hash());
+    }
+
+    #[test]
+    fn fallback_picks_gemma4_when_present() {
+        let available = vec![
+            "qwen3:7b".to_string(),
+            "gemma4:e4b-it-q8_0".to_string(),
+            "llama3.2:latest".to_string(),
+        ];
+        assert_eq!(
+            pick_fallback_model(&available),
+            Some("gemma4:e4b-it-q8_0".into())
+        );
+    }
+
+    #[test]
+    fn fallback_none_when_no_gemma4() {
+        let available = vec!["qwen3:7b".to_string(), "llama3.2:latest".to_string()];
+        assert_eq!(pick_fallback_model(&available), None);
+    }
+
+    #[test]
+    fn fallback_none_when_empty() {
+        assert_eq!(pick_fallback_model(&[]), None);
     }
 
     #[test]

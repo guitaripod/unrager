@@ -44,8 +44,10 @@ need_cmd uname
 TARGET=$(detect_target)
 note "detected target: $TARGET"
 
-TAG=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
-    | grep -m1 '"tag_name"' \
+RELEASE_JSON=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest")
+TAG=$(printf '%s\n' "$RELEASE_JSON" \
+    | grep '"tag_name"' \
+    | head -n 1 \
     | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
 [ -n "$TAG" ] || err "could not determine latest release tag"
 note "latest release: $TAG"

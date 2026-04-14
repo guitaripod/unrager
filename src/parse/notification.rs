@@ -177,11 +177,6 @@ fn build_tweet_entry(_entry_id: &str, content: &Value) -> Option<RawNotification
 
 fn build_grouped_entry(entry_id: &str, content: &Value) -> Option<RawNotification> {
     let item = content.get("itemContent")?;
-    let stable_id = item
-        .get("id")
-        .and_then(Value::as_str)
-        .map(|id| format!("notif-{id}"))
-        .unwrap_or_else(|| entry_id.to_string());
 
     let icon = item
         .get("notification_icon")
@@ -206,6 +201,10 @@ fn build_grouped_entry(entry_id: &str, content: &Value) -> Option<RawNotificatio
     let (target_tweet_id, target_tweet_like_count, target_tweet_created_at, target_tweet_snippet) =
         extract_target_tweet(item);
 
+    let stable_id =
+        composite_grouped_id(&notification_type, &actors, &target_tweet_id, others_count)
+            .unwrap_or_else(|| entry_id.to_string());
+
     Some(RawNotification {
         id: stable_id,
         notification_type,
@@ -217,6 +216,25 @@ fn build_grouped_entry(entry_id: &str, content: &Value) -> Option<RawNotificatio
         target_tweet_snippet,
         timestamp,
     })
+}
+
+fn composite_grouped_id(
+    notification_type: &str,
+    actors: &[User],
+    target_tweet_id: &Option<String>,
+    others_count: Option<u64>,
+) -> Option<String> {
+    if actors.is_empty() && target_tweet_id.is_none() {
+        return None;
+    }
+    let mut handles: Vec<&str> = actors.iter().map(|u| u.handle.as_str()).collect();
+    handles.sort_unstable();
+    let actors_part = handles.join(",");
+    let target_part = target_tweet_id.as_deref().unwrap_or("-");
+    let others_part = others_count.unwrap_or(0);
+    Some(format!(
+        "g-{notification_type}-{target_part}-{actors_part}-{others_part}"
+    ))
 }
 
 fn parse_notification_timestamp(item: &Value) -> Option<DateTime<Utc>> {

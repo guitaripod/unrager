@@ -7,7 +7,8 @@ use unrager::tui;
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-    init_tracing(cli.debug);
+    let tui_mode = cli.command.is_none();
+    init_tracing(cli.debug, tui_mode);
     install_panic_hook();
 
     let result = match cli.command {
@@ -51,16 +52,22 @@ fn install_panic_hook() {
     }));
 }
 
-fn init_tracing(debug: bool) {
-    let stderr_filter = if debug {
-        EnvFilter::try_new("unrager=debug,warn").unwrap()
+fn init_tracing(debug: bool, tui_mode: bool) {
+    let stderr_layer = if tui_mode {
+        None
     } else {
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"))
+        let stderr_filter = if debug {
+            EnvFilter::try_new("unrager=debug,warn").unwrap()
+        } else {
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"))
+        };
+        Some(
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stderr)
+                .compact()
+                .with_filter(stderr_filter),
+        )
     };
-    let stderr_layer = tracing_subscriber::fmt::layer()
-        .with_writer(std::io::stderr)
-        .compact()
-        .with_filter(stderr_filter);
 
     let file_layer = unrager::config::cache_dir().ok().map(|cache_dir| {
         let _ = std::fs::create_dir_all(&cache_dir);

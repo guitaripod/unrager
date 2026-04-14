@@ -154,15 +154,16 @@ fn extract_cursor(content: &Value) -> Option<(String, String)> {
     Some((cursor_type, value))
 }
 
-fn build_tweet_entry(entry_id: &str, content: &Value) -> Option<RawNotification> {
+fn build_tweet_entry(_entry_id: &str, content: &Value) -> Option<RawNotification> {
     let result = content.pointer("/itemContent/tweet_results/result")?;
     let tweet = parse_tweet_result(result).ok()?;
 
     let is_mention = tweet.in_reply_to_tweet_id.is_none();
     let notification_type = if is_mention { "Mention" } else { "Reply" }.to_string();
+    let stable_id = format!("tweet-{}", tweet.rest_id);
 
     Some(RawNotification {
-        id: entry_id.to_string(),
+        id: stable_id,
         notification_type,
         actors: vec![tweet.author.clone()],
         others_count: None,
@@ -176,6 +177,11 @@ fn build_tweet_entry(entry_id: &str, content: &Value) -> Option<RawNotification>
 
 fn build_grouped_entry(entry_id: &str, content: &Value) -> Option<RawNotification> {
     let item = content.get("itemContent")?;
+    let stable_id = item
+        .get("id")
+        .and_then(Value::as_str)
+        .map(|id| format!("notif-{id}"))
+        .unwrap_or_else(|| entry_id.to_string());
 
     let icon = item
         .get("notification_icon")
@@ -201,7 +207,7 @@ fn build_grouped_entry(entry_id: &str, content: &Value) -> Option<RawNotificatio
         extract_target_tweet(item);
 
     Some(RawNotification {
-        id: entry_id.to_string(),
+        id: stable_id,
         notification_type,
         actors,
         others_count,

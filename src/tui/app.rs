@@ -1283,9 +1283,6 @@ impl App {
     }
 
     fn handle_key_source(&mut self, key: KeyEvent) {
-        if self.source.is_notifications() && !self.source.fresh_ids.is_empty() {
-            self.source.clear_fresh();
-        }
         match (key.code, key.modifiers) {
             (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => {
                 if self.step_actor_cursor(1) {
@@ -1629,7 +1626,6 @@ impl App {
         self.source.silent_refreshing = false;
         self.source.cursor = None;
         self.source.exhausted = false;
-        self.source.clear_fresh();
         if self.source.is_notifications() {
             self.fetch_notifications_source(false, false);
         } else {
@@ -1824,7 +1820,7 @@ impl App {
                 if append {
                     self.source.append_notifications(page);
                 } else {
-                    self.source.reset_with_notifications(page, silent);
+                    self.source.reset_with_notifications(page);
                 }
                 self.error = None;
                 if !silent {

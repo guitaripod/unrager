@@ -83,7 +83,6 @@ pub struct Source {
     pub silent_refreshing: bool,
     pub exhausted: bool,
     pub list_state: ListState,
-    pub fresh_ids: HashSet<String>,
 }
 
 impl Source {
@@ -156,27 +155,12 @@ impl Source {
         }
     }
 
-    pub fn reset_with_notifications(&mut self, page: NotificationPage, track_fresh: bool) {
-        let prior_ids: HashSet<String> = self.notifications.iter().map(|n| n.id.clone()).collect();
-
-        let next: Vec<RawNotification> = page
+    pub fn reset_with_notifications(&mut self, page: NotificationPage) {
+        self.notifications = page
             .notifications
             .into_iter()
             .filter(is_actionable_notification)
             .collect();
-
-        if track_fresh {
-            self.fresh_ids.retain(|id| next.iter().any(|n| n.id == *id));
-            for n in &next {
-                if !prior_ids.contains(&n.id) {
-                    self.fresh_ids.insert(n.id.clone());
-                }
-            }
-        } else {
-            self.fresh_ids.clear();
-        }
-
-        self.notifications = next;
         self.cursor = page.next_cursor;
         self.exhausted = self.cursor.is_none();
         let last = self.notifications.len().saturating_sub(1);
@@ -186,14 +170,6 @@ impl Source {
         if !self.notifications.is_empty() {
             *self.list_state.offset_mut() = 0;
         }
-    }
-
-    pub fn is_fresh(&self, id: &str) -> bool {
-        self.fresh_ids.contains(id)
-    }
-
-    pub fn clear_fresh(&mut self) {
-        self.fresh_ids.clear();
     }
 
     pub fn append_notifications(&mut self, page: NotificationPage) {

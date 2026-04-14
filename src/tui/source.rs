@@ -165,27 +165,15 @@ impl Source {
             .filter(is_actionable_notification)
             .collect();
 
-        let mut newly_arrived = 0usize;
         if track_fresh {
             self.fresh_ids.retain(|id| next.iter().any(|n| n.id == *id));
             for n in &next {
                 if !prior_ids.contains(&n.id) {
                     self.fresh_ids.insert(n.id.clone());
-                    newly_arrived += 1;
                 }
             }
         } else {
             self.fresh_ids.clear();
-        }
-
-        if track_fresh {
-            tracing::info!(
-                prior = prior_ids.len(),
-                incoming = next.len(),
-                newly_arrived,
-                fresh_ids = self.fresh_ids.len(),
-                "silent notifications refresh diff"
-            );
         }
 
         self.notifications = next;

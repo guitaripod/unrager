@@ -298,10 +298,18 @@ async fn fetch_user(
     cursor: Option<String>,
 ) -> Result<TimelinePage> {
     let user_id = resolve_user_id(client, handle).await?;
+    fetch_user_tweets_by_id(client, &user_id, cursor).await
+}
+
+pub async fn fetch_user_tweets_by_id(
+    client: &GqlClient,
+    user_id: &str,
+    cursor: Option<String>,
+) -> Result<TimelinePage> {
     let response = client
         .get(
             Operation::UserTweets,
-            &endpoints::user_tweets_variables(&user_id, PAGE_SIZE, cursor.as_deref()),
+            &endpoints::user_tweets_variables(user_id, PAGE_SIZE, cursor.as_deref()),
             &endpoints::user_tweets_features(),
         )
         .await?;

@@ -1,5 +1,5 @@
 use clap::Parser;
-use tracing_subscriber::{EnvFilter, fmt};
+use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt, util::SubscriberInitExt};
 use unrager::cli::{self, Cli, Command};
 use unrager::error::Result;
 use unrager::tui;
@@ -52,14 +52,32 @@ fn install_panic_hook() {
 }
 
 fn init_tracing(debug: bool) {
-    let filter = if debug {
+    let stderr_filter = if debug {
         EnvFilter::try_new("unrager=debug,warn").unwrap()
     } else {
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"))
     };
-    fmt()
-        .with_env_filter(filter)
+    let stderr_layer = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
         .compact()
+        .with_filter(stderr_filter);
+
+    let file_layer = unrager::config::cache_dir().ok().map(|cache_dir| {
+        let _ = std::fs::create_dir_all(&cache_dir);
+        let appender = tracing_appender::rolling::daily(&cache_dir, "unrager.log");
+        let file_filter = if debug {
+            EnvFilter::try_new("unrager=debug,warn").unwrap()
+        } else {
+            EnvFilter::try_new("unrager=info,warn").unwrap()
+        };
+        tracing_subscriber::fmt::layer()
+            .with_writer(appender)
+            .with_ansi(false)
+            .with_filter(file_filter)
+    });
+
+    tracing_subscriber::registry()
+        .with(stderr_layer)
+        .with(file_layer)
         .init();
 }

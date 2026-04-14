@@ -1703,7 +1703,8 @@ impl App {
                     self.source.reset_with(page);
                 }
                 let baseline = self.fetch_baseline.unwrap_or(0);
-                if self.source.tweets.len() < baseline + 10
+                if !silent
+                    && self.source.tweets.len() < baseline + 10
                     && self.source.cursor.is_some()
                     && matches!(kind, SourceKind::Home { .. })
                 {

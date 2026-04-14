@@ -535,6 +535,7 @@ pub fn whisper_llm_async(entry: NotifEntry, ollama: OllamaConfig, tx: EventTx) {
             ],
             "stream": false,
             "think": false,
+            "keep_alive": ollama.keep_alive,
             "options": { "temperature": 0.3, "num_predict": 60 },
         });
 
@@ -592,6 +593,7 @@ pub fn surge_llm_async(entries: Vec<NotifEntry>, ollama: OllamaConfig, tx: Event
             ],
             "stream": false,
             "think": false,
+            "keep_alive": ollama.keep_alive,
             "options": { "temperature": 0, "num_predict": 80 },
         });
 

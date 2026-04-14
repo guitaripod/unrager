@@ -24,3 +24,8 @@ extra_guidance = "KEEP technical, scientific, art, music, sports, personal-life,
 model = "gemma4:latest"
 host = "http://localhost:11434"
 timeout_seconds = 20
+# How long Ollama should retain the model in VRAM after each request.
+# "30s" unloads the model 30s after the last classification/translation,
+# freeing GPU memory for other apps (games, etc.). Use "5m" for the
+# previous always-hot behavior, or "0" to unload immediately.
+keep_alive = "30s"

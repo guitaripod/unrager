@@ -51,6 +51,12 @@ pub struct OllamaConfig {
     pub model: String,
     pub host: String,
     pub timeout_seconds: u64,
+    #[serde(default = "default_keep_alive")]
+    pub keep_alive: String,
+}
+
+fn default_keep_alive() -> String {
+    "30s".to_string()
 }
 
 impl FilterConfig {
@@ -310,6 +316,7 @@ impl Classifier {
                 ],
                 "stream": false,
                 "think": false,
+                "keep_alive": ollama.keep_alive,
                 "options": { "temperature": 0, "num_predict": 3 },
             });
             debug!(
@@ -383,6 +390,7 @@ pub fn translate_async(rest_id: String, text: String, ollama: OllamaConfig, tx: 
             ],
             "stream": false,
             "think": false,
+            "keep_alive": ollama.keep_alive,
             "options": { "temperature": 0, "num_predict": 512 },
         });
         match http.post(&url).json(&body).send().await {
@@ -450,6 +458,7 @@ mod tests {
                 model: "gemma4:latest".into(),
                 host: "http://localhost:11434".into(),
                 timeout_seconds: 20,
+                keep_alive: "30s".into(),
             },
         }
     }

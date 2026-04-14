@@ -210,6 +210,32 @@ struct Candidate {
     path: PathBuf,
 }
 
+pub struct ProbeResult {
+    pub browser: &'static str,
+    pub path: PathBuf,
+    pub has_x_session: bool,
+}
+
+pub fn probe() -> Result<Vec<ProbeResult>> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for Candidate { browser, path } in candidate_paths()? {
+        if !path.exists() || !seen.insert(path.clone()) {
+            continue;
+        }
+        let has_x_session = matches!(
+            read_encrypted_cookies(&path),
+            Ok(rows) if rows.len() == COOKIE_NAMES.len()
+        );
+        out.push(ProbeResult {
+            browser: browser.label,
+            path,
+            has_x_session,
+        });
+    }
+    Ok(out)
+}
+
 fn candidate_paths() -> Result<Vec<Candidate>> {
     if let Some(override_path) = std::env::var_os(COOKIES_PATH_ENV) {
         return Ok(vec![Candidate {

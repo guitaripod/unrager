@@ -287,6 +287,12 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
             format!("−{}", app.filter_hidden_count),
             Style::default().fg(Color::Green),
         ));
+    } else if app.filter_classifier.is_none() {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            "filter⌀",
+            Style::default().fg(Color::DarkGray),
+        ));
     }
     if matches!(app.feed_mode, crate::tui::app::FeedMode::Originals)
         && matches!(app.source.kind, Some(SourceKind::Home { .. }))
@@ -1610,6 +1616,10 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from(vec![
             Span::styled("  −N ", Style::default().fg(Color::Green)),
             Span::raw("N tweets hidden by rage filter"),
+        ]),
+        Line::from(vec![
+            Span::styled("  filter⌀ ", Style::default().fg(Color::DarkGray)),
+            Span::raw("filter off (run `unrager doctor` to diagnose)"),
         ]),
         Line::from(vec![
             Span::styled("  ◇  ", Style::default().fg(Color::Cyan)),

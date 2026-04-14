@@ -41,6 +41,7 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::Tweet(args) => cli::tweet::run(args).await,
         Command::Reply(args) => cli::reply::run(args).await,
         Command::Auth(args) => cli::auth::run(args).await,
+        Command::Doctor(args) => cli::doctor::run(args).await,
     }
 }
 

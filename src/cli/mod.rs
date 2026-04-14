@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod bookmarks;
 pub mod common;
+pub mod doctor;
 pub mod home;
 pub mod mentions;
 pub mod notifs;
@@ -14,10 +15,25 @@ pub mod whoami;
 
 use clap::{Parser, Subcommand};
 
+const LONG_ABOUT: &str = "A calm Twitter/X CLI with a local-LLM rage filter.
+
+Run `unrager` with no arguments to launch the TUI. Subcommands perform
+one-shot reads, writes, or diagnostics.
+
+The TUI reads cookies from your logged-in Chromium-family browser and
+pipes every tweet through a local Ollama classifier. The filter disables
+itself silently when Ollama isn't running; `unrager doctor` explains what
+is and isn't set up.
+
+Config:
+  Linux   ~/.config/unrager/{filter.toml, session.json, tokens.json}
+  macOS   ~/Library/Application Support/unrager/{filter.toml, ...}";
+
 #[derive(Debug, Parser)]
 #[command(
     name = "unrager",
     about = "A calm Twitter/X CLI with a local-LLM rage filter",
+    long_about = LONG_ABOUT,
     version,
     disable_help_subcommand = true
 )]
@@ -66,4 +82,7 @@ pub enum Command {
 
     #[command(about = "Manage OAuth 2.0 tokens for the write path")]
     Auth(auth::Args),
+
+    #[command(about = "Check cookies, Ollama, and gemma4 setup")]
+    Doctor(doctor::Args),
 }

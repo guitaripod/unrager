@@ -18,6 +18,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static PALETTE_IS_DARK: AtomicBool = AtomicBool::new(true);
 
 pub struct PaneItem {
     pub lines: Vec<Line<'static>>,
@@ -207,6 +210,7 @@ pub struct RenderContext<'a> {
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
+    PALETTE_IS_DARK.store(app.is_dark, Ordering::Relaxed);
     let [top, main, bottom] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(0),
@@ -1567,7 +1571,7 @@ fn author_spans(handle: &str, verified: bool, name: &str, show_name: bool) -> Ve
     spans
 }
 
-const HANDLE_PALETTE: &[Color] = &[
+const HANDLE_PALETTE_DARK: &[Color] = &[
     Color::Indexed(39),
     Color::Indexed(45),
     Color::Indexed(51),
@@ -1590,13 +1594,41 @@ const HANDLE_PALETTE: &[Color] = &[
     Color::Indexed(80),
 ];
 
+const HANDLE_PALETTE_LIGHT: &[Color] = &[
+    Color::Indexed(19),
+    Color::Indexed(25),
+    Color::Indexed(24),
+    Color::Indexed(22),
+    Color::Indexed(28),
+    Color::Indexed(29),
+    Color::Indexed(64),
+    Color::Indexed(100),
+    Color::Indexed(94),
+    Color::Indexed(130),
+    Color::Indexed(124),
+    Color::Indexed(88),
+    Color::Indexed(52),
+    Color::Indexed(126),
+    Color::Indexed(132),
+    Color::Indexed(90),
+    Color::Indexed(92),
+    Color::Indexed(55),
+    Color::Indexed(57),
+    Color::Indexed(60),
+];
+
 fn handle_color(handle: &str) -> Color {
     let mut h: u64 = 0xcbf29ce484222325;
     for b in handle.as_bytes() {
         h ^= b.to_ascii_lowercase() as u64;
         h = h.wrapping_mul(0x100000001b3);
     }
-    HANDLE_PALETTE[(h as usize) % HANDLE_PALETTE.len()]
+    let palette = if PALETTE_IS_DARK.load(Ordering::Relaxed) {
+        HANDLE_PALETTE_DARK
+    } else {
+        HANDLE_PALETTE_LIGHT
+    };
+    palette[(h as usize) % palette.len()]
 }
 
 const TEXT_LINES_IN_CARD: usize = 3;

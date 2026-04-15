@@ -1924,15 +1924,13 @@ pub fn emit_media_placements(app: &App, terminal_width: u16) {
         (terminal_width as usize, None)
     };
 
-    let needs_source = app.media_auto_expand
-        || app
-            .source
-            .tweets
-            .iter()
-            .any(|t| app.expanded_bodies.contains(&t.rest_id));
-    if needs_source {
-        for tweet in app.source.tweets.iter() {
-            emit_placement_for_tweet(&app.media, cell, tweet, source_wrap, max_rows);
+    for tweet in app.source.tweets.iter() {
+        emit_placement_for_tweet(&app.media, cell, tweet, source_wrap, max_rows);
+        if let Some(thread) = app.inline_threads.get(&tweet.rest_id) {
+            for (depth, reply) in &thread.replies {
+                let child_wrap = source_wrap.saturating_sub(4 + depth * 2);
+                emit_placement_for_tweet(&app.media, cell, reply, child_wrap, max_rows);
+            }
         }
     }
 
@@ -1941,6 +1939,12 @@ pub fn emit_media_placements(app: &App, terminal_width: u16) {
         emit_placement_for_tweet(&app.media, cell, &detail.tweet, wrap, max_rows);
         for reply in &detail.replies {
             emit_placement_for_tweet(&app.media, cell, reply, wrap, max_rows);
+            if let Some(thread) = app.inline_threads.get(&reply.rest_id) {
+                for (depth, child) in &thread.replies {
+                    let child_wrap = wrap.saturating_sub(4 + depth * 2);
+                    emit_placement_for_tweet(&app.media, cell, child, child_wrap, max_rows);
+                }
+            }
         }
     }
 }

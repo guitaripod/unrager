@@ -1174,8 +1174,8 @@ impl App {
                 if defer {
                     return Ok(());
                 }
-                terminal.draw(|frame| ui::draw(frame, self))?;
                 ui::emit_media_placements(self, terminal.size()?.width);
+                terminal.draw(|frame| ui::draw(frame, self))?;
                 self.last_render_at = Some(Instant::now());
                 self.dirty = false;
             }
@@ -1189,8 +1189,8 @@ impl App {
             }
             Event::Key(key) => self.handle_key(key),
             Event::Resize(_, _) => {
-                terminal.draw(|frame| ui::draw(frame, self))?;
                 ui::emit_media_placements(self, terminal.size()?.width);
+                terminal.draw(|frame| ui::draw(frame, self))?;
             }
             Event::TimelineLoaded {
                 kind,

@@ -168,7 +168,7 @@ pub struct App {
 
 pub const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-const FETCH_TARGET_TWEETS: usize = 25;
+const FETCH_TARGET_TWEETS: usize = 50;
 
 impl App {
     pub async fn new(tx: EventTx, is_dark: bool) -> Result<Self> {

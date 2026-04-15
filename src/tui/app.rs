@@ -147,6 +147,7 @@ pub struct App {
     pub filter_verdicts: HashMap<String, FilterState>,
     pub filter_inflight: HashSet<String>,
     pub filter_hidden_count: usize,
+    pub pending_classification: Vec<Tweet>,
     pub translations: HashMap<String, String>,
     pub translation_inflight: HashSet<String>,
     pub brief_cache: HashMap<String, BriefView>,
@@ -166,6 +167,8 @@ pub struct App {
 }
 
 pub const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+const FETCH_TARGET_TWEETS: usize = 25;
 
 impl App {
     pub async fn new(tx: EventTx, is_dark: bool) -> Result<Self> {
@@ -270,6 +273,7 @@ impl App {
             filter_verdicts: HashMap::new(),
             filter_inflight: HashSet::new(),
             filter_hidden_count: 0,
+            pending_classification: Vec::new(),
             translations: HashMap::new(),
             translation_inflight: HashSet::new(),
             brief_cache: HashMap::new(),
@@ -368,6 +372,14 @@ impl App {
             FilterMode::On => FilterMode::Off,
             FilterMode::Off => FilterMode::On,
         };
+        if matches!(self.filter_mode, FilterMode::Off) {
+            let drained: Vec<Tweet> = self.pending_classification.drain(..).collect();
+            for t in drained {
+                if !self.source.tweets.iter().any(|x| x.rest_id == t.rest_id) {
+                    self.source.tweets.push(t);
+                }
+            }
+        }
         let msg = match self.filter_mode {
             FilterMode::On => "filter: on",
             FilterMode::Off => "filter: off",
@@ -415,8 +427,71 @@ impl App {
             .insert(rest_id.clone(), FilterState::Classified(verdict));
         if matches!(verdict, FilterDecision::Hide) {
             self.filter_hidden_count += 1;
-            self.remove_tweet_by_id(&rest_id);
+            let in_pending = self
+                .pending_classification
+                .iter()
+                .any(|t| t.rest_id == rest_id);
+            if !in_pending {
+                self.remove_tweet_by_id(&rest_id);
+            }
         }
+        self.drain_pending_classification();
+    }
+
+    fn drain_pending_classification(&mut self) {
+        while let Some(front) = self.pending_classification.first() {
+            match self.filter_verdicts.get(&front.rest_id) {
+                Some(FilterState::Classified(FilterDecision::Keep)) => {
+                    let t = self.pending_classification.remove(0);
+                    if !self.source.tweets.iter().any(|x| x.rest_id == t.rest_id) {
+                        self.source.tweets.push(t);
+                    }
+                }
+                Some(FilterState::Classified(FilterDecision::Hide)) => {
+                    self.pending_classification.remove(0);
+                }
+                _ => break,
+            }
+        }
+        self.try_advance_fetch_target();
+    }
+
+    fn try_advance_fetch_target(&mut self) {
+        let Some(baseline) = self.fetch_baseline else {
+            return;
+        };
+        let target = baseline + FETCH_TARGET_TWEETS;
+
+        if self.source.tweets.len() >= target {
+            self.fetch_baseline = None;
+            self.source.loading = false;
+            self.clear_status();
+            return;
+        }
+
+        let total_eventual = self.source.tweets.len() + self.pending_classification.len();
+        let is_home = self
+            .source
+            .kind
+            .as_ref()
+            .is_some_and(|k| matches!(k, SourceKind::Home { .. }));
+        let can_fetch_more = self.source.cursor.is_some() && !self.source.exhausted && is_home;
+
+        if total_eventual < target && can_fetch_more {
+            if !self.source.loading {
+                self.fetch_source(true, false);
+            }
+            return;
+        }
+
+        if self.pending_classification.is_empty() {
+            self.fetch_baseline = None;
+            self.source.loading = false;
+            self.clear_status();
+            return;
+        }
+
+        self.source.loading = true;
     }
 
     fn translate_selected(&mut self) {
@@ -2012,6 +2087,7 @@ impl App {
         self.filter_verdicts.clear();
         self.filter_inflight.clear();
         self.filter_hidden_count = 0;
+        self.pending_classification.clear();
         self.translations.clear();
         self.translation_inflight.clear();
         self.notif_actor_cursor = None;
@@ -2234,32 +2310,51 @@ impl App {
                 if matches!(kind, SourceKind::Home { following: true }) {
                     page.tweets.sort_by(|a, b| b.created_at.cmp(&a.created_at));
                 }
+                let filter_active = !silent
+                    && matches!(self.filter_mode, FilterMode::On)
+                    && self.filter_classifier.is_some();
+                let split_idx = if filter_active {
+                    page.tweets
+                        .iter()
+                        .position(|t| {
+                            self.filter_cache
+                                .as_ref()
+                                .is_some_and(|c| c.get(&t.rest_id).is_none())
+                        })
+                        .unwrap_or(page.tweets.len())
+                } else {
+                    page.tweets.len()
+                };
+                let held: Vec<Tweet> = page.tweets.drain(split_idx..).collect();
+                let prefix_count = page.tweets.len();
+                let held_count = held.len();
                 let old_len = self.source.tweets.len();
+                if !append {
+                    self.pending_classification.clear();
+                }
                 if append {
                     self.source.append(page);
                 } else {
                     self.source.reset_with(page);
                 }
-                let baseline = self.fetch_baseline.unwrap_or(0);
-                if !silent
-                    && self.source.tweets.len() < baseline + 10
-                    && self.source.cursor.is_some()
-                    && matches!(kind, SourceKind::Home { .. })
-                {
+                self.pending_classification.extend(held.iter().cloned());
+                if prefix_count + held_count > 0 && self.source.cursor.is_some() {
                     self.source.exhausted = false;
-                    self.fetch_source(true, silent);
-                    return;
                 }
-                self.fetch_baseline = None;
                 self.error = None;
-                self.clear_status();
-                let new_tweets: Vec<Tweet> = if append {
+                let mut new_tweets: Vec<Tweet> = if append {
                     self.source.tweets[old_len..].to_vec()
                 } else {
                     self.source.tweets.clone()
                 };
+                new_tweets.extend(held);
                 self.queue_source_media(&new_tweets);
                 self.queue_filter_classification(new_tweets);
+                if silent {
+                    self.fetch_baseline = None;
+                    self.clear_status();
+                }
+                self.drain_pending_classification();
             }
             Err(e) => {
                 self.error = Some(e.to_string());

@@ -2338,20 +2338,30 @@ impl App {
                 let prefix_count = page.tweets.len();
                 let held_count = held.len();
                 let old_len = self.source.tweets.len();
-                if !append {
+                if !append && !silent {
                     self.pending_classification.clear();
                 }
-                if append {
+                let added;
+                if silent {
+                    added = self.source.prepend_fresh(page);
+                    if added > 0 && self.source.state.selected > 0 {
+                        self.source.state.selected += added;
+                    }
+                } else if append {
                     self.source.append(page);
+                    added = self.source.tweets.len().saturating_sub(old_len);
                 } else {
                     self.source.reset_with(page);
+                    added = self.source.tweets.len();
                 }
                 self.pending_classification.extend(held.iter().cloned());
                 if prefix_count + held_count > 0 && self.source.cursor.is_some() {
                     self.source.exhausted = false;
                 }
                 self.error = None;
-                let mut new_tweets: Vec<Tweet> = if append {
+                let mut new_tweets: Vec<Tweet> = if silent {
+                    self.source.tweets[..added].to_vec()
+                } else if append {
                     self.source.tweets[old_len..].to_vec()
                 } else {
                     self.source.tweets.clone()

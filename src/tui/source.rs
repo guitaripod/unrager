@@ -163,6 +163,23 @@ impl Source {
         }
     }
 
+    pub fn prepend_fresh(&mut self, page: TimelinePage) -> usize {
+        let existing: HashSet<&str> = self.tweets.iter().map(|t| t.rest_id.as_str()).collect();
+        let new_tweets: Vec<Tweet> = page
+            .tweets
+            .into_iter()
+            .filter(|t| !existing.contains(t.rest_id.as_str()))
+            .collect();
+        let added = new_tweets.len();
+        if added == 0 {
+            return 0;
+        }
+        let mut combined = new_tweets;
+        combined.append(&mut self.tweets);
+        self.tweets = combined;
+        added
+    }
+
     pub fn reset_with_notifications(&mut self, page: NotificationPage) {
         self.notifications = page
             .notifications

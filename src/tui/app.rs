@@ -437,10 +437,11 @@ impl App {
                 return;
             }
         };
-        if self.filter_cfg.as_ref().map(|c| c.ollama.clone()).is_none() {
+        let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone()) else {
             self.set_status("ask unavailable (no ollama config)");
             return;
-        }
+        };
+        ask::preload(ollama);
         let replies_in_detail = if self.active == ActivePane::Detail {
             self.top_detail()
                 .filter(|d| d.tweet.rest_id == tweet.rest_id)
@@ -1084,9 +1085,19 @@ impl App {
             Event::Quit => self.running = false,
             Event::FocusGained => {
                 self.terminal_focused = true;
+                if matches!(self.focus_stack.last(), Some(FocusEntry::Ask(_)))
+                    && let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone())
+                {
+                    ask::preload(ollama);
+                }
             }
             Event::FocusLost => {
                 self.terminal_focused = false;
+                if matches!(self.focus_stack.last(), Some(FocusEntry::Ask(_)))
+                    && let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone())
+                {
+                    ask::unload(ollama);
+                }
             }
         }
         Ok(())
@@ -1763,7 +1774,12 @@ impl App {
     }
 
     fn back_out(&mut self, can_quit: bool) {
-        if self.focus_stack.pop().is_some() {
+        if let Some(popped) = self.focus_stack.pop() {
+            if matches!(popped, FocusEntry::Ask(_))
+                && let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone())
+            {
+                ask::unload(ollama);
+            }
             self.pending_thread = None;
             if self.focus_stack.is_empty() {
                 self.active = ActivePane::Source;

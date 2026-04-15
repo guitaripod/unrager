@@ -169,6 +169,48 @@ pub enum Role {
     Assistant,
 }
 
+pub fn preload(ollama: OllamaConfig) {
+    tokio::spawn(async move {
+        warm_model(&ollama, "10m").await;
+    });
+}
+
+pub fn unload(ollama: OllamaConfig) {
+    tokio::spawn(async move {
+        warm_model(&ollama, "0s").await;
+    });
+}
+
+async fn warm_model(ollama: &OllamaConfig, keep_alive: &str) {
+    let Ok(http) = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+    else {
+        return;
+    };
+    let url = format!("{}/api/generate", ollama.host.trim_end_matches('/'));
+    let body = json!({
+        "model": ollama.model,
+        "prompt": "",
+        "keep_alive": keep_alive,
+    });
+    match http.post(&url).json(&body).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            debug!(keep_alive, model = %ollama.model, "ask model warm call ok");
+        }
+        Ok(resp) => {
+            debug!(
+                keep_alive,
+                status = resp.status().as_u16(),
+                "ask model warm non-success"
+            );
+        }
+        Err(e) => {
+            debug!(keep_alive, "ask model warm failed: {e}");
+        }
+    }
+}
+
 pub fn send(
     ollama: OllamaConfig,
     tweet: Tweet,

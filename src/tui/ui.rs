@@ -599,11 +599,13 @@ fn notification_lines(
 
     if !n.actors.is_empty() {
         let first = &n.actors[0];
-        let mut handle_style = Style::default().fg(handle_color(&first.handle));
-        if !dim {
-            handle_style = handle_style.add_modifier(Modifier::BOLD);
+        let handle_style = Style::default()
+            .fg(handle_color(&first.handle))
+            .add_modifier(Modifier::BOLD);
+        header.push(Span::styled(format!("@{}", first.handle), handle_style));
+        if first.verified {
+            header.push(Span::styled(" ✓", Style::default().fg(Color::Blue)));
         }
-        header.push(Span::styled(first.handle.clone(), handle_style));
 
         let others = n
             .others_count
@@ -612,11 +614,13 @@ fn notification_lines(
         } else if n.actors.len() >= 2 && others == 1 {
             header.push(Span::styled(", ", Style::default().fg(meta_color)));
             let second = &n.actors[1];
-            let mut h2_style = Style::default().fg(handle_color(&second.handle));
-            if !dim {
-                h2_style = h2_style.add_modifier(Modifier::BOLD);
+            let h2_style = Style::default()
+                .fg(handle_color(&second.handle))
+                .add_modifier(Modifier::BOLD);
+            header.push(Span::styled(format!("@{}", second.handle), h2_style));
+            if second.verified {
+                header.push(Span::styled(" ✓", Style::default().fg(Color::Blue)));
             }
-            header.push(Span::styled(second.handle.clone(), h2_style));
         } else {
             header.push(Span::styled(
                 format!(" +{others}"),
@@ -709,11 +713,10 @@ fn notification_lines(
                 Span::styled("    → ", Style::default().fg(Color::Blue))
             };
             let mut row: Vec<Span<'static>> = vec![marker];
-            let mut h_style = Style::default().fg(handle_color(&actor.handle));
-            if !dim || is_cursor {
-                h_style = h_style.add_modifier(Modifier::BOLD);
-            }
-            row.push(Span::styled(actor.handle.clone(), h_style));
+            let h_style = Style::default()
+                .fg(handle_color(&actor.handle))
+                .add_modifier(Modifier::BOLD);
+            row.push(Span::styled(format!("@{}", actor.handle), h_style));
             if actor.verified {
                 row.push(Span::styled(" ✓", Style::default().fg(Color::Blue)));
             }

@@ -1504,6 +1504,15 @@ impl App {
                     TimestampStyle::Absolute => TimestampStyle::Relative,
                 };
             }
+            (KeyCode::Char('Z'), _) => {
+                self.is_dark = !self.is_dark;
+                let msg = if self.is_dark {
+                    "theme: dark"
+                } else {
+                    "theme: light"
+                };
+                self.set_status(msg);
+            }
             (KeyCode::Char(','), KeyModifiers::NONE) if self.is_split() => {
                 self.split_pct = self.split_pct.saturating_sub(5).max(20);
             }

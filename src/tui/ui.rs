@@ -2399,6 +2399,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  M              toggle metric counts"),
         Line::from("  N              toggle display names"),
         Line::from("  I              toggle media auto-expand"),
+        Line::from("  Z              toggle dark / light theme palette"),
         Line::from("  p              my profile"),
         Line::from("  P              open own profile in browser"),
         Line::from("  T              translate tweet to English (toggle)"),

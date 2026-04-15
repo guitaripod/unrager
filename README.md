@@ -140,6 +140,7 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 | `x` | Expand / collapse tweet body |
 | `X` | Inline thread replies |
 | `I` | Toggle media auto-expand |
+| `Z` | Toggle dark / light theme palette |
 | `M` | Toggle metric counts |
 | `N` | Toggle display names |
 | `t` | Toggle relative / absolute timestamps |

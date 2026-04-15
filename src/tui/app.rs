@@ -2306,6 +2306,7 @@ impl App {
         }
         match result {
             Ok(mut page) => {
+                let total_incoming = page.tweets.len();
                 let hidden = filter_incoming_page(
                     &mut page,
                     &kind,
@@ -2335,8 +2336,6 @@ impl App {
                     page.tweets.len()
                 };
                 let held: Vec<Tweet> = page.tweets.drain(split_idx..).collect();
-                let prefix_count = page.tweets.len();
-                let held_count = held.len();
                 let old_len = self.source.tweets.len();
                 if !append && !silent {
                     self.pending_classification.clear();
@@ -2355,7 +2354,7 @@ impl App {
                     added = self.source.tweets.len();
                 }
                 self.pending_classification.extend(held.iter().cloned());
-                if prefix_count + held_count > 0 && self.source.cursor.is_some() {
+                if total_incoming > 0 && self.source.cursor.is_some() {
                     self.source.exhausted = false;
                 }
                 self.error = None;

@@ -439,12 +439,14 @@ impl App {
     }
 
     fn drain_pending_classification(&mut self) {
+        let mut added = false;
         while let Some(front) = self.pending_classification.first() {
             match self.filter_verdicts.get(&front.rest_id) {
                 Some(FilterState::Classified(FilterDecision::Keep)) => {
                     let t = self.pending_classification.remove(0);
                     if !self.source.tweets.iter().any(|x| x.rest_id == t.rest_id) {
                         self.source.tweets.push(t);
+                        added = true;
                     }
                 }
                 Some(FilterState::Classified(FilterDecision::Hide)) => {
@@ -453,7 +455,29 @@ impl App {
                 _ => break,
             }
         }
+        if added {
+            self.sort_source_if_following();
+        }
         self.try_advance_fetch_target();
+    }
+
+    fn sort_source_if_following(&mut self) {
+        if !matches!(self.source.kind, Some(SourceKind::Home { following: true })) {
+            return;
+        }
+        let selected_id = self
+            .source
+            .tweets
+            .get(self.source.state.selected)
+            .map(|t| t.rest_id.clone());
+        self.source
+            .tweets
+            .sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        if let Some(id) = selected_id {
+            if let Some(idx) = self.source.tweets.iter().position(|t| t.rest_id == id) {
+                self.source.state.selected = idx;
+            }
+        }
     }
 
     fn try_advance_fetch_target(&mut self) {
@@ -2345,6 +2369,9 @@ impl App {
                     added = self.source.prepend_fresh(page);
                     if added > 0 && self.source.state.selected > 0 {
                         self.source.state.selected += added;
+                    }
+                    if added > 0 {
+                        self.sort_source_if_following();
                     }
                 } else if append {
                     self.source.append(page);

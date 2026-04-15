@@ -1,7 +1,8 @@
-use crate::model::Tweet;
+use crate::model::{MediaKind, Tweet};
 use crate::tui::event::{Event, EventTx};
 use crate::tui::filter::OllamaConfig;
 use crate::tui::source::PaneState;
+use base64::Engine;
 use futures::TryStreamExt;
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -84,40 +85,103 @@ impl AskView {
         self.error = error;
     }
 
-    pub fn build_ollama_messages(&self) -> Vec<Value> {
-        let mut out: Vec<Value> = Vec::with_capacity(self.messages.len() + 1);
-        out.push(json!({ "role": "system", "content": SYSTEM_PROMPT }));
-        let handle = &self.tweet.author.handle;
-        let tweet_text = &self.tweet.text;
-        for (i, m) in self.messages.iter().enumerate() {
+    pub fn turn_texts(&self) -> Vec<(Role, String)> {
+        let mut out = Vec::with_capacity(self.messages.len());
+        for m in &self.messages {
             match m {
-                AskMessage::User(text) => {
-                    let content = if i == 0 {
-                        format!("@{handle} posted:\n{tweet_text}\n\n{text}")
-                    } else {
-                        text.clone()
-                    };
-                    out.push(json!({ "role": "user", "content": content }));
-                }
-                AskMessage::Assistant(a) => {
-                    out.push(json!({ "role": "assistant", "content": a.text }));
-                }
+                AskMessage::User(text) => out.push((Role::User, text.clone())),
+                AskMessage::Assistant(a) => out.push((Role::Assistant, a.text.clone())),
             }
         }
         out
     }
 }
 
-pub fn send(ollama: OllamaConfig, messages: Vec<Value>, tweet_id: String, tx: EventTx) {
+#[derive(Debug, Clone, Copy)]
+pub enum Role {
+    User,
+    Assistant,
+}
+
+pub fn send(ollama: OllamaConfig, tweet: Tweet, turns: Vec<(Role, String)>, tx: EventTx) {
+    let tweet_id = tweet.rest_id.clone();
     tokio::spawn(async move {
-        info!(tweet_id = %tweet_id, turns = messages.len(), "ask stream start");
+        info!(tweet_id = %tweet_id, turns = turns.len(), "ask stream start");
+        let images = fetch_images(&tweet).await;
+        if !images.is_empty() {
+            debug!(tweet_id = %tweet_id, count = images.len(), "ask images attached");
+        }
+        let messages = build_messages(&tweet, &turns, images);
         stream_ollama(&ollama, &tweet_id, messages, &tx).await;
     });
 }
 
+fn build_messages(tweet: &Tweet, turns: &[(Role, String)], images: Vec<String>) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::with_capacity(turns.len() + 1);
+    out.push(json!({ "role": "system", "content": SYSTEM_PROMPT }));
+    let handle = &tweet.author.handle;
+    let tweet_text = &tweet.text;
+    let mut first_user = true;
+    for (role, text) in turns {
+        match role {
+            Role::User => {
+                let content = if first_user {
+                    format!("@{handle} posted:\n{tweet_text}\n\n{text}")
+                } else {
+                    text.clone()
+                };
+                let mut msg = json!({ "role": "user", "content": content });
+                if first_user && !images.is_empty() {
+                    msg["images"] = json!(images);
+                }
+                out.push(msg);
+                first_user = false;
+            }
+            Role::Assistant => {
+                out.push(json!({ "role": "assistant", "content": text }));
+            }
+        }
+    }
+    out
+}
+
+async fn fetch_images(tweet: &Tweet) -> Vec<String> {
+    let photo_urls: Vec<String> = tweet
+        .media
+        .iter()
+        .filter(|m| matches!(m.kind, MediaKind::Photo))
+        .map(|m| m.url.clone())
+        .take(4)
+        .collect();
+    if photo_urls.is_empty() {
+        return Vec::new();
+    }
+    let Ok(http) = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+    else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = Vec::with_capacity(photo_urls.len());
+    for url in photo_urls {
+        match http.get(&url).send().await {
+            Ok(resp) if resp.status().is_success() => match resp.bytes().await {
+                Ok(bytes) => {
+                    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                    out.push(encoded);
+                }
+                Err(e) => warn!(url = %url, "ask image body read failed: {e}"),
+            },
+            Ok(resp) => warn!(url = %url, status = resp.status().as_u16(), "ask image http error"),
+            Err(e) => warn!(url = %url, "ask image fetch failed: {e}"),
+        }
+    }
+    out
+}
+
 async fn stream_ollama(ollama: &OllamaConfig, tweet_id: &str, messages: Vec<Value>, tx: &EventTx) {
     let http = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(ollama.timeout_seconds.max(60)))
+        .timeout(Duration::from_secs(ollama.timeout_seconds.max(180)))
         .build()
     {
         Ok(c) => c,
@@ -133,7 +197,7 @@ async fn stream_ollama(ollama: &OllamaConfig, tweet_id: &str, messages: Vec<Valu
         "stream": true,
         "think": true,
         "keep_alive": ollama.keep_alive,
-        "options": { "temperature": 0.3, "num_predict": 1024 },
+        "options": { "temperature": 0.3, "num_predict": 2048 },
     });
 
     let response = match http.post(&url).json(&body).send().await {
@@ -175,13 +239,12 @@ async fn stream_ollama(ollama: &OllamaConfig, tweet_id: &str, messages: Vec<Valu
                 }
                 match serde_json::from_str::<Value>(&line) {
                     Ok(parsed) => {
-                        if let Some(token) =
-                            parsed.pointer("/message/content").and_then(Value::as_str)
-                            && !token.is_empty()
+                        if let Some(c) = parsed.pointer("/message/content").and_then(Value::as_str)
+                            && !c.is_empty()
                         {
                             let _ = tx.send(Event::AskToken {
                                 tweet_id: tweet_id.to_string(),
-                                token: token.to_string(),
+                                token: c.to_string(),
                             });
                         }
                         if parsed.get("done").and_then(Value::as_bool) == Some(true) {

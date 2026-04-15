@@ -949,7 +949,9 @@ fn draw_ask_conversation(
                 if m.text.is_empty() && !m.complete {
                     lines.push(Line::from(Span::styled(
                         "thinking…",
-                        Style::default().fg(Color::DarkGray),
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::ITALIC),
                     )));
                 }
                 for raw_line in m.text.lines() {

@@ -468,10 +468,10 @@ impl App {
         view.input.clear();
         view.push_user_message(effective_prompt);
         view.auto_follow = true;
-        let tweet_id = view.tweet_id().to_string();
-        let messages = view.build_ollama_messages();
+        let tweet = view.tweet.clone();
+        let turns = view.turn_texts();
         let tx = self.tx.clone();
-        ask::send(ollama, messages, tweet_id, tx);
+        ask::send(ollama, tweet, turns, tx);
     }
 
     fn handle_ask_token(&mut self, tweet_id: String, token: String) {

@@ -23,6 +23,7 @@ pub struct GqlClient {
     cache_path: PathBuf,
     next_allowed: AsyncMutex<Instant>,
     client_uuid: String,
+    rate_limit_until: Mutex<Option<std::time::Instant>>,
 }
 
 enum Method {
@@ -45,6 +46,7 @@ impl GqlClient {
             cache_path,
             next_allowed: AsyncMutex::new(Instant::now()),
             client_uuid,
+            rate_limit_until: Mutex::new(None),
         })
     }
 
@@ -82,6 +84,11 @@ impl GqlClient {
         variables: &Value,
         features: &Value,
     ) -> Result<Value> {
+        if let Some(remaining) = self.rate_limit_remaining() {
+            return Err(Error::RateLimited {
+                remaining_secs: remaining.as_secs().max(1),
+            });
+        }
         let qid = self.lookup_qid(op).ok_or_else(|| {
             Error::GraphqlShape(format!("no query id for operation {}", op.name()))
         })?;
@@ -199,6 +206,18 @@ impl GqlClient {
 
     async fn parse(&self, res: reqwest::Response) -> Result<Value> {
         let status = res.status();
+        if status.as_u16() == 429 {
+            let reset_hdr = res
+                .headers()
+                .get("x-rate-limit-reset")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok());
+            let remaining = compute_rate_limit_remaining(reset_hdr);
+            self.record_rate_limit(remaining);
+            return Err(Error::RateLimited {
+                remaining_secs: remaining.as_secs().max(1),
+            });
+        }
         let body = res.text().await?;
         if !status.is_success() {
             return Err(Error::GraphqlStatus {
@@ -222,6 +241,37 @@ impl GqlClient {
         }
         Ok(value)
     }
+}
+
+impl GqlClient {
+    pub fn rate_limit_remaining(&self) -> Option<Duration> {
+        let until = *self.rate_limit_until.lock().ok()?;
+        let until = until?;
+        let now = std::time::Instant::now();
+        if until > now { Some(until - now) } else { None }
+    }
+
+    fn record_rate_limit(&self, remaining: Duration) {
+        if let Ok(mut guard) = self.rate_limit_until.lock() {
+            *guard = Some(std::time::Instant::now() + remaining);
+        }
+    }
+}
+
+fn compute_rate_limit_remaining(reset_epoch: Option<u64>) -> Duration {
+    const DEFAULT_WINDOW: Duration = Duration::from_secs(15 * 60);
+    const MIN_WINDOW: Duration = Duration::from_secs(60);
+    let Some(reset) = reset_epoch else {
+        return DEFAULT_WINDOW;
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if reset <= now {
+        return MIN_WINDOW;
+    }
+    Duration::from_secs((reset - now).clamp(MIN_WINDOW.as_secs(), 60 * 60))
 }
 
 fn random_uuid_v4() -> String {

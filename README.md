@@ -135,6 +135,7 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 | `R` | Toggle tweets / replies on user profile |
 | `T` | Translate selected tweet to English (toggle) |
 | `A` | Ask gemma about the selected post |
+| `B` | Deep profile brief on the selected author |
 | `c` | Toggle rage filter |
 | `x` | Expand / collapse tweet body |
 | `X` | Inline thread replies |

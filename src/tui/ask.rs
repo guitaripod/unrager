@@ -181,6 +181,10 @@ pub fn unload(ollama: OllamaConfig) {
     });
 }
 
+pub async fn unload_blocking(ollama: &OllamaConfig) {
+    warm_model(ollama, "0s").await;
+}
+
 async fn warm_model(ollama: &OllamaConfig, keep_alive: &str) {
     let Ok(http) = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))

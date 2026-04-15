@@ -319,6 +319,15 @@ pub struct FilterRenderCtx {
     pub enabled: bool,
 }
 
+fn format_countdown(remaining: std::time::Duration) -> String {
+    let secs = remaining.as_secs();
+    if secs < 60 {
+        format!("{secs}s")
+    } else {
+        format!("{}:{:02}", secs / 60, secs % 60)
+    }
+}
+
 fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     let mut spans = vec![
         Span::styled(
@@ -379,6 +388,13 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
         spans.push(Span::styled(
             format!("{}◆", app.focus_stack.len()),
             Style::default().fg(Color::Magenta),
+        ));
+    }
+    if let Some(remaining) = app.client.rate_limit_remaining() {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!("⊘ rate-limited · {}", format_countdown(remaining)),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         ));
     }
     if app.filter_classifier.is_some()
@@ -732,7 +748,188 @@ fn draw_detail(
             draw_likers_detail(frame, area, view, ctx.raw_display_names, active)
         }
         FocusEntry::Ask(view) => draw_ask(frame, area, view, ctx, active),
+        FocusEntry::Brief(view) => draw_brief(frame, area, view, active),
     }
+}
+
+fn draw_brief(
+    frame: &mut Frame,
+    area: Rect,
+    view: &mut crate::tui::brief::BriefView,
+    active: bool,
+) {
+    let status = if view.loading_tweets {
+        "jacking in"
+    } else if view.streaming {
+        "cognition pass"
+    } else if view.error.is_some() {
+        "aborted"
+    } else if view.complete {
+        "complete"
+    } else {
+        "standby"
+    };
+    let mut title = format!("profile · @{}", view.handle);
+    if view.sample_count > 0 {
+        title.push_str(&format!(" · {}t", view.sample_count));
+    }
+    if !view.span_label.is_empty() {
+        title.push_str(&format!(" · {}", view.span_label));
+    }
+    title.push_str(" · ");
+    title.push_str(status);
+
+    let block = block_with_focus(&title, active);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if view.loading_tweets {
+        let dim = Style::default().fg(Color::DarkGray);
+        lines.push(Line::from(Span::styled(
+            format!("jacking into @{}'s timeline · newest-first", view.handle),
+            dim,
+        )));
+        lines.push(Line::from(Span::styled(
+            "window: up to 300 authored posts, 15 pages",
+            dim,
+        )));
+        lines.push(Line::from(""));
+        let progress = if view.fetch_pages == 0 && view.fetch_authored == 0 {
+            "scraping page 1/15 · 0 logged".to_string()
+        } else {
+            format!(
+                "scraping page {}/15 · {} logged",
+                view.fetch_pages + 1,
+                view.fetch_authored
+            )
+        };
+        lines.push(Line::from(vec![
+            Span::styled("▸ ", Style::default().fg(Color::Cyan)),
+            Span::styled(progress, Style::default().fg(Color::Gray)),
+        ]));
+    } else {
+        let has_bold = view.text.contains("**");
+        let cleaned = sanitize_brief_output(&view.text);
+        if !has_bold && view.text.trim().is_empty() && view.streaming {
+            let angle = current_brief_angle();
+            let dim = Style::default().fg(Color::DarkGray);
+            lines.push(Line::from(Span::styled(
+                "cognition pass · reading the sample",
+                dim.add_modifier(Modifier::ITALIC),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("▸ ", Style::default().fg(Color::Cyan)),
+                Span::styled(angle, Style::default().fg(Color::Gray)),
+            ]));
+        } else if has_bold {
+            lines.extend(render_markdown(cleaned));
+        } else {
+            lines.push(Line::from(Span::styled(
+                "model returned no bold thesis · showing raw output below",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::ITALIC),
+            )));
+            lines.push(Line::from(""));
+            lines.extend(render_markdown(view.text.trim()));
+        }
+    }
+    if let Some(err) = &view.error {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("aborted: {err}"),
+            Style::default().fg(Color::Red),
+        )));
+    }
+    if view.complete && view.error.is_none() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "R re-read · Esc close",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    let visual_rows = count_visual_rows(&lines, inner.width);
+    let max_scroll = visual_rows.saturating_sub(inner.height);
+    if view.scroll > max_scroll {
+        view.scroll = max_scroll;
+    }
+    if max_scroll > 0 {
+        let pct = (view.scroll as u32 * 100 / max_scroll as u32) as u16;
+        let pos_label = if view.scroll == 0 {
+            " · top".to_string()
+        } else if view.scroll >= max_scroll {
+            " · bot".to_string()
+        } else {
+            format!(" · {pct}%")
+        };
+        let title_ext = format!("{title}{pos_label}");
+        let block2 = block_with_focus(&title_ext, active);
+        frame.render_widget(block2, area);
+    }
+    let para = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .scroll((view.scroll, 0));
+    frame.render_widget(para, inner);
+}
+
+fn sanitize_brief_output(text: &str) -> &str {
+    if let Some(idx) = text.find("**") {
+        return &text[idx..];
+    }
+    ""
+}
+
+const BRIEF_ANGLES: &[&str] = &[
+    "pattern-matching preoccupations",
+    "tracing rhetorical tics",
+    "naming observed postures",
+    "reading stance and worldview",
+    "mapping canonical enemies and heroes",
+    "sampling emotional register",
+    "indexing posting cadence and rhythm",
+    "probing how the mind moves across topics",
+    "inferring dominant arguing style",
+    "watching attention pattern (what pulls focus, what is ignored)",
+    "observing learning behavior under challenge",
+    "sensing default affective register",
+    "reading social-cognition tells (warmth vs suspicion)",
+    "reading status-game posture",
+    "locating moral foundations from what is defended and attacked",
+    "inferring epistemic posture",
+    "flagging contradictions and tensions",
+    "noting conspicuous absences in the repertoire",
+    "finding the most characteristic post",
+];
+
+fn current_brief_angle() -> &'static str {
+    let idx = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() / 1200)
+        .unwrap_or(0) as usize)
+        % BRIEF_ANGLES.len();
+    BRIEF_ANGLES[idx]
+}
+
+fn count_visual_rows(lines: &[Line<'static>], width: u16) -> u16 {
+    use unicode_width::UnicodeWidthStr;
+    let w = width.max(1) as usize;
+    let mut total: u32 = 0;
+    for line in lines {
+        let line_w: usize = line
+            .spans
+            .iter()
+            .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+            .sum();
+        if line_w == 0 {
+            total += 1;
+        } else {
+            total += line_w.div_ceil(w) as u32;
+        }
+    }
+    total.min(u16::MAX as u32) as u16
 }
 
 fn draw_likers_detail(
@@ -1125,6 +1322,18 @@ fn render_markdown(text: &str) -> Vec<Line<'static>> {
             out.push(Line::from(prefixed));
             continue;
         }
+        if let Some(quote) = strip_blockquote(line) {
+            let gutter = Span::styled(
+                "│ ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            );
+            let mut spans: Vec<Span<'static>> = vec![gutter];
+            spans.extend(parse_md_inline(&quote, Modifier::ITALIC));
+            out.push(Line::from(spans));
+            continue;
+        }
         if let Some((indent, rest)) = strip_bullet(line) {
             let mut spans: Vec<Span<'static>> = Vec::with_capacity(3);
             if indent > 0 {
@@ -1154,6 +1363,17 @@ fn strip_heading(line: &str) -> Option<(u8, String)> {
     let after = &trimmed[hashes..];
     let rest = after.strip_prefix(' ')?;
     Some((hashes as u8, rest.to_string()))
+}
+
+fn strip_blockquote(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("> ") {
+        return Some(rest.to_string());
+    }
+    if trimmed == ">" {
+        return Some(String::new());
+    }
+    None
 }
 
 fn strip_bullet(line: &str) -> Option<(usize, String)> {
@@ -2144,6 +2364,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  P              open own profile in browser"),
         Line::from("  T              translate tweet to English (toggle)"),
         Line::from("  A              ask gemma (digit = preset, thread context if in detail)"),
+        Line::from("  B              run a profile on the selected author (R re-read)"),
         Line::from("  c              toggle rage filter"),
         Line::from("  s              cycle reply sort order"),
         Line::from("  x              expand / collapse tweet body"),

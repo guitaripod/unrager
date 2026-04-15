@@ -25,6 +25,9 @@ pub enum Error {
     #[error("graphql request failed with status {status}: {body}")]
     GraphqlStatus { status: u16, body: String },
 
+    #[error("x rate-limited · retry in {}s", remaining_secs)]
+    RateLimited { remaining_secs: u64 },
+
     #[error("graphql response shape unexpected: {0}")]
     GraphqlShape(String),
 

@@ -120,6 +120,26 @@ pub enum Event {
         tweet_id: String,
         replies: Vec<crate::model::Tweet>,
     },
+    BriefSampleReady {
+        handle: String,
+        count: usize,
+        span_label: String,
+        error: Option<String>,
+        sample: Vec<crate::model::Tweet>,
+    },
+    BriefFetchProgress {
+        handle: String,
+        pages: usize,
+        authored: usize,
+    },
+    BriefToken {
+        handle: String,
+        token: String,
+    },
+    BriefStreamFinished {
+        handle: String,
+        error: Option<String>,
+    },
 }
 
 pub type EventTx = mpsc::UnboundedSender<Event>;

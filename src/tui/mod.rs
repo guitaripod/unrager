@@ -1,5 +1,6 @@
 pub mod app;
 pub mod ask;
+pub mod brief;
 pub mod command;
 pub mod event;
 pub mod filter;
@@ -52,6 +53,9 @@ async fn run_inner(terminal: &mut ratatui::DefaultTerminal, is_dark: bool) -> Re
         app.handle_event(event, terminal)?;
     }
 
+    if let Some(ollama) = app.filter_cfg.as_ref().map(|c| c.ollama.clone()) {
+        ask::unload_blocking(&ollama).await;
+    }
     app.save_session();
     Ok(())
 }

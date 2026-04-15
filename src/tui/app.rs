@@ -5,6 +5,7 @@ use crate::gql::GqlClient;
 use crate::model::Tweet;
 use crate::parse::timeline::TimelinePage;
 use crate::tui::ask::{self, AskView};
+use crate::tui::brief::{self, BriefView};
 use crate::tui::command::{self, Command};
 use crate::tui::event::{self, Event, EventTx, RequestId};
 use crate::tui::filter::{
@@ -148,6 +149,7 @@ pub struct App {
     pub filter_hidden_count: usize,
     pub translations: HashMap<String, String>,
     pub translation_inflight: HashSet<String>,
+    pub brief_cache: HashMap<String, BriefView>,
     pub reply_sort: ReplySortOrder,
     pub app_config: AppConfig,
     pub help_scroll: u16,
@@ -270,6 +272,7 @@ impl App {
             filter_hidden_count: 0,
             translations: HashMap::new(),
             translation_inflight: HashSet::new(),
+            brief_cache: HashMap::new(),
             app_config,
             help_scroll: 0,
             whisper: whisper_state,
@@ -288,6 +291,25 @@ impl App {
     pub fn set_status(&mut self, msg: impl Into<String>) {
         self.status = msg.into();
         self.status_until = Some(Instant::now() + Duration::from_secs(3));
+    }
+
+    pub fn rate_limit_remaining(&self) -> Option<std::time::Duration> {
+        self.client.rate_limit_remaining()
+    }
+
+    fn block_if_rate_limited(&mut self) -> bool {
+        if let Some(remaining) = self.rate_limit_remaining() {
+            let secs = remaining.as_secs();
+            let label = if secs < 60 {
+                format!("{secs}s")
+            } else {
+                format!("{}:{:02}", secs / 60, secs % 60)
+            };
+            self.set_status(format!("rate-limited · retry in {label}"));
+            true
+        } else {
+            false
+        }
     }
 
     pub fn clear_status(&mut self) {
@@ -502,6 +524,220 @@ impl App {
         {
             view.replies = replies;
             view.replies_loading = false;
+        }
+    }
+
+    fn open_brief_for_target(&mut self) {
+        let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone()) else {
+            self.set_status("profile unavailable (no ollama config)");
+            return;
+        };
+        if self.block_if_rate_limited() {
+            return;
+        }
+        let (handle, prefetched) = match self.brief_target() {
+            Some(h) => h,
+            None => {
+                self.set_status("no target for profile");
+                return;
+            }
+        };
+        if let Some(cached) = self.brief_cache.get(&handle).cloned() {
+            tracing::info!(handle = %handle, "profile view opened from cache");
+            self.focus_stack.push(FocusEntry::Brief(cached));
+            self.active = ActivePane::Detail;
+            self.set_status("profile cached · R to re-read");
+            ask::preload(ollama);
+            return;
+        }
+        tracing::info!(handle = %handle, "profile view opened");
+        let view = BriefView::new(handle.clone());
+        self.focus_stack.push(FocusEntry::Brief(view));
+        self.active = ActivePane::Detail;
+        self.set_status(format!("profile · jacking into @{handle}…"));
+        ask::preload(ollama.clone());
+        brief::start(
+            self.client.clone(),
+            ollama,
+            handle,
+            prefetched,
+            self.tx.clone(),
+        );
+    }
+
+    fn brief_target(&self) -> Option<(String, Option<Vec<Tweet>>)> {
+        if let Some(SourceKind::User { handle }) = &self.source.kind {
+            let mine: Vec<Tweet> = self
+                .source
+                .tweets
+                .iter()
+                .filter(|t| t.author.handle.eq_ignore_ascii_case(handle))
+                .cloned()
+                .collect();
+            return Some((handle.clone(), Some(mine)));
+        }
+        let tweet = self.selected_tweet()?;
+        Some((tweet.author.handle.clone(), None))
+    }
+
+    fn refresh_brief(&mut self) {
+        let handle = {
+            let Some(FocusEntry::Brief(view)) = self.focus_stack.last_mut() else {
+                return;
+            };
+            if view.streaming || view.loading_tweets {
+                return;
+            }
+            view.handle.clone()
+        };
+        let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone()) else {
+            return;
+        };
+        self.brief_cache.remove(&handle);
+        if let Some(FocusEntry::Brief(view)) = self.focus_stack.last_mut() {
+            *view = BriefView::new(handle.clone());
+        }
+        self.set_status(format!("profile · re-reading @{handle}…"));
+        brief::start(self.client.clone(), ollama, handle, None, self.tx.clone());
+    }
+
+    fn handle_brief_sample_ready(
+        &mut self,
+        handle: String,
+        count: usize,
+        span_label: String,
+        error: Option<String>,
+        sample: Vec<Tweet>,
+    ) {
+        let mut status_msg: Option<String> = None;
+        if let Some(FocusEntry::Brief(view)) = self.focus_stack.last_mut()
+            && view.handle == handle
+        {
+            if let Some(err) = error {
+                let msg = err.clone();
+                view.set_error(err);
+                status_msg = Some(format!("profile: {msg}"));
+            } else {
+                view.start_analysis(count, span_label, sample);
+            }
+        }
+        if let Some(msg) = status_msg {
+            self.set_status(msg);
+        }
+    }
+
+    fn handle_brief_fetch_progress(&mut self, handle: String, pages: usize, authored: usize) {
+        if let Some(FocusEntry::Brief(view)) = self.focus_stack.last_mut()
+            && view.handle == handle
+        {
+            view.fetch_pages = pages;
+            view.fetch_authored = authored;
+        }
+    }
+
+    fn handle_brief_token(&mut self, handle: String, token: String) {
+        if let Some(FocusEntry::Brief(view)) = self.focus_stack.last_mut()
+            && view.handle == handle
+        {
+            view.append_token(&token);
+        }
+    }
+
+    fn handle_brief_stream_finished(&mut self, handle: String, error: Option<String>) {
+        let mut done_text: Option<BriefView> = None;
+        if let Some(FocusEntry::Brief(view)) = self.focus_stack.last_mut()
+            && view.handle == handle
+        {
+            view.mark_done(error.clone());
+            if error.is_none() && !view.text.trim().is_empty() {
+                done_text = Some(BriefView {
+                    handle: view.handle.clone(),
+                    sample: view.sample.clone(),
+                    sample_count: view.sample_count,
+                    span_label: view.span_label.clone(),
+                    loading_tweets: false,
+                    fetch_pages: view.fetch_pages,
+                    fetch_authored: view.fetch_authored,
+                    streaming: false,
+                    complete: true,
+                    text: view.text.clone(),
+                    error: None,
+                    scroll: 0,
+                });
+            }
+        }
+        if let Some(err) = error {
+            tracing::warn!(handle = %handle, "profile error: {err}");
+            self.set_status(format!("profile aborted: {err}"));
+        } else {
+            self.set_status("profile complete");
+        }
+        if let Some(snap) = done_text {
+            self.brief_cache.insert(handle, snap);
+        }
+    }
+
+    fn handle_key_brief(&mut self, key: KeyEvent) {
+        fn scroll_by(view: &mut BriefView, delta: i32) {
+            view.scroll = if delta >= 0 {
+                view.scroll.saturating_add(delta as u16)
+            } else {
+                view.scroll.saturating_sub((-delta) as u16)
+            };
+        }
+        match (key.code, key.modifiers) {
+            (KeyCode::Char('c'), KeyModifiers::CONTROL) => self.running = false,
+            (KeyCode::Esc, _) | (KeyCode::Char('q'), KeyModifiers::NONE) => self.back_out(false),
+            (KeyCode::Tab, _) if self.is_split() => {
+                self.active = match self.active {
+                    ActivePane::Source => ActivePane::Detail,
+                    ActivePane::Detail => ActivePane::Source,
+                };
+            }
+            (KeyCode::Char('R'), _) => self.refresh_brief(),
+            (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => {
+                if let Some(FocusEntry::Brief(view)) = self.focus_stack.last_mut() {
+                    scroll_by(view, 1);
+                }
+            }
+            (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => {
+                if let Some(FocusEntry::Brief(view)) = self.focus_stack.last_mut() {
+                    scroll_by(view, -1);
+                }
+            }
+            (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+                if let Some(FocusEntry::Brief(view)) = self.focus_stack.last_mut() {
+                    scroll_by(view, 10);
+                }
+            }
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+                if let Some(FocusEntry::Brief(view)) = self.focus_stack.last_mut() {
+                    scroll_by(view, -10);
+                }
+            }
+            (KeyCode::Char('f'), KeyModifiers::CONTROL)
+            | (KeyCode::PageDown, _)
+            | (KeyCode::Char(' '), KeyModifiers::NONE) => {
+                if let Some(FocusEntry::Brief(view)) = self.focus_stack.last_mut() {
+                    scroll_by(view, 20);
+                }
+            }
+            (KeyCode::Char('b'), KeyModifiers::CONTROL) | (KeyCode::PageUp, _) => {
+                if let Some(FocusEntry::Brief(view)) = self.focus_stack.last_mut() {
+                    scroll_by(view, -20);
+                }
+            }
+            (KeyCode::Char('g'), KeyModifiers::NONE) | (KeyCode::Home, _) => {
+                if let Some(FocusEntry::Brief(view)) = self.focus_stack.last_mut() {
+                    view.scroll = 0;
+                }
+            }
+            (KeyCode::Char('G'), KeyModifiers::NONE | KeyModifiers::SHIFT) | (KeyCode::End, _) => {
+                if let Some(FocusEntry::Brief(view)) = self.focus_stack.last_mut() {
+                    view.scroll = u16::MAX;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -905,7 +1141,7 @@ impl App {
     pub fn top_detail(&self) -> Option<&TweetDetail> {
         self.focus_stack.last().and_then(|entry| match entry {
             FocusEntry::Tweet(d) => Some(d),
-            FocusEntry::Likers(_) | FocusEntry::Ask(_) => None,
+            FocusEntry::Likers(_) | FocusEntry::Ask(_) | FocusEntry::Brief(_) => None,
         })
     }
 
@@ -917,6 +1153,7 @@ impl App {
                 FocusEntry::Tweet(d) => d.loading,
                 FocusEntry::Likers(l) => l.loading,
                 FocusEntry::Ask(a) => a.streaming,
+                FocusEntry::Brief(b) => b.loading_tweets || b.streaming,
             })
     }
 
@@ -1077,6 +1314,28 @@ impl App {
             Event::AskRepliesLoaded { tweet_id, replies } => {
                 self.handle_ask_replies_loaded(tweet_id, replies);
             }
+            Event::BriefSampleReady {
+                handle,
+                count,
+                span_label,
+                error,
+                sample,
+            } => {
+                self.handle_brief_sample_ready(handle, count, span_label, error, sample);
+            }
+            Event::BriefToken { handle, token } => {
+                self.handle_brief_token(handle, token);
+            }
+            Event::BriefStreamFinished { handle, error } => {
+                self.handle_brief_stream_finished(handle, error);
+            }
+            Event::BriefFetchProgress {
+                handle,
+                pages,
+                authored,
+            } => {
+                self.handle_brief_fetch_progress(handle, pages, authored);
+            }
             Event::WhisperSurgeReady { summary, sentiment } => {
                 self.whisper.llm_inflight = false;
                 self.whisper.surge_sentiment = Some(sentiment);
@@ -1085,16 +1344,20 @@ impl App {
             Event::Quit => self.running = false,
             Event::FocusGained => {
                 self.terminal_focused = true;
-                if matches!(self.focus_stack.last(), Some(FocusEntry::Ask(_)))
-                    && let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone())
+                if matches!(
+                    self.focus_stack.last(),
+                    Some(FocusEntry::Ask(_) | FocusEntry::Brief(_))
+                ) && let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone())
                 {
                     ask::preload(ollama);
                 }
             }
             Event::FocusLost => {
                 self.terminal_focused = false;
-                if matches!(self.focus_stack.last(), Some(FocusEntry::Ask(_)))
-                    && let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone())
+                if matches!(
+                    self.focus_stack.last(),
+                    Some(FocusEntry::Ask(_) | FocusEntry::Brief(_))
+                ) && let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone())
                 {
                     ask::unload(ollama);
                 }
@@ -1112,6 +1375,12 @@ impl App {
             && matches!(self.focus_stack.last(), Some(FocusEntry::Ask(_)))
         {
             self.handle_key_ask(key);
+            return;
+        }
+        if self.active == ActivePane::Detail
+            && matches!(self.focus_stack.last(), Some(FocusEntry::Brief(_)))
+        {
+            self.handle_key_brief(key);
             return;
         }
         if matches!(self.mode, InputMode::Help) {
@@ -1218,6 +1487,7 @@ impl App {
             (KeyCode::Char('P'), _) => self.open_own_profile_in_browser(),
             (KeyCode::Char('T'), _) => self.translate_selected(),
             (KeyCode::Char('A'), _) => self.open_ask_for_selected(),
+            (KeyCode::Char('B'), _) => self.open_brief_for_target(),
             (KeyCode::Char('c'), KeyModifiers::NONE) => self.toggle_filter(),
             (KeyCode::Char('y'), KeyModifiers::NONE) => self.yank_url(),
             (KeyCode::Char('Y'), _) => self.yank_json(),
@@ -1607,20 +1877,20 @@ impl App {
                         l.select_next();
                         self.maybe_load_more_likers();
                     }
-                    Some(FocusEntry::Ask(_)) | None => {}
+                    Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
                 }
             }
             (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => {
                 match self.focus_stack.last_mut() {
                     Some(FocusEntry::Tweet(d)) => d.select_prev(),
                     Some(FocusEntry::Likers(l)) => l.select_prev(),
-                    Some(FocusEntry::Ask(_)) | None => {}
+                    Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
                 }
             }
             (KeyCode::Char('g'), KeyModifiers::NONE) => match self.focus_stack.last_mut() {
                 Some(FocusEntry::Tweet(d)) => d.jump_top(),
                 Some(FocusEntry::Likers(l)) => l.jump_top(),
-                Some(FocusEntry::Ask(_)) | None => {}
+                Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
             },
             (KeyCode::Char('G'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
                 match self.focus_stack.last_mut() {
@@ -1629,7 +1899,7 @@ impl App {
                         l.jump_bottom();
                         self.maybe_load_more_likers();
                     }
-                    Some(FocusEntry::Ask(_)) | None => {}
+                    Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
                 }
             }
             (KeyCode::Char('d'), KeyModifiers::CONTROL) => match self.focus_stack.last_mut() {
@@ -1638,12 +1908,12 @@ impl App {
                     l.advance(10);
                     self.maybe_load_more_likers();
                 }
-                Some(FocusEntry::Ask(_)) | None => {}
+                Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
             },
             (KeyCode::Char('u'), KeyModifiers::CONTROL) => match self.focus_stack.last_mut() {
                 Some(FocusEntry::Tweet(d)) => d.advance(-10),
                 Some(FocusEntry::Likers(l)) => l.advance(-10),
-                Some(FocusEntry::Ask(_)) | None => {}
+                Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
             },
             (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, _) => {
                 self.active = ActivePane::Source;
@@ -1663,7 +1933,7 @@ impl App {
                             self.open_user_in_detail(user.handle, Some(user.rest_id));
                         }
                     }
-                    Some(FocusEntry::Ask(_)) | None => {}
+                    Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
                 }
             }
             _ => {}
@@ -1775,7 +2045,7 @@ impl App {
 
     fn back_out(&mut self, can_quit: bool) {
         if let Some(popped) = self.focus_stack.pop() {
-            if matches!(popped, FocusEntry::Ask(_))
+            if matches!(popped, FocusEntry::Ask(_) | FocusEntry::Brief(_))
                 && let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone())
             {
                 ask::unload(ollama);

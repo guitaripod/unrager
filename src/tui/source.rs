@@ -296,7 +296,7 @@ async fn fetch_home(
     Ok(timeline::walk(instructions))
 }
 
-async fn fetch_user(
+pub async fn fetch_user(
     client: &GqlClient,
     handle: &str,
     cursor: Option<String>,

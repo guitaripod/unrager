@@ -81,6 +81,8 @@ The left pane stays live. `Tab` swaps focus between panes, `,`/`.` adjusts the s
 
 `:search nvidia` pulls live results in every language. Press `T` on any tweet to translate it to English via the same local Ollama instance. Press `T` again to revert. Translations are ephemeral — in memory only.
 
+Press `A` on any tweet to open an ask pane powered by your local Ollama gemma model (the same one used for the rage filter and translation). The post is pinned to the top, a prompt box sits at the bottom (Enter with empty input uses `Explain this post`), and the reply streams inline token-by-token. Conversations live only in memory and are discarded when you leave the pane. Fully offline — no X API, no rate limit, no account exposure. Thinking is enabled for the chat path since replies benefit from reasoning; the background filter and translate paths keep thinking off for speed.
+
 The command palette supports `:home`, `:user <handle>`, `:search <query>`, `:mentions`, `:notifs`, `:bookmarks`, and `:read <id|url>`. History navigates with `]`/`[`.
 
 ## Notifications
@@ -132,6 +134,7 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 | `F` | Toggle For You / Following |
 | `R` | Toggle tweets / replies on user profile |
 | `T` | Translate selected tweet to English (toggle) |
+| `A` | Ask gemma about the selected post |
 | `c` | Toggle rage filter |
 | `x` | Expand / collapse tweet body |
 | `X` | Inline thread replies |

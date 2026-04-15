@@ -108,6 +108,14 @@ pub enum Event {
         summary: String,
         sentiment: crate::tui::whisper::Sentiment,
     },
+    AskToken {
+        tweet_id: String,
+        token: String,
+    },
+    AskStreamFinished {
+        tweet_id: String,
+        error: Option<String>,
+    },
 }
 
 pub type EventTx = mpsc::UnboundedSender<Event>;

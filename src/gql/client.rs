@@ -22,6 +22,7 @@ pub struct GqlClient {
     store: Mutex<QueryIdStore>,
     cache_path: PathBuf,
     next_allowed: AsyncMutex<Instant>,
+    client_uuid: String,
 }
 
 enum Method {
@@ -36,12 +37,14 @@ impl GqlClient {
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))
             .build()?;
+        let client_uuid = random_uuid_v4();
         Ok(Self {
             http,
             session,
             store: Mutex::new(store),
             cache_path,
             next_allowed: AsyncMutex::new(Instant::now()),
+            client_uuid,
         })
     }
 
@@ -174,6 +177,11 @@ impl GqlClient {
             HeaderValue::from_static("en"),
         );
         h.insert(
+            HeaderName::from_static("x-client-uuid"),
+            HeaderValue::from_str(&self.client_uuid)
+                .map_err(|e| Error::GraphqlShape(e.to_string()))?,
+        );
+        h.insert(
             reqwest::header::CONTENT_TYPE,
             HeaderValue::from_static("application/json"),
         );
@@ -214,6 +222,33 @@ impl GqlClient {
         }
         Ok(value)
     }
+}
+
+fn random_uuid_v4() -> String {
+    use rand::RngCore;
+    let mut bytes = [0u8; 16];
+    rand::rng().fill_bytes(&mut bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15],
+    )
 }
 
 fn truncate(s: &str, max_bytes: usize) -> String {

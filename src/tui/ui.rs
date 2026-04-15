@@ -721,6 +721,7 @@ fn draw_detail(
         FocusEntry::Likers(view) => {
             draw_likers_detail(frame, area, view, ctx.raw_display_names, active)
         }
+        FocusEntry::Ask(view) => draw_ask(frame, area, view, ctx, active),
     }
 }
 
@@ -793,6 +794,244 @@ fn draw_likers_detail(
         Some(selected),
         active,
     );
+}
+
+fn draw_ask(
+    frame: &mut Frame,
+    area: Rect,
+    view: &mut crate::tui::ask::AskView,
+    ctx: &RenderContext,
+    active: bool,
+) {
+    use crate::tui::app::SPINNER_FRAMES;
+
+    let status_suffix = if view.streaming {
+        " · streaming…"
+    } else if view.error.is_some() {
+        " · error"
+    } else if view.messages.is_empty() {
+        " · ready"
+    } else {
+        " · done"
+    };
+    let title = format!("ask · @{}{}", view.tweet.author.handle, status_suffix);
+
+    let block = block_with_focus(&title, active);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height < 4 {
+        return;
+    }
+
+    let tweet_preview_h = inner.height.min(5);
+    let input_h: u16 = 2;
+    let conv_h = inner.height.saturating_sub(tweet_preview_h + input_h);
+
+    let [tweet_area, conv_area, input_area] = Layout::vertical([
+        Constraint::Length(tweet_preview_h),
+        Constraint::Length(conv_h),
+        Constraint::Length(input_h),
+    ])
+    .areas(inner);
+
+    draw_ask_tweet_header(frame, tweet_area, &view.tweet, ctx);
+    draw_ask_conversation(
+        frame,
+        conv_area,
+        &view.messages,
+        view.error.as_deref(),
+        view.streaming,
+        &mut view.state,
+        view.auto_follow,
+    );
+    draw_ask_input(
+        frame,
+        input_area,
+        &view.input,
+        view.streaming,
+        active,
+        SPINNER_FRAMES,
+    );
+}
+
+fn draw_ask_tweet_header(frame: &mut Frame, area: Rect, tweet: &Tweet, ctx: &RenderContext) {
+    let wrap_width = (area.width as usize).saturating_sub(2);
+    let handle_line = Line::from(vec![
+        Span::styled(
+            format!("@{}", tweet.author.handle),
+            Style::default()
+                .fg(handle_color(&tweet.author.handle))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            format_timestamp(tweet.created_at, ctx.opts.timestamps),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]);
+    let mut body_lines: Vec<Line<'static>> = vec![handle_line];
+    let text = tweet.text.as_str();
+    let max_body_lines = area.height.saturating_sub(2) as usize;
+    let mut count = 0;
+    for raw_line in text.lines() {
+        for wrapped in wrap_text(raw_line, wrap_width) {
+            if count >= max_body_lines {
+                break;
+            }
+            body_lines.push(Line::from(Span::raw(wrapped)));
+            count += 1;
+        }
+        if count >= max_body_lines {
+            break;
+        }
+    }
+    let separator = "─".repeat(wrap_width);
+    body_lines.push(Line::from(Span::styled(
+        separator,
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let para = Paragraph::new(body_lines).wrap(Wrap { trim: false });
+    frame.render_widget(para, area);
+}
+
+fn draw_ask_conversation(
+    frame: &mut Frame,
+    area: Rect,
+    messages: &[crate::tui::ask::AskMessage],
+    error: Option<&str>,
+    streaming: bool,
+    state: &mut PaneState,
+    auto_follow: bool,
+) {
+    use crate::tui::ask::AskMessage;
+    let wrap_width = (area.width as usize).saturating_sub(2);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if messages.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "Ask anything about this post (answered by local gemma).",
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines.push(Line::from(Span::styled(
+            "Press Enter to send; empty prompt uses 'Explain this post'.",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    for (idx, msg) in messages.iter().enumerate() {
+        if idx > 0 {
+            lines.push(Line::from(""));
+        }
+        match msg {
+            AskMessage::User(text) => {
+                lines.push(Line::from(Span::styled(
+                    "you",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                for raw_line in text.lines() {
+                    for wrapped in wrap_text(raw_line, wrap_width) {
+                        lines.push(Line::from(Span::raw(wrapped)));
+                    }
+                }
+            }
+            AskMessage::Assistant(m) => {
+                let header_style = Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD);
+                let mut header_spans = vec![Span::styled("gemma", header_style)];
+                if !m.complete && streaming && idx + 1 == messages.len() {
+                    header_spans.push(Span::styled(" …", Style::default().fg(Color::DarkGray)));
+                }
+                lines.push(Line::from(header_spans));
+                if m.text.is_empty() && !m.complete {
+                    lines.push(Line::from(Span::styled(
+                        "thinking…",
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+                for raw_line in m.text.lines() {
+                    for wrapped in wrap_text(raw_line, wrap_width) {
+                        lines.push(Line::from(Span::raw(wrapped)));
+                    }
+                }
+            }
+        }
+    }
+    if let Some(err) = error {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("error: {err}"),
+            Style::default().fg(Color::Red),
+        )));
+    }
+
+    let total = lines.len() as u16;
+    let max_scroll = total.saturating_sub(area.height);
+    if auto_follow || state.scroll > max_scroll {
+        state.scroll = max_scroll;
+    }
+
+    let para = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .scroll((state.scroll, 0));
+    frame.render_widget(para, area);
+}
+
+fn draw_ask_input(
+    frame: &mut Frame,
+    area: Rect,
+    input: &str,
+    streaming: bool,
+    active: bool,
+    spinner: &[&str],
+) {
+    let separator = "─".repeat(area.width as usize);
+    let sep_line = Line::from(Span::styled(
+        separator,
+        Style::default().fg(Color::DarkGray),
+    ));
+
+    let prompt_style = if active {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let mut spans: Vec<Span<'static>> = vec![Span::styled("> ", prompt_style)];
+    if streaming {
+        let idx = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() / 120)
+            .unwrap_or(0) as usize)
+            % spinner.len().max(1);
+        let frame_str = spinner.get(idx).copied().unwrap_or("·").to_string();
+        spans.push(Span::styled(
+            format!("{frame_str} thinking…"),
+            Style::default().fg(Color::DarkGray),
+        ));
+    } else if input.is_empty() {
+        spans.push(Span::styled(
+            "Explain this post (Enter to send)",
+            Style::default().fg(Color::DarkGray),
+        ));
+    } else {
+        spans.push(Span::raw(input.to_string()));
+        if active {
+            spans.push(Span::styled(
+                "▏",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+    }
+    let input_line = Line::from(spans);
+    let para = Paragraph::new(vec![sep_line, input_line]).wrap(Wrap { trim: false });
+    frame.render_widget(para, area);
 }
 
 fn draw_tweet_detail(
@@ -1675,6 +1914,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  p              my profile"),
         Line::from("  P              open own profile in browser"),
         Line::from("  T              translate tweet to English (toggle)"),
+        Line::from("  A              ask gemma about the selected post"),
         Line::from("  c              toggle rage filter"),
         Line::from("  s              cycle reply sort order"),
         Line::from("  x              expand / collapse tweet body"),

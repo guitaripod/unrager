@@ -4,6 +4,7 @@ use crate::error::Result;
 use crate::gql::GqlClient;
 use crate::model::Tweet;
 use crate::parse::timeline::TimelinePage;
+use crate::tui::ask::{self, AskView};
 use crate::tui::command::{self, Command};
 use crate::tui::event::{self, Event, EventTx, RequestId};
 use crate::tui::filter::{
@@ -428,6 +429,141 @@ impl App {
         self.set_status("translated");
     }
 
+    fn open_ask_for_selected(&mut self) {
+        let tweet = match self.selected_tweet() {
+            Some(t) => t.clone(),
+            None => {
+                self.set_status("no tweet selected");
+                return;
+            }
+        };
+        if self.filter_cfg.as_ref().map(|c| c.ollama.clone()).is_none() {
+            self.set_status("ask unavailable (no ollama config)");
+            return;
+        }
+        tracing::info!(tweet_id = %tweet.rest_id, "ask view opened");
+        let view = AskView::new(tweet);
+        self.focus_stack.push(FocusEntry::Ask(view));
+        self.active = ActivePane::Detail;
+        self.set_status("ask: type your question, Enter to send (empty = 'Explain this post')");
+    }
+
+    fn ask_submit_input(&mut self) {
+        let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone()) else {
+            self.set_status("ask unavailable (no ollama config)");
+            return;
+        };
+        let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() else {
+            return;
+        };
+        if view.streaming {
+            return;
+        }
+        let prompt_text = view.input.trim().to_string();
+        let effective_prompt = if prompt_text.is_empty() {
+            ask::DEFAULT_PROMPT.to_string()
+        } else {
+            prompt_text
+        };
+        view.input.clear();
+        view.push_user_message(effective_prompt);
+        view.auto_follow = true;
+        let tweet_id = view.tweet_id().to_string();
+        let messages = view.build_ollama_messages();
+        let tx = self.tx.clone();
+        ask::send(ollama, messages, tweet_id, tx);
+    }
+
+    fn handle_ask_token(&mut self, tweet_id: String, token: String) {
+        if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut()
+            && view.tweet_id() == tweet_id
+        {
+            view.append_token(&token);
+        }
+    }
+
+    fn handle_ask_stream_finished(&mut self, tweet_id: String, error: Option<String>) {
+        if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut()
+            && view.tweet_id() == tweet_id
+        {
+            if let Some(err) = &error {
+                tracing::warn!(tweet_id = %tweet_id, "ask stream error: {err}");
+                self.set_status(format!("ask error: {err}"));
+            } else {
+                self.set_status("ask done");
+            }
+            if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() {
+                view.mark_done(error);
+            }
+        }
+    }
+
+    fn handle_key_ask(&mut self, key: KeyEvent) {
+        match (key.code, key.modifiers) {
+            (KeyCode::Char('c'), KeyModifiers::CONTROL) => self.running = false,
+            (KeyCode::Esc, _) => self.back_out(false),
+            (KeyCode::Tab, _) if self.is_split() => {
+                self.active = match self.active {
+                    ActivePane::Source => ActivePane::Detail,
+                    ActivePane::Detail => ActivePane::Source,
+                };
+            }
+            (KeyCode::Enter, _) => self.ask_submit_input(),
+            (KeyCode::Backspace, _) => {
+                if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() {
+                    view.input.pop();
+                }
+            }
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+                if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() {
+                    view.input.clear();
+                }
+            }
+            (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
+                if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() {
+                    let trimmed_end = view.input.trim_end_matches(char::is_whitespace).len();
+                    let cut_to = view.input[..trimmed_end]
+                        .rfind(char::is_whitespace)
+                        .map(|i| i + 1)
+                        .unwrap_or(0);
+                    view.input.truncate(cut_to);
+                }
+            }
+            (KeyCode::Up, _) => {
+                if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() {
+                    view.auto_follow = false;
+                    view.state.scroll = view.state.scroll.saturating_sub(1);
+                }
+            }
+            (KeyCode::Down, _) => {
+                if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() {
+                    view.state.scroll = view.state.scroll.saturating_add(1);
+                }
+            }
+            (KeyCode::PageUp, _) => {
+                if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() {
+                    view.auto_follow = false;
+                    view.state.scroll = view.state.scroll.saturating_sub(10);
+                }
+            }
+            (KeyCode::PageDown, _) => {
+                if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() {
+                    view.state.scroll = view.state.scroll.saturating_add(10);
+                }
+            }
+            (KeyCode::Char(c), m)
+                if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
+            {
+                if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut()
+                    && !view.streaming
+                {
+                    view.input.push(c);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn handle_notifications_loaded(
         &mut self,
         raw_notifs: Vec<crate::parse::notification::RawNotification>,
@@ -672,7 +808,7 @@ impl App {
     pub fn top_detail(&self) -> Option<&TweetDetail> {
         self.focus_stack.last().and_then(|entry| match entry {
             FocusEntry::Tweet(d) => Some(d),
-            FocusEntry::Likers(_) => None,
+            FocusEntry::Likers(_) | FocusEntry::Ask(_) => None,
         })
     }
 
@@ -683,6 +819,7 @@ impl App {
             || self.focus_stack.last().is_some_and(|e| match e {
                 FocusEntry::Tweet(d) => d.loading,
                 FocusEntry::Likers(l) => l.loading,
+                FocusEntry::Ask(a) => a.streaming,
             })
     }
 
@@ -834,6 +971,12 @@ impl App {
                     priority: 1,
                 });
             }
+            Event::AskToken { tweet_id, token } => {
+                self.handle_ask_token(tweet_id, token);
+            }
+            Event::AskStreamFinished { tweet_id, error } => {
+                self.handle_ask_stream_finished(tweet_id, error);
+            }
             Event::WhisperSurgeReady { summary, sentiment } => {
                 self.whisper.llm_inflight = false;
                 self.whisper.surge_sentiment = Some(sentiment);
@@ -853,6 +996,12 @@ impl App {
     fn handle_key(&mut self, key: KeyEvent) {
         if matches!(self.mode, InputMode::Command) {
             self.handle_key_command(key);
+            return;
+        }
+        if self.active == ActivePane::Detail
+            && matches!(self.focus_stack.last(), Some(FocusEntry::Ask(_)))
+        {
+            self.handle_key_ask(key);
             return;
         }
         if matches!(self.mode, InputMode::Help) {
@@ -958,6 +1107,7 @@ impl App {
             (KeyCode::Char('p'), KeyModifiers::NONE) => self.open_profile(),
             (KeyCode::Char('P'), _) => self.open_own_profile_in_browser(),
             (KeyCode::Char('T'), _) => self.translate_selected(),
+            (KeyCode::Char('A'), _) => self.open_ask_for_selected(),
             (KeyCode::Char('c'), KeyModifiers::NONE) => self.toggle_filter(),
             (KeyCode::Char('y'), KeyModifiers::NONE) => self.yank_url(),
             (KeyCode::Char('Y'), _) => self.yank_json(),
@@ -1347,20 +1497,20 @@ impl App {
                         l.select_next();
                         self.maybe_load_more_likers();
                     }
-                    None => {}
+                    Some(FocusEntry::Ask(_)) | None => {}
                 }
             }
             (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => {
                 match self.focus_stack.last_mut() {
                     Some(FocusEntry::Tweet(d)) => d.select_prev(),
                     Some(FocusEntry::Likers(l)) => l.select_prev(),
-                    None => {}
+                    Some(FocusEntry::Ask(_)) | None => {}
                 }
             }
             (KeyCode::Char('g'), KeyModifiers::NONE) => match self.focus_stack.last_mut() {
                 Some(FocusEntry::Tweet(d)) => d.jump_top(),
                 Some(FocusEntry::Likers(l)) => l.jump_top(),
-                None => {}
+                Some(FocusEntry::Ask(_)) | None => {}
             },
             (KeyCode::Char('G'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
                 match self.focus_stack.last_mut() {
@@ -1369,7 +1519,7 @@ impl App {
                         l.jump_bottom();
                         self.maybe_load_more_likers();
                     }
-                    None => {}
+                    Some(FocusEntry::Ask(_)) | None => {}
                 }
             }
             (KeyCode::Char('d'), KeyModifiers::CONTROL) => match self.focus_stack.last_mut() {
@@ -1378,12 +1528,12 @@ impl App {
                     l.advance(10);
                     self.maybe_load_more_likers();
                 }
-                None => {}
+                Some(FocusEntry::Ask(_)) | None => {}
             },
             (KeyCode::Char('u'), KeyModifiers::CONTROL) => match self.focus_stack.last_mut() {
                 Some(FocusEntry::Tweet(d)) => d.advance(-10),
                 Some(FocusEntry::Likers(l)) => l.advance(-10),
-                None => {}
+                Some(FocusEntry::Ask(_)) | None => {}
             },
             (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, _) => {
                 self.active = ActivePane::Source;
@@ -1403,7 +1553,7 @@ impl App {
                             self.open_user_in_detail(user.handle, Some(user.rest_id));
                         }
                     }
-                    None => {}
+                    Some(FocusEntry::Ask(_)) | None => {}
                 }
             }
             _ => {}

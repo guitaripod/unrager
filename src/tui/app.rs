@@ -2268,6 +2268,7 @@ impl App {
         self.source.silent_refreshing = false;
         self.source.cursor = None;
         self.source.exhausted = false;
+        self.source.set_selected(0);
         if self.source.is_notifications() {
             self.fetch_notifications_source(false, false);
         } else {

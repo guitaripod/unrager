@@ -116,6 +116,10 @@ pub enum Event {
         tweet_id: String,
         error: Option<String>,
     },
+    AskRepliesLoaded {
+        tweet_id: String,
+        replies: Vec<crate::model::Tweet>,
+    },
 }
 
 pub type EventTx = mpsc::UnboundedSender<Event>;

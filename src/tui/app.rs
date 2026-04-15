@@ -441,11 +441,67 @@ impl App {
             self.set_status("ask unavailable (no ollama config)");
             return;
         }
-        tracing::info!(tweet_id = %tweet.rest_id, "ask view opened");
-        let view = AskView::new(tweet);
+        let replies_in_detail = if self.active == ActivePane::Detail {
+            self.top_detail()
+                .filter(|d| d.tweet.rest_id == tweet.rest_id)
+                .map(|d| d.replies.clone())
+        } else {
+            None
+        };
+        let should_fetch = replies_in_detail.is_none() && tweet.reply_count > 0;
+        let replies = replies_in_detail.unwrap_or_default();
+        tracing::info!(
+            tweet_id = %tweet.rest_id,
+            replies = replies.len(),
+            will_fetch = should_fetch,
+            "ask view opened"
+        );
+        let view = AskView::new(tweet.clone(), replies, should_fetch);
         self.focus_stack.push(FocusEntry::Ask(view));
         self.active = ActivePane::Detail;
-        self.set_status("ask: type your question, Enter to send (empty = 'Explain this post')");
+        self.set_status("ask: digit = preset, type for custom, Enter to send");
+        if should_fetch {
+            let tweet_id = tweet.rest_id.clone();
+            let client = self.client.clone();
+            let tx = self.tx.clone();
+            tokio::spawn(async move {
+                match focus::fetch_thread(&client, &tweet_id).await {
+                    Ok(page) => {
+                        let focal_id = tweet_id.clone();
+                        let replies: Vec<Tweet> = page
+                            .tweets
+                            .into_iter()
+                            .filter(|t| {
+                                t.rest_id != focal_id
+                                    && t.in_reply_to_tweet_id.as_deref() == Some(&focal_id)
+                            })
+                            .collect();
+                        tracing::info!(
+                            tweet_id = %tweet_id,
+                            count = replies.len(),
+                            "ask replies loaded"
+                        );
+                        let _ = tx.send(Event::AskRepliesLoaded { tweet_id, replies });
+                    }
+                    Err(e) => {
+                        tracing::warn!(tweet_id = %tweet_id, "ask reply fetch failed: {e}");
+                        let _ = tx.send(Event::AskRepliesLoaded {
+                            tweet_id,
+                            replies: Vec::new(),
+                        });
+                    }
+                }
+            });
+        }
+    }
+
+    fn handle_ask_replies_loaded(&mut self, tweet_id: String, replies: Vec<Tweet>) {
+        if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut()
+            && view.tweet_id() == tweet_id
+        {
+            view.replies = replies;
+            view.replies_loading = false;
+        }
     }
 
     fn ask_submit_input(&mut self) {
@@ -469,9 +525,28 @@ impl App {
         view.push_user_message(effective_prompt);
         view.auto_follow = true;
         let tweet = view.tweet.clone();
+        let replies = view.replies.clone();
         let turns = view.turn_texts();
         let tx = self.tx.clone();
-        ask::send(ollama, tweet, turns, tx);
+        ask::send(ollama, tweet, replies, turns, tx);
+    }
+
+    fn ask_fire_preset(&mut self, index: usize) {
+        let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() else {
+            return;
+        };
+        if view.streaming || !view.input.is_empty() {
+            return;
+        }
+        let Some(preset) = ask::PRESETS.get(index.saturating_sub(1)) else {
+            return;
+        };
+        if !view.preset_enabled(preset) {
+            self.set_status(format!("[{index}] needs thread context"));
+            return;
+        }
+        view.input = preset.prompt.to_string();
+        self.ask_submit_input();
     }
 
     fn handle_ask_token(&mut self, tweet_id: String, token: String) {
@@ -549,6 +624,27 @@ impl App {
             (KeyCode::PageDown, _) => {
                 if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() {
                     view.state.scroll = view.state.scroll.saturating_add(10);
+                }
+            }
+            (KeyCode::Char(c @ '1'..='9'), m)
+                if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
+            {
+                let input_empty = self
+                    .focus_stack
+                    .last()
+                    .map(|e| match e {
+                        FocusEntry::Ask(v) => v.input.is_empty() && !v.streaming,
+                        _ => false,
+                    })
+                    .unwrap_or(false);
+                if input_empty {
+                    if let Some(idx) = c.to_digit(10) {
+                        self.ask_fire_preset(idx as usize);
+                    }
+                } else if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut()
+                    && !view.streaming
+                {
+                    view.input.push(c);
                 }
             }
             (KeyCode::Char(c), m)
@@ -976,6 +1072,9 @@ impl App {
             }
             Event::AskStreamFinished { tweet_id, error } => {
                 self.handle_ask_stream_finished(tweet_id, error);
+            }
+            Event::AskRepliesLoaded { tweet_id, replies } => {
+                self.handle_ask_replies_loaded(tweet_id, replies);
             }
             Event::WhisperSurgeReady { summary, sentiment } => {
                 self.whisper.llm_inflight = false;

@@ -806,27 +806,47 @@ fn draw_ask(
     use crate::tui::app::SPINNER_FRAMES;
 
     let status_suffix = if view.streaming {
-        " · streaming…"
+        "streaming…"
     } else if view.error.is_some() {
-        " · error"
+        "error"
     } else if view.messages.is_empty() {
-        " · ready"
+        "ready"
     } else {
-        " · done"
+        "done"
     };
-    let title = format!("ask · @{}{}", view.tweet.author.handle, status_suffix);
+    let mut title = format!("ask · @{}", view.tweet.author.handle);
+    let imgs = view.image_count();
+    if imgs > 0 {
+        title.push_str(&format!(" · {imgs} img"));
+        if imgs > 1 {
+            title.push('s');
+        }
+    }
+    if view.replies_loading {
+        title.push_str(" · loading replies…");
+    } else {
+        let replies = view.reply_count();
+        if replies > 0 {
+            title.push_str(&format!(" · {replies} replies"));
+        }
+    }
+    title.push_str(" · ");
+    title.push_str(status_suffix);
 
     let block = block_with_focus(&title, active);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if inner.height < 4 {
+    if inner.height < 5 {
         return;
     }
 
+    let chip_rows = ask_chip_rows(view, inner.width);
+    let input_h: u16 = 2 + chip_rows;
     let tweet_preview_h = inner.height.min(5);
-    let input_h: u16 = 2;
-    let conv_h = inner.height.saturating_sub(tweet_preview_h + input_h);
+    let conv_h = inner
+        .height
+        .saturating_sub(tweet_preview_h.saturating_add(input_h));
 
     let [tweet_area, conv_area, input_area] = Layout::vertical([
         Constraint::Length(tweet_preview_h),
@@ -845,14 +865,21 @@ fn draw_ask(
         &mut view.state,
         view.auto_follow,
     );
-    draw_ask_input(
-        frame,
-        input_area,
-        &view.input,
-        view.streaming,
-        active,
-        SPINNER_FRAMES,
-    );
+    draw_ask_input(frame, input_area, view, active, SPINNER_FRAMES, chip_rows);
+}
+
+fn ask_chip_rows(view: &crate::tui::ask::AskView, width: u16) -> u16 {
+    use unicode_width::UnicodeWidthStr;
+    let total: usize = view
+        .available_presets()
+        .iter()
+        .map(|(idx, p)| {
+            let s = format!("[{idx}] {}", p.label);
+            UnicodeWidthStr::width(s.as_str())
+        })
+        .sum::<usize>()
+        + view.available_presets().len().saturating_sub(1) * 2;
+    if total <= width as usize { 1 } else { 2 }
 }
 
 fn draw_ask_tweet_header(frame: &mut Frame, area: Rect, tweet: &Tweet, ctx: &RenderContext) {
@@ -906,7 +933,6 @@ fn draw_ask_conversation(
     auto_follow: bool,
 ) {
     use crate::tui::ask::AskMessage;
-    let wrap_width = (area.width as usize).saturating_sub(2);
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     if messages.is_empty() {
@@ -932,9 +958,7 @@ fn draw_ask_conversation(
                         .add_modifier(Modifier::BOLD),
                 )));
                 for raw_line in text.lines() {
-                    for wrapped in wrap_text(raw_line, wrap_width) {
-                        lines.push(Line::from(Span::raw(wrapped)));
-                    }
+                    lines.push(Line::from(Span::raw(raw_line.to_string())));
                 }
             }
             AskMessage::Assistant(m) => {
@@ -954,11 +978,7 @@ fn draw_ask_conversation(
                             .add_modifier(Modifier::ITALIC),
                     )));
                 }
-                for raw_line in m.text.lines() {
-                    for wrapped in wrap_text(raw_line, wrap_width) {
-                        lines.push(Line::from(Span::raw(wrapped)));
-                    }
-                }
+                lines.extend(render_markdown(&m.text));
             }
         }
     }
@@ -985,11 +1005,14 @@ fn draw_ask_conversation(
 fn draw_ask_input(
     frame: &mut Frame,
     area: Rect,
-    input: &str,
-    streaming: bool,
+    view: &crate::tui::ask::AskView,
     active: bool,
     spinner: &[&str],
+    chip_rows: u16,
 ) {
+    let streaming = view.streaming;
+    let input = view.input.as_str();
+
     let separator = "─".repeat(area.width as usize);
     let sep_line = Line::from(Span::styled(
         separator,
@@ -1003,7 +1026,7 @@ fn draw_ask_input(
     } else {
         Style::default().fg(Color::DarkGray)
     };
-    let mut spans: Vec<Span<'static>> = vec![Span::styled("> ", prompt_style)];
+    let mut input_spans: Vec<Span<'static>> = vec![Span::styled("> ", prompt_style)];
     if streaming {
         let idx = (std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1011,19 +1034,19 @@ fn draw_ask_input(
             .unwrap_or(0) as usize)
             % spinner.len().max(1);
         let frame_str = spinner.get(idx).copied().unwrap_or("·").to_string();
-        spans.push(Span::styled(
+        input_spans.push(Span::styled(
             format!("{frame_str} thinking…"),
             Style::default().fg(Color::DarkGray),
         ));
     } else if input.is_empty() {
-        spans.push(Span::styled(
-            "Explain this post (Enter to send)",
+        input_spans.push(Span::styled(
+            "type or [1–5] preset",
             Style::default().fg(Color::DarkGray),
         ));
     } else {
-        spans.push(Span::raw(input.to_string()));
+        input_spans.push(Span::raw(input.to_string()));
         if active {
-            spans.push(Span::styled(
+            input_spans.push(Span::styled(
                 "▏",
                 Style::default()
                     .fg(Color::Cyan)
@@ -1031,9 +1054,203 @@ fn draw_ask_input(
             ));
         }
     }
-    let input_line = Line::from(spans);
-    let para = Paragraph::new(vec![sep_line, input_line]).wrap(Wrap { trim: false });
+    let input_line = Line::from(input_spans);
+
+    let chips_active = active && !streaming && input.is_empty();
+    let mut chip_spans: Vec<Span<'static>> = Vec::new();
+    for (idx, preset) in view.available_presets() {
+        if !chip_spans.is_empty() {
+            chip_spans.push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
+        }
+        let enabled = view.preset_enabled(preset) && chips_active;
+        let (num_style, label_style) = if enabled {
+            (
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Gray),
+            )
+        } else {
+            let dim = Style::default().fg(Color::DarkGray);
+            (dim, dim)
+        };
+        chip_spans.push(Span::styled(format!("[{idx}] "), num_style));
+        chip_spans.push(Span::styled(preset.label.to_string(), label_style));
+    }
+    let chip_line = Line::from(chip_spans);
+
+    let mut lines = vec![sep_line, input_line, chip_line];
+    if chip_rows == 2 {
+        lines.push(Line::from(""));
+    }
+    let para = Paragraph::new(lines).wrap(Wrap { trim: false });
     frame.render_widget(para, area);
+}
+
+fn render_markdown(text: &str) -> Vec<Line<'static>> {
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let mut in_code_fence = false;
+    for raw in text.split('\n') {
+        let line = raw.trim_end_matches('\r');
+        if line.trim_start().starts_with("```") {
+            in_code_fence = !in_code_fence;
+            continue;
+        }
+        if in_code_fence {
+            out.push(Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(line.to_string(), Style::default().fg(Color::Yellow)),
+            ]));
+            continue;
+        }
+        if let Some((level, rest)) = strip_heading(line) {
+            let spans = parse_md_inline(&rest, Modifier::BOLD);
+            let mut prefixed = vec![Span::styled(
+                "#".repeat(level as usize) + " ",
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )];
+            prefixed.extend(spans);
+            out.push(Line::from(prefixed));
+            continue;
+        }
+        if let Some((indent, rest)) = strip_bullet(line) {
+            let mut spans: Vec<Span<'static>> = Vec::with_capacity(3);
+            if indent > 0 {
+                spans.push(Span::raw(" ".repeat(indent)));
+            }
+            spans.push(Span::styled("• ", Style::default().fg(Color::DarkGray)));
+            spans.extend(parse_md_inline(&rest, Modifier::empty()));
+            out.push(Line::from(spans));
+            continue;
+        }
+        if line.is_empty() {
+            out.push(Line::from(""));
+            continue;
+        }
+        let spans = parse_md_inline(line, Modifier::empty());
+        out.push(Line::from(spans));
+    }
+    out
+}
+
+fn strip_heading(line: &str) -> Option<(u8, String)> {
+    let trimmed = line.trim_start();
+    let hashes = trimmed.chars().take_while(|c| *c == '#').count();
+    if hashes == 0 || hashes > 6 {
+        return None;
+    }
+    let after = &trimmed[hashes..];
+    let rest = after.strip_prefix(' ')?;
+    Some((hashes as u8, rest.to_string()))
+}
+
+fn strip_bullet(line: &str) -> Option<(usize, String)> {
+    let leading = line.chars().take_while(|c| *c == ' ').count();
+    let rest = &line[leading..];
+    if let Some(after) = rest.strip_prefix("- ") {
+        return Some((leading, after.to_string()));
+    }
+    if let Some(after) = rest.strip_prefix("* ")
+        && !after.starts_with('*')
+    {
+        return Some((leading, after.to_string()));
+    }
+    None
+}
+
+fn parse_md_inline(text: &str, base_modifier: Modifier) -> Vec<Span<'static>> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut buf = String::new();
+    let mut bold = false;
+    let mut italic = false;
+    let mut code = false;
+    let mut i = 0;
+
+    while i < chars.len() {
+        let ch = chars[i];
+
+        if ch == '`' {
+            flush_md_span(&mut buf, &mut spans, base_modifier, bold, italic, code);
+            code = !code;
+            i += 1;
+            continue;
+        }
+        if code {
+            buf.push(ch);
+            i += 1;
+            continue;
+        }
+        if ch == '*' && i + 1 < chars.len() && chars[i + 1] == '*' {
+            let ok_toggle = if !bold {
+                i + 2 < chars.len() && !chars[i + 2].is_whitespace()
+            } else {
+                !buf.is_empty() && !buf.ends_with(char::is_whitespace)
+            };
+            if ok_toggle {
+                flush_md_span(&mut buf, &mut spans, base_modifier, bold, italic, code);
+                bold = !bold;
+                i += 2;
+                continue;
+            }
+        }
+        if ch == '*' {
+            let prev_is_space = if buf.is_empty() {
+                spans.last().and_then(|s| s.content.chars().last())
+            } else {
+                buf.chars().last()
+            }
+            .map(|c| c.is_whitespace())
+            .unwrap_or(true);
+            let next_ch = chars.get(i + 1).copied();
+            let ok_toggle = if !italic {
+                next_ch.is_some_and(|c| !c.is_whitespace() && c != '*')
+            } else {
+                !buf.is_empty() && !buf.ends_with(char::is_whitespace)
+            };
+            if ok_toggle && (italic || prev_is_space || spans.is_empty() && buf.is_empty()) {
+                flush_md_span(&mut buf, &mut spans, base_modifier, bold, italic, code);
+                italic = !italic;
+                i += 1;
+                continue;
+            }
+        }
+        buf.push(ch);
+        i += 1;
+    }
+
+    flush_md_span(&mut buf, &mut spans, base_modifier, bold, italic, code);
+    spans
+}
+
+fn flush_md_span(
+    buf: &mut String,
+    spans: &mut Vec<Span<'static>>,
+    base_modifier: Modifier,
+    bold: bool,
+    italic: bool,
+    code: bool,
+) {
+    if buf.is_empty() {
+        return;
+    }
+    let mut style = Style::default();
+    let mut modifier = base_modifier;
+    if bold {
+        modifier = modifier.union(Modifier::BOLD);
+    }
+    if italic {
+        modifier = modifier.union(Modifier::ITALIC);
+    }
+    if !modifier.is_empty() {
+        style = style.add_modifier(modifier);
+    }
+    if code {
+        style = style.fg(Color::Yellow);
+    }
+    spans.push(Span::styled(std::mem::take(buf), style));
 }
 
 fn draw_tweet_detail(
@@ -1916,7 +2133,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  p              my profile"),
         Line::from("  P              open own profile in browser"),
         Line::from("  T              translate tweet to English (toggle)"),
-        Line::from("  A              ask gemma about the selected post"),
+        Line::from("  A              ask gemma (digit = preset, thread context if in detail)"),
         Line::from("  c              toggle rage filter"),
         Line::from("  s              cycle reply sort order"),
         Line::from("  x              expand / collapse tweet body"),

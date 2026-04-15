@@ -12,7 +12,44 @@ use tracing::{debug, info, warn};
 
 pub const DEFAULT_PROMPT: &str = "Explain this post";
 
-const SYSTEM_PROMPT: &str = "You help a reader understand a social media post. Be concise, direct, and factual. Keep replies short (2–4 short paragraphs). If the post is ambiguous or lacks context, say so plainly.";
+const SYSTEM_PROMPT: &str = "You help a reader understand a social media post. Be concise, direct, and factual. Keep replies short (2–4 short paragraphs). If the post is ambiguous or lacks context, say so plainly. Prefer plain prose. Use markdown sparingly: **bold**, bulleted lists with '- ', and inline `code` are fine when they genuinely help, but avoid headings, horizontal rules, tables, and heavy formatting.";
+
+const MAX_REPLIES_IN_CONTEXT: usize = 20;
+
+#[derive(Debug, Clone, Copy)]
+pub struct Preset {
+    pub label: &'static str,
+    pub prompt: &'static str,
+    pub needs_replies: bool,
+}
+
+pub const PRESETS: &[Preset] = &[
+    Preset {
+        label: "Explain",
+        prompt: "Explain this post.",
+        needs_replies: false,
+    },
+    Preset {
+        label: "Summary",
+        prompt: "Summarize the key points of the replies in 3–5 bullets. Focus on dominant reactions and any notable disagreements.",
+        needs_replies: true,
+    },
+    Preset {
+        label: "Counter",
+        prompt: "What are the strongest counter-arguments to this post? List 2–3, each one or two sentences.",
+        needs_replies: false,
+    },
+    Preset {
+        label: "ELI5",
+        prompt: "Explain this post like I'm five.",
+        needs_replies: false,
+    },
+    Preset {
+        label: "Entities",
+        prompt: "Who and what is referenced in this post? Identify people, projects, events, or topics mentioned.",
+        needs_replies: false,
+    },
+];
 
 #[derive(Debug)]
 pub struct AskAssistantMsg {
@@ -38,6 +75,8 @@ pub enum AskMessage {
 #[derive(Debug)]
 pub struct AskView {
     pub tweet: Tweet,
+    pub replies: Vec<Tweet>,
+    pub replies_loading: bool,
     pub messages: Vec<AskMessage>,
     pub input: String,
     pub streaming: bool,
@@ -47,9 +86,11 @@ pub struct AskView {
 }
 
 impl AskView {
-    pub fn new(tweet: Tweet) -> Self {
+    pub fn new(tweet: Tweet, replies: Vec<Tweet>, replies_loading: bool) -> Self {
         Self {
             tweet,
+            replies,
+            replies_loading,
             messages: Vec::new(),
             input: String::new(),
             streaming: false,
@@ -61,6 +102,31 @@ impl AskView {
 
     pub fn tweet_id(&self) -> &str {
         &self.tweet.rest_id
+    }
+
+    pub fn image_count(&self) -> usize {
+        self.tweet
+            .media
+            .iter()
+            .filter(|m| matches!(m.kind, MediaKind::Photo))
+            .count()
+            .min(4)
+    }
+
+    pub fn reply_count(&self) -> usize {
+        self.replies.len()
+    }
+
+    pub fn available_presets(&self) -> Vec<(usize, &'static Preset)> {
+        PRESETS
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (i + 1, p))
+            .collect()
+    }
+
+    pub fn preset_enabled(&self, preset: &Preset) -> bool {
+        !preset.needs_replies || !self.replies.is_empty()
     }
 
     pub fn push_user_message(&mut self, text: String) {
@@ -103,20 +169,36 @@ pub enum Role {
     Assistant,
 }
 
-pub fn send(ollama: OllamaConfig, tweet: Tweet, turns: Vec<(Role, String)>, tx: EventTx) {
+pub fn send(
+    ollama: OllamaConfig,
+    tweet: Tweet,
+    replies: Vec<Tweet>,
+    turns: Vec<(Role, String)>,
+    tx: EventTx,
+) {
     let tweet_id = tweet.rest_id.clone();
     tokio::spawn(async move {
-        info!(tweet_id = %tweet_id, turns = turns.len(), "ask stream start");
+        info!(
+            tweet_id = %tweet_id,
+            turns = turns.len(),
+            replies = replies.len(),
+            "ask stream start"
+        );
         let images = fetch_images(&tweet).await;
         if !images.is_empty() {
             debug!(tweet_id = %tweet_id, count = images.len(), "ask images attached");
         }
-        let messages = build_messages(&tweet, &turns, images);
+        let messages = build_messages(&tweet, &replies, &turns, images);
         stream_ollama(&ollama, &tweet_id, messages, &tx).await;
     });
 }
 
-fn build_messages(tweet: &Tweet, turns: &[(Role, String)], images: Vec<String>) -> Vec<Value> {
+fn build_messages(
+    tweet: &Tweet,
+    replies: &[Tweet],
+    turns: &[(Role, String)],
+    images: Vec<String>,
+) -> Vec<Value> {
     let mut out: Vec<Value> = Vec::with_capacity(turns.len() + 1);
     out.push(json!({ "role": "system", "content": SYSTEM_PROMPT }));
     let handle = &tweet.author.handle;
@@ -126,7 +208,17 @@ fn build_messages(tweet: &Tweet, turns: &[(Role, String)], images: Vec<String>) 
         match role {
             Role::User => {
                 let content = if first_user {
-                    format!("@{handle} posted:\n{tweet_text}\n\n{text}")
+                    let mut buf = format!("@{handle} posted:\n{tweet_text}\n");
+                    if !replies.is_empty() {
+                        buf.push_str("\nReplies to the post:\n");
+                        for reply in replies.iter().take(MAX_REPLIES_IN_CONTEXT) {
+                            let snippet: String = reply.text.chars().take(400).collect();
+                            let snippet = snippet.replace('\n', " ");
+                            buf.push_str(&format!("- @{}: {}\n", reply.author.handle, snippet));
+                        }
+                    }
+                    buf.push_str(&format!("\n{text}"));
+                    buf
                 } else {
                     text.clone()
                 };

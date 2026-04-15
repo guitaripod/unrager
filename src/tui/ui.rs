@@ -110,12 +110,17 @@ fn render_scrollable(
     let inner = block.inner(area);
     let inner_h = inner.height;
 
-    let mut spans: Vec<(u16, u16)> = Vec::with_capacity(items.len());
+    const ITEM_GAP: u16 = 1;
+    let n_items = items.len();
+    let mut spans: Vec<(u16, u16)> = Vec::with_capacity(n_items);
     let mut cursor: u16 = 0;
-    for item in &items {
+    for (i, item) in items.iter().enumerate() {
         let h = item.lines.len() as u16;
         spans.push((cursor, h));
         cursor = cursor.saturating_add(h);
+        if i + 1 < n_items {
+            cursor = cursor.saturating_add(ITEM_GAP);
+        }
     }
     let total_h = cursor;
 
@@ -123,16 +128,20 @@ fn render_scrollable(
     let (sel_start, sel_h) = spans.get(sel).copied().unwrap_or((0, 0));
     let sel_end = sel_start.saturating_add(sel_h);
 
+    const SCROLL_MARGIN: u16 = 8;
     let mut scroll = state.scroll;
     if inner_h > 0 {
-        if sel_start < scroll {
-            scroll = sel_start;
+        let margin = SCROLL_MARGIN.min(inner_h.saturating_sub(sel_h) / 2);
+        let desired_top = sel_start.saturating_sub(margin);
+        let desired_bottom = sel_end.saturating_add(margin);
+        if desired_top < scroll {
+            scroll = desired_top;
         }
-        if sel_end > scroll.saturating_add(inner_h) {
+        if desired_bottom > scroll.saturating_add(inner_h) {
             scroll = if sel_h >= inner_h {
                 sel_start
             } else {
-                sel_end.saturating_sub(inner_h)
+                desired_bottom.saturating_sub(inner_h)
             };
         }
     }
@@ -148,13 +157,8 @@ fn render_scrollable(
     let mut flat: Vec<Line<'static>> = Vec::with_capacity(total_h as usize);
     for (i, item) in items.into_iter().enumerate() {
         let is_selected = selected == Some(i);
-        let bg = if is_selected {
-            Some(hl_bg)
-        } else if item.zebra {
-            Some(ZEBRA_BG)
-        } else {
-            None
-        };
+        let bg = if is_selected { Some(hl_bg) } else { None };
+        let _ = item.zebra;
         let mut item_lines = item.lines;
         for (j, line) in item_lines.iter_mut().enumerate() {
             if let Some(bg) = bg {
@@ -169,6 +173,12 @@ fn render_scrollable(
             }
         }
         flat.extend(item_lines);
+        if i + 1 < n_items {
+            flat.push(Line::from(Span::styled(
+                "─".repeat(row_width as usize),
+                Style::default().fg(Color::Indexed(236)),
+            )));
+        }
     }
 
     let para = Paragraph::new(flat).block(block).scroll((state.scroll, 0));

@@ -21,7 +21,7 @@
 
 Sorted by what would hurt a new user the most if unaddressed.
 
-- [ ] **Hand-written release notes on tagged releases** — `--generate-notes` currently produces a bare compare-link. Adds 2 minutes per release; readers of the GitHub release page get an actual "what's in this" summary.
+- [x] **Automated release notes** — conventional-commit parser in the release workflow groups commits by category (Features, Fixes, Tuning, Styling), strips chore/docs noise, appends a compare link.
 - [ ] **OAuth write-path client-ID clarity** — README makes forking-and-replacing sound optional. A published install pool sharing one X developer client ID risks per-client rate limits and X flagging cross-user traffic. Either: require users to set their own client ID before building (remove the embedded default), or make the current guidance in the README prominent and unambiguous. Only matters for `unrager tweet` / `unrager reply` — read and TUI are unaffected.
 - [ ] **Uninstall story** — `install.sh --uninstall` that removes the binary and optionally offers to wipe `~/.config/unrager` + `~/.cache/unrager` (or the macOS equivalents). Right now users have to reverse the install by hand.
 - [ ] **`unrager update`** — self-update subcommand that checks latest GitHub release, verifies SHA256, atomic-swap via `self_replace`. Would close the "how do I get the new version" loop without requiring users to re-run the installer.

@@ -193,11 +193,59 @@ jobs:
           sha256sum *.tar.gz > SHA256SUMS
           cat SHA256SUMS
 
+      - name: Generate release notes
+        run: |
+          TAG="${{ github.ref_name }}"
+          PREV_TAG=$(git tag --sort=-v:refname | grep -E '^[0-9]+\.[0-9]+\.[0-9]+' | sed -n '2p')
+
+          if [ -z "$PREV_TAG" ]; then
+            RANGE="$TAG"
+          else
+            RANGE="${PREV_TAG}..${TAG}"
+          fi
+
+          declare -A SECTIONS
+          SECTIONS=(
+            [feat]="Features"
+            [fix]="Fixes"
+            [tune]="Tuning"
+            [style]="Styling"
+          )
+          declare -A BUCKETS
+
+          while IFS= read -r line; do
+            msg="${line#* }"
+
+            if echo "$msg" | grep -qE '^(chore|docs)'; then
+              continue
+            fi
+
+            prefix=$(echo "$msg" | sed -n 's/^\([a-z]*\).*/\1/p')
+            body=$(echo "$msg" | sed 's/^[a-z]*\(([^)]*)\)\{0,1\}: *//')
+
+            header="${SECTIONS[$prefix]:-Other}"
+            BUCKETS["$header"]+="- ${body}"$'\n'
+          done < <(git log --oneline --no-decorate "$RANGE")
+
+          {
+            for section in "Features" "Fixes" "Tuning" "Styling" "Other"; do
+              if [ -n "${BUCKETS[$section]:-}" ]; then
+                echo "## $section"
+                echo ""
+                echo -n "${BUCKETS[$section]}"
+                echo ""
+              fi
+            done
+            if [ -n "$PREV_TAG" ]; then
+              echo "**Full changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${TAG}"
+            fi
+          } > RELEASE_NOTES.md
+
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ github.ref_name }}" \
             --title "${{ github.ref_name }}" \
-            --generate-notes \
+            --notes-file RELEASE_NOTES.md \
             dist/*.tar.gz dist/SHA256SUMS

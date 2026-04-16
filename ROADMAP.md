@@ -22,8 +22,8 @@
 Sorted by what would hurt a new user the most if unaddressed.
 
 - [x] **Automated release notes** — conventional-commit parser in the release workflow groups commits by category (Features, Fixes, Tuning, Styling), strips chore/docs noise, appends a compare link.
-- [ ] **OAuth write-path client-ID clarity** — README makes forking-and-replacing sound optional. A published install pool sharing one X developer client ID risks per-client rate limits and X flagging cross-user traffic. Either: require users to set their own client ID before building (remove the embedded default), or make the current guidance in the README prominent and unambiguous. Only matters for `unrager tweet` / `unrager reply` — read and TUI are unaffected.
-- [ ] **Uninstall story** — `install.sh --uninstall` that removes the binary and optionally offers to wipe `~/.config/unrager` + `~/.cache/unrager` (or the macOS equivalents). Right now users have to reverse the install by hand.
+- [x] **OAuth write-path client-ID clarity** — README write-path setup now makes replacing the embedded Client ID an explicit numbered step with a rationale callout.
+- [x] **Uninstall story** — `install.sh --uninstall` removes the binary, optionally wipes config/cache. Respects `UNRAGER_INSTALL_DIR`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, and macOS `~/Library` paths.
 - [ ] **`unrager update`** — self-update subcommand that checks latest GitHub release, verifies SHA256, atomic-swap via `self_replace`. Would close the "how do I get the new version" loop without requiring users to re-run the installer.
 - [ ] **Passive update nag in TUI** — once-a-day background check against GitHub releases, `↑ X.Y.Z` in the status bar when newer. Pairs with `unrager update`.
 - [ ] **GHA Node 20 → 24 migration** — current workflows emit deprecation warnings on every run. Deadline June 2026. Set `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true` now to clean up the annotations.

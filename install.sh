@@ -7,6 +7,49 @@ INSTALL_DIR="${UNRAGER_INSTALL_DIR:-$HOME/.local/bin}"
 err() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
 note() { printf '==> %s\n' "$*"; }
 
+data_dirs() {
+    if [ "$(uname -s)" = "Darwin" ]; then
+        echo "$HOME/Library/Application Support/unrager"
+        echo "$HOME/Library/Caches/unrager"
+    else
+        echo "${XDG_CONFIG_HOME:-$HOME/.config}/unrager"
+        echo "${XDG_CACHE_HOME:-$HOME/.cache}/unrager"
+    fi
+}
+
+uninstall() {
+    local binary="$INSTALL_DIR/unrager"
+    if [ -f "$binary" ]; then
+        rm "$binary"
+        note "removed $binary"
+    else
+        note "no binary found at $binary"
+    fi
+
+    printf '\nRemove config and cache directories? [y/N] '
+    read -r answer
+    case "$answer" in
+        [yY]*)
+            while IFS= read -r dir; do
+                if [ -d "$dir" ]; then
+                    rm -rf "$dir"
+                    note "removed $dir"
+                fi
+            done < <(data_dirs)
+            ;;
+        *)
+            note "keeping data directories"
+            ;;
+    esac
+
+    note "uninstall complete"
+    exit 0
+}
+
+if [ "${1:-}" = "--uninstall" ]; then
+    uninstall
+fi
+
 detect_target() {
     local os arch
     os=$(uname -s)
@@ -107,5 +150,8 @@ Next steps:
   unrager                  launch the TUI
   unrager --help           see all subcommands
   ollama pull gemma4       enable the local-LLM rage filter (optional)
+
+Uninstall:
+  curl -fsSL https://raw.githubusercontent.com/guitaripod/unrager/master/install.sh | bash -s -- --uninstall
 
 EOF

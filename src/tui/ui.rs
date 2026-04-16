@@ -2560,7 +2560,7 @@ fn draw_changelog_overlay(frame: &mut Frame, area: Rect, app: &App) {
                         lines.push(Line::from(Span::styled(section, heading_style)));
                     } else if let Some(item) = trimmed.strip_prefix("- ") {
                         lines.push(Line::from(format!("  {item}")));
-                    } else if trimmed.starts_with("**Full changelog**") {
+                    } else if trimmed.to_lowercase().starts_with("**full changelog**") {
                         continue;
                     } else if !trimmed.is_empty() {
                         lines.push(Line::from(trimmed.to_string()));

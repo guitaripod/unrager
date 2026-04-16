@@ -282,6 +282,14 @@ pub fn notifications_timeline_features() -> Value {
     })
 }
 
+pub fn favorite_variables(tweet_id: &str) -> Value {
+    json!({ "tweet_id": tweet_id })
+}
+
+pub fn mutation_features() -> Value {
+    json!({})
+}
+
 pub fn favoriters_variables(tweet_id: &str, count: u32, cursor: Option<&str>) -> Value {
     let mut vars = json!({
         "tweetId": tweet_id,

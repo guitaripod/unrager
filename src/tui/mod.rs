@@ -2,6 +2,7 @@ pub mod app;
 pub mod ask;
 pub mod brief;
 pub mod command;
+pub mod engage;
 pub mod event;
 pub mod filter;
 pub mod focus;

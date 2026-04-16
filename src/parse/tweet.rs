@@ -78,6 +78,10 @@ fn parse_tweet_node(node: &Value) -> Result<Tweet> {
         .and_then(Value::as_str)
         .and_then(|s| s.parse::<u64>().ok());
 
+    let favorited = bool_field(legacy, "favorited");
+    let retweeted = bool_field(legacy, "retweeted");
+    let bookmarked = bool_field(legacy, "bookmarked");
+
     let lang = legacy
         .get("lang")
         .and_then(Value::as_str)
@@ -107,6 +111,9 @@ fn parse_tweet_node(node: &Value) -> Result<Tweet> {
         like_count,
         quote_count,
         view_count,
+        favorited,
+        retweeted,
+        bookmarked,
         lang,
         in_reply_to_tweet_id,
         quoted_tweet,
@@ -207,6 +214,10 @@ fn u64_field(legacy: &Value, key: &str) -> u64 {
     legacy.get(key).and_then(Value::as_u64).unwrap_or(0)
 }
 
+fn bool_field(legacy: &Value, key: &str) -> bool {
+    legacy.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
 fn parse_media(legacy: &Value) -> Vec<Media> {
     let Some(items) = legacy
         .pointer("/extended_entities/media")
@@ -271,6 +282,9 @@ mod tests {
                 "retweet_count": 7,
                 "favorite_count": 42,
                 "quote_count": 1,
+                "favorited": false,
+                "retweeted": false,
+                "bookmarked": false,
                 "lang": "en"
             },
             "views": { "count": "1000" }
@@ -440,5 +454,29 @@ mod tests {
         let v = json!({ "__typename": "SomethingNew" });
         let err = parse_tweet_result(&v).unwrap_err();
         assert!(err.to_string().contains("SomethingNew"));
+    }
+
+    #[test]
+    fn parse_engagement_state() {
+        let mut v = minimal_tweet_json("1100", "engaged tweet");
+        v["legacy"]["favorited"] = json!(true);
+        v["legacy"]["retweeted"] = json!(true);
+        v["legacy"]["bookmarked"] = json!(true);
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert!(tweet.favorited);
+        assert!(tweet.retweeted);
+        assert!(tweet.bookmarked);
+    }
+
+    #[test]
+    fn parse_engagement_defaults_false() {
+        let mut v = minimal_tweet_json("1101", "unengaged");
+        v["legacy"].as_object_mut().unwrap().remove("favorited");
+        v["legacy"].as_object_mut().unwrap().remove("retweeted");
+        v["legacy"].as_object_mut().unwrap().remove("bookmarked");
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert!(!tweet.favorited);
+        assert!(!tweet.retweeted);
+        assert!(!tweet.bookmarked);
     }
 }

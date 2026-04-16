@@ -22,6 +22,12 @@ pub struct Tweet {
     pub like_count: u64,
     pub quote_count: u64,
     pub view_count: Option<u64>,
+    #[serde(default)]
+    pub favorited: bool,
+    #[serde(default)]
+    pub retweeted: bool,
+    #[serde(default)]
+    pub bookmarked: bool,
     pub lang: Option<String>,
     pub in_reply_to_tweet_id: Option<String>,
     pub quoted_tweet: Option<Box<Tweet>>,

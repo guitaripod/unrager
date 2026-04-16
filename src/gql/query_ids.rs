@@ -18,6 +18,8 @@ pub enum Operation {
     BookmarkSearchTimeline,
     Favoriters,
     NotificationsTimeline,
+    FavoriteTweet,
+    UnfavoriteTweet,
 }
 
 impl Operation {
@@ -35,6 +37,8 @@ impl Operation {
             Self::BookmarkSearchTimeline => "BookmarkSearchTimeline",
             Self::Favoriters => "Favoriters",
             Self::NotificationsTimeline => "NotificationsTimeline",
+            Self::FavoriteTweet => "FavoriteTweet",
+            Self::UnfavoriteTweet => "UnfavoriteTweet",
         }
     }
 }
@@ -130,4 +134,6 @@ const FALLBACK_QUERY_IDS: &[(&str, &str)] = &[
     ("SearchTimeline", "pCd62NDD9dlCDgEGgEVHMg"),
     ("Favoriters", "E-ZTxvWWIkmOKwYdNTEefg"),
     ("NotificationsTimeline", "l6ovGrjBwVobgU4puBCycg"),
+    ("FavoriteTweet", "lI07N6Otwv1PhnEgXILM7A"),
+    ("UnfavoriteTweet", "ZYKSe-w7KEslx3JhSIk5LA"),
 ];

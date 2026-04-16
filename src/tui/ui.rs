@@ -43,9 +43,9 @@ impl PaneItem {
 
 fn highlight_bg(active: bool) -> Color {
     if active {
-        Color::Indexed(24)
-    } else {
         Color::Indexed(238)
+    } else {
+        Color::Indexed(236)
     }
 }
 
@@ -56,10 +56,6 @@ fn apply_line_bg(line: &mut Line<'static>, bg: Color) {
             span.style = span.style.bg(bg);
         }
     }
-}
-
-fn apply_line_modifier(line: &mut Line<'static>, modifier: Modifier) {
-    line.style = line.style.add_modifier(modifier);
 }
 
 fn pad_line_to_width(line: &mut Line<'static>, target_width: u16, bg: Color) {
@@ -79,14 +75,14 @@ fn pad_line_to_width(line: &mut Line<'static>, target_width: u16, bg: Color) {
 fn prepend_selection_marker(line: &mut Line<'static>, active: bool, highlight_bg: Color) {
     let (marker_text, marker_style) = if active {
         (
-            "▶ ",
-            Style::default()
-                .fg(Color::Cyan)
-                .bg(highlight_bg)
-                .add_modifier(Modifier::BOLD),
+            "▎ ",
+            Style::default().fg(Color::Indexed(75)).bg(highlight_bg),
         )
     } else {
-        ("· ", Style::default().fg(Color::DarkGray).bg(highlight_bg))
+        (
+            "▎ ",
+            Style::default().fg(Color::Indexed(240)).bg(highlight_bg),
+        )
     };
     let marker = Span::styled(marker_text, marker_style);
 
@@ -163,15 +159,10 @@ fn render_scrollable(
         let bg = if is_selected { Some(hl_bg) } else { None };
         let _ = item.zebra;
         let mut item_lines = item.lines;
-        for (j, line) in item_lines.iter_mut().enumerate() {
+        for line in item_lines.iter_mut() {
             if let Some(bg) = bg {
                 apply_line_bg(line, bg);
-                if is_selected && active {
-                    apply_line_modifier(line, Modifier::BOLD);
-                }
-                if is_selected && j == 0 {
-                    prepend_selection_marker(line, active, bg);
-                }
+                prepend_selection_marker(line, active, bg);
                 pad_line_to_width(line, row_width, bg);
             }
         }
@@ -1723,7 +1714,7 @@ fn tweet_lines(
     let extras = if show_extra {
         extra_stats_spans(t)
     } else {
-        Vec::new()
+        engagement_only_spans(t)
     };
     if let Some(reply_span) = reply_count_span(t) {
         header.push(Span::raw("    "));
@@ -2155,8 +2146,14 @@ fn reply_count_span(t: &Tweet) -> Option<Span<'static>> {
     ))
 }
 
+const COLOR_LIKED: Color = Color::Indexed(203);
+
+fn engaged_style(color: Color) -> Style {
+    Style::default().fg(color).add_modifier(Modifier::BOLD)
+}
+
 fn extra_stats_spans(t: &Tweet) -> Vec<Span<'static>> {
-    let style = Style::default().fg(Color::DarkGray);
+    let dim = Style::default().fg(Color::DarkGray);
     let mut parts: Vec<Span<'static>> = Vec::new();
     let push = |span: Span<'static>, parts: &mut Vec<Span<'static>>| {
         if !parts.is_empty() {
@@ -2168,12 +2165,17 @@ fn extra_stats_spans(t: &Tweet) -> Vec<Span<'static>> {
         push(
             Span::styled(
                 format!("{GLYPH_RETWEETS} {}", short_count(t.retweet_count)),
-                style,
+                dim,
             ),
             &mut parts,
         );
     }
-    if t.like_count > 0 {
+    if t.like_count > 0 || t.favorited {
+        let style = if t.favorited {
+            engaged_style(COLOR_LIKED)
+        } else {
+            dim
+        };
         push(
             Span::styled(
                 format!("{GLYPH_LIKES} {}", short_count(t.like_count)),
@@ -2186,11 +2188,21 @@ fn extra_stats_spans(t: &Tweet) -> Vec<Span<'static>> {
         && v > 0
     {
         push(
-            Span::styled(format!("{GLYPH_VIEWS} {}", short_count(v)), style),
+            Span::styled(format!("{GLYPH_VIEWS} {}", short_count(v)), dim),
             &mut parts,
         );
     }
     parts
+}
+
+fn engagement_only_spans(t: &Tweet) -> Vec<Span<'static>> {
+    if !t.favorited {
+        return Vec::new();
+    }
+    vec![Span::styled(
+        GLYPH_LIKES.to_string(),
+        engaged_style(COLOR_LIKED),
+    )]
 }
 
 fn highlight_text(text: &str) -> Vec<Span<'static>> {
@@ -2415,6 +2427,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  T              translate tweet to English (toggle)"),
         Line::from("  A              ask gemma (digit = preset, thread context if in detail)"),
         Line::from("  B              run a profile on the selected author (R re-read)"),
+        Line::from("  f              like / unlike"),
         Line::from("  c              toggle rage filter"),
         Line::from("  s              cycle reply sort order"),
         Line::from("  x              expand / collapse tweet body"),
@@ -2442,7 +2455,12 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
             Span::styled("  ⟲  ", icon_style),
             Span::raw("retweets"),
         ]),
-        Line::from(vec![Span::styled("  ♥  ", icon_style), Span::raw("likes")]),
+        Line::from(vec![
+            Span::styled("  ♥  ", icon_style),
+            Span::raw("likes ("),
+            Span::styled("red", Style::default().fg(COLOR_LIKED)),
+            Span::raw(" = you liked)"),
+        ]),
         Line::from(vec![Span::styled("  ◉  ", icon_style), Span::raw("views")]),
         Line::from(vec![
             Span::styled("  ▣  ", icon_style),

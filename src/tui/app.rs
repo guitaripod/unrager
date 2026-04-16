@@ -7,6 +7,7 @@ use crate::parse::timeline::TimelinePage;
 use crate::tui::ask::{self, AskView};
 use crate::tui::brief::{self, BriefView};
 use crate::tui::command::{self, Command};
+use crate::tui::engage::EngageAction;
 use crate::tui::event::{self, Event, EventTx, RequestId};
 use crate::tui::filter::{
     self, Classifier, FilterCache, FilterConfig, FilterDecision, FilterMode, FilterState,
@@ -151,6 +152,7 @@ pub struct App {
     pub pending_classification: Vec<Tweet>,
     pub translations: HashMap<String, String>,
     pub translation_inflight: HashSet<String>,
+    pub engage_inflight: HashSet<String>,
     pub brief_cache: HashMap<String, BriefView>,
     pub reply_sort: ReplySortOrder,
     pub app_config: AppConfig,
@@ -282,6 +284,7 @@ impl App {
             pending_classification: Vec::new(),
             translations: HashMap::new(),
             translation_inflight: HashSet::new(),
+            engage_inflight: HashSet::new(),
             brief_cache: HashMap::new(),
             app_config,
             help_scroll: 0,
@@ -574,6 +577,65 @@ impl App {
         self.translation_inflight.remove(&rest_id);
         self.translations.insert(rest_id, translated);
         self.set_status("translated");
+    }
+
+    fn engage(&mut self, action: EngageAction) {
+        if self.block_if_rate_limited() {
+            return;
+        }
+        let Some(tweet) = self.selected_tweet().cloned() else {
+            return;
+        };
+        if self.engage_inflight.contains(&tweet.rest_id) {
+            return;
+        }
+
+        let verb = action.verb(action.is_engaged(&tweet));
+        self.engage_inflight.insert(tweet.rest_id.clone());
+        self.mutate_tweet_by_id(&tweet.rest_id, |t| action.apply(t));
+        self.set_status(verb);
+
+        crate::tui::engage::dispatch(action, &tweet, self.client.clone(), self.tx.clone());
+    }
+
+    fn handle_engage_result(
+        &mut self,
+        rest_id: String,
+        action: EngageAction,
+        error: Option<String>,
+    ) {
+        self.engage_inflight.remove(&rest_id);
+        if let Some(err) = error {
+            self.mutate_tweet_by_id(&rest_id, |t| action.apply(t));
+            self.error = Some(err);
+        }
+    }
+
+    fn mutate_tweet_by_id(&mut self, rest_id: &str, f: impl Fn(&mut Tweet)) {
+        for tweet in &mut self.source.tweets {
+            if tweet.rest_id == rest_id {
+                f(tweet);
+            }
+        }
+        for entry in &mut self.focus_stack {
+            if let FocusEntry::Tweet(detail) = entry {
+                if detail.tweet.rest_id == rest_id {
+                    f(&mut detail.tweet);
+                }
+                for reply in &mut detail.replies {
+                    if reply.rest_id == rest_id {
+                        f(reply);
+                    }
+                }
+            }
+        }
+        for inline in self.inline_threads.values_mut() {
+            for (_, tweet) in &mut inline.replies {
+                if tweet.rest_id == rest_id {
+                    f(tweet);
+                }
+            }
+        }
     }
 
     fn open_ask_for_selected(&mut self) {
@@ -1466,6 +1528,13 @@ impl App {
                 self.whisper.surge_sentiment = Some(sentiment);
                 self.whisper.text = summary;
             }
+            Event::EngageResult {
+                rest_id,
+                action,
+                error,
+            } => {
+                self.handle_engage_result(rest_id, action, error);
+            }
             Event::UpdateAvailable { version } => {
                 self.update_available = Some(version);
             }
@@ -1652,6 +1721,7 @@ impl App {
             (KeyCode::Char('T'), _) => self.translate_selected(),
             (KeyCode::Char('A'), _) => self.open_ask_for_selected(),
             (KeyCode::Char('B'), _) => self.open_brief_for_target(),
+            (KeyCode::Char('f'), KeyModifiers::NONE) => self.engage(EngageAction::Like),
             (KeyCode::Char('c'), KeyModifiers::NONE) => self.toggle_filter(),
             (KeyCode::Char('y'), KeyModifiers::NONE) => self.yank_url(),
             (KeyCode::Char('Y'), _) => self.yank_json(),
@@ -2179,6 +2249,7 @@ impl App {
         self.pending_classification.clear();
         self.translations.clear();
         self.translation_inflight.clear();
+        self.engage_inflight.clear();
         self.notif_actor_cursor = None;
         if is_notifs {
             self.fetch_notifications_source(false, false);
@@ -2923,6 +2994,9 @@ mod tests {
             like_count: 0,
             quote_count: 0,
             view_count: None,
+            favorited: false,
+            retweeted: false,
+            bookmarked: false,
             lang: None,
             in_reply_to_tweet_id: None,
             quoted_tweet: None,

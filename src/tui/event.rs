@@ -140,6 +140,11 @@ pub enum Event {
         handle: String,
         error: Option<String>,
     },
+    EngageResult {
+        rest_id: String,
+        action: crate::tui::engage::EngageAction,
+        error: Option<String>,
+    },
     UpdateAvailable {
         version: String,
     },

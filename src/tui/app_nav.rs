@@ -498,6 +498,75 @@ impl App {
         }
     }
 
+    pub(super) fn start_reply(&mut self) {
+        let Some(tweet) = self.selected_tweet().cloned() else {
+            return;
+        };
+        if self.block_if_rate_limited() {
+            return;
+        }
+        let view = crate::tui::compose::ComposeView::new(tweet);
+        self.focus_stack.push(FocusEntry::Compose(view));
+        self.active = ActivePane::Detail;
+        self.set_status("reply: type, Enter send, Esc cancel");
+    }
+
+    pub(super) fn submit_reply(&mut self) {
+        let (text, in_reply_to) = {
+            let Some(FocusEntry::Compose(view)) = self.focus_stack.last() else {
+                return;
+            };
+            if view.sending || view.editor.input.trim().is_empty() {
+                return;
+            }
+            (
+                view.editor.input.trim().to_string(),
+                view.tweet.rest_id.clone(),
+            )
+        };
+        if self.block_if_rate_limited() {
+            return;
+        }
+        if let Some(FocusEntry::Compose(view)) = self.focus_stack.last_mut() {
+            view.sending = true;
+            view.error = None;
+        }
+        self.set_status("sending reply…");
+        crate::tui::compose::dispatch_reply(
+            text,
+            in_reply_to,
+            self.client.clone(),
+            self.tx.clone(),
+        );
+    }
+
+    pub(super) fn handle_reply_result(
+        &mut self,
+        in_reply_to: String,
+        result: std::result::Result<String, String>,
+    ) {
+        let is_match = matches!(
+            self.focus_stack.last(),
+            Some(FocusEntry::Compose(v)) if v.tweet.rest_id == in_reply_to
+        );
+        if !is_match {
+            return;
+        }
+        match result {
+            Ok(new_id) => {
+                self.set_status(format!("reply sent · {new_id}"));
+                self.back_out(false);
+            }
+            Err(err) => {
+                if let Some(FocusEntry::Compose(view)) = self.focus_stack.last_mut() {
+                    view.sending = false;
+                    view.error = Some(err.clone());
+                }
+                self.error = Some(err);
+            }
+        }
+    }
+
     pub(super) fn cycle_reply_sort(&mut self) {
         self.reply_sort = self.reply_sort.cycle();
         if let Some(FocusEntry::Tweet(detail)) = self.focus_stack.last_mut() {

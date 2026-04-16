@@ -1,4 +1,5 @@
 use crate::model::{MediaKind, Tweet};
+use crate::tui::editor::VimEditor;
 use crate::tui::event::{Event, EventTx};
 use crate::tui::filter::OllamaConfig;
 use crate::tui::source::PaneState;
@@ -75,7 +76,7 @@ pub struct AskView {
     pub replies: Vec<Tweet>,
     pub replies_loading: bool,
     pub messages: Vec<AskMessage>,
-    pub input: String,
+    pub editor: VimEditor,
     pub streaming: bool,
     pub error: Option<String>,
     pub state: PaneState,
@@ -89,7 +90,7 @@ impl AskView {
             replies,
             replies_loading,
             messages: Vec::new(),
-            input: String::new(),
+            editor: VimEditor::normal(),
             streaming: false,
             error: None,
             state: PaneState::default(),

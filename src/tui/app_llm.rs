@@ -329,13 +329,14 @@ impl App {
         if view.streaming {
             return;
         }
-        let prompt_text = view.input.trim().to_string();
+        let prompt_text = view.editor.input.trim().to_string();
         let effective_prompt = if prompt_text.is_empty() {
             ask::DEFAULT_PROMPT.to_string()
         } else {
             prompt_text
         };
-        view.input.clear();
+        view.editor.input.clear();
+        view.editor.cursor_pos = 0;
         view.push_user_message(effective_prompt);
         view.auto_follow = true;
         let tweet = view.tweet.clone();
@@ -349,7 +350,7 @@ impl App {
         let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() else {
             return;
         };
-        if view.streaming || !view.input.is_empty() {
+        if view.streaming || !view.editor.input.is_empty() {
             return;
         }
         let Some(preset) = ask::PRESETS.get(index.saturating_sub(1)) else {
@@ -359,7 +360,8 @@ impl App {
             self.set_status(format!("[{index}] needs thread context"));
             return;
         }
-        view.input = preset.prompt.to_string();
+        view.editor.input = preset.prompt.to_string();
+        view.editor.cursor_pos = view.editor.input.len();
         self.ask_submit_input();
     }
 

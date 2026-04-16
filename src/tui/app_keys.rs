@@ -8,6 +8,10 @@ use crate::tui::focus::FocusEntry;
 use crate::tui::source::SourceKind;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+enum AskAction {
+    Preset(usize),
+}
+
 impl App {
     pub(super) fn handle_key(&mut self, key: KeyEvent) {
         if matches!(self.mode, InputMode::Command) {
@@ -24,6 +28,12 @@ impl App {
             && matches!(self.focus_stack.last(), Some(FocusEntry::Brief(_)))
         {
             self.handle_key_brief(key);
+            return;
+        }
+        if self.active == ActivePane::Detail
+            && matches!(self.focus_stack.last(), Some(FocusEntry::Compose(_)))
+        {
+            self.handle_key_reply(key);
             return;
         }
         if matches!(self.mode, InputMode::Help | InputMode::Changelog) {
@@ -214,7 +224,12 @@ impl App {
                 self.mark_current_seen();
                 self.maybe_load_more();
             }
-            (KeyCode::Char('r'), KeyModifiers::NONE) => self.reload_source(),
+            (KeyCode::Char('r'), KeyModifiers::NONE) => {
+                if !self.source.is_notifications() {
+                    self.start_reply();
+                }
+            }
+            (KeyCode::Char('r'), KeyModifiers::CONTROL) => self.reload_source(),
             (KeyCode::Char('u'), KeyModifiers::NONE) => self.jump_next_unread(),
             (KeyCode::Char('U'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
                 self.mark_all_seen_in_source();
@@ -253,20 +268,29 @@ impl App {
                         l.select_next();
                         self.maybe_load_more_likers();
                     }
-                    Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
+                    Some(FocusEntry::Ask(_))
+                    | Some(FocusEntry::Brief(_))
+                    | Some(FocusEntry::Compose(_))
+                    | None => {}
                 }
             }
             (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => {
                 match self.focus_stack.last_mut() {
                     Some(FocusEntry::Tweet(d)) => d.select_prev(),
                     Some(FocusEntry::Likers(l)) => l.select_prev(),
-                    Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
+                    Some(FocusEntry::Ask(_))
+                    | Some(FocusEntry::Brief(_))
+                    | Some(FocusEntry::Compose(_))
+                    | None => {}
                 }
             }
             (KeyCode::Char('g'), KeyModifiers::NONE) => match self.focus_stack.last_mut() {
                 Some(FocusEntry::Tweet(d)) => d.jump_top(),
                 Some(FocusEntry::Likers(l)) => l.jump_top(),
-                Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
+                Some(FocusEntry::Ask(_))
+                | Some(FocusEntry::Brief(_))
+                | Some(FocusEntry::Compose(_))
+                | None => {}
             },
             (KeyCode::Char('G'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
                 match self.focus_stack.last_mut() {
@@ -275,7 +299,10 @@ impl App {
                         l.jump_bottom();
                         self.maybe_load_more_likers();
                     }
-                    Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
+                    Some(FocusEntry::Ask(_))
+                    | Some(FocusEntry::Brief(_))
+                    | Some(FocusEntry::Compose(_))
+                    | None => {}
                 }
             }
             (KeyCode::Char('d'), KeyModifiers::CONTROL) => match self.focus_stack.last_mut() {
@@ -284,12 +311,18 @@ impl App {
                     l.advance(10);
                     self.maybe_load_more_likers();
                 }
-                Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
+                Some(FocusEntry::Ask(_))
+                | Some(FocusEntry::Brief(_))
+                | Some(FocusEntry::Compose(_))
+                | None => {}
             },
             (KeyCode::Char('u'), KeyModifiers::CONTROL) => match self.focus_stack.last_mut() {
                 Some(FocusEntry::Tweet(d)) => d.advance(-10),
                 Some(FocusEntry::Likers(l)) => l.advance(-10),
-                Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
+                Some(FocusEntry::Ask(_))
+                | Some(FocusEntry::Brief(_))
+                | Some(FocusEntry::Compose(_))
+                | None => {}
             },
             (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, _) => {
                 self.active = ActivePane::Source;
@@ -309,10 +342,49 @@ impl App {
                             self.open_user_in_detail(user.handle, Some(user.rest_id));
                         }
                     }
-                    Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
+                    Some(FocusEntry::Ask(_))
+                    | Some(FocusEntry::Brief(_))
+                    | Some(FocusEntry::Compose(_))
+                    | None => {}
+                }
+            }
+            (KeyCode::Char('r'), KeyModifiers::NONE) => {
+                if matches!(self.focus_stack.last(), Some(FocusEntry::Tweet(_))) {
+                    self.start_reply();
                 }
             }
             _ => {}
+        }
+    }
+
+    fn handle_key_reply(&mut self, key: KeyEvent) {
+        use crate::tui::editor::EditorResult;
+
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.running = false;
+            return;
+        }
+        if key.code == KeyCode::Tab && self.is_split() {
+            self.active = match self.active {
+                ActivePane::Source => ActivePane::Detail,
+                ActivePane::Detail => ActivePane::Source,
+            };
+            return;
+        }
+
+        let result = {
+            let Some(FocusEntry::Compose(view)) = self.focus_stack.last_mut() else {
+                return;
+            };
+            if view.sending {
+                return;
+            }
+            view.editor.handle_key(key)
+        };
+        match result {
+            EditorResult::Submit => self.submit_reply(),
+            EditorResult::ExitNormal => self.back_out(false),
+            EditorResult::Consumed => {}
         }
     }
 
@@ -351,89 +423,106 @@ impl App {
     }
 
     fn handle_key_ask(&mut self, key: KeyEvent) {
-        match (key.code, key.modifiers) {
-            (KeyCode::Char('c'), KeyModifiers::CONTROL) => self.running = false,
-            (KeyCode::Esc, _) => self.back_out(false),
-            (KeyCode::Tab, _) if self.is_split() => {
-                self.active = match self.active {
-                    ActivePane::Source => ActivePane::Detail,
-                    ActivePane::Detail => ActivePane::Source,
-                };
-            }
-            (KeyCode::Enter, _) => self.ask_submit_input(),
-            (KeyCode::Backspace, _) => {
-                if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() {
-                    view.input.pop();
-                }
-            }
-            (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
-                if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() {
-                    view.input.clear();
-                }
-            }
-            (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
-                if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() {
-                    let trimmed_end = view.input.trim_end_matches(char::is_whitespace).len();
-                    let cut_to = view.input[..trimmed_end]
-                        .rfind(char::is_whitespace)
-                        .map(|i| i + 1)
-                        .unwrap_or(0);
-                    view.input.truncate(cut_to);
-                }
-            }
-            (KeyCode::Up, _) => {
-                if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() {
-                    view.auto_follow = false;
-                    view.state.scroll = view.state.scroll.saturating_sub(1);
-                }
-            }
-            (KeyCode::Down, _) => {
-                if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() {
-                    view.state.scroll = view.state.scroll.saturating_add(1);
-                }
-            }
-            (KeyCode::PageUp, _) => {
-                if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() {
-                    view.auto_follow = false;
-                    view.state.scroll = view.state.scroll.saturating_sub(10);
-                }
-            }
-            (KeyCode::PageDown, _) => {
-                if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() {
-                    view.state.scroll = view.state.scroll.saturating_add(10);
-                }
-            }
-            (KeyCode::Char(c @ '1'..='9'), m)
-                if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
-            {
-                let input_empty = self
-                    .focus_stack
-                    .last()
-                    .map(|e| match e {
-                        FocusEntry::Ask(v) => v.input.is_empty() && !v.streaming,
-                        _ => false,
-                    })
-                    .unwrap_or(false);
-                if input_empty {
-                    if let Some(idx) = c.to_digit(10) {
-                        self.ask_fire_preset(idx as usize);
+        use crate::tui::editor::{EditorResult, VimMode};
+
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.running = false;
+            return;
+        }
+        if key.code == KeyCode::Tab && self.is_split() {
+            self.active = match self.active {
+                ActivePane::Source => ActivePane::Detail,
+                ActivePane::Detail => ActivePane::Source,
+            };
+            return;
+        }
+
+        let result = {
+            let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() else {
+                return;
+            };
+
+            if view.editor.mode == VimMode::Normal {
+                match (key.code, key.modifiers) {
+                    (KeyCode::Char('j'), KeyModifiers::NONE) => {
+                        view.auto_follow = false;
+                        view.state.scroll = view.state.scroll.saturating_add(1);
+                        return;
                     }
-                } else if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut()
-                    && !view.streaming
-                {
-                    view.input.push(c);
+                    (KeyCode::Char('k'), KeyModifiers::NONE) => {
+                        view.auto_follow = false;
+                        view.state.scroll = view.state.scroll.saturating_sub(1);
+                        return;
+                    }
+                    (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+                        view.auto_follow = false;
+                        view.state.scroll = view.state.scroll.saturating_add(10);
+                        return;
+                    }
+                    (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+                        view.auto_follow = false;
+                        view.state.scroll = view.state.scroll.saturating_sub(10);
+                        return;
+                    }
+                    (KeyCode::Char('G'), _) => {
+                        view.state.scroll = u16::MAX;
+                        view.auto_follow = true;
+                        return;
+                    }
+                    (KeyCode::Char('g'), KeyModifiers::NONE) => {
+                        view.auto_follow = false;
+                        view.state.scroll = 0;
+                        return;
+                    }
+                    (KeyCode::Char(c @ '1'..='9'), KeyModifiers::NONE)
+                        if !view.streaming && view.editor.input.is_empty() =>
+                    {
+                        c.to_digit(10).map(|idx| AskAction::Preset(idx as usize))
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        };
+
+        if let Some(action) = result {
+            match action {
+                AskAction::Preset(idx) => self.ask_fire_preset(idx),
+            }
+            return;
+        }
+
+        let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() else {
+            return;
+        };
+
+        match (key.code, key.modifiers) {
+            (KeyCode::Up, _) | (KeyCode::PageUp, _) => {
+                let delta = if key.code == KeyCode::PageUp { 10 } else { 1 };
+                view.auto_follow = false;
+                view.state.scroll = view.state.scroll.saturating_sub(delta);
+            }
+            (KeyCode::Down, _) | (KeyCode::PageDown, _) => {
+                let delta = if key.code == KeyCode::PageDown { 10 } else { 1 };
+                view.state.scroll = view.state.scroll.saturating_add(delta);
+            }
+            _ => {
+                let is_mode_switch = matches!(key.code, KeyCode::Esc)
+                    || (key.code == KeyCode::Char('q')
+                        && view.editor.mode == VimMode::Normal
+                        && key.modifiers == KeyModifiers::NONE);
+                if view.streaming && !is_mode_switch {
+                    return;
+                }
+                let result = view.editor.handle_key(key);
+                let _ = view;
+                match result {
+                    EditorResult::Submit => self.ask_submit_input(),
+                    EditorResult::ExitNormal => self.back_out(false),
+                    EditorResult::Consumed => {}
                 }
             }
-            (KeyCode::Char(c), m)
-                if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
-            {
-                if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut()
-                    && !view.streaming
-                {
-                    view.input.push(c);
-                }
-            }
-            _ => {}
         }
     }
 

@@ -237,6 +237,9 @@ impl App {
         whisper::start_poll_loop(tx.clone());
         super::app_fetch::spawn_update_check(tx.clone());
 
+        let warm_client = client.clone();
+        tokio::spawn(async move { warm_client.warm_transaction_key().await });
+
         Ok(Self {
             running: true,
             mode: InputMode::Normal,
@@ -377,7 +380,10 @@ impl App {
     pub fn top_detail(&self) -> Option<&TweetDetail> {
         self.focus_stack.last().and_then(|entry| match entry {
             FocusEntry::Tweet(d) => Some(d),
-            FocusEntry::Likers(_) | FocusEntry::Ask(_) | FocusEntry::Brief(_) => None,
+            FocusEntry::Likers(_)
+            | FocusEntry::Ask(_)
+            | FocusEntry::Brief(_)
+            | FocusEntry::Compose(_) => None,
         })
     }
 
@@ -390,6 +396,7 @@ impl App {
                 FocusEntry::Likers(l) => l.loading,
                 FocusEntry::Ask(a) => a.streaming,
                 FocusEntry::Brief(b) => b.loading_tweets || b.streaming,
+                FocusEntry::Compose(r) => r.sending,
             })
     }
 
@@ -550,6 +557,12 @@ impl App {
             } => {
                 self.handle_engage_result(rest_id, action, error);
             }
+            Event::ReplyResult {
+                in_reply_to,
+                result,
+            } => {
+                self.handle_reply_result(in_reply_to, result);
+            }
             Event::UpdateAvailable { version } => {
                 self.update_available = Some(version);
             }
@@ -562,7 +575,7 @@ impl App {
                 self.terminal_focused = true;
                 if matches!(
                     self.focus_stack.last(),
-                    Some(FocusEntry::Ask(_) | FocusEntry::Brief(_))
+                    Some(FocusEntry::Ask(_) | FocusEntry::Brief(_) | FocusEntry::Compose(_))
                 ) && let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone())
                 {
                     ask::preload(ollama);
@@ -572,7 +585,7 @@ impl App {
                 self.terminal_focused = false;
                 if matches!(
                     self.focus_stack.last(),
-                    Some(FocusEntry::Ask(_) | FocusEntry::Brief(_))
+                    Some(FocusEntry::Ask(_) | FocusEntry::Brief(_) | FocusEntry::Compose(_))
                 ) && let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone())
                 {
                     ask::unload(ollama);

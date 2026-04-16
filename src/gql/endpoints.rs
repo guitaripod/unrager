@@ -180,28 +180,6 @@ pub fn bookmark_search_features() -> Value {
     })
 }
 
-pub fn bookmarks_variables(count: u32, cursor: Option<&str>) -> Value {
-    let mut vars = json!({
-        "count": count,
-        "includePromotedContent": false
-    });
-    if let Some(c) = cursor {
-        vars["cursor"] = Value::String(c.to_string());
-    }
-    vars
-}
-
-pub fn bookmarks_features() -> Value {
-    let mut f = tweet_read_features();
-    if let Value::Object(ref mut m) = f {
-        m.insert(
-            "graphql_timeline_v2_bookmark_timeline".into(),
-            Value::Bool(true),
-        );
-    }
-    f
-}
-
 pub fn tweet_read_features() -> Value {
     json!({
         "creator_subscriptions_tweet_preview_api_enabled": true,

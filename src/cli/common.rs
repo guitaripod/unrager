@@ -75,13 +75,10 @@ pub async fn run_search(
                 &endpoints::search_timeline_features(),
             )
             .await?;
-        let instructions = response
-            .pointer("/data/search_by_raw_query/search_timeline/timeline/instructions")
-            .and_then(serde_json::Value::as_array)
-            .map(Vec::as_slice)
-            .ok_or_else(|| {
-                crate::error::Error::GraphqlShape("missing search instructions".into())
-            })?;
+        let instructions = timeline::extract_instructions(
+            &response,
+            "/data/search_by_raw_query/search_timeline/timeline/instructions",
+        )?;
         Ok(timeline::walk(instructions))
     })
     .await

@@ -4,13 +4,9 @@ use crate::tui::event::{Event, EventTx};
 use crate::tui::filter::OllamaConfig;
 use crate::tui::source;
 use chrono::{DateTime, Utc};
-use futures::TryStreamExt;
-use serde_json::{Value, json};
+use serde_json::json;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio_util::io::StreamReader;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 const SYSTEM_PROMPT: &str = "You write sharp third-person reads on social media accounts for a reader who is curious about the subject. You are never the subject's friend, never their interlocutor, never addressing them directly — you are describing them to someone else. You write in flowing prose, not lists. You name what the subject actually thinks, not just topic categories. You ground every claim in a short quote or tight paraphrase from the sample. You hold the subject's dignity. You never invent tweets. You never refuse the task.";
 
@@ -322,17 +318,6 @@ async fn stream_ollama_with(
     num_predict: u32,
     tx: &EventTx,
 ) {
-    let http = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(ollama.timeout_seconds.max(180)))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            finish(tx, handle, Some(format!("http client build failed: {e}")));
-            return;
-        }
-    };
-    let url = ollama.chat_url();
     let body = json!({
         "model": ollama.model,
         "messages": [
@@ -345,92 +330,44 @@ async fn stream_ollama_with(
         "options": { "temperature": 0.5, "num_predict": num_predict },
     });
 
-    let response = match http.post(&url).json(&body).send().await {
-        Ok(r) => r,
-        Err(e) => {
-            warn!(handle = %handle, "brief ollama request failed: {e}");
-            finish(tx, handle, Some(format!("request failed: {e}")));
-            return;
-        }
-    };
-
-    let status = response.status();
-    if !status.is_success() {
-        let body_preview = response.text().await.unwrap_or_default();
-        let trimmed = body_preview.chars().take(200).collect::<String>();
-        warn!(
-            handle = %handle,
-            status = status.as_u16(),
-            body = %trimmed,
-            "brief ollama http error"
-        );
-        finish(
-            tx,
-            handle,
-            Some(format!("http {}: {trimmed}", status.as_u16())),
-        );
-        return;
-    }
-
-    let stream = response.bytes_stream().map_err(std::io::Error::other);
-    let reader = StreamReader::new(stream);
-    let mut lines = BufReader::new(reader).lines();
-
+    let h = handle.to_string();
+    let tx2 = tx.clone();
     let mut output_chars: usize = 0;
     let mut thinking_chars: usize = 0;
-    let mut done_reason: Option<String> = None;
 
-    loop {
-        match lines.next_line().await {
-            Ok(Some(line)) => {
-                if line.trim().is_empty() {
-                    continue;
-                }
-                match serde_json::from_str::<Value>(&line) {
-                    Ok(parsed) => {
-                        if let Some(c) = parsed.pointer("/message/content").and_then(Value::as_str)
-                            && !c.is_empty()
-                        {
-                            output_chars += c.len();
-                            let _ = tx.send(Event::BriefToken {
-                                handle: handle.to_string(),
-                                token: c.to_string(),
-                            });
-                        }
-                        if let Some(t) = parsed.pointer("/message/thinking").and_then(Value::as_str)
-                        {
-                            thinking_chars += t.len();
-                        }
-                        if parsed.get("done").and_then(Value::as_bool) == Some(true) {
-                            done_reason = parsed
-                                .get("done_reason")
-                                .and_then(Value::as_str)
-                                .map(str::to_string);
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        debug!(handle = %handle, error = %e, raw = %line, "brief json parse skip");
-                    }
-                }
-            }
-            Ok(None) => break,
-            Err(e) => {
-                warn!(handle = %handle, "brief stream read error: {e}");
-                finish(tx, handle, Some(format!("stream error: {e}")));
-                return;
-            }
+    let result = ollama
+        .stream_chat(
+            body,
+            "brief",
+            |token| {
+                output_chars += token.len();
+                let _ = tx2.send(Event::BriefToken {
+                    handle: h.clone(),
+                    token: token.to_string(),
+                });
+            },
+            |t| {
+                thinking_chars += t.len();
+            },
+        )
+        .await;
+
+    match result {
+        Ok(done_reason) => {
+            info!(
+                handle = %handle,
+                output_chars,
+                thinking_chars,
+                done_reason = done_reason.as_deref().unwrap_or(""),
+                "brief stream complete"
+            );
+            finish(tx, handle, None);
+        }
+        Err(e) => {
+            warn!(handle = %handle, "brief stream failed: {e}");
+            finish(tx, handle, Some(e));
         }
     }
-
-    info!(
-        handle = %handle,
-        output_chars,
-        thinking_chars,
-        done_reason = done_reason.as_deref().unwrap_or(""),
-        "brief stream complete"
-    );
-    finish(tx, handle, None);
 }
 
 fn finish(tx: &EventTx, handle: &str, error: Option<String>) {

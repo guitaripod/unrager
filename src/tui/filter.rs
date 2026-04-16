@@ -70,6 +70,93 @@ impl OllamaConfig {
             .build()
             .unwrap_or_else(|_| reqwest::Client::new())
     }
+
+    pub fn build_streaming_client(&self) -> reqwest::Client {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(self.timeout_seconds.max(180)))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    }
+
+    pub async fn stream_chat(
+        &self,
+        body: serde_json::Value,
+        label: &str,
+        mut on_token: impl FnMut(&str),
+        mut on_thinking: impl FnMut(&str),
+    ) -> std::result::Result<Option<String>, String> {
+        use futures::TryStreamExt;
+        use tokio::io::AsyncBufReadExt;
+        use tokio::io::BufReader;
+        use tokio_util::io::StreamReader;
+
+        let http = self.build_streaming_client();
+        let url = self.chat_url();
+
+        let response = http
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("request failed: {e}"))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let preview = response.text().await.unwrap_or_default();
+            let trimmed: String = preview.chars().take(200).collect();
+            tracing::warn!(label, status = status.as_u16(), body = %trimmed, "ollama http error");
+            return Err(format!("http {}: {trimmed}", status.as_u16()));
+        }
+
+        let stream = response.bytes_stream().map_err(std::io::Error::other);
+        let reader = StreamReader::new(stream);
+        let mut lines = BufReader::new(reader).lines();
+        let mut done_reason: Option<String> = None;
+
+        loop {
+            match lines.next_line().await {
+                Ok(Some(line)) => {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    match serde_json::from_str::<serde_json::Value>(&line) {
+                        Ok(parsed) => {
+                            if let Some(c) =
+                                parsed.pointer("/message/content").and_then(|v| v.as_str())
+                            {
+                                if !c.is_empty() {
+                                    on_token(c);
+                                }
+                            }
+                            if let Some(t) =
+                                parsed.pointer("/message/thinking").and_then(|v| v.as_str())
+                            {
+                                if !t.is_empty() {
+                                    on_thinking(t);
+                                }
+                            }
+                            if parsed.get("done").and_then(|v| v.as_bool()) == Some(true) {
+                                done_reason = parsed
+                                    .get("done_reason")
+                                    .and_then(|v| v.as_str())
+                                    .map(str::to_string);
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            tracing::debug!(label, error = %e, "ollama json parse skip");
+                        }
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    return Err(format!("stream error: {e}"));
+                }
+            }
+        }
+
+        Ok(done_reason)
+    }
 }
 
 impl FilterConfig {

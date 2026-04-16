@@ -123,56 +123,11 @@ fn parse_tweet_node(node: &Value) -> Result<Tweet> {
 }
 
 fn parse_author(node: &Value) -> Result<User> {
-    let user = node
+    let user_node = node
         .pointer("/core/user_results/result")
         .ok_or_else(|| Error::GraphqlShape("tweet missing core.user_results.result".into()))?;
-
-    let rest_id = user
-        .get("rest_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::GraphqlShape("author missing rest_id".into()))?
-        .to_string();
-
-    let handle = user
-        .pointer("/core/screen_name")
-        .or_else(|| user.pointer("/legacy/screen_name"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::GraphqlShape("author missing screen_name".into()))?
-        .to_string();
-
-    let name = user
-        .pointer("/core/name")
-        .or_else(|| user.pointer("/legacy/name"))
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-
-    let verified = user
-        .get("is_blue_verified")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-        || user
-            .pointer("/legacy/verified")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-
-    let followers = user
-        .pointer("/legacy/followers_count")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let following = user
-        .pointer("/legacy/friends_count")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-
-    Ok(User {
-        rest_id,
-        handle,
-        name,
-        verified,
-        followers,
-        following,
-    })
+    crate::parse::user::parse_user_result(user_node)
+        .ok_or_else(|| Error::GraphqlShape("author missing required fields".into()))
 }
 
 fn extract_text(node: &Value, legacy: &Value) -> String {

@@ -1,6 +1,27 @@
+use crate::error::{Error, Result};
 use crate::model::Tweet;
 use crate::parse::tweet::parse_tweet_result;
 use serde_json::Value;
+
+pub fn extract_instructions<'a>(response: &'a Value, path: &str) -> Result<&'a [Value]> {
+    response
+        .pointer(path)
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .ok_or_else(|| Error::GraphqlShape(format!("missing instructions at {path}")))
+}
+
+pub fn extract_instructions_multi<'a>(response: &'a Value, paths: &[&str]) -> Result<&'a [Value]> {
+    for path in paths {
+        if let Some(arr) = response.pointer(path).and_then(Value::as_array) {
+            return Ok(arr.as_slice());
+        }
+    }
+    Err(Error::GraphqlShape(format!(
+        "missing instructions at any of: {}",
+        paths.join(", ")
+    )))
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct TimelinePage {

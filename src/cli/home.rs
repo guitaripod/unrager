@@ -1,10 +1,9 @@
 use crate::cli::common;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::gql::endpoints;
 use crate::gql::query_ids::Operation;
 use crate::parse::timeline;
 use clap::Args as ClapArgs;
-use serde_json::Value;
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
@@ -37,20 +36,11 @@ pub async fn run(args: Args) -> Result<()> {
                 &endpoints::home_timeline_features(),
             )
             .await?;
-        let instructions = extract_instructions(&response)?;
+        let instructions =
+            timeline::extract_instructions(&response, "/data/home/home_timeline_urt/instructions")?;
         Ok(timeline::walk(instructions))
     })
     .await?;
 
     common::emit_tweets(&tweets, args.json, "(home timeline returned no tweets)")
-}
-
-fn extract_instructions(response: &Value) -> Result<&[Value]> {
-    response
-        .pointer("/data/home/home_timeline_urt/instructions")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .ok_or_else(|| {
-            Error::GraphqlShape("missing data.home.home_timeline_urt.instructions".into())
-        })
 }

@@ -223,12 +223,10 @@ pub async fn fetch_thread(client: &GqlClient, focal_tweet_id: &str) -> Result<Ti
         )
         .await?;
 
-    let instructions = response
-        .pointer("/data/threaded_conversation_with_injections_v2/instructions")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .ok_or_else(|| Error::GraphqlShape("missing thread instructions".into()))?;
-
+    let instructions = timeline::extract_instructions(
+        &response,
+        "/data/threaded_conversation_with_injections_v2/instructions",
+    )?;
     Ok(timeline::walk(instructions))
 }
 

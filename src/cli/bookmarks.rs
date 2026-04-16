@@ -4,7 +4,6 @@ use crate::gql::endpoints;
 use crate::gql::query_ids::Operation;
 use crate::parse::timeline;
 use clap::Args as ClapArgs;
-use serde_json::Value;
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
@@ -41,23 +40,13 @@ pub async fn run(args: Args) -> Result<()> {
                 &endpoints::bookmark_search_features(),
             )
             .await?;
-        let instructions = extract_instructions(&response)?;
+        let instructions = timeline::extract_instructions(
+            &response,
+            "/data/search_by_raw_query/bookmarks_search_timeline/timeline/instructions",
+        )?;
         Ok(timeline::walk(instructions))
     })
     .await?;
 
     common::emit_tweets(&tweets, args.json, "(no matching bookmarks)")
-}
-
-fn extract_instructions(response: &Value) -> Result<&[Value]> {
-    response
-        .pointer("/data/search_by_raw_query/bookmarks_search_timeline/timeline/instructions")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .ok_or_else(|| {
-            Error::GraphqlShape(
-                "missing data.search_by_raw_query.bookmarks_search_timeline.timeline.instructions"
-                    .into(),
-            )
-        })
 }

@@ -3,11 +3,8 @@ use crate::tui::event::{Event, EventTx};
 use crate::tui::filter::OllamaConfig;
 use crate::tui::source::PaneState;
 use base64::Engine;
-use futures::TryStreamExt;
 use serde_json::{Value, json};
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio_util::io::StreamReader;
 use tracing::{debug, info, warn};
 
 pub const DEFAULT_PROMPT: &str = "Explain this post";
@@ -318,17 +315,6 @@ async fn fetch_images(tweet: &Tweet) -> Vec<String> {
 }
 
 async fn stream_ollama(ollama: &OllamaConfig, tweet_id: &str, messages: Vec<Value>, tx: &EventTx) {
-    let http = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(ollama.timeout_seconds.max(180)))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            finish(tx, tweet_id, Some(format!("http client build failed: {e}")));
-            return;
-        }
-    };
-    let url = ollama.chat_url();
     let body = json!({
         "model": ollama.model,
         "messages": messages,
@@ -338,73 +324,32 @@ async fn stream_ollama(ollama: &OllamaConfig, tweet_id: &str, messages: Vec<Valu
         "options": { "temperature": 0.3, "num_predict": 2048 },
     });
 
-    let response = match http.post(&url).json(&body).send().await {
-        Ok(r) => r,
+    let tid = tweet_id.to_string();
+    let tx2 = tx.clone();
+    let result = ollama
+        .stream_chat(
+            body,
+            "ask",
+            |token| {
+                let _ = tx2.send(Event::AskToken {
+                    tweet_id: tid.clone(),
+                    token: token.to_string(),
+                });
+            },
+            |_| {},
+        )
+        .await;
+
+    match result {
+        Ok(_) => {
+            info!(tweet_id = %tweet_id, "ask stream complete");
+            finish(tx, tweet_id, None);
+        }
         Err(e) => {
-            warn!(tweet_id = %tweet_id, "ask request failed: {e}");
-            finish(tx, tweet_id, Some(format!("request failed: {e}")));
-            return;
-        }
-    };
-
-    let status = response.status();
-    if !status.is_success() {
-        let body_preview = response.text().await.unwrap_or_default();
-        let trimmed = body_preview.chars().take(200).collect::<String>();
-        warn!(
-            tweet_id = %tweet_id,
-            status = status.as_u16(),
-            body = %trimmed,
-            "ask http error"
-        );
-        finish(
-            tx,
-            tweet_id,
-            Some(format!("http {}: {trimmed}", status.as_u16())),
-        );
-        return;
-    }
-
-    let stream = response.bytes_stream().map_err(std::io::Error::other);
-    let reader = StreamReader::new(stream);
-    let mut lines = BufReader::new(reader).lines();
-
-    loop {
-        match lines.next_line().await {
-            Ok(Some(line)) => {
-                if line.trim().is_empty() {
-                    continue;
-                }
-                match serde_json::from_str::<Value>(&line) {
-                    Ok(parsed) => {
-                        if let Some(c) = parsed.pointer("/message/content").and_then(Value::as_str)
-                            && !c.is_empty()
-                        {
-                            let _ = tx.send(Event::AskToken {
-                                tweet_id: tweet_id.to_string(),
-                                token: c.to_string(),
-                            });
-                        }
-                        if parsed.get("done").and_then(Value::as_bool) == Some(true) {
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        debug!(tweet_id = %tweet_id, error = %e, raw = %line, "ask json parse skip");
-                    }
-                }
-            }
-            Ok(None) => break,
-            Err(e) => {
-                warn!(tweet_id = %tweet_id, "ask stream read error: {e}");
-                finish(tx, tweet_id, Some(format!("stream error: {e}")));
-                return;
-            }
+            warn!(tweet_id = %tweet_id, "ask stream failed: {e}");
+            finish(tx, tweet_id, Some(e));
         }
     }
-
-    info!(tweet_id = %tweet_id, "ask stream complete");
-    finish(tx, tweet_id, None);
 }
 
 fn finish(tx: &EventTx, tweet_id: &str, error: Option<String>) {

@@ -304,12 +304,8 @@ async fn fetch_home(
         )
         .await?;
 
-    let instructions = response
-        .pointer("/data/home/home_timeline_urt/instructions")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .ok_or_else(|| Error::GraphqlShape("missing home timeline instructions".into()))?;
-
+    let instructions =
+        timeline::extract_instructions(&response, "/data/home/home_timeline_urt/instructions")?;
     Ok(timeline::walk(instructions))
 }
 
@@ -335,17 +331,17 @@ pub async fn fetch_user_tweets_by_id(
         )
         .await?;
 
-    let instructions = response
-        .pointer("/data/user/result/timeline/timeline/instructions")
-        .or_else(|| response.pointer("/data/user/result/timeline_v2/timeline/instructions"))
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .ok_or_else(|| Error::GraphqlShape("missing user tweets instructions".into()))?;
-
+    let instructions = timeline::extract_instructions_multi(
+        &response,
+        &[
+            "/data/user/result/timeline/timeline/instructions",
+            "/data/user/result/timeline_v2/timeline/instructions",
+        ],
+    )?;
     Ok(timeline::walk(instructions))
 }
 
-async fn resolve_user_id(client: &GqlClient, handle: &str) -> Result<String> {
+pub async fn resolve_user_id(client: &GqlClient, handle: &str) -> Result<String> {
     let response = client
         .get(
             Operation::UserByScreenName,
@@ -381,11 +377,10 @@ async fn fetch_search(
             &endpoints::search_timeline_features(),
         )
         .await?;
-    let instructions = response
-        .pointer("/data/search_by_raw_query/search_timeline/timeline/instructions")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .ok_or_else(|| Error::GraphqlShape("missing search instructions".into()))?;
+    let instructions = timeline::extract_instructions(
+        &response,
+        "/data/search_by_raw_query/search_timeline/timeline/instructions",
+    )?;
     Ok(timeline::walk(instructions))
 }
 
@@ -401,11 +396,10 @@ async fn fetch_bookmarks(
             &endpoints::bookmark_search_features(),
         )
         .await?;
-    let instructions = response
-        .pointer("/data/search_by_raw_query/bookmarks_search_timeline/timeline/instructions")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .ok_or_else(|| Error::GraphqlShape("missing bookmark timeline instructions".into()))?;
+    let instructions = timeline::extract_instructions(
+        &response,
+        "/data/search_by_raw_query/bookmarks_search_timeline/timeline/instructions",
+    )?;
     Ok(timeline::walk(instructions))
 }
 

@@ -5,7 +5,6 @@ use crate::gql::query_ids::Operation;
 use crate::parse::timeline;
 use crate::util::parse_tweet_ref;
 use clap::Args as ClapArgs;
-use serde_json::Value;
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
@@ -31,7 +30,10 @@ pub async fn run(args: Args) -> Result<()> {
                 &endpoints::tweet_read_features(),
             )
             .await?;
-        let instructions = extract_instructions(&response)?;
+        let instructions = timeline::extract_instructions(
+            &response,
+            "/data/threaded_conversation_with_injections_v2/instructions",
+        )?;
         Ok(timeline::walk(instructions))
     })
     .await?;
@@ -43,16 +45,4 @@ pub async fn run(args: Args) -> Result<()> {
     }
 
     common::emit_tweets(&tweets, args.json, "(empty)")
-}
-
-fn extract_instructions(response: &Value) -> Result<&[Value]> {
-    response
-        .pointer("/data/threaded_conversation_with_injections_v2/instructions")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .ok_or_else(|| {
-            Error::GraphqlShape(
-                "missing data.threaded_conversation_with_injections_v2.instructions".into(),
-            )
-        })
 }

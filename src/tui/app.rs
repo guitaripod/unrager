@@ -2364,19 +2364,36 @@ impl App {
                 let filter_active = !silent
                     && matches!(self.filter_mode, FilterMode::On)
                     && self.filter_classifier.is_some();
-                let split_idx = if filter_active {
-                    page.tweets
+                let held: Vec<Tweet> = if !filter_active {
+                    Vec::new()
+                } else if matches!(kind, SourceKind::Home { following: true }) {
+                    let mut uncached = Vec::new();
+                    let mut cached = Vec::with_capacity(page.tweets.len());
+                    for t in page.tweets.drain(..) {
+                        if self
+                            .filter_cache
+                            .as_ref()
+                            .is_some_and(|c| c.get(&t.rest_id).is_some())
+                        {
+                            cached.push(t);
+                        } else {
+                            uncached.push(t);
+                        }
+                    }
+                    page.tweets = cached;
+                    uncached
+                } else {
+                    let split_idx = page
+                        .tweets
                         .iter()
                         .position(|t| {
                             self.filter_cache
                                 .as_ref()
                                 .is_some_and(|c| c.get(&t.rest_id).is_none())
                         })
-                        .unwrap_or(page.tweets.len())
-                } else {
-                    page.tweets.len()
+                        .unwrap_or(page.tweets.len());
+                    page.tweets.drain(split_idx..).collect()
                 };
-                let held: Vec<Tweet> = page.tweets.drain(split_idx..).collect();
                 let old_len = self.source.tweets.len();
                 if !append && !silent {
                     self.pending_classification.clear();

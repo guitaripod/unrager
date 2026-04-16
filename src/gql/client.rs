@@ -2,6 +2,7 @@ use crate::auth::XSession;
 use crate::error::{Error, Result};
 use crate::gql::query_ids::{Operation, QueryId, QueryIdStore};
 use crate::gql::scraper;
+use crate::gql::transaction::TransactionKeyMaterial;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -13,7 +14,8 @@ use tokio::time::{Instant, sleep_until};
 const WEB_BEARER: &str = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA";
 
 const GQL_BASE: &str = "https://x.com/i/api/graphql";
-const MIN_INTERVAL: Duration = Duration::from_millis(400);
+const MIN_INTERVAL_LOW_MS: u64 = 300;
+const MIN_INTERVAL_HIGH_MS: u64 = 700;
 const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0";
 
 pub struct GqlClient {
@@ -24,6 +26,7 @@ pub struct GqlClient {
     next_allowed: AsyncMutex<Instant>,
     client_uuid: String,
     rate_limit_until: Mutex<Option<std::time::Instant>>,
+    transaction_key: Mutex<Option<TransactionKeyMaterial>>,
 }
 
 enum Method {
@@ -47,6 +50,7 @@ impl GqlClient {
             next_allowed: AsyncMutex::new(Instant::now()),
             client_uuid,
             rate_limit_until: Mutex::new(None),
+            transaction_key: Mutex::new(None),
         })
     }
 
@@ -96,6 +100,20 @@ impl GqlClient {
 
         self.throttle().await;
 
+        let method_str = match method {
+            Method::Get => "GET",
+            Method::Post => "POST",
+        };
+        let path = format!("/i/api/graphql/{}/{}", qid.id, op.name());
+        let has_transaction = self.generate_transaction_id(method_str, &path).is_some();
+        tracing::debug!(
+            op = op.name(),
+            method = method_str,
+            qid = %qid.id,
+            has_transaction,
+            "gql request"
+        );
+
         let req = match method {
             Method::Get => {
                 let vars_json = serde_json::to_string(variables)?;
@@ -104,7 +122,10 @@ impl GqlClient {
                     ("variables", vars_json.as_str()),
                     ("features", features_json.as_str()),
                 ];
-                self.http.get(&url).headers(self.headers()?).query(&query)
+                self.http
+                    .get(&url)
+                    .headers(self.headers(method_str, &path)?)
+                    .query(&query)
             }
             Method::Post => {
                 let body = serde_json::json!({
@@ -112,7 +133,10 @@ impl GqlClient {
                     "features": features,
                     "queryId": qid.id,
                 });
-                self.http.post(&url).headers(self.headers()?).json(&body)
+                self.http
+                    .post(&url)
+                    .headers(self.headers(method_str, &path)?)
+                    .json(&body)
             }
         };
 
@@ -124,18 +148,49 @@ impl GqlClient {
         self.store.lock().ok()?.get(op).cloned()
     }
 
+    pub async fn warm_transaction_key(&self) {
+        match scraper::scrape(&self.http).await {
+            Ok(result) => {
+                {
+                    let mut guard = match self.store.lock() {
+                        Ok(g) => g,
+                        Err(_) => return,
+                    };
+                    guard.merge_iter(result.query_ids);
+                    let _ = guard.save_cached(&self.cache_path);
+                }
+                if let Some(material) = result.transaction_material {
+                    if let Ok(mut guard) = self.transaction_key.lock() {
+                        tracing::info!("transaction key material loaded");
+                        *guard = Some(material);
+                    }
+                } else {
+                    tracing::warn!("scraper succeeded but transaction key material unavailable");
+                }
+            }
+            Err(e) => {
+                tracing::warn!("startup scrape failed (transaction key unavailable): {e}");
+            }
+        }
+    }
+
     async fn refresh_query_ids(&self) -> Result<()> {
-        let fresh = scraper::scrape(&self.http).await?;
+        let result = scraper::scrape(&self.http).await?;
         let snapshot = {
             let mut guard = self
                 .store
                 .lock()
                 .map_err(|_| Error::Config("query id store poisoned".into()))?;
-            guard.merge_iter(fresh);
+            guard.merge_iter(result.query_ids);
             guard.clone()
         };
         if let Err(e) = snapshot.save_cached(&self.cache_path) {
             tracing::warn!("failed to persist query id cache: {e}");
+        }
+        if let Some(material) = result.transaction_material {
+            if let Ok(mut guard) = self.transaction_key.lock() {
+                *guard = Some(material);
+            }
         }
         Ok(())
     }
@@ -145,13 +200,13 @@ impl GqlClient {
             let mut guard = self.next_allowed.lock().await;
             let now = Instant::now();
             let target = if *guard > now { *guard } else { now };
-            *guard = target + MIN_INTERVAL;
+            *guard = target + jittered_interval();
             target
         };
         sleep_until(wait_until).await;
     }
 
-    fn headers(&self) -> Result<HeaderMap> {
+    fn headers(&self, method: &str, path: &str) -> Result<HeaderMap> {
         let mut h = HeaderMap::new();
         let cookie = format!(
             "auth_token={}; ct0={}; twid={}",
@@ -201,7 +256,19 @@ impl GqlClient {
             HeaderName::from_static("origin"),
             HeaderValue::from_static("https://x.com"),
         );
+        if let Some(tid) = self.generate_transaction_id(method, path) {
+            tracing::debug!(tid_len = tid.len(), "x-client-transaction-id generated");
+            if let Ok(val) = HeaderValue::from_str(&tid) {
+                h.insert(HeaderName::from_static("x-client-transaction-id"), val);
+            }
+        }
         Ok(h)
+    }
+
+    fn generate_transaction_id(&self, method: &str, path: &str) -> Option<String> {
+        let guard = self.transaction_key.lock().ok()?;
+        let material = guard.as_ref()?;
+        crate::gql::transaction::generate_id(material, method, path)
     }
 
     async fn parse(&self, res: reqwest::Response) -> Result<Value> {
@@ -299,6 +366,11 @@ fn random_uuid_v4() -> String {
         bytes[14],
         bytes[15],
     )
+}
+
+fn jittered_interval() -> Duration {
+    use rand::Rng;
+    Duration::from_millis(rand::rng().random_range(MIN_INTERVAL_LOW_MS..=MIN_INTERVAL_HIGH_MS))
 }
 
 fn truncate(s: &str, max_bytes: usize) -> String {

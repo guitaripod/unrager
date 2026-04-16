@@ -14,21 +14,21 @@ use chrono::Utc;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
+use tempfile::TempDir;
 use tokio::sync::mpsc;
 
-pub fn dummy_app() -> (App, mpsc::UnboundedReceiver<Event>) {
+pub fn dummy_app() -> (App, mpsc::UnboundedReceiver<Event>, TempDir) {
     let (tx, rx) = mpsc::unbounded_channel();
     let session = XSession {
         auth_token: "test".into(),
         ct0: "test".into(),
         twid: "test".into(),
     };
-    let tmp = std::env::temp_dir().join(format!("unrager-test-{}", std::process::id()));
-    std::fs::create_dir_all(&tmp).unwrap();
+    let tmp = TempDir::new().unwrap();
     let store = QueryIdStore::with_fallbacks();
-    let client = Arc::new(GqlClient::new(session, store, tmp.join("qids.json")).unwrap());
-    let seen = SeenStore::open(&tmp.join("seen.db")).unwrap();
-    let notif_seen = SeenStore::open(&tmp.join("notif_seen.db")).unwrap();
+    let client = Arc::new(GqlClient::new(session, store, tmp.path().join("qids.json")).unwrap());
+    let seen = SeenStore::open(&tmp.path().join("seen.db")).unwrap();
+    let notif_seen = SeenStore::open(&tmp.path().join("notif_seen.db")).unwrap();
     let app = App {
         running: true,
         mode: InputMode::Normal,
@@ -46,7 +46,7 @@ pub fn dummy_app() -> (App, mpsc::UnboundedReceiver<Event>) {
         last_render_at: None,
         dirty: false,
         seen,
-        session_path: tmp.join("session.json"),
+        session_path: tmp.path().join("session.json"),
         timestamps: TimestampStyle::Relative,
         metrics: MetricsStyle::Visible,
         display_names: DisplayNameStyle::Visible,
@@ -90,7 +90,7 @@ pub fn dummy_app() -> (App, mpsc::UnboundedReceiver<Event>) {
         changelog_scroll: 0,
         changelog_loading: false,
     };
-    (app, rx)
+    (app, rx, tmp)
 }
 
 pub fn make_tweet(id: &str, text: &str) -> Tweet {

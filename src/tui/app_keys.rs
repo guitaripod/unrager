@@ -1,0 +1,583 @@
+use super::app::{
+    ActivePane, App, DisplayNameStyle, InlineThread, InputMode, MetricsStyle, TimestampStyle,
+};
+use crate::tui::command::{self, Command};
+use crate::tui::engage::EngageAction;
+use crate::tui::event::Event;
+use crate::tui::focus::FocusEntry;
+use crate::tui::source::SourceKind;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+impl App {
+    pub(super) fn handle_key(&mut self, key: KeyEvent) {
+        if matches!(self.mode, InputMode::Command) {
+            self.handle_key_command(key);
+            return;
+        }
+        if self.active == ActivePane::Detail
+            && matches!(self.focus_stack.last(), Some(FocusEntry::Ask(_)))
+        {
+            self.handle_key_ask(key);
+            return;
+        }
+        if self.active == ActivePane::Detail
+            && matches!(self.focus_stack.last(), Some(FocusEntry::Brief(_)))
+        {
+            self.handle_key_brief(key);
+            return;
+        }
+        if matches!(self.mode, InputMode::Help | InputMode::Changelog) {
+            let scroll = if self.mode == InputMode::Help {
+                &mut self.help_scroll
+            } else {
+                &mut self.changelog_scroll
+            };
+            match key.code {
+                KeyCode::Char('j') | KeyCode::Down => *scroll = scroll.saturating_add(1),
+                KeyCode::Char('k') | KeyCode::Up => *scroll = scroll.saturating_sub(1),
+                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    *scroll = scroll.saturating_add(10);
+                }
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    *scroll = scroll.saturating_sub(10);
+                }
+                KeyCode::Char('g') => *scroll = 0,
+                KeyCode::Char('G') => *scroll = u16::MAX,
+                _ => {
+                    self.mode = InputMode::Normal;
+                    self.help_scroll = 0;
+                    self.changelog_scroll = 0;
+                }
+            }
+            return;
+        }
+        match (key.code, key.modifiers) {
+            (KeyCode::Char('c'), KeyModifiers::CONTROL) => self.running = false,
+            (KeyCode::Tab, _) if self.is_split() => {
+                self.active = match self.active {
+                    ActivePane::Source => ActivePane::Detail,
+                    ActivePane::Detail => ActivePane::Source,
+                };
+            }
+            (KeyCode::Char(':'), _) => {
+                self.mode = InputMode::Command;
+                self.command_buffer.clear();
+                self.error = None;
+            }
+            (KeyCode::Char('?'), _) => {
+                self.mode = InputMode::Help;
+                self.help_scroll = 0;
+            }
+            (KeyCode::Char('W'), _) => {
+                self.mode = InputMode::Changelog;
+                self.changelog_scroll = 0;
+                if self.changelog.is_none() && !self.changelog_loading {
+                    self.changelog_loading = true;
+                    let tx = self.tx.clone();
+                    tokio::spawn(async move {
+                        match crate::update::fetch_changelog().await {
+                            Ok(releases) => {
+                                let _ = tx.send(Event::ChangelogLoaded { releases });
+                            }
+                            Err(e) => {
+                                tracing::warn!("changelog fetch failed: {e}");
+                                let _ = tx.send(Event::ChangelogLoaded {
+                                    releases: Vec::new(),
+                                });
+                            }
+                        }
+                    });
+                }
+            }
+            (KeyCode::Char('t'), KeyModifiers::NONE) => {
+                self.timestamps = match self.timestamps {
+                    TimestampStyle::Relative => TimestampStyle::Absolute,
+                    TimestampStyle::Absolute => TimestampStyle::Relative,
+                };
+            }
+            (KeyCode::Char('Z'), _) => {
+                self.is_dark = !self.is_dark;
+                let msg = if self.is_dark {
+                    "theme: dark"
+                } else {
+                    "theme: light"
+                };
+                self.set_status(msg);
+            }
+            (KeyCode::Char(','), KeyModifiers::NONE) if self.is_split() => {
+                self.split_pct = self.split_pct.saturating_sub(5).max(20);
+            }
+            (KeyCode::Char('.'), KeyModifiers::NONE) if self.is_split() => {
+                self.split_pct = (self.split_pct + 5).min(80);
+            }
+            (KeyCode::Char('V'), _) => self.toggle_feed_mode(),
+            (KeyCode::Char('F'), _) => self.toggle_home_mode(),
+            (KeyCode::Char('M'), _) => {
+                self.metrics = match self.metrics {
+                    MetricsStyle::Visible => MetricsStyle::Hidden,
+                    MetricsStyle::Hidden => MetricsStyle::Visible,
+                };
+                let msg = match self.metrics {
+                    MetricsStyle::Visible => "metrics on",
+                    MetricsStyle::Hidden => "metrics off",
+                };
+                self.set_status(msg);
+                self.save_session();
+            }
+            (KeyCode::Char('N'), _) => {
+                self.display_names = match self.display_names {
+                    DisplayNameStyle::Visible => DisplayNameStyle::Hidden,
+                    DisplayNameStyle::Hidden => DisplayNameStyle::Visible,
+                };
+                let msg = match self.display_names {
+                    DisplayNameStyle::Visible => "display names on",
+                    DisplayNameStyle::Hidden => "display names off (handles only)",
+                };
+                self.set_status(msg);
+                self.save_session();
+            }
+            (KeyCode::Char('x'), KeyModifiers::NONE) => self.toggle_expand_selected(),
+            (KeyCode::Char('I'), _) => {
+                self.media_auto_expand = !self.media_auto_expand;
+                if self.media_auto_expand {
+                    let tweets = self.source.tweets.clone();
+                    self.queue_source_media(&tweets);
+                    self.set_status("media auto-expand on");
+                } else {
+                    self.set_status("media auto-expand off");
+                }
+            }
+            (KeyCode::Char('X'), _) => {
+                if self.active == ActivePane::Source && !self.source.is_notifications() {
+                    if let Some(tweet) = self.source.tweets.get(self.source.selected()).cloned() {
+                        self.mark_current_seen();
+                        self.push_tweet(tweet);
+                    }
+                    self.toggle_inline_thread();
+                } else if self.active == ActivePane::Detail {
+                    self.toggle_inline_thread();
+                }
+            }
+            (KeyCode::Char('p'), KeyModifiers::NONE) => self.open_profile(),
+            (KeyCode::Char('P'), _) => self.open_own_profile_in_browser(),
+            (KeyCode::Char('T'), _) => self.translate_selected(),
+            (KeyCode::Char('A'), _) => self.open_ask_for_selected(),
+            (KeyCode::Char('B'), _) => self.open_brief_for_target(),
+            (KeyCode::Char('f'), KeyModifiers::NONE) => self.engage(EngageAction::Like),
+            (KeyCode::Char('c'), KeyModifiers::NONE) => self.toggle_filter(),
+            (KeyCode::Char('y'), KeyModifiers::NONE) => self.yank_url(),
+            (KeyCode::Char('Y'), _) => self.yank_json(),
+            (KeyCode::Char('R'), _) => self.toggle_user_replies(),
+            (KeyCode::Char('L'), _) => self.show_likers_for_selected(),
+            (KeyCode::Char('n'), KeyModifiers::NONE) => {
+                self.switch_source(SourceKind::Notifications);
+            }
+            (KeyCode::Char('o'), KeyModifiers::NONE) => self.open_tweet_in_browser(),
+            (KeyCode::Char('O'), _) => self.open_author_in_browser(),
+            (KeyCode::Char('m'), KeyModifiers::NONE) => self.open_media_external(),
+            (KeyCode::Char('q'), KeyModifiers::NONE) => self.back_out(true),
+            (KeyCode::Esc, _) => self.back_out(false),
+            (KeyCode::Char(']'), _) => self.history_forward(),
+            (KeyCode::Char('['), _) => self.history_back(),
+            _ => match self.active {
+                ActivePane::Source => self.handle_key_source(key),
+                ActivePane::Detail => self.handle_key_detail(key),
+            },
+        }
+    }
+
+    fn handle_key_source(&mut self, key: KeyEvent) {
+        match (key.code, key.modifiers) {
+            (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => {
+                if self.step_actor_cursor(1) {
+                    return;
+                }
+                self.notif_actor_cursor = None;
+                self.source.select_next();
+                self.mark_current_seen();
+                self.maybe_load_more();
+            }
+            (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => {
+                if self.step_actor_cursor(-1) {
+                    return;
+                }
+                self.notif_actor_cursor = None;
+                self.source.select_prev();
+                self.mark_current_seen();
+            }
+            (KeyCode::Char('g'), KeyModifiers::NONE) => {
+                self.source.jump_top();
+                self.mark_current_seen();
+            }
+            (KeyCode::Char('G'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                self.source.jump_bottom();
+                self.mark_current_seen();
+                self.maybe_load_more();
+            }
+            (KeyCode::Char('r'), KeyModifiers::NONE) => self.reload_source(),
+            (KeyCode::Char('u'), KeyModifiers::NONE) => self.jump_next_unread(),
+            (KeyCode::Char('U'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                self.mark_all_seen_in_source();
+            }
+            (KeyCode::Enter, _) | (KeyCode::Char('l'), KeyModifiers::NONE) => {
+                if self.source.is_notifications() {
+                    self.open_selected_notification();
+                } else if let Some(tweet) = self.source.tweets.get(self.source.selected()).cloned()
+                {
+                    self.mark_current_seen();
+                    self.push_tweet(tweet);
+                }
+            }
+            (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+                self.source.advance(10);
+                self.mark_current_seen();
+                self.maybe_load_more();
+            }
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+                self.source.advance(-10);
+                self.mark_current_seen();
+            }
+            (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, _) => {
+                self.switch_source(SourceKind::Home { following: false });
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_key_detail(&mut self, key: KeyEvent) {
+        match (key.code, key.modifiers) {
+            (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => {
+                match self.focus_stack.last_mut() {
+                    Some(FocusEntry::Tweet(d)) => d.select_next(),
+                    Some(FocusEntry::Likers(l)) => {
+                        l.select_next();
+                        self.maybe_load_more_likers();
+                    }
+                    Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
+                }
+            }
+            (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => {
+                match self.focus_stack.last_mut() {
+                    Some(FocusEntry::Tweet(d)) => d.select_prev(),
+                    Some(FocusEntry::Likers(l)) => l.select_prev(),
+                    Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
+                }
+            }
+            (KeyCode::Char('g'), KeyModifiers::NONE) => match self.focus_stack.last_mut() {
+                Some(FocusEntry::Tweet(d)) => d.jump_top(),
+                Some(FocusEntry::Likers(l)) => l.jump_top(),
+                Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
+            },
+            (KeyCode::Char('G'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                match self.focus_stack.last_mut() {
+                    Some(FocusEntry::Tweet(d)) => d.jump_bottom(),
+                    Some(FocusEntry::Likers(l)) => {
+                        l.jump_bottom();
+                        self.maybe_load_more_likers();
+                    }
+                    Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
+                }
+            }
+            (KeyCode::Char('d'), KeyModifiers::CONTROL) => match self.focus_stack.last_mut() {
+                Some(FocusEntry::Tweet(d)) => d.advance(10),
+                Some(FocusEntry::Likers(l)) => {
+                    l.advance(10);
+                    self.maybe_load_more_likers();
+                }
+                Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
+            },
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) => match self.focus_stack.last_mut() {
+                Some(FocusEntry::Tweet(d)) => d.advance(-10),
+                Some(FocusEntry::Likers(l)) => l.advance(-10),
+                Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
+            },
+            (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, _) => {
+                self.active = ActivePane::Source;
+            }
+            (KeyCode::Char('s'), KeyModifiers::NONE) => self.cycle_reply_sort(),
+            (KeyCode::Enter, _) | (KeyCode::Char('l'), KeyModifiers::NONE) => {
+                match self.focus_stack.last() {
+                    Some(FocusEntry::Tweet(_)) => {
+                        if let Some(reply) =
+                            self.top_detail().and_then(|d| d.selected_reply()).cloned()
+                        {
+                            self.push_tweet(reply);
+                        }
+                    }
+                    Some(FocusEntry::Likers(l)) => {
+                        if let Some(user) = l.selected_user().cloned() {
+                            self.open_user_in_detail(user.handle, Some(user.rest_id));
+                        }
+                    }
+                    Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_key_command(&mut self, key: KeyEvent) {
+        match (key.code, key.modifiers) {
+            (KeyCode::Esc, _) => {
+                self.mode = InputMode::Normal;
+                self.command_buffer.clear();
+            }
+            (KeyCode::Enter, _) => self.run_command_buffer(),
+            (KeyCode::Backspace, _) => {
+                self.command_buffer.pop();
+            }
+            (KeyCode::Char(c), _) => {
+                self.command_buffer.push(c);
+            }
+            _ => {}
+        }
+    }
+
+    fn run_command_buffer(&mut self) {
+        let input = std::mem::take(&mut self.command_buffer);
+        self.mode = InputMode::Normal;
+        match command::parse(&input) {
+            Ok(Command::SwitchSource(kind)) => self.switch_source(kind),
+            Ok(Command::OpenTweet(id)) => self.open_tweet_by_id(id),
+            Ok(Command::Quit) => self.running = false,
+            Ok(Command::Help) => {
+                self.status =
+                    "help: j/k nav, Enter open, h back, q pop, : command, ] forward, [ back".into();
+            }
+            Err(e) => {
+                self.error = Some(e.0);
+            }
+        }
+    }
+
+    fn handle_key_ask(&mut self, key: KeyEvent) {
+        match (key.code, key.modifiers) {
+            (KeyCode::Char('c'), KeyModifiers::CONTROL) => self.running = false,
+            (KeyCode::Esc, _) => self.back_out(false),
+            (KeyCode::Tab, _) if self.is_split() => {
+                self.active = match self.active {
+                    ActivePane::Source => ActivePane::Detail,
+                    ActivePane::Detail => ActivePane::Source,
+                };
+            }
+            (KeyCode::Enter, _) => self.ask_submit_input(),
+            (KeyCode::Backspace, _) => {
+                if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() {
+                    view.input.pop();
+                }
+            }
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+                if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() {
+                    view.input.clear();
+                }
+            }
+            (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
+                if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() {
+                    let trimmed_end = view.input.trim_end_matches(char::is_whitespace).len();
+                    let cut_to = view.input[..trimmed_end]
+                        .rfind(char::is_whitespace)
+                        .map(|i| i + 1)
+                        .unwrap_or(0);
+                    view.input.truncate(cut_to);
+                }
+            }
+            (KeyCode::Up, _) => {
+                if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() {
+                    view.auto_follow = false;
+                    view.state.scroll = view.state.scroll.saturating_sub(1);
+                }
+            }
+            (KeyCode::Down, _) => {
+                if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() {
+                    view.state.scroll = view.state.scroll.saturating_add(1);
+                }
+            }
+            (KeyCode::PageUp, _) => {
+                if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() {
+                    view.auto_follow = false;
+                    view.state.scroll = view.state.scroll.saturating_sub(10);
+                }
+            }
+            (KeyCode::PageDown, _) => {
+                if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() {
+                    view.state.scroll = view.state.scroll.saturating_add(10);
+                }
+            }
+            (KeyCode::Char(c @ '1'..='9'), m)
+                if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
+            {
+                let input_empty = self
+                    .focus_stack
+                    .last()
+                    .map(|e| match e {
+                        FocusEntry::Ask(v) => v.input.is_empty() && !v.streaming,
+                        _ => false,
+                    })
+                    .unwrap_or(false);
+                if input_empty {
+                    if let Some(idx) = c.to_digit(10) {
+                        self.ask_fire_preset(idx as usize);
+                    }
+                } else if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut()
+                    && !view.streaming
+                {
+                    view.input.push(c);
+                }
+            }
+            (KeyCode::Char(c), m)
+                if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
+            {
+                if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut()
+                    && !view.streaming
+                {
+                    view.input.push(c);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_key_brief(&mut self, key: KeyEvent) {
+        enum BriefAction {
+            Scroll(i32),
+            Jump(u16),
+        }
+
+        let action = match (key.code, key.modifiers) {
+            (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                self.running = false;
+                return;
+            }
+            (KeyCode::Esc, _) | (KeyCode::Char('q'), KeyModifiers::NONE) => {
+                self.back_out(false);
+                return;
+            }
+            (KeyCode::Tab, _) if self.is_split() => {
+                self.active = match self.active {
+                    ActivePane::Source => ActivePane::Detail,
+                    ActivePane::Detail => ActivePane::Source,
+                };
+                return;
+            }
+            (KeyCode::Char('R'), _) => {
+                self.refresh_brief();
+                return;
+            }
+            (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => BriefAction::Scroll(1),
+            (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => BriefAction::Scroll(-1),
+            (KeyCode::Char('d'), KeyModifiers::CONTROL) => BriefAction::Scroll(10),
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) => BriefAction::Scroll(-10),
+            (KeyCode::Char('f'), KeyModifiers::CONTROL)
+            | (KeyCode::PageDown, _)
+            | (KeyCode::Char(' '), KeyModifiers::NONE) => BriefAction::Scroll(20),
+            (KeyCode::Char('b'), KeyModifiers::CONTROL) | (KeyCode::PageUp, _) => {
+                BriefAction::Scroll(-20)
+            }
+            (KeyCode::Char('g'), KeyModifiers::NONE) | (KeyCode::Home, _) => BriefAction::Jump(0),
+            (KeyCode::Char('G'), KeyModifiers::NONE | KeyModifiers::SHIFT) | (KeyCode::End, _) => {
+                BriefAction::Jump(u16::MAX)
+            }
+            _ => return,
+        };
+
+        if let Some(FocusEntry::Brief(view)) = self.focus_stack.last_mut() {
+            match action {
+                BriefAction::Scroll(delta) => {
+                    view.scroll = if delta >= 0 {
+                        view.scroll.saturating_add(delta as u16)
+                    } else {
+                        view.scroll.saturating_sub((-delta) as u16)
+                    };
+                }
+                BriefAction::Jump(target) => view.scroll = target,
+            }
+        }
+    }
+
+    fn actor_count_for_current_notif(&self) -> Option<usize> {
+        if !self.source.is_notifications() {
+            return None;
+        }
+        let notif = self.source.notifications.get(self.source.selected())?;
+        if notif.notification_type != "Follow"
+            || notif.actors.len() < 2
+            || !self.expanded_bodies.contains(&notif.id)
+        {
+            return None;
+        }
+        Some(notif.actors.len())
+    }
+
+    fn step_actor_cursor(&mut self, delta: isize) -> bool {
+        let Some(count) = self.actor_count_for_current_notif() else {
+            return false;
+        };
+        let current = self.notif_actor_cursor.unwrap_or(0) as isize;
+        let next = current + delta;
+        if next < 0 || next >= count as isize {
+            return false;
+        }
+        self.notif_actor_cursor = Some(next as usize);
+        true
+    }
+
+    fn toggle_expand_selected(&mut self) {
+        if self.source.is_notifications() && self.active == ActivePane::Source {
+            if let Some(notif) = self.source.notifications.get(self.source.selected()) {
+                let id = notif.id.clone();
+                let is_multi_follow = notif.notification_type == "Follow" && notif.actors.len() > 1;
+                if !self.expanded_bodies.remove(&id) {
+                    self.expanded_bodies.insert(id);
+                    if is_multi_follow {
+                        self.notif_actor_cursor = Some(0);
+                    }
+                    self.set_status("expanded");
+                } else {
+                    self.notif_actor_cursor = None;
+                    self.set_status("collapsed");
+                }
+            }
+            return;
+        }
+        let Some(tweet) = self.selected_tweet().cloned() else {
+            return;
+        };
+        if !self.expanded_bodies.remove(&tweet.rest_id) {
+            self.expanded_bodies.insert(tweet.rest_id.clone());
+            self.media.ensure_tweet_media(&tweet, &self.tx);
+            self.set_status("expanded");
+        } else {
+            self.set_status("collapsed");
+        }
+    }
+
+    fn toggle_inline_thread(&mut self) {
+        let Some(id) = self.selected_tweet().map(|t| t.rest_id.clone()) else {
+            return;
+        };
+        if self.inline_threads.remove(&id).is_some() {
+            self.set_status("thread collapsed");
+            return;
+        }
+        self.expanded_bodies.insert(id.clone());
+        if let Some(tweet) = self.selected_tweet().cloned() {
+            self.media.ensure_tweet_media(&tweet, &self.tx);
+        }
+        self.inline_threads.insert(
+            id.clone(),
+            InlineThread {
+                loading: true,
+                replies: Vec::new(),
+                error: None,
+            },
+        );
+        self.set_status("loading thread…");
+        let client = self.client.clone();
+        let tx = self.tx.clone();
+        let focal_id = id;
+        tokio::spawn(async move {
+            let result = crate::tui::focus::fetch_thread_recursive(&client, &focal_id).await;
+            let _ = tx.send(Event::InlineThreadLoaded { focal_id, result });
+        });
+    }
+}

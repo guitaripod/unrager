@@ -1,4 +1,8 @@
 pub mod app;
+mod app_fetch;
+mod app_keys;
+mod app_llm;
+mod app_nav;
 pub mod ask;
 pub mod brief;
 pub mod command;

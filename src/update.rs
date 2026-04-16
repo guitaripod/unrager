@@ -5,9 +5,18 @@ use std::path::Path;
 const REPO: &str = "guitaripod/unrager";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct GithubRelease {
     tag_name: String,
+    #[serde(default)]
+    body: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReleaseEntry {
+    pub version: String,
+    pub body: String,
+    pub is_current: bool,
 }
 
 fn http_client() -> reqwest::Client {
@@ -40,6 +49,33 @@ pub async fn check_latest() -> Result<Option<String>> {
     } else {
         Ok(None)
     }
+}
+
+pub async fn fetch_changelog() -> Result<Vec<ReleaseEntry>> {
+    let client = http_client();
+    let releases: Vec<GithubRelease> = client
+        .get(format!(
+            "https://api.github.com/repos/{REPO}/releases?per_page=50"
+        ))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+
+    Ok(releases
+        .into_iter()
+        .map(|r| {
+            let version = r.tag_name.trim().to_string();
+            let is_current = version == CURRENT_VERSION;
+            let body = r.body.unwrap_or_default();
+            ReleaseEntry {
+                version,
+                body,
+                is_current,
+            }
+        })
+        .collect())
 }
 
 fn detect_target() -> Option<&'static str> {

@@ -163,6 +163,7 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 | `u` | Jump to next unread |
 | `U` | Mark all as read |
 | `]` / `[` | History forward / back |
+| `W` | Changelog (release history) |
 | `Ctrl-c` | Quit immediately |
 
 </details>

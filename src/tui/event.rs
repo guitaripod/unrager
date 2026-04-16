@@ -143,6 +143,9 @@ pub enum Event {
     UpdateAvailable {
         version: String,
     },
+    ChangelogLoaded {
+        releases: Vec<crate::update::ReleaseEntry>,
+    },
 }
 
 pub type EventTx = mpsc::UnboundedSender<Event>;

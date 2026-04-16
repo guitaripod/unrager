@@ -314,6 +314,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.mode == InputMode::Help {
         draw_help_overlay(frame, frame.area(), app.help_scroll);
     }
+    if app.mode == InputMode::Changelog {
+        draw_changelog_overlay(frame, frame.area(), app);
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2418,6 +2421,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  X              toggle inline thread replies"),
         Line::from("  Ctrl-d / Ctrl-u  half-page down / up"),
         Line::from("  Ctrl-c           quit immediately"),
+        Line::from("  W                changelog (release history)"),
         Line::from("  ?                toggle this help"),
         Line::from(""),
         Line::from(Span::styled("ICONOGRAPHY", heading)),
@@ -2474,6 +2478,10 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
             Span::styled("  N◆ ", Style::default().fg(Color::Magenta)),
             Span::raw("N detail panes stacked"),
         ]),
+        Line::from(vec![
+            Span::styled("  ↑X.Y.Z ", Style::default().fg(Color::Yellow)),
+            Span::raw("newer version available (`unrager update`)"),
+        ]),
         Line::from(""),
         Line::from(Span::styled("j/k scroll  ·  any other key to close", dim)),
     ];
@@ -2488,6 +2496,96 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         .scroll((scroll, 0))
         .wrap(Wrap { trim: false });
     frame.render_widget(help, popup);
+}
+
+fn draw_changelog_overlay(frame: &mut Frame, area: Rect, app: &App) {
+    let w = area.width.min(76);
+    let h = area.height.saturating_sub(2);
+    let x = (area.width.saturating_sub(w)) / 2;
+    let y = (area.height.saturating_sub(h)) / 2;
+    let popup = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
+
+    frame.render_widget(Clear, popup);
+
+    let dim = Style::default().fg(Color::DarkGray);
+    let version_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+    let current_style = Style::default()
+        .fg(Color::Green)
+        .add_modifier(Modifier::BOLD);
+    let heading_style = Style::default()
+        .fg(Color::White)
+        .add_modifier(Modifier::BOLD);
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    match &app.changelog {
+        None => {
+            lines.push(Line::from(Span::styled("loading changelog...", dim)));
+        }
+        Some(releases) if releases.is_empty() => {
+            lines.push(Line::from(Span::styled("could not fetch releases", dim)));
+        }
+        Some(releases) => {
+            for (i, release) in releases.iter().enumerate() {
+                if i > 0 {
+                    lines.push(Line::from(Span::styled(
+                        "─".repeat((w as usize).saturating_sub(4)),
+                        dim,
+                    )));
+                    lines.push(Line::from(""));
+                }
+
+                let tag_style = if release.is_current {
+                    current_style
+                } else {
+                    version_style
+                };
+                let mut version_spans = vec![Span::styled(&release.version, tag_style)];
+                if release.is_current {
+                    version_spans.push(Span::styled(" (current)", current_style));
+                }
+                lines.push(Line::from(version_spans));
+                lines.push(Line::from(""));
+
+                for raw_line in release.body.lines() {
+                    let trimmed = raw_line.trim();
+                    if let Some(section) = trimmed.strip_prefix("## ") {
+                        lines.push(Line::from(Span::styled(section, heading_style)));
+                    } else if let Some(item) = trimmed.strip_prefix("- ") {
+                        lines.push(Line::from(format!("  {item}")));
+                    } else if trimmed.starts_with("**Full changelog**") {
+                        continue;
+                    } else if !trimmed.is_empty() {
+                        lines.push(Line::from(trimmed.to_string()));
+                    }
+                }
+                lines.push(Line::from(""));
+            }
+        }
+    }
+
+    lines.push(Line::from(Span::styled(
+        "j/k scroll  ·  any other key to close",
+        dim,
+    )));
+
+    let changelog = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow))
+                .title(" changelog "),
+        )
+        .scroll((app.changelog_scroll, 0))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(changelog, popup);
 }
 
 #[cfg(test)]

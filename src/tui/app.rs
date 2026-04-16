@@ -47,6 +47,7 @@ pub enum InputMode {
     Normal,
     Command,
     Help,
+    Changelog,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -165,6 +166,9 @@ pub struct App {
     pub(super) pending_notif_scroll: Option<String>,
     pub(super) fetch_baseline: Option<usize>,
     pub update_available: Option<String>,
+    pub changelog: Option<Vec<crate::update::ReleaseEntry>>,
+    pub changelog_scroll: u16,
+    pub changelog_loading: bool,
 }
 
 pub const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -292,6 +296,9 @@ impl App {
             pending_notif_scroll: None,
             fetch_baseline: None,
             update_available: None,
+            changelog: None,
+            changelog_scroll: 0,
+            changelog_loading: false,
         })
     }
 
@@ -1462,6 +1469,10 @@ impl App {
             Event::UpdateAvailable { version } => {
                 self.update_available = Some(version);
             }
+            Event::ChangelogLoaded { releases } => {
+                self.changelog = Some(releases);
+                self.changelog_loading = false;
+            }
             Event::Quit => self.running = false,
             Event::FocusGained => {
                 self.terminal_focused = true;
@@ -1504,25 +1515,27 @@ impl App {
             self.handle_key_brief(key);
             return;
         }
-        if matches!(self.mode, InputMode::Help) {
+        if matches!(self.mode, InputMode::Help | InputMode::Changelog) {
+            let scroll = if self.mode == InputMode::Help {
+                &mut self.help_scroll
+            } else {
+                &mut self.changelog_scroll
+            };
             match key.code {
-                KeyCode::Char('j') | KeyCode::Down => {
-                    self.help_scroll = self.help_scroll.saturating_add(1)
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    self.help_scroll = self.help_scroll.saturating_sub(1)
-                }
+                KeyCode::Char('j') | KeyCode::Down => *scroll = scroll.saturating_add(1),
+                KeyCode::Char('k') | KeyCode::Up => *scroll = scroll.saturating_sub(1),
                 KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.help_scroll = self.help_scroll.saturating_add(10);
+                    *scroll = scroll.saturating_add(10);
                 }
                 KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.help_scroll = self.help_scroll.saturating_sub(10);
+                    *scroll = scroll.saturating_sub(10);
                 }
-                KeyCode::Char('g') => self.help_scroll = 0,
-                KeyCode::Char('G') => self.help_scroll = u16::MAX,
+                KeyCode::Char('g') => *scroll = 0,
+                KeyCode::Char('G') => *scroll = u16::MAX,
                 _ => {
                     self.mode = InputMode::Normal;
                     self.help_scroll = 0;
+                    self.changelog_scroll = 0;
                 }
             }
             return;
@@ -1543,6 +1556,27 @@ impl App {
             (KeyCode::Char('?'), _) => {
                 self.mode = InputMode::Help;
                 self.help_scroll = 0;
+            }
+            (KeyCode::Char('W'), _) => {
+                self.mode = InputMode::Changelog;
+                self.changelog_scroll = 0;
+                if self.changelog.is_none() && !self.changelog_loading {
+                    self.changelog_loading = true;
+                    let tx = self.tx.clone();
+                    tokio::spawn(async move {
+                        match crate::update::fetch_changelog().await {
+                            Ok(releases) => {
+                                let _ = tx.send(Event::ChangelogLoaded { releases });
+                            }
+                            Err(e) => {
+                                tracing::warn!("changelog fetch failed: {e}");
+                                let _ = tx.send(Event::ChangelogLoaded {
+                                    releases: Vec::new(),
+                                });
+                            }
+                        }
+                    });
+                }
             }
             (KeyCode::Char('t'), KeyModifiers::NONE) => {
                 self.timestamps = match self.timestamps {

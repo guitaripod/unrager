@@ -763,6 +763,7 @@ fn draw_detail(
         }
         FocusEntry::Ask(view) => draw_ask(frame, area, view, ctx, active),
         FocusEntry::Brief(view) => draw_brief(frame, area, view, active),
+        FocusEntry::Compose(view) => draw_compose(frame, area, view, ctx, active),
     }
 }
 
@@ -1029,10 +1030,8 @@ fn draw_ask(
         "streaming…"
     } else if view.error.is_some() {
         "error"
-    } else if view.messages.is_empty() {
-        "ready"
     } else {
-        "done"
+        "ready"
     };
     let mut title = format!("ask · @{}", view.tweet.author.handle);
     let imgs = view.image_count();
@@ -1062,7 +1061,7 @@ fn draw_ask(
     }
 
     let chip_rows = ask_chip_rows(view, inner.width);
-    let input_h: u16 = 2 + chip_rows;
+    let input_h: u16 = 3 + chip_rows;
     let tweet_preview_h = inner.height.min(5);
     let conv_h = inner
         .height
@@ -1210,8 +1209,23 @@ fn draw_ask_conversation(
         )));
     }
 
-    let total = lines.len() as u16;
-    let max_scroll = total.saturating_sub(area.height);
+    let wrap_width = area.width as usize;
+    let visual_lines: u16 = if wrap_width > 0 {
+        lines
+            .iter()
+            .map(|line| {
+                let w: usize = line
+                    .spans
+                    .iter()
+                    .map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref()))
+                    .sum();
+                w.max(1).div_ceil(wrap_width) as u16
+            })
+            .sum()
+    } else {
+        lines.len() as u16
+    };
+    let max_scroll = visual_lines.saturating_sub(area.height);
     if auto_follow || state.scroll > max_scroll {
         state.scroll = max_scroll;
     }
@@ -1231,7 +1245,7 @@ fn draw_ask_input(
     chip_rows: u16,
 ) {
     let streaming = view.streaming;
-    let input = view.input.as_str();
+    let input = view.editor.input.as_str();
 
     let separator = "─".repeat(area.width as usize);
     let sep_line = Line::from(Span::styled(
@@ -1299,12 +1313,194 @@ fn draw_ask_input(
     }
     let chip_line = Line::from(chip_spans);
 
-    let mut lines = vec![sep_line, input_line, chip_line];
+    let mode_tag = match view.editor.mode {
+        crate::tui::editor::VimMode::Insert => "INSERT",
+        crate::tui::editor::VimMode::Normal => "NORMAL",
+    };
+    let mode_style = match view.editor.mode {
+        crate::tui::editor::VimMode::Insert => Style::default().fg(Color::Green),
+        crate::tui::editor::VimMode::Normal => Style::default().fg(Color::Yellow),
+    };
+    let mode_line = Line::from(Span::styled(format!("-- {mode_tag} --"), mode_style));
+
+    let mut lines = vec![sep_line, mode_line, input_line, chip_line];
     if chip_rows == 2 {
         lines.push(Line::from(""));
     }
     let para = Paragraph::new(lines).wrap(Wrap { trim: false });
     frame.render_widget(para, area);
+}
+
+fn draw_compose(
+    frame: &mut Frame,
+    area: Rect,
+    view: &mut crate::tui::compose::ComposeView,
+    ctx: &RenderContext,
+    active: bool,
+) {
+    let title = format!("reply · @{}", view.tweet.author.handle);
+    let block = block_with_focus(&title, active);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height < 4 {
+        return;
+    }
+
+    let tweet_preview_h = inner.height.min(5);
+    let input_h = inner.height.saturating_sub(tweet_preview_h);
+    let [tweet_area, input_area] = Layout::vertical([
+        Constraint::Length(tweet_preview_h),
+        Constraint::Length(input_h),
+    ])
+    .areas(inner);
+    draw_ask_tweet_header(frame, tweet_area, &view.tweet, ctx);
+
+    let wrap_width = input_area.width as usize;
+
+    let separator = "─".repeat(wrap_width);
+    let sep_line = Line::from(Span::styled(
+        separator,
+        Style::default().fg(Color::DarkGray),
+    ));
+
+    let prompt_style = if active {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let mut lines: Vec<Line<'static>> = vec![sep_line];
+
+    let (cursor_col, cursor_row) = if view.sending || view.editor.input.is_empty() {
+        let mut spans: Vec<Span<'static>> = vec![Span::styled("> ", prompt_style)];
+        if view.sending {
+            spans.push(Span::styled(
+                "sending…",
+                Style::default().fg(Color::DarkGray),
+            ));
+        } else {
+            spans.push(Span::styled(
+                "type your reply…",
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        lines.push(Line::from(spans));
+        (2usize, 0usize)
+    } else {
+        let (wrapped, c_col, c_row) =
+            reply_wrap_input("> ", &view.editor.input, view.editor.cursor_pos, wrap_width);
+        for (i, visual_line) in wrapped.into_iter().enumerate() {
+            if i == 0 && visual_line.len() >= 2 {
+                let rest = visual_line[2..].to_string();
+                lines.push(Line::from(vec![
+                    Span::styled("> ", prompt_style),
+                    Span::raw(rest),
+                ]));
+            } else {
+                lines.push(Line::from(Span::raw(visual_line)));
+            }
+        }
+        (c_col, c_row)
+    };
+
+    let char_count = view.editor.char_count();
+    let count_style = if char_count > 280 {
+        Style::default().fg(Color::Red)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let mode_tag = match view.editor.mode {
+        crate::tui::editor::VimMode::Insert => "INSERT",
+        crate::tui::editor::VimMode::Normal => "NORMAL",
+    };
+    let mode_style = match view.editor.mode {
+        crate::tui::editor::VimMode::Insert => Style::default().fg(Color::Green),
+        crate::tui::editor::VimMode::Normal => Style::default().fg(Color::Yellow),
+    };
+    lines.push(Line::from(vec![
+        Span::styled(format!("-- {mode_tag} -- "), mode_style),
+        Span::styled(format!("{char_count}/280"), count_style),
+        Span::styled(
+            "  Enter send · Esc cancel",
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]));
+
+    if let Some(ref err) = view.error {
+        lines.push(Line::from(Span::styled(
+            err.clone(),
+            Style::default().fg(Color::Red),
+        )));
+    }
+
+    let para = Paragraph::new(lines);
+    frame.render_widget(para, input_area);
+
+    if active && !view.sending {
+        let cursor_x = input_area.x + cursor_col as u16;
+        let cursor_y = input_area.y + 1 + cursor_row as u16;
+        if cursor_x < input_area.right() && cursor_y < input_area.bottom() {
+            frame.set_cursor_position((cursor_x, cursor_y));
+        }
+    }
+}
+
+fn reply_wrap_input(
+    prompt: &str,
+    text: &str,
+    cursor_byte_pos: usize,
+    width: usize,
+) -> (Vec<String>, usize, usize) {
+    use unicode_width::UnicodeWidthChar;
+
+    let target_byte = prompt.len() + cursor_byte_pos;
+    let full = format!("{prompt}{text}");
+
+    let mut result_lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut col = 0usize;
+    let mut cursor_col = 0usize;
+    let mut cursor_row = 0usize;
+    let mut byte_offset = 0usize;
+    let mut found_cursor = false;
+
+    for ch in full.chars() {
+        let w = UnicodeWidthChar::width(ch).unwrap_or(1);
+
+        if width > 0 && col + w > width {
+            result_lines.push(std::mem::take(&mut current));
+            col = 0;
+        }
+
+        if byte_offset == target_byte && !found_cursor {
+            cursor_col = col;
+            cursor_row = result_lines.len();
+            found_cursor = true;
+        }
+
+        current.push(ch);
+        col += w;
+        byte_offset += ch.len_utf8();
+    }
+
+    if !found_cursor {
+        if width > 0 && col >= width {
+            cursor_col = 0;
+            cursor_row = result_lines.len() + 1;
+        } else {
+            cursor_col = col;
+            cursor_row = result_lines.len();
+        }
+    }
+
+    if !current.is_empty() || result_lines.is_empty() {
+        result_lines.push(current);
+    }
+
+    (result_lines, cursor_col, cursor_row)
 }
 
 fn render_markdown(text: &str) -> Vec<Line<'static>> {
@@ -2405,7 +2601,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  U              mark all loaded as read"),
         Line::from(""),
         Line::from(Span::styled("ACTIONS", heading)),
-        Line::from("  r              reload current source"),
+        Line::from("  Ctrl-r         reload current source"),
         Line::from("  y              yank fixupx URL to clipboard"),
         Line::from("  Y              yank selected tweet JSON"),
         Line::from("  n              open notifications"),
@@ -2422,6 +2618,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  T              translate tweet to English (toggle)"),
         Line::from("  A              ask gemma (digit = preset, thread context if in detail)"),
         Line::from("  B              run a profile on the selected author (R re-read)"),
+        Line::from("  r              reply to selected tweet"),
         Line::from("  f              like / unlike"),
         Line::from("  c              toggle rage filter"),
         Line::from("  s              cycle reply sort order"),

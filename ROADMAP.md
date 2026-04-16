@@ -35,5 +35,4 @@ Sorted by what would hurt a new user the most if unaddressed.
 
 ## Blocked
 
-- [ ] Likers list / notifications — query IDs live in X's lazy-loaded webpack chunks, not discoverable from `main.*.js`
-- [ ] Full bookmarks list — same lazy-chunk issue; `:bookmarks` works with a search query only
+- [ ] Full bookmarks list — query ID lives in X's lazy-loaded webpack chunks, not discoverable from `main.*.js`; `:bookmarks` works with a search query only

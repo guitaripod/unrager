@@ -6,6 +6,8 @@ mod app_nav;
 pub mod ask;
 pub mod brief;
 pub mod command;
+pub mod compose;
+pub mod editor;
 pub mod engage;
 pub mod event;
 pub mod filter;

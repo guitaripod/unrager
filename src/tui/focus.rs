@@ -7,6 +7,7 @@ use crate::parse::timeline::{self, TimelinePage};
 use crate::tui::app::ReplySortOrder;
 use crate::tui::ask::AskView;
 use crate::tui::brief::BriefView;
+use crate::tui::compose::ComposeView;
 use crate::tui::source::PaneState;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -201,6 +202,7 @@ pub enum FocusEntry {
     Likers(LikersView),
     Ask(AskView),
     Brief(BriefView),
+    Compose(ComposeView),
 }
 
 impl FocusEntry {
@@ -210,6 +212,7 @@ impl FocusEntry {
             Self::Likers(l) => &l.tweet_id,
             Self::Ask(a) => a.tweet_id(),
             Self::Brief(b) => &b.handle,
+            Self::Compose(c) => c.tweet_id(),
         }
     }
 }

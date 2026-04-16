@@ -145,6 +145,10 @@ pub enum Event {
         action: crate::tui::engage::EngageAction,
         error: Option<String>,
     },
+    ReplyResult {
+        in_reply_to: String,
+        result: std::result::Result<String, String>,
+    },
     UpdateAvailable {
         version: String,
     },

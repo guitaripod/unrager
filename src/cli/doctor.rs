@@ -15,6 +15,7 @@ pub async fn run(_args: Args) -> Result<()> {
     let mut report = Report::default();
 
     print_cookies(&mut report);
+    print_query_ids(&mut report).await;
     print_ollama_and_gemma4(&mut report).await;
 
     println!();
@@ -150,6 +151,90 @@ async fn print_ollama_and_gemma4(report: &mut Report) {
         );
         println!("              → fix: ollama pull gemma4");
         report.warnings += 1;
+    }
+}
+
+async fn print_query_ids(report: &mut Report) {
+    let cache_path = match config::cache_dir() {
+        Ok(d) => d.join("query-ids.json"),
+        Err(_) => {
+            println!("✗ query ids   cache dir unavailable");
+            report.errors += 1;
+            return;
+        }
+    };
+
+    let config_dir = config::config_dir().ok();
+    let overrides = config_dir
+        .map(|d| config::AppConfig::load(&d).query_ids)
+        .unwrap_or_default();
+    if !overrides.is_empty() {
+        println!(
+            "✓ query ids   {} manual override(s) in config.toml",
+            overrides.len()
+        );
+        for (op, id) in &overrides {
+            println!("              - {op} = {id}");
+        }
+    }
+
+    let store = crate::gql::QueryIdStore::with_fallbacks_and_cache(&cache_path);
+    let cached_age = std::fs::metadata(&cache_path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok());
+
+    match cached_age {
+        Some(age) if age.as_secs() < 86400 => {
+            let hours = age.as_secs() / 3600;
+            println!("✓ query ids   cache is {hours}h old (fresh)");
+        }
+        Some(age) => {
+            let days = age.as_secs() / 86400;
+            println!(
+                "! query ids   cache is {days}d old — may be stale; will refresh on next API call"
+            );
+            report.warnings += 1;
+        }
+        None => {
+            println!("! query ids   no cache file — using hardcoded fallbacks");
+            report.warnings += 1;
+        }
+    }
+
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap_or_default();
+    match crate::gql::scraper::scrape(&http).await {
+        Ok(fresh) => {
+            let known_ops: Vec<&str> = [
+                "HomeTimeline",
+                "HomeLatestTimeline",
+                "UserTweets",
+                "SearchTimeline",
+                "TweetDetail",
+            ]
+            .into_iter()
+            .collect();
+            let matched = fresh
+                .iter()
+                .filter(|q| known_ops.contains(&q.operation.as_str()))
+                .count();
+            println!(
+                "✓ query ids   scraper found {} ids ({matched} known operations)",
+                fresh.len()
+            );
+            let _ = store; // drop store; scraping tested independently
+        }
+        Err(e) => {
+            println!("! query ids   scraper failed: {e}");
+            println!("              → cached/fallback ids will be used; may go stale");
+            println!(
+                "              → manual override: add [query_ids] section to config.toml with OperationName = \"queryId\""
+            );
+            report.warnings += 1;
+        }
     }
 }
 

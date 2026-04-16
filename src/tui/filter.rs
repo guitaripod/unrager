@@ -266,6 +266,8 @@ pub fn parse_verdict(raw: &str) -> FilterDecision {
     FilterDecision::Keep
 }
 
+const RETENTION_DAYS: i64 = 30;
+
 pub struct FilterCache {
     conn: Connection,
     rubric_hash: String,
@@ -295,6 +297,20 @@ impl FilterCache {
             [],
         )
         .map_err(|e| Error::Config(format!("create verdicts table: {e}")))?;
+        let cutoff = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0)
+            - RETENTION_DAYS * 86400;
+        let pruned = conn
+            .execute(
+                "DELETE FROM verdicts WHERE classified_at < ?1",
+                params![cutoff],
+            )
+            .unwrap_or(0);
+        if pruned > 0 {
+            tracing::info!(pruned, "filter.db: pruned old entries");
+        }
         let mut mem: HashMap<String, FilterDecision> = HashMap::new();
         {
             let mut stmt = conn

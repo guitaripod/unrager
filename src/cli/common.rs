@@ -10,8 +10,11 @@ use crate::parse::viewer;
 
 pub async fn build_gql_client() -> Result<GqlClient> {
     let session = chromium::load_session().await?;
+    let config_dir = config::config_dir()?;
+    let app_config = config::AppConfig::load(&config_dir);
     let cache_path = config::cache_dir()?.join("query-ids.json");
-    let store = QueryIdStore::with_fallbacks_and_cache(&cache_path);
+    let mut store = QueryIdStore::with_fallbacks_and_cache(&cache_path);
+    store.apply_config_overrides(&app_config.query_ids);
     GqlClient::new(session, store, cache_path)
 }
 

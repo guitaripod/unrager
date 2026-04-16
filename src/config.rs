@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 pub struct AppConfig {
     #[serde(default = "default_browser")]
     pub browser: String,
+    #[serde(default)]
+    pub query_ids: std::collections::HashMap<String, String>,
 }
 
 fn default_browser() -> String {

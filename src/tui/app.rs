@@ -488,41 +488,7 @@ impl App {
             } => {
                 self.handle_likers_page_loaded(tweet_id, result, append);
             }
-            Event::WhisperPollTick => {
-                self.whisper.tick();
-                let should_poll = self.whisper.should_poll();
-                if should_poll
-                    && self.source.selected() == 0
-                    && !self.source.loading
-                    && !self.source.silent_refreshing
-                {
-                    if self.source.is_notifications() {
-                        self.fetch_notifications_source(false, true);
-                    } else if matches!(self.source.kind, Some(SourceKind::Home { following: true }))
-                    {
-                        self.fetch_source(false, true);
-                    }
-                }
-                if should_poll {
-                    self.whisper.poll_inflight = true;
-                    self.whisper.last_poll = Some(Instant::now());
-                    let client = self.client.clone();
-                    let tx = self.tx.clone();
-                    tokio::spawn(async move {
-                        match whisper::fetch_notifications(&client, None).await {
-                            Ok(page) => {
-                                let _ = tx.send(Event::NotificationsLoaded {
-                                    notifications: page.notifications,
-                                    top_cursor: page.top_cursor,
-                                });
-                            }
-                            Err(e) => {
-                                let _ = tx.send(Event::NotificationsFailed { err: e.to_string() });
-                            }
-                        }
-                    });
-                }
-            }
+            Event::WhisperPollTick => self.handle_whisper_poll_tick(),
             Event::NotificationsLoaded {
                 notifications,
                 top_cursor,
@@ -620,49 +586,11 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::super::app_fetch::{build_reply_tree, filter_incoming_page};
+    use super::super::test_util::{dummy_app, make_page, make_tweet};
     use super::*;
-    use crate::model::User;
-    use crate::parse::timeline::TimelinePage;
     use crate::tui::filter::{FilterCache, FilterDecision};
     use chrono::Utc;
     use tempfile::NamedTempFile;
-
-    fn make_tweet(id: &str, text: &str) -> Tweet {
-        Tweet {
-            rest_id: id.to_string(),
-            author: User {
-                rest_id: "1".to_string(),
-                handle: "test".to_string(),
-                name: "Test".to_string(),
-                verified: false,
-                followers: 0,
-                following: 0,
-            },
-            created_at: Utc::now(),
-            text: text.to_string(),
-            reply_count: 0,
-            retweet_count: 0,
-            like_count: 0,
-            quote_count: 0,
-            view_count: None,
-            favorited: false,
-            retweeted: false,
-            bookmarked: false,
-            lang: None,
-            in_reply_to_tweet_id: None,
-            quoted_tweet: None,
-            media: vec![],
-            url: format!("https://x.com/test/status/{id}"),
-        }
-    }
-
-    fn make_page(tweets: Vec<Tweet>) -> TimelinePage {
-        TimelinePage {
-            tweets,
-            next_cursor: None,
-            top_cursor: None,
-        }
-    }
 
     fn fresh_seen() -> (NamedTempFile, SeenStore) {
         let tmp = NamedTempFile::new().unwrap();
@@ -955,5 +883,221 @@ mod tests {
     fn build_reply_tree_empty() {
         let tree = build_reply_tree("root", &[]);
         assert!(tree.is_empty());
+    }
+
+    #[tokio::test]
+    async fn switch_source_resets_state() {
+        let (mut app, _rx) = dummy_app();
+        app.source.tweets = vec![make_tweet("1", "old")];
+        app.error = Some("stale error".into());
+        app.filter_hidden_count = 5;
+        app.expanded_bodies.insert("1".into());
+
+        app.switch_source(SourceKind::User {
+            handle: "someone".into(),
+        });
+
+        assert!(app.source.tweets.is_empty());
+        assert!(app.error.is_none());
+        assert_eq!(app.filter_hidden_count, 0);
+        assert!(app.expanded_bodies.is_empty());
+        assert_eq!(app.active, ActivePane::Source);
+        assert!(app.focus_stack.is_empty());
+    }
+
+    #[tokio::test]
+    async fn switch_source_noop_when_same() {
+        let (mut app, _rx) = dummy_app();
+        app.source = Source::new(SourceKind::Home { following: true });
+        app.source.tweets = vec![make_tweet("1", "keep me")];
+
+        app.switch_source(SourceKind::Home { following: true });
+
+        assert_eq!(app.source.tweets.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn switch_source_pushes_history() {
+        let (mut app, _rx) = dummy_app();
+        assert_eq!(app.history.len(), 1);
+
+        app.switch_source(SourceKind::User {
+            handle: "alice".into(),
+        });
+        assert_eq!(app.history.len(), 2);
+        assert_eq!(app.history_cursor, 1);
+
+        app.switch_source(SourceKind::Notifications);
+        assert_eq!(app.history.len(), 3);
+        assert_eq!(app.history_cursor, 2);
+    }
+
+    #[tokio::test]
+    async fn history_back_and_forward() {
+        let (mut app, _rx) = dummy_app();
+        app.switch_source(SourceKind::User {
+            handle: "alice".into(),
+        });
+        app.switch_source(SourceKind::Notifications);
+        assert_eq!(app.history_cursor, 2);
+
+        app.history_back();
+        assert_eq!(app.history_cursor, 1);
+        assert!(matches!(
+            app.source.kind,
+            Some(SourceKind::User { ref handle }) if handle == "alice"
+        ));
+
+        app.history_forward();
+        assert_eq!(app.history_cursor, 2);
+        assert!(matches!(app.source.kind, Some(SourceKind::Notifications)));
+    }
+
+    #[tokio::test]
+    async fn back_out_pops_focus_stack() {
+        let (mut app, _rx) = dummy_app();
+        let tweet = make_tweet("1", "focal");
+        app.push_tweet(tweet);
+        assert_eq!(app.focus_stack.len(), 1);
+        assert_eq!(app.active, ActivePane::Detail);
+
+        app.back_out(false);
+        assert!(app.focus_stack.is_empty());
+        assert_eq!(app.active, ActivePane::Source);
+    }
+
+    #[tokio::test]
+    async fn back_out_navigates_history_when_stack_empty() {
+        let (mut app, _rx) = dummy_app();
+        app.switch_source(SourceKind::User {
+            handle: "bob".into(),
+        });
+        assert!(app.focus_stack.is_empty());
+
+        app.back_out(false);
+        assert!(matches!(
+            app.source.kind,
+            Some(SourceKind::Home { following: true })
+        ));
+    }
+
+    #[tokio::test]
+    async fn handle_timeline_loaded_appends() {
+        let (mut app, _rx) = dummy_app();
+        app.source = Source::new(SourceKind::Home { following: true });
+        app.source.tweets = vec![make_tweet("1", "existing")];
+
+        let page = make_page(vec![make_tweet("2", "new"), make_tweet("3", "also new")]);
+        app.handle_timeline_loaded(SourceKind::Home { following: true }, Ok(page), true, false);
+
+        assert_eq!(app.source.tweets.len(), 3);
+        assert!(app.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn handle_timeline_loaded_replaces_on_non_append() {
+        let (mut app, _rx) = dummy_app();
+        app.source = Source::new(SourceKind::Home { following: true });
+        app.source.tweets = vec![make_tweet("old", "stale")];
+
+        let page = make_page(vec![make_tweet("new", "fresh")]);
+        app.handle_timeline_loaded(SourceKind::Home { following: true }, Ok(page), false, false);
+
+        assert_eq!(app.source.tweets.len(), 1);
+        assert_eq!(app.source.tweets[0].rest_id, "new");
+    }
+
+    #[tokio::test]
+    async fn handle_timeline_loaded_error_sets_error() {
+        let (mut app, _rx) = dummy_app();
+        app.source = Source::new(SourceKind::Home { following: true });
+
+        app.handle_timeline_loaded(
+            SourceKind::Home { following: true },
+            Err(crate::error::Error::GraphqlShape("test error".into())),
+            false,
+            false,
+        );
+
+        assert!(app.error.is_some());
+        assert!(app.error.as_ref().unwrap().contains("test error"));
+    }
+
+    #[tokio::test]
+    async fn handle_timeline_loaded_ignores_stale_source() {
+        let (mut app, _rx) = dummy_app();
+        app.source = Source::new(SourceKind::Notifications);
+
+        let page = make_page(vec![make_tweet("1", "from wrong source")]);
+        app.handle_timeline_loaded(SourceKind::Home { following: true }, Ok(page), false, false);
+
+        assert!(app.source.tweets.is_empty());
+    }
+
+    #[test]
+    fn selected_tweet_from_source() {
+        let (mut app, _rx) = dummy_app();
+        app.source.tweets = vec![
+            make_tweet("1", "first"),
+            make_tweet("2", "second"),
+            make_tweet("3", "third"),
+        ];
+        app.source.set_selected(1);
+
+        let selected = app.selected_tweet().unwrap();
+        assert_eq!(selected.rest_id, "2");
+    }
+
+    #[test]
+    fn mark_current_seen_tracks() {
+        let (mut app, _rx) = dummy_app();
+        app.source.tweets = vec![make_tweet("42", "read me")];
+        app.source.set_selected(0);
+        assert!(!app.seen.is_seen("42"));
+
+        app.mark_current_seen();
+        assert!(app.seen.is_seen("42"));
+    }
+
+    #[tokio::test]
+    async fn engage_toggles_like() {
+        use crate::tui::engage::EngageAction;
+
+        let (mut app, _rx) = dummy_app();
+        let mut tweet = make_tweet("1", "like me");
+        tweet.like_count = 5;
+        app.source.tweets = vec![tweet];
+        app.source.set_selected(0);
+
+        app.engage(EngageAction::Like);
+
+        assert!(app.source.tweets[0].favorited);
+        assert_eq!(app.source.tweets[0].like_count, 6);
+        assert!(app.liked_tweet_ids.contains("1"));
+        assert!(app.engage_inflight.contains("1"));
+    }
+
+    #[tokio::test]
+    async fn toggle_feed_mode_cycles() {
+        let (mut app, _rx) = dummy_app();
+        assert!(matches!(app.feed_mode, FeedMode::All));
+
+        app.toggle_feed_mode();
+        assert!(matches!(app.feed_mode, FeedMode::Originals));
+
+        app.toggle_feed_mode();
+        assert!(matches!(app.feed_mode, FeedMode::All));
+    }
+
+    #[tokio::test]
+    async fn push_tweet_opens_detail() {
+        let (mut app, _rx) = dummy_app();
+        assert!(app.focus_stack.is_empty());
+
+        app.push_tweet(make_tweet("1", "focus on me"));
+
+        assert_eq!(app.focus_stack.len(), 1);
+        assert_eq!(app.active, ActivePane::Detail);
+        assert!(matches!(app.focus_stack.last(), Some(FocusEntry::Tweet(_))));
     }
 }

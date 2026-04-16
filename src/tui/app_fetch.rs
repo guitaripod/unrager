@@ -626,6 +626,41 @@ impl App {
         }
     }
 
+    pub(super) fn handle_whisper_poll_tick(&mut self) {
+        self.whisper.tick();
+        let should_poll = self.whisper.should_poll();
+        if should_poll
+            && self.source.selected() == 0
+            && !self.source.loading
+            && !self.source.silent_refreshing
+        {
+            if self.source.is_notifications() {
+                self.fetch_notifications_source(false, true);
+            } else if matches!(self.source.kind, Some(SourceKind::Home { following: true })) {
+                self.fetch_source(false, true);
+            }
+        }
+        if should_poll {
+            self.whisper.poll_inflight = true;
+            self.whisper.last_poll = Some(Instant::now());
+            let client = self.client.clone();
+            let tx = self.tx.clone();
+            tokio::spawn(async move {
+                match whisper::fetch_notifications(&client, None).await {
+                    Ok(page) => {
+                        let _ = tx.send(Event::NotificationsLoaded {
+                            notifications: page.notifications,
+                            top_cursor: page.top_cursor,
+                        });
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Event::NotificationsFailed { err: e.to_string() });
+                    }
+                }
+            });
+        }
+    }
+
     pub(super) fn handle_notifications_loaded(
         &mut self,
         raw_notifs: Vec<crate::parse::notification::RawNotification>,

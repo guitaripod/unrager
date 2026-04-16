@@ -14,6 +14,8 @@ pub mod media;
 pub mod seen;
 pub mod session;
 pub mod source;
+#[cfg(test)]
+pub(crate) mod test_util;
 pub mod ui;
 pub mod whisper;
 

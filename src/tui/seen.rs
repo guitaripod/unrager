@@ -3,6 +3,8 @@ use rusqlite::{Connection, params};
 use std::collections::HashSet;
 use std::path::Path;
 
+const RETENTION_DAYS: i64 = 30;
+
 pub struct SeenStore {
     conn: Connection,
     cache: HashSet<String>,
@@ -19,6 +21,12 @@ impl SeenStore {
             PRAGMA journal_mode = WAL;
             PRAGMA synchronous = NORMAL;",
         )?;
+
+        let cutoff = chrono::Utc::now().timestamp() - RETENTION_DAYS * 86400;
+        let pruned = conn.execute("DELETE FROM seen WHERE seen_at < ?1", params![cutoff])?;
+        if pruned > 0 {
+            tracing::info!(pruned, "seen.db: pruned old entries");
+        }
 
         let mut stmt = conn.prepare("SELECT tweet_id FROM seen")?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;

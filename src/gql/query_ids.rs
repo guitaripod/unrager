@@ -98,6 +98,22 @@ impl QueryIdStore {
         }
     }
 
+    pub fn apply_config_overrides(
+        &mut self,
+        overrides: &std::collections::HashMap<String, String>,
+    ) {
+        for (operation, id) in overrides {
+            tracing::info!(operation, id, "query id override from config");
+            self.entries.insert(
+                operation.clone(),
+                QueryId {
+                    id: id.clone(),
+                    operation: operation.clone(),
+                },
+            );
+        }
+    }
+
     pub fn load_cached(path: &Path) -> Result<Option<Self>> {
         match std::fs::read(path) {
             Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),

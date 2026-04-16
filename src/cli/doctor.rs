@@ -207,7 +207,7 @@ async fn print_query_ids(report: &mut Report) {
         .build()
         .unwrap_or_default();
     match crate::gql::scraper::scrape(&http).await {
-        Ok(fresh) => {
+        Ok(result) => {
             let known_ops: Vec<&str> = [
                 "HomeTimeline",
                 "HomeLatestTimeline",
@@ -217,15 +217,21 @@ async fn print_query_ids(report: &mut Report) {
             ]
             .into_iter()
             .collect();
-            let matched = fresh
+            let matched = result
+                .query_ids
                 .iter()
                 .filter(|q| known_ops.contains(&q.operation.as_str()))
                 .count();
             println!(
                 "✓ query ids   scraper found {} ids ({matched} known operations)",
-                fresh.len()
+                result.query_ids.len()
             );
-            let _ = store; // drop store; scraping tested independently
+            if result.transaction_material.is_some() {
+                println!("✓ transaction key material extracted");
+            } else {
+                println!("! transaction key material not available (header will be omitted)");
+            }
+            let _ = store;
         }
         Err(e) => {
             println!("! query ids   scraper failed: {e}");

@@ -439,14 +439,27 @@ impl App {
     }
 
     fn drain_pending_classification(&mut self) {
-        let mut added = false;
+        let is_following = matches!(self.source.kind, Some(SourceKind::Home { following: true }));
+        let original_selected = self.source.state.selected;
+        let mut cursor = original_selected;
+
         while let Some(front) = self.pending_classification.first() {
             match self.filter_verdicts.get(&front.rest_id) {
                 Some(FilterState::Classified(FilterDecision::Keep)) => {
                     let t = self.pending_classification.remove(0);
                     if !self.source.tweets.iter().any(|x| x.rest_id == t.rest_id) {
-                        self.source.tweets.push(t);
-                        added = true;
+                        if is_following {
+                            let pos = self
+                                .source
+                                .tweets
+                                .partition_point(|x| x.created_at > t.created_at);
+                            if pos <= cursor {
+                                cursor += 1;
+                            }
+                            self.source.tweets.insert(pos, t);
+                        } else {
+                            self.source.tweets.push(t);
+                        }
                     }
                 }
                 Some(FilterState::Classified(FilterDecision::Hide)) => {
@@ -455,8 +468,8 @@ impl App {
                 _ => break,
             }
         }
-        if added {
-            self.sort_source_if_following();
+        if is_following && original_selected > 0 {
+            self.source.state.selected = cursor;
         }
         self.try_advance_fetch_target();
     }
@@ -465,11 +478,14 @@ impl App {
         if !matches!(self.source.kind, Some(SourceKind::Home { following: true })) {
             return;
         }
-        let selected_id = self
-            .source
-            .tweets
-            .get(self.source.state.selected)
-            .map(|t| t.rest_id.clone());
+        let selected_id = if self.source.state.selected > 0 {
+            self.source
+                .tweets
+                .get(self.source.state.selected)
+                .map(|t| t.rest_id.clone())
+        } else {
+            None
+        };
         self.source
             .tweets
             .sort_by(|a, b| b.created_at.cmp(&a.created_at));

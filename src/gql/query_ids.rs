@@ -19,6 +19,7 @@ pub enum Operation {
     NotificationsTimeline,
     FavoriteTweet,
     UnfavoriteTweet,
+    CreateTweet,
 }
 
 impl Operation {
@@ -37,6 +38,7 @@ impl Operation {
             Self::NotificationsTimeline => "NotificationsTimeline",
             Self::FavoriteTweet => "FavoriteTweet",
             Self::UnfavoriteTweet => "UnfavoriteTweet",
+            Self::CreateTweet => "CreateTweet",
         }
     }
 }
@@ -150,4 +152,5 @@ const FALLBACK_QUERY_IDS: &[(&str, &str)] = &[
     ("NotificationsTimeline", "l6ovGrjBwVobgU4puBCycg"),
     ("FavoriteTweet", "lI07N6Otwv1PhnEgXILM7A"),
     ("UnfavoriteTweet", "ZYKSe-w7KEslx3JhSIk5LA"),
+    ("CreateTweet", "bDE2rBtZb3uyrczSZ_pI9g"),
 ];

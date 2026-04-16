@@ -39,6 +39,12 @@ unrager
 ollama pull gemma4
 ```
 
+Uninstall:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/guitaripod/unrager/master/install.sh | bash -s -- --uninstall
+```
+
 Works on macOS (Apple Silicon + Intel) and Linux (x86_64 + aarch64). Builds from source via `cargo install --path .` on any platform with Rust 1.85+.
 
 The TUI reads cookies from your logged-in browser automatically (Vivaldi, Chrome, Brave, Edge, Opera, Arc). The filter enables itself when Ollama is reachable and disables silently when it isn't.
@@ -242,11 +248,12 @@ Posting uses the official X API v2 (not cookie auth), so your account is never a
 1. Create a developer account at [developer.x.com](https://developer.x.com)
 2. Register a Native App (PKCE, no client secret)
 3. Set callback URL to `http://127.0.0.1:8765/callback`
-4. Load pay-per-use credits at [console.x.com](https://console.x.com)
-5. `unrager auth login` — opens browser for the OAuth flow
-6. `unrager tweet "hello from unrager"`
+4. **Replace the Client ID** in `src/auth/oauth.rs` (`CLIENT_ID`) with your own, then rebuild
+5. Load pay-per-use credits at [console.x.com](https://console.x.com)
+6. `unrager auth login` — opens browser for the OAuth flow
+7. `unrager tweet "hello from unrager"`
 
-If you fork this repo, replace the Client ID in `src/auth/oauth.rs` with your own.
+> **Why your own Client ID?** The embedded ID is the author's personal credential. X enforces per-client rate limits and may flag traffic from many unrelated users sharing a single client. Read and TUI are unaffected — only `tweet` and `reply` go through OAuth.
 
 </details>
 

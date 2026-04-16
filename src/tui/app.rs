@@ -2361,9 +2361,8 @@ impl App {
                 if matches!(kind, SourceKind::Home { following: true }) {
                     page.tweets.sort_by(|a, b| b.created_at.cmp(&a.created_at));
                 }
-                let filter_active = !silent
-                    && matches!(self.filter_mode, FilterMode::On)
-                    && self.filter_classifier.is_some();
+                let filter_active =
+                    matches!(self.filter_mode, FilterMode::On) && self.filter_classifier.is_some();
                 let held: Vec<Tweet> = if !filter_active {
                     Vec::new()
                 } else if matches!(kind, SourceKind::Home { following: true }) {

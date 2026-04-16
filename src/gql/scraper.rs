@@ -1,5 +1,6 @@
 use crate::error::{Error, Result};
 use crate::gql::query_ids::QueryId;
+use crate::gql::transaction::{self, TransactionKeyMaterial};
 use regex::Regex;
 use reqwest::Client;
 use std::sync::OnceLock;
@@ -24,7 +25,12 @@ fn query_id_re() -> &'static Regex {
     })
 }
 
-pub async fn scrape(http: &Client) -> Result<Vec<QueryId>> {
+pub struct ScrapeResult {
+    pub query_ids: Vec<QueryId>,
+    pub transaction_material: Option<TransactionKeyMaterial>,
+}
+
+pub async fn scrape(http: &Client) -> Result<ScrapeResult> {
     let html = http
         .get(HOMEPAGE)
         .header(reqwest::header::USER_AGENT, SCRAPER_UA)
@@ -52,7 +58,7 @@ pub async fn scrape(http: &Client) -> Result<Vec<QueryId>> {
         .text()
         .await?;
 
-    let found: Vec<QueryId> = query_id_re()
+    let query_ids: Vec<QueryId> = query_id_re()
         .captures_iter(&bundle)
         .map(|cap| QueryId {
             id: cap[1].to_string(),
@@ -60,13 +66,48 @@ pub async fn scrape(http: &Client) -> Result<Vec<QueryId>> {
         })
         .collect();
 
-    tracing::debug!("scraped {} query ids", found.len());
+    tracing::debug!("scraped {} query ids", query_ids.len());
 
-    if found.is_empty() {
+    if query_ids.is_empty() {
         return Err(Error::GraphqlShape(
             "main.js regex matched zero query ids; bundle format may have changed".into(),
         ));
     }
 
-    Ok(found)
+    let transaction_material = extract_transaction_material(http, &html).await;
+
+    Ok(ScrapeResult {
+        query_ids,
+        transaction_material,
+    })
+}
+
+async fn extract_transaction_material(http: &Client, html: &str) -> Option<TransactionKeyMaterial> {
+    let extract = transaction::extract_from_homepage(html)?;
+
+    tracing::debug!("fetching ondemand.s from {}", extract.ondemand_url);
+    let js = http
+        .get(&extract.ondemand_url)
+        .header(reqwest::header::USER_AGENT, SCRAPER_UA)
+        .send()
+        .await
+        .ok()?
+        .text()
+        .await
+        .ok()?;
+
+    let (row_index, key_indices) = transaction::extract_indices_from_js(&js)?;
+
+    tracing::info!(
+        "transaction key material ready (key_bytes={}, row_index={row_index}, indices={})",
+        extract.key_bytes.len(),
+        key_indices.len(),
+    );
+
+    Some(TransactionKeyMaterial {
+        key_bytes: extract.key_bytes,
+        svg_frames: extract.svg_frames,
+        row_index,
+        key_indices,
+    })
 }

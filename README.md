@@ -188,6 +188,7 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 |---|---|
 | `unrager whoami` | Confirm which account your cookies belong to |
 | `unrager doctor` | Check cookies, Ollama, and gemma4 setup |
+| `unrager update` | Self-update to the latest release |
 | `unrager read <id\|url>` | Fetch a single tweet |
 | `unrager thread <id\|url>` | Full conversation thread |
 | `unrager home [--following]` | Home timeline |

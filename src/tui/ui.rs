@@ -447,6 +447,13 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
                 .add_modifier(Modifier::ITALIC),
         ));
     }
+    if let Some(version) = &app.update_available {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!("↑{version}"),
+            Style::default().fg(Color::Yellow),
+        ));
+    }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 

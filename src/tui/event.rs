@@ -140,6 +140,9 @@ pub enum Event {
         handle: String,
         error: Option<String>,
     },
+    UpdateAvailable {
+        version: String,
+    },
 }
 
 pub type EventTx = mpsc::UnboundedSender<Event>;

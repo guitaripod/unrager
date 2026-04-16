@@ -10,6 +10,7 @@ pub mod reply;
 pub mod search;
 pub mod thread;
 pub mod tweet;
+pub mod update;
 pub mod user;
 pub mod whoami;
 
@@ -85,4 +86,7 @@ pub enum Command {
 
     #[command(about = "Check cookies, Ollama, and gemma4 setup")]
     Doctor(doctor::Args),
+
+    #[command(about = "Update unrager to the latest release")]
+    Update(update::Args),
 }

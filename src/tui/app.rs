@@ -164,6 +164,7 @@ pub struct App {
     pub(super) pending_open: Option<RequestId>,
     pub(super) pending_notif_scroll: Option<String>,
     pub(super) fetch_baseline: Option<usize>,
+    pub update_available: Option<String>,
 }
 
 pub const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -234,6 +235,7 @@ impl App {
         }
 
         whisper::start_poll_loop(tx.clone());
+        spawn_update_check(tx.clone());
 
         Ok(Self {
             running: true,
@@ -289,6 +291,7 @@ impl App {
             pending_open: None,
             pending_notif_scroll: None,
             fetch_baseline: None,
+            update_available: None,
         })
     }
 
@@ -1455,6 +1458,9 @@ impl App {
                 self.whisper.llm_inflight = false;
                 self.whisper.surge_sentiment = Some(sentiment);
                 self.whisper.text = summary;
+            }
+            Event::UpdateAvailable { version } => {
+                self.update_available = Some(version);
             }
             Event::Quit => self.running = false,
             Event::FocusGained => {
@@ -2813,6 +2819,23 @@ fn filter_incoming_page(
         }
     }
     hidden
+}
+
+fn spawn_update_check(tx: EventTx) {
+    tokio::spawn(async move {
+        match crate::update::check_latest().await {
+            Ok(Some(version)) => {
+                tracing::info!("update available: {version}");
+                let _ = tx.send(Event::UpdateAvailable { version });
+            }
+            Ok(None) => {
+                tracing::debug!("no update available");
+            }
+            Err(e) => {
+                tracing::debug!("update check failed: {e}");
+            }
+        }
+    });
 }
 
 fn init_filter_stack(

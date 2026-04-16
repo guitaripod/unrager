@@ -30,16 +30,8 @@ Sorted by what would hurt a new user the most if unaddressed.
 
 ## Maybe
 
-- [ ] `/` in-buffer search within the current feed
-- [ ] `--calm` flag on CLI commands (pipe filter into one-shot output)
-- [ ] Filter rubric refinement based on real-world usage
-- [ ] User avatars (small kitty-graphics thumbnails next to handles)
-- [ ] `unrager doctor --json` for scripting / integration
-- [ ] Multi-language filter rubric (key off `tweet.lang`)
-- [ ] Fine-tuned small classifier (distilled from gemma4 verdicts)
 - [ ] Mouse support
 - [ ] Compose modal in TUI
-- [ ] Homebrew tap (only if demand materializes; installer already serves the same audience)
 
 ## Blocked
 

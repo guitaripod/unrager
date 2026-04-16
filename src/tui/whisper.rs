@@ -4,7 +4,6 @@ use crate::parse::notification;
 use crate::tui::event::{Event, EventTx};
 use crate::tui::filter::OllamaConfig;
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tracing::{debug, warn};
@@ -494,23 +493,12 @@ POSITIVE|your async tweet is spreading -- mostly positive\n\
 MIXED|your take is getting debated -- split reactions\n\
 NEGATIVE|you're getting ratio'd -- mostly hostile quotes";
 
-#[derive(Debug, Deserialize)]
-struct OllamaChatResponse {
-    message: OllamaChatMessage,
-}
-
-#[derive(Debug, Deserialize)]
-struct OllamaChatMessage {
-    content: String,
-}
+use crate::tui::filter::OllamaChatResponse;
 
 pub fn whisper_llm_async(entry: NotifEntry, ollama: OllamaConfig, tx: EventTx) {
     tokio::spawn(async move {
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(ollama.timeout_seconds))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
-        let url = format!("{}/api/chat", ollama.host.trim_end_matches('/'));
+        let http = ollama.build_client();
+        let url = ollama.chat_url();
 
         let verb = match entry.kind {
             NotifKind::Reply => "replied to",
@@ -565,11 +553,8 @@ pub fn whisper_llm_async(entry: NotifEntry, ollama: OllamaConfig, tx: EventTx) {
 
 pub fn surge_llm_async(entries: Vec<NotifEntry>, ollama: OllamaConfig, tx: EventTx) {
     tokio::spawn(async move {
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(ollama.timeout_seconds))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
-        let url = format!("{}/api/chat", ollama.host.trim_end_matches('/'));
+        let http = ollama.build_client();
+        let url = ollama.chat_url();
 
         let mut prompt = String::from("Recent reactions to the user's tweet:\n");
         for e in &entries {

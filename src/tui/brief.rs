@@ -332,7 +332,7 @@ async fn stream_ollama_with(
             return;
         }
     };
-    let url = format!("{}/api/chat", ollama.host.trim_end_matches('/'));
+    let url = ollama.chat_url();
     let body = json!({
         "model": ollama.model,
         "messages": [

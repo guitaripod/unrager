@@ -1,4 +1,5 @@
 use crate::model::{MediaKind, Tweet};
+use crate::util::short_count;
 use std::fmt::Write;
 
 pub fn tweet(tweet: &Tweet) -> String {
@@ -77,15 +78,5 @@ fn render_into(out: &mut String, t: &Tweet, indent_level: usize) {
         let _ = writeln!(out);
         let _ = writeln!(out, "{indent}── quoting ──");
         render_into(out, q, indent_level + 1);
-    }
-}
-
-fn short_count(n: u64) -> String {
-    if n >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1_000_000.0)
-    } else if n >= 1_000 {
-        format!("{:.1}K", n as f64 / 1_000.0)
-    } else {
-        n.to_string()
     }
 }

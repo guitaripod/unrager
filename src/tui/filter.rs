@@ -59,6 +59,19 @@ fn default_keep_alive() -> String {
     "10s".to_string()
 }
 
+impl OllamaConfig {
+    pub fn chat_url(&self) -> String {
+        format!("{}/api/chat", self.host.trim_end_matches('/'))
+    }
+
+    pub fn build_client(&self) -> reqwest::Client {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(self.timeout_seconds))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    }
+}
+
 impl FilterConfig {
     pub fn default_content() -> &'static str {
         DEFAULT_CONFIG
@@ -272,12 +285,8 @@ pub struct TweetPayload {
 
 impl Classifier {
     pub fn new(cfg: &FilterConfig) -> Self {
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(cfg.ollama.timeout_seconds))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
         Self {
-            http,
+            http: cfg.ollama.build_client(),
             ollama: cfg.ollama.clone(),
             sem: Arc::new(Semaphore::new(2)),
             system_prompt: Arc::new(build_system_prompt(cfg)),
@@ -330,7 +339,7 @@ impl Classifier {
         tokio::spawn(async move {
             let _permit = sem.acquire_owned().await.ok();
             let started = std::time::Instant::now();
-            let url = format!("{}/api/chat", ollama.host.trim_end_matches('/'));
+            let url = ollama.chat_url();
             let body = serde_json::json!({
                 "model": ollama.model,
                 "messages": [
@@ -389,13 +398,13 @@ impl Classifier {
 }
 
 #[derive(Debug, Deserialize)]
-struct OllamaChatResponse {
-    message: OllamaChatMessage,
+pub struct OllamaChatResponse {
+    pub message: OllamaChatMessage,
 }
 
 #[derive(Debug, Deserialize)]
-struct OllamaChatMessage {
-    content: String,
+pub struct OllamaChatMessage {
+    pub content: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -415,11 +424,8 @@ fn pick_fallback_model(available: &[String]) -> Option<String> {
 
 pub fn translate_async(rest_id: String, text: String, ollama: OllamaConfig, tx: EventTx) {
     tokio::spawn(async move {
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(ollama.timeout_seconds))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
-        let url = format!("{}/api/chat", ollama.host.trim_end_matches('/'));
+        let http = ollama.build_client();
+        let url = ollama.chat_url();
         let body = serde_json::json!({
             "model": ollama.model,
             "messages": [

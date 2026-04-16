@@ -10,6 +10,7 @@ use crate::tui::media::{self, MediaEntry, MediaRegistry, media_badge_failed, med
 use crate::tui::seen::SeenStore;
 use crate::tui::source::PaneState;
 use crate::tui::source::{Source, SourceKind};
+use crate::util::short_count;
 use chrono::{DateTime, Utc};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -24,20 +25,11 @@ static PALETTE_IS_DARK: AtomicBool = AtomicBool::new(true);
 
 pub struct PaneItem {
     pub lines: Vec<Line<'static>>,
-    pub zebra: bool,
 }
 
 impl PaneItem {
     pub fn new(lines: Vec<Line<'static>>) -> Self {
-        Self {
-            lines,
-            zebra: false,
-        }
-    }
-
-    pub fn with_zebra(mut self, zebra: bool) -> Self {
-        self.zebra = zebra;
-        self
+        Self { lines }
     }
 }
 
@@ -157,7 +149,6 @@ fn render_scrollable(
     for (i, item) in items.into_iter().enumerate() {
         let is_selected = selected == Some(i);
         let bg = if is_selected { Some(hl_bg) } else { None };
-        let _ = item.zebra;
         let mut item_lines = item.lines;
         for line in item_lines.iter_mut() {
             if let Some(bg) = bg {
@@ -319,7 +310,7 @@ pub struct FilterRenderCtx {
     pub enabled: bool,
 }
 
-fn format_countdown(remaining: std::time::Duration) -> String {
+pub(super) fn format_countdown(remaining: std::time::Duration) -> String {
     let secs = remaining.as_secs();
     if secs < 60 {
         format!("{secs}s")
@@ -526,19 +517,18 @@ fn draw_source_list(
                     .is_some_and(|tid| ctx.liked_tweet_ids.contains(tid));
                 let lines =
                     notification_lines(n, seen, wrap_width, is_expanded, actor_cursor, liked);
-                PaneItem::new(lines).with_zebra(i % 2 == 1)
+                PaneItem::new(lines)
             })
             .collect()
     } else {
         source
             .tweets
             .iter()
-            .enumerate()
-            .map(|(i, t)| {
+            .map(|t| {
                 let is_seen = ctx.seen.is_seen(&t.rest_id);
                 let is_expanded = ctx.expanded.contains(&t.rest_id);
                 let lines = tweet_lines(t, ctx, is_seen, false, wrap_width, is_expanded);
-                PaneItem::new(lines).with_zebra(i % 2 == 1)
+                PaneItem::new(lines)
             })
             .collect()
     };
@@ -986,8 +976,7 @@ fn draw_likers_detail(
     let items: Vec<PaneItem> = view
         .users
         .iter()
-        .enumerate()
-        .map(|(i, user)| {
+        .map(|user| {
             let mut row: Vec<Span<'static>> = vec![
                 Span::raw("  "),
                 Span::styled(
@@ -1012,7 +1001,7 @@ fn draw_likers_detail(
                     Style::default().fg(Color::DarkGray),
                 ));
             }
-            PaneItem::new(vec![Line::from(row)]).with_zebra(i % 2 == 1)
+            PaneItem::new(vec![Line::from(row)])
         })
         .collect();
 
@@ -1538,14 +1527,14 @@ fn draw_tweet_detail(
     let mut items: Vec<PaneItem> = Vec::with_capacity(1 + detail.replies.len());
     items.push(PaneItem::new(focal_lines));
 
-    for (i, t) in detail.replies.iter().enumerate() {
+    for t in &detail.replies {
         let is_seen = ctx.seen.is_seen(&t.rest_id);
         let is_expanded = ctx.expanded.contains(&t.rest_id);
         let mut lines = tweet_lines(t, ctx, is_seen, true, wrap_width, is_expanded);
         if let Some(thread) = ctx.inline_threads.get(&t.rest_id) {
             append_inline_thread(&mut lines, thread, ctx, wrap_width);
         }
-        items.push(PaneItem::new(lines).with_zebra(i % 2 == 0));
+        items.push(PaneItem::new(lines));
     }
 
     if detail.replies.is_empty() && detail.loading {
@@ -2305,16 +2294,6 @@ fn relative_time(dt: DateTime<Utc>) -> String {
     format!("{years}y")
 }
 
-fn short_count(n: u64) -> String {
-    if n >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1_000_000.0)
-    } else if n >= 1_000 {
-        format!("{:.1}K", n as f64 / 1_000.0)
-    } else {
-        n.to_string()
-    }
-}
-
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     if app.mode == InputMode::Command {
         let spans = vec![
@@ -2624,7 +2603,7 @@ fn draw_changelog_overlay(frame: &mut Frame, area: Rect, app: &App) {
 
 #[cfg(test)]
 mod tests {
-    use super::{short_count, strip_leading_mentions, wrap_text};
+    use super::{strip_leading_mentions, wrap_text};
 
     #[test]
     fn strips_single_mention() {
@@ -2712,26 +2691,5 @@ mod tests {
             result,
             vec!["the quick brown", "fox jumps over", "the lazy dog"]
         );
-    }
-
-    #[test]
-    fn short_count_below_thousand() {
-        assert_eq!(short_count(0), "0");
-        assert_eq!(short_count(1), "1");
-        assert_eq!(short_count(999), "999");
-    }
-
-    #[test]
-    fn short_count_thousands() {
-        assert_eq!(short_count(1000), "1.0K");
-        assert_eq!(short_count(1500), "1.5K");
-        assert_eq!(short_count(999_999), "1000.0K");
-    }
-
-    #[test]
-    fn short_count_millions() {
-        assert_eq!(short_count(1_000_000), "1.0M");
-        assert_eq!(short_count(1_500_000), "1.5M");
-        assert_eq!(short_count(42_300_000), "42.3M");
     }
 }

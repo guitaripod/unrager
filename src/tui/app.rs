@@ -318,13 +318,10 @@ impl App {
 
     fn block_if_rate_limited(&mut self) -> bool {
         if let Some(remaining) = self.rate_limit_remaining() {
-            let secs = remaining.as_secs();
-            let label = if secs < 60 {
-                format!("{secs}s")
-            } else {
-                format!("{}:{:02}", secs / 60, secs % 60)
-            };
-            self.set_status(format!("rate-limited · retry in {label}"));
+            self.set_status(format!(
+                "rate-limited · retry in {}",
+                ui::format_countdown(remaining)
+            ));
             true
         } else {
             false
@@ -905,66 +902,59 @@ impl App {
     }
 
     fn handle_key_brief(&mut self, key: KeyEvent) {
-        fn scroll_by(view: &mut BriefView, delta: i32) {
-            view.scroll = if delta >= 0 {
-                view.scroll.saturating_add(delta as u16)
-            } else {
-                view.scroll.saturating_sub((-delta) as u16)
-            };
+        enum BriefAction {
+            Scroll(i32),
+            Jump(u16),
         }
-        match (key.code, key.modifiers) {
-            (KeyCode::Char('c'), KeyModifiers::CONTROL) => self.running = false,
-            (KeyCode::Esc, _) | (KeyCode::Char('q'), KeyModifiers::NONE) => self.back_out(false),
+
+        let action = match (key.code, key.modifiers) {
+            (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                self.running = false;
+                return;
+            }
+            (KeyCode::Esc, _) | (KeyCode::Char('q'), KeyModifiers::NONE) => {
+                self.back_out(false);
+                return;
+            }
             (KeyCode::Tab, _) if self.is_split() => {
                 self.active = match self.active {
                     ActivePane::Source => ActivePane::Detail,
                     ActivePane::Detail => ActivePane::Source,
                 };
+                return;
             }
-            (KeyCode::Char('R'), _) => self.refresh_brief(),
-            (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => {
-                if let Some(FocusEntry::Brief(view)) = self.focus_stack.last_mut() {
-                    scroll_by(view, 1);
-                }
+            (KeyCode::Char('R'), _) => {
+                self.refresh_brief();
+                return;
             }
-            (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => {
-                if let Some(FocusEntry::Brief(view)) = self.focus_stack.last_mut() {
-                    scroll_by(view, -1);
-                }
-            }
-            (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
-                if let Some(FocusEntry::Brief(view)) = self.focus_stack.last_mut() {
-                    scroll_by(view, 10);
-                }
-            }
-            (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
-                if let Some(FocusEntry::Brief(view)) = self.focus_stack.last_mut() {
-                    scroll_by(view, -10);
-                }
-            }
+            (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => BriefAction::Scroll(1),
+            (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => BriefAction::Scroll(-1),
+            (KeyCode::Char('d'), KeyModifiers::CONTROL) => BriefAction::Scroll(10),
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) => BriefAction::Scroll(-10),
             (KeyCode::Char('f'), KeyModifiers::CONTROL)
             | (KeyCode::PageDown, _)
-            | (KeyCode::Char(' '), KeyModifiers::NONE) => {
-                if let Some(FocusEntry::Brief(view)) = self.focus_stack.last_mut() {
-                    scroll_by(view, 20);
-                }
-            }
+            | (KeyCode::Char(' '), KeyModifiers::NONE) => BriefAction::Scroll(20),
             (KeyCode::Char('b'), KeyModifiers::CONTROL) | (KeyCode::PageUp, _) => {
-                if let Some(FocusEntry::Brief(view)) = self.focus_stack.last_mut() {
-                    scroll_by(view, -20);
-                }
+                BriefAction::Scroll(-20)
             }
-            (KeyCode::Char('g'), KeyModifiers::NONE) | (KeyCode::Home, _) => {
-                if let Some(FocusEntry::Brief(view)) = self.focus_stack.last_mut() {
-                    view.scroll = 0;
-                }
-            }
+            (KeyCode::Char('g'), KeyModifiers::NONE) | (KeyCode::Home, _) => BriefAction::Jump(0),
             (KeyCode::Char('G'), KeyModifiers::NONE | KeyModifiers::SHIFT) | (KeyCode::End, _) => {
-                if let Some(FocusEntry::Brief(view)) = self.focus_stack.last_mut() {
-                    view.scroll = u16::MAX;
-                }
+                BriefAction::Jump(u16::MAX)
             }
-            _ => {}
+            _ => return,
+        };
+
+        if let Some(FocusEntry::Brief(view)) = self.focus_stack.last_mut() {
+            match action {
+                BriefAction::Scroll(delta) => {
+                    view.scroll = if delta >= 0 {
+                        view.scroll.saturating_add(delta as u16)
+                    } else {
+                        view.scroll.saturating_sub((-delta) as u16)
+                    };
+                }
+                BriefAction::Jump(target) => view.scroll = target,
+            }
         }
     }
 

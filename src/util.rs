@@ -7,6 +7,16 @@ fn status_id_re() -> &'static regex::Regex {
     STATUS_ID_RE.get_or_init(|| regex::Regex::new(r"/status/(\d{1,25})").expect("status id regex"))
 }
 
+pub fn short_count(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{:.1}K", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
+    }
+}
+
 pub fn parse_tweet_ref(raw: &str) -> Result<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -61,5 +71,26 @@ mod tests {
     fn rejects_garbage() {
         assert!(parse_tweet_ref("").is_err());
         assert!(parse_tweet_ref("not a tweet").is_err());
+    }
+
+    #[test]
+    fn short_count_below_thousand() {
+        assert_eq!(short_count(0), "0");
+        assert_eq!(short_count(1), "1");
+        assert_eq!(short_count(999), "999");
+    }
+
+    #[test]
+    fn short_count_thousands() {
+        assert_eq!(short_count(1000), "1.0K");
+        assert_eq!(short_count(1500), "1.5K");
+        assert_eq!(short_count(999_999), "1000.0K");
+    }
+
+    #[test]
+    fn short_count_millions() {
+        assert_eq!(short_count(1_000_000), "1.0M");
+        assert_eq!(short_count(1_500_000), "1.5M");
+        assert_eq!(short_count(42_300_000), "42.3M");
     }
 }

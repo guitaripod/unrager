@@ -15,6 +15,7 @@ pub struct RawNotification {
     pub target_tweet_like_count: Option<u64>,
     pub target_tweet_created_at: Option<DateTime<Utc>>,
     pub target_tweet_snippet: Option<String>,
+    pub target_tweet_favorited: bool,
     pub timestamp: DateTime<Utc>,
 }
 
@@ -171,6 +172,7 @@ fn build_tweet_entry(_entry_id: &str, content: &Value) -> Option<RawNotification
         target_tweet_like_count: Some(tweet.like_count),
         target_tweet_created_at: Some(tweet.created_at),
         target_tweet_snippet: Some(tweet.text.clone()),
+        target_tweet_favorited: tweet.favorited,
         timestamp: tweet.created_at,
     })
 }
@@ -198,8 +200,8 @@ fn build_grouped_entry(entry_id: &str, content: &Value) -> Option<RawNotificatio
         .or_else(|| item.pointer("/message/text").and_then(Value::as_str))
         .and_then(extract_others_count);
 
-    let (target_tweet_id, target_tweet_like_count, target_tweet_created_at, target_tweet_snippet) =
-        extract_target_tweet(item);
+    let target = extract_target_tweet(item);
+    let target_tweet_id = target.as_ref().map(|t| t.id.clone());
 
     let stable_id =
         composite_grouped_id(&notification_type, &actors, &target_tweet_id, others_count)
@@ -211,9 +213,10 @@ fn build_grouped_entry(entry_id: &str, content: &Value) -> Option<RawNotificatio
         actors,
         others_count,
         target_tweet_id,
-        target_tweet_like_count,
-        target_tweet_created_at,
-        target_tweet_snippet,
+        target_tweet_like_count: target.as_ref().map(|t| t.like_count),
+        target_tweet_created_at: target.as_ref().map(|t| t.created_at),
+        target_tweet_snippet: target.as_ref().map(|t| t.snippet.clone()),
+        target_tweet_favorited: target.as_ref().is_some_and(|t| t.favorited),
         timestamp,
     })
 }
@@ -316,22 +319,20 @@ fn extract_actors(item: &Value) -> Vec<User> {
         .collect()
 }
 
-fn extract_target_tweet(
-    item: &Value,
-) -> (
-    Option<String>,
-    Option<u64>,
-    Option<DateTime<Utc>>,
-    Option<String>,
-) {
+struct TargetTweet {
+    id: String,
+    like_count: u64,
+    created_at: DateTime<Utc>,
+    snippet: String,
+    favorited: bool,
+}
+
+fn extract_target_tweet(item: &Value) -> Option<TargetTweet> {
     let targets = item
         .pointer("/template/target_objects")
         .or_else(|| item.pointer("/template/aggregate_user_actions_v1/target_objects"))
         .or_else(|| item.pointer("/template/aggregateUserActionsV1/targetObjects"))
-        .and_then(Value::as_array);
-    let Some(targets) = targets else {
-        return (None, None, None, None);
-    };
+        .and_then(Value::as_array)?;
 
     for target in targets {
         let result = target
@@ -341,16 +342,16 @@ fn extract_target_tweet(
         let Ok(tweet) = parse_tweet_result(result) else {
             continue;
         };
-        let snippet = decode_html_entities(&tweet.text);
-        return (
-            Some(tweet.rest_id),
-            Some(tweet.like_count),
-            Some(tweet.created_at),
-            Some(snippet),
-        );
+        return Some(TargetTweet {
+            id: tweet.rest_id,
+            like_count: tweet.like_count,
+            created_at: tweet.created_at,
+            snippet: decode_html_entities(&tweet.text),
+            favorited: tweet.favorited,
+        });
     }
 
-    (None, None, None, None)
+    None
 }
 
 fn extract_others_count(text: &str) -> Option<u64> {

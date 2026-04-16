@@ -75,12 +75,12 @@ fn pad_line_to_width(line: &mut Line<'static>, target_width: u16, bg: Color) {
 fn prepend_selection_marker(line: &mut Line<'static>, active: bool, highlight_bg: Color) {
     let (marker_text, marker_style) = if active {
         (
-            "▎ ",
+            "▌ ",
             Style::default().fg(Color::Indexed(75)).bg(highlight_bg),
         )
     } else {
         (
-            "▎ ",
+            "▌ ",
             Style::default().fg(Color::Indexed(240)).bg(highlight_bg),
         )
     };
@@ -198,6 +198,7 @@ pub struct RenderContext<'a> {
     pub inline_threads: &'a HashMap<String, InlineThread>,
     pub media_reg: &'a MediaRegistry,
     pub translations: &'a HashMap<String, String>,
+    pub liked_tweet_ids: &'a HashSet<String>,
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
@@ -250,6 +251,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         inline_threads: &app.inline_threads,
         media_reg: &app.media,
         translations: &app.translations,
+        liked_tweet_ids: &app.liked_tweet_ids,
     };
 
     if app.is_split() {
@@ -518,7 +520,12 @@ fn draw_source_list(
                 } else {
                     None
                 };
-                let lines = notification_lines(n, seen, wrap_width, is_expanded, actor_cursor);
+                let liked = n
+                    .target_tweet_id
+                    .as_ref()
+                    .is_some_and(|tid| ctx.liked_tweet_ids.contains(tid));
+                let lines =
+                    notification_lines(n, seen, wrap_width, is_expanded, actor_cursor, liked);
                 PaneItem::new(lines).with_zebra(i % 2 == 1)
             })
             .collect()
@@ -553,6 +560,7 @@ fn notification_lines(
     wrap_width: usize,
     expanded: bool,
     actor_cursor: Option<usize>,
+    liked: bool,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::with_capacity(2);
 
@@ -663,6 +671,14 @@ fn notification_lines(
         format!(" · {}", relative_time(n.timestamp)),
         Style::default().fg(meta_color),
     ));
+
+    if liked {
+        header.push(Span::raw("  "));
+        header.push(Span::styled(
+            GLYPH_LIKES.to_string(),
+            engaged_style(COLOR_LIKED),
+        ));
+    }
 
     lines.push(Line::from(header));
 

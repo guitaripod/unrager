@@ -153,6 +153,7 @@ pub struct App {
     pub translations: HashMap<String, String>,
     pub translation_inflight: HashSet<String>,
     pub engage_inflight: HashSet<String>,
+    pub liked_tweet_ids: HashSet<String>,
     pub brief_cache: HashMap<String, BriefView>,
     pub reply_sort: ReplySortOrder,
     pub app_config: AppConfig,
@@ -285,6 +286,7 @@ impl App {
             translations: HashMap::new(),
             translation_inflight: HashSet::new(),
             engage_inflight: HashSet::new(),
+            liked_tweet_ids: HashSet::new(),
             brief_cache: HashMap::new(),
             app_config,
             help_scroll: 0,
@@ -583,19 +585,44 @@ impl App {
         if self.block_if_rate_limited() {
             return;
         }
-        let Some(tweet) = self.selected_tweet().cloned() else {
+        let (rest_id, was_engaged) = if let Some(tweet) = self.selected_tweet() {
+            (tweet.rest_id.clone(), action.is_engaged(tweet))
+        } else if let Some(tid) = self.selected_notification_tweet_id() {
+            let engaged = self.liked_tweet_ids.contains(&tid);
+            (tid, engaged)
+        } else {
             return;
         };
-        if self.engage_inflight.contains(&tweet.rest_id) {
+        if self.engage_inflight.contains(&rest_id) {
             return;
         }
 
-        let verb = action.verb(action.is_engaged(&tweet));
-        self.engage_inflight.insert(tweet.rest_id.clone());
-        self.mutate_tweet_by_id(&tweet.rest_id, |t| action.apply(t));
-        self.set_status(verb);
+        self.engage_inflight.insert(rest_id.clone());
+        self.mutate_tweet_by_id(&rest_id, |t| action.apply(t));
+        if !was_engaged {
+            self.liked_tweet_ids.insert(rest_id.clone());
+        } else {
+            self.liked_tweet_ids.remove(&rest_id);
+        }
+        self.set_status(action.verb(was_engaged));
 
-        crate::tui::engage::dispatch(action, &tweet, self.client.clone(), self.tx.clone());
+        crate::tui::engage::dispatch(
+            action,
+            rest_id,
+            was_engaged,
+            self.client.clone(),
+            self.tx.clone(),
+        );
+    }
+
+    fn selected_notification_tweet_id(&self) -> Option<String> {
+        if !self.source.is_notifications() || self.active != ActivePane::Source {
+            return None;
+        }
+        self.source
+            .notifications
+            .get(self.source.selected())
+            .and_then(|n| n.target_tweet_id.clone())
     }
 
     fn handle_engage_result(
@@ -607,6 +634,11 @@ impl App {
         self.engage_inflight.remove(&rest_id);
         if let Some(err) = error {
             self.mutate_tweet_by_id(&rest_id, |t| action.apply(t));
+            if self.liked_tweet_ids.contains(&rest_id) {
+                self.liked_tweet_ids.remove(&rest_id);
+            } else {
+                self.liked_tweet_ids.insert(rest_id);
+            }
             self.error = Some(err);
         }
     }
@@ -634,6 +666,14 @@ impl App {
                 if tweet.rest_id == rest_id {
                     f(tweet);
                 }
+            }
+        }
+    }
+
+    fn track_liked_tweets(&mut self, tweets: &[Tweet]) {
+        for t in tweets {
+            if t.favorited {
+                self.liked_tweet_ids.insert(t.rest_id.clone());
             }
         }
     }
@@ -2308,6 +2348,9 @@ impl App {
     }
 
     fn push_tweet(&mut self, tweet: Tweet) {
+        if tweet.favorited {
+            self.liked_tweet_ids.insert(tweet.rest_id.clone());
+        }
         let focal_id = tweet.rest_id.clone();
         self.media.ensure_tweet_media(&tweet, &self.tx);
         let detail = TweetDetail::new(tweet);
@@ -2387,6 +2430,7 @@ impl App {
                 Vec::new()
             }
         };
+        self.track_liked_tweets(&replies_snapshot);
         self.queue_thread_media(&replies_snapshot);
     }
 
@@ -2524,6 +2568,11 @@ impl App {
                     self.source.reset_with(page);
                     added = self.source.tweets.len();
                 }
+                for t in &self.source.tweets {
+                    if t.favorited {
+                        self.liked_tweet_ids.insert(t.rest_id.clone());
+                    }
+                }
                 self.pending_classification.extend(held.iter().cloned());
                 if total_incoming > 0 && self.source.cursor.is_some() {
                     self.source.exhausted = false;
@@ -2634,6 +2683,13 @@ impl App {
                     silent,
                     "notification page loaded"
                 );
+                for n in &page.notifications {
+                    if n.target_tweet_favorited {
+                        if let Some(tid) = &n.target_tweet_id {
+                            self.liked_tweet_ids.insert(tid.clone());
+                        }
+                    }
+                }
                 if append {
                     self.source.append_notifications(page);
                 } else {

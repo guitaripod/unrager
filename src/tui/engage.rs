@@ -45,9 +45,13 @@ impl EngageAction {
     }
 }
 
-pub fn dispatch(action: EngageAction, tweet: &Tweet, client: Arc<GqlClient>, tx: EventTx) {
-    let rest_id = tweet.rest_id.clone();
-    let was_engaged = action.is_engaged(tweet);
+pub fn dispatch(
+    action: EngageAction,
+    rest_id: String,
+    was_engaged: bool,
+    client: Arc<GqlClient>,
+    tx: EventTx,
+) {
     let op = action.operation(was_engaged);
     let variables = endpoints::favorite_variables(&rest_id);
     let features = endpoints::mutation_features();
@@ -55,6 +59,7 @@ pub fn dispatch(action: EngageAction, tweet: &Tweet, client: Arc<GqlClient>, tx:
     tokio::spawn(async move {
         let error = match client.post(op, &variables, &features).await {
             Ok(_) => None,
+            Err(e) if already_engaged(&e) => None,
             Err(e) => {
                 tracing::warn!(%rest_id, ?action, "engage failed: {e}");
                 Some(e.to_string())
@@ -66,6 +71,11 @@ pub fn dispatch(action: EngageAction, tweet: &Tweet, client: Arc<GqlClient>, tx:
             error,
         });
     });
+}
+
+fn already_engaged(e: &crate::error::Error) -> bool {
+    let msg = e.to_string();
+    msg.contains("\"code\":139") || msg.contains("\"code\":327")
 }
 
 #[cfg(test)]

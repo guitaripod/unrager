@@ -2470,7 +2470,12 @@ impl App {
             None
         };
         tokio::spawn(async move {
-            let result = source::fetch_page(&client, &kind, cursor).await;
+            let mut result = source::fetch_page(&client, &kind, cursor.clone()).await;
+            if result.is_err() && !append {
+                tracing::info!("transient fetch error, retrying in 2s");
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                result = source::fetch_page(&client, &kind, cursor).await;
+            }
             let _ = tx.send(Event::TimelineLoaded {
                 kind,
                 result,
@@ -2595,8 +2600,12 @@ impl App {
                 self.drain_pending_classification();
             }
             Err(e) => {
-                self.error = Some(e.to_string());
-                self.clear_status();
+                if silent {
+                    tracing::warn!("silent timeline refresh failed: {e}");
+                } else {
+                    self.error = Some(e.to_string());
+                    self.clear_status();
+                }
             }
         }
     }
@@ -2638,14 +2647,33 @@ impl App {
             None
         };
         tokio::spawn(async move {
-            let timeout = tokio::time::Duration::from_secs(15);
-            let fetch = whisper::fetch_notifications(&client, cursor.as_deref());
-            let result = match tokio::time::timeout(timeout, fetch).await {
+            let timeout_dur = tokio::time::Duration::from_secs(15);
+            let mut result = match tokio::time::timeout(
+                timeout_dur,
+                whisper::fetch_notifications(&client, cursor.as_deref()),
+            )
+            .await
+            {
                 Ok(r) => r,
                 Err(_) => Err(crate::error::Error::GraphqlShape(
                     "notification fetch timed out".into(),
                 )),
             };
+            if result.is_err() && !append {
+                tracing::info!("transient notification fetch error, retrying in 2s");
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                result = match tokio::time::timeout(
+                    timeout_dur,
+                    whisper::fetch_notifications(&client, cursor.as_deref()),
+                )
+                .await
+                {
+                    Ok(r) => r,
+                    Err(_) => Err(crate::error::Error::GraphqlShape(
+                        "notification fetch timed out".into(),
+                    )),
+                };
+            }
             let _ = tx.send(Event::NotificationPageLoaded {
                 result,
                 append,

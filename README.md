@@ -254,15 +254,19 @@ Every field has a default — omit `[clock]` entirely to get the defaults (enabl
 ```toml
 [clock]
 enabled = true
-position = "top_right"   # top_left | top_right | bottom_left | bottom_right
+position = "footer"        # footer | header | top_left | top_right | bottom_left | bottom_right
 show_time = true
 show_date = true
 show_seconds = false
-format_24h = true
-date_format = "%a %d %b" # any chrono strftime string
-accent = "cyan"          # ANSI name, 0–255 index, or #rrggbb
-border = true
+hour_format = "auto"       # auto | h12 | h24
+date_format = "auto"       # "auto" or any chrono strftime string (e.g. "%a %d %b")
+accent = "cyan"            # ANSI name, 0–255 index, or #rrggbb
+border = true              # only applies to the corner overlays
 ```
+
+`hour_format = "auto"` (the default) reads the OS locale via `sys-locale` — so `en_US`/`en_CA`/`en_AU`/`en_IN`/etc. see `3:15 PM`, while most of Europe/Asia see `15:15`. `date_format = "auto"` picks `%a, %b %-d` for 12h locales and `%a %-d %b` otherwise. Force either with `hour_format = "h12"` / `"h24"` or an explicit strftime string.
+
+`footer` / `header` render the clock right-aligned inside that row — one line of text, no box, no overlay. The four corner positions render as a floating overlay with an optional rounded border.
 
 </details>
 

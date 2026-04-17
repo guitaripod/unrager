@@ -5,6 +5,7 @@ mod app_llm;
 mod app_nav;
 pub mod ask;
 pub mod brief;
+pub mod clock;
 pub mod command;
 pub mod compose;
 pub mod editor;

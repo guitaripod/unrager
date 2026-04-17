@@ -9,6 +9,97 @@ pub struct AppConfig {
     pub browser: String,
     #[serde(default)]
     pub query_ids: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub clock: ClockConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClockConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub position: ClockPosition,
+    #[serde(default = "default_true")]
+    pub show_time: bool,
+    #[serde(default = "default_true")]
+    pub show_date: bool,
+    #[serde(default)]
+    pub show_seconds: bool,
+    #[serde(default)]
+    pub hour_format: HourFormat,
+    #[serde(default)]
+    pub date_format: DateFormatSetting,
+    #[serde(default = "default_accent")]
+    pub accent: String,
+    #[serde(default = "default_true")]
+    pub border: bool,
+}
+
+impl Default for ClockConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+            position: ClockPosition::default(),
+            show_time: default_true(),
+            show_date: default_true(),
+            show_seconds: false,
+            hour_format: HourFormat::default(),
+            date_format: DateFormatSetting::default(),
+            accent: default_accent(),
+            border: default_true(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HourFormat {
+    #[default]
+    Auto,
+    H24,
+    H12,
+}
+
+/// Either a literal strftime string (e.g. `"%a %d %b"`) or the sentinel
+/// `"auto"`, which lets the renderer pick a locale-appropriate format.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum DateFormatSetting {
+    Literal(String),
+}
+
+impl Default for DateFormatSetting {
+    fn default() -> Self {
+        Self::Literal("auto".into())
+    }
+}
+
+impl DateFormatSetting {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Literal(s) => s.as_str(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ClockPosition {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+    Header,
+    #[default]
+    Footer,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_accent() -> String {
+    "cyan".into()
 }
 
 /// Platform-native "open a URL or path in the default app" command.

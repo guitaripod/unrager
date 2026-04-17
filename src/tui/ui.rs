@@ -444,7 +444,35 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(Color::Yellow),
         ));
     }
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    let clock_cfg = &app.app_config.clock;
+    let clock_w = if matches!(clock_cfg.position, crate::config::ClockPosition::Header) {
+        crate::tui::clock::inline_width(clock_cfg).saturating_add(2)
+    } else {
+        0
+    };
+    let (left, right) = split_right(area, clock_w);
+    frame.render_widget(Paragraph::new(Line::from(spans)), left);
+    if clock_w > 0 {
+        crate::tui::clock::render_inline(frame, right, clock_cfg);
+    }
+}
+
+fn split_right(area: Rect, right_w: u16) -> (Rect, Rect) {
+    let right_w = right_w.min(area.width);
+    let left_w = area.width.saturating_sub(right_w);
+    let left = Rect {
+        x: area.x,
+        y: area.y,
+        width: left_w,
+        height: area.height,
+    };
+    let right = Rect {
+        x: area.x + left_w,
+        y: area.y,
+        width: right_w,
+        height: area.height,
+    };
+    (left, right)
 }
 
 fn block_with_focus(title: &str, active: bool) -> Block<'_> {
@@ -2970,6 +2998,14 @@ fn relative_time(dt: DateTime<Utc>) -> String {
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
+    let clock_cfg = &app.app_config.clock;
+    let clock_w = if matches!(clock_cfg.position, crate::config::ClockPosition::Footer) {
+        crate::tui::clock::inline_width(clock_cfg).saturating_add(2)
+    } else {
+        0
+    };
+    let (left, right) = split_right(area, clock_w);
+
     if app.mode == InputMode::Command {
         let spans = vec![
             Span::styled(
@@ -2986,7 +3022,10 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             ),
             Span::styled("▎", Style::default().fg(Color::Yellow)),
         ];
-        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        frame.render_widget(Paragraph::new(Line::from(spans)), left);
+        if clock_w > 0 {
+            crate::tui::clock::render_inline(frame, right, clock_cfg);
+        }
         return;
     }
 
@@ -3025,7 +3064,10 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(Color::DarkGray),
         ));
     }
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    frame.render_widget(Paragraph::new(Line::from(spans)), left);
+    if clock_w > 0 {
+        crate::tui::clock::render_inline(frame, right, clock_cfg);
+    }
 }
 
 fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {

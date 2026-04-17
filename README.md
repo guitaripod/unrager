@@ -178,7 +178,7 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 - **Read tracking** — tweets mark as read on cursor. For You feed hides already-seen tweets and deduplicates across pages. `u` jumps to next unread.
 - **Color-hashed handles** — FNV-1a hash into a 20-color palette, consistent across every mention in every tweet body.
 - **Zebra striping** — alternating row backgrounds, auto-detects light/dark terminal theme via OSC 11.
-- **Share** — `y` copies a [fixupx](https://fixupx.com) embed URL, `o` opens in browser, `m` downloads every attachment on the selected tweet (all photos, GIFs, and video MP4s). On macOS images go to QuickLook (`qlmanage -p`) — space/Esc closes and focus returns to the terminal — while videos go through `open` (QuickTime Player), since `qlmanage` can't drive video playback. Linux uses `xdg-open` for everything. Cache lives under `~/.cache/unrager/media/<tweet_id>/`.
+- **Share** — `y` copies a [fixupx](https://fixupx.com) embed URL, `o` opens in browser, `m` downloads every attachment on the selected tweet (all photos, GIFs, and video MP4s). On macOS images go to QuickLook (`qlmanage -p`) — space/Esc closes and focus returns to the terminal — while videos open in QuickTime Player via an osascript wrapper that polls for the document close and reactivates the spawning terminal, so Cmd+W alone gets you back to unrager. Linux uses `xdg-open` for everything. Cache lives under `~/.cache/unrager/media/<tweet_id>/`.
 - **Configurable browser** — `config.toml` supports `{}` URL placeholder for Chromium `--app={}` kiosk mode.
 - **Session persistence** — source, selection, toggles, split width, feed mode, reply sort all survive restarts.
 

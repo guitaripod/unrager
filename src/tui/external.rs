@@ -3,9 +3,11 @@ use std::path::{Path, PathBuf};
 
 /// macOS splits by media kind: images/GIF-stills go through QuickLook
 /// (`qlmanage -p`) so space/Esc returns focus to the terminal, while videos
-/// go through `open` → QuickTime Player, because `qlmanage -p` throws an
-/// NSInternalInconsistencyException on MP4s (it can't drive the video player
-/// view). Linux uses `xdg-open` for everything and leans on the WM for focus.
+/// go through an osascript wrapper that opens the file in QuickTime Player,
+/// polls until the user closes the document, then reactivates the spawning
+/// terminal. Plain `open` leaves the user on the Finder/desktop after Cmd+W,
+/// and `qlmanage -p` outright crashes on mp4 with
+/// NSInternalInconsistencyException. Linux uses `xdg-open` for everything.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenerKind {
     Image,
@@ -13,15 +15,17 @@ pub enum OpenerKind {
 }
 
 #[cfg(target_os = "macos")]
-pub fn opener_for(kind: OpenerKind) -> (&'static str, &'static [&'static str], bool) {
-    match kind {
-        OpenerKind::Image => ("qlmanage", &["-p"], true),
-        OpenerKind::Video => ("open", &[], true),
-    }
+pub fn image_opener() -> (&'static str, &'static [&'static str], bool) {
+    ("qlmanage", &["-p"], true)
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn opener_for(_kind: OpenerKind) -> (&'static str, &'static [&'static str], bool) {
+pub fn image_opener() -> (&'static str, &'static [&'static str], bool) {
+    ("xdg-open", &[], false)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn video_opener() -> (&'static str, &'static [&'static str], bool) {
     ("xdg-open", &[], false)
 }
 
@@ -30,6 +34,36 @@ pub fn kind_for_extension(ext: &str) -> OpenerKind {
         "mp4" | "mov" => OpenerKind::Video,
         _ => OpenerKind::Image,
     }
+}
+
+/// AppleScript that opens `path` in QuickTime Player, blocks until the user
+/// closes the document, then reactivates the terminal identified by `bundle`.
+/// Escapes path/name/bundle so embedded quotes or backslashes stay literal.
+#[cfg(target_os = "macos")]
+fn macos_video_applescript(path: &Path, bundle: &str) -> String {
+    let path_str = path.display().to_string();
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    format!(
+        "tell application \"QuickTime Player\"\n\
+             activate\n\
+             open POSIX file \"{path}\"\n\
+             delay 0.3\n\
+             repeat while (count of (documents whose name is \"{name}\")) > 0\n\
+                 delay 0.3\n\
+             end repeat\n\
+         end tell\n\
+         tell application id \"{bundle}\" to activate",
+        path = applescript_escape(&path_str),
+        name = applescript_escape(name),
+        bundle = applescript_escape(bundle),
+    )
+}
+
+fn applescript_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,36 +159,116 @@ pub async fn download_and_open(targets: Vec<OpenTarget>) -> Result<Vec<PathBuf>,
 
     let mut opened: Vec<PathBuf> = Vec::new();
     for (kind, paths) in groups {
-        let (program, prefix_args, multi_file) = opener_for(kind);
-        let to_open: Vec<PathBuf> = if multi_file {
-            paths.clone()
-        } else {
-            vec![paths[0].clone()]
-        };
-        opened.extend(to_open.clone());
-        let prefix_args = prefix_args.to_vec();
-        tracing::info!(
-            program,
-            ?prefix_args,
-            count = to_open.len(),
-            ?kind,
-            "spawning external viewer"
-        );
-        tokio::task::spawn_blocking(move || {
-            std::process::Command::new(program)
-                .args(&prefix_args)
-                .args(&to_open)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-                .map(|_| ())
-                .map_err(|e| format!("{program} failed: {e}"))
-        })
-        .await
-        .map_err(|e| format!("spawn join: {e}"))??;
+        opened.extend(paths.clone());
+        match kind {
+            OpenerKind::Image => spawn_image_viewer(paths).await?,
+            OpenerKind::Video => spawn_video_viewer(paths).await?,
+        }
     }
     Ok(opened)
+}
+
+async fn spawn_image_viewer(paths: Vec<PathBuf>) -> Result<(), String> {
+    let (program, prefix_args, multi_file) = image_opener();
+    let to_open: Vec<PathBuf> = if multi_file {
+        paths
+    } else {
+        vec![paths.into_iter().next().unwrap()]
+    };
+    let prefix_args = prefix_args.to_vec();
+    tracing::info!(
+        program,
+        ?prefix_args,
+        count = to_open.len(),
+        "spawning image viewer"
+    );
+    tokio::task::spawn_blocking(move || {
+        std::process::Command::new(program)
+            .args(&prefix_args)
+            .args(&to_open)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("{program} failed: {e}"))
+    })
+    .await
+    .map_err(|e| format!("spawn join: {e}"))?
+}
+
+#[cfg(target_os = "macos")]
+async fn spawn_video_viewer(paths: Vec<PathBuf>) -> Result<(), String> {
+    let bundle = std::env::var("__CFBundleIdentifier").ok();
+    tracing::info!(
+        count = paths.len(),
+        ?bundle,
+        "spawning video viewer (macOS)"
+    );
+    for path in paths {
+        match &bundle {
+            Some(b) => {
+                let script = macos_video_applescript(&path, b);
+                tokio::task::spawn_blocking(move || {
+                    std::process::Command::new("osascript")
+                        .arg("-e")
+                        .arg(&script)
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn()
+                        .map(|_| ())
+                        .map_err(|e| format!("osascript failed: {e}"))
+                })
+                .await
+                .map_err(|e| format!("spawn join: {e}"))??;
+            }
+            None => {
+                tokio::task::spawn_blocking(move || {
+                    std::process::Command::new("open")
+                        .arg(&path)
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn()
+                        .map(|_| ())
+                        .map_err(|e| format!("open failed: {e}"))
+                })
+                .await
+                .map_err(|e| format!("spawn join: {e}"))??;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn spawn_video_viewer(paths: Vec<PathBuf>) -> Result<(), String> {
+    let (program, prefix_args, multi_file) = video_opener();
+    let to_open: Vec<PathBuf> = if multi_file {
+        paths
+    } else {
+        vec![paths.into_iter().next().unwrap()]
+    };
+    let prefix_args = prefix_args.to_vec();
+    tracing::info!(
+        program,
+        count = to_open.len(),
+        "spawning video viewer (non-macOS)"
+    );
+    tokio::task::spawn_blocking(move || {
+        std::process::Command::new(program)
+            .args(&prefix_args)
+            .args(&to_open)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("{program} failed: {e}"))
+    })
+    .await
+    .map_err(|e| format!("spawn join: {e}"))?
 }
 
 #[cfg(test)]
@@ -339,23 +453,44 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "macos")]
-    fn macos_routes_images_to_quicklook_videos_to_open() {
-        let (img_prog, img_prefix, _) = opener_for(OpenerKind::Image);
-        assert_eq!(img_prog, "qlmanage");
-        assert_eq!(img_prefix, &["-p"]);
-        let (vid_prog, vid_prefix, _) = opener_for(OpenerKind::Video);
-        assert_eq!(vid_prog, "open");
-        assert!(vid_prefix.is_empty());
+    fn macos_image_opener_is_quicklook() {
+        let (prog, prefix, multi) = image_opener();
+        assert_eq!(prog, "qlmanage");
+        assert_eq!(prefix, &["-p"]);
+        assert!(multi);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_video_applescript_has_poll_and_reactivate() {
+        let path = PathBuf::from("/tmp/x/00.mp4");
+        let script = macos_video_applescript(&path, "com.example.term");
+        assert!(script.contains("open POSIX file \"/tmp/x/00.mp4\""));
+        assert!(script.contains("documents whose name is \"00.mp4\""));
+        assert!(script.contains("tell application id \"com.example.term\" to activate"));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_video_applescript_escapes_quotes_and_backslashes() {
+        let path = PathBuf::from("/tmp/weird \"name\"/file\\odd.mp4");
+        let script = macos_video_applescript(&path, "a\"b\\c");
+        assert!(!script.contains("/tmp/weird \""));
+        assert!(script.contains("\\\"name\\\""));
+        assert!(script.contains("\\\\odd.mp4"));
+        assert!(script.contains("a\\\"b\\\\c"));
     }
 
     #[test]
     #[cfg(target_os = "linux")]
     fn linux_uses_xdg_open_for_everything() {
-        for kind in [OpenerKind::Image, OpenerKind::Video] {
-            let (prog, prefix, multi) = opener_for(kind);
-            assert_eq!(prog, "xdg-open");
-            assert!(prefix.is_empty());
-            assert!(!multi);
-        }
+        let (prog, prefix, multi) = image_opener();
+        assert_eq!(prog, "xdg-open");
+        assert!(prefix.is_empty());
+        assert!(!multi);
+        let (prog, prefix, multi) = video_opener();
+        assert_eq!(prog, "xdg-open");
+        assert!(prefix.is_empty());
+        assert!(!multi);
     }
 }

@@ -77,6 +77,8 @@ Toggle with `c`. The status bar shows `−N` when the filter is actively hiding 
 
 `Enter` opens a tweet into a split detail pane. The focal tweet and all its replies form one scrollable list. Push deeper into any reply with `Enter`, pop back with `h`. Press `s` to cycle reply sort order — newest, likes, replies, retweets, views — it persists across sessions. `X` expands inline thread replies without leaving the current view.
 
+Submitting a reply with `r` auto-likes the tweet you're replying to (unless it's already liked) — reciprocal-like etiquette without the manual step. If X is write-rate-limiting you and you fall back to the browser via `o` to compose there, the TUI still fires the auto-like on your behalf.
+
 The left pane stays live. `Tab` swaps focus between panes, `,`/`.` adjusts the split width.
 
 ## Search and translation
@@ -155,12 +157,12 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 | `p` | Open selected author's profile (falls back to own) |
 | `P` | Open own profile in browser |
 | `n` | Open notifications as a detail pane |
-| `o` | Open tweet in browser |
+| `o` | Open tweet in browser (auto-likes if write-rate-limited, for the browser-reply fallback) |
 | `O` | Open tweet author's profile in browser |
 | `m` | Open all media (photos/GIFs/videos) in native viewer |
 | `y` | Yank fixupx URL to clipboard |
 | `Y` | Yank tweet JSON to clipboard |
-| `r` | Reply to selected tweet |
+| `r` | Reply to selected tweet (auto-likes the target on submit) |
 | `Ctrl-r` | Reload source / refresh thread replies |
 | `u` | Jump to next unread |
 | `U` | Mark all as read |

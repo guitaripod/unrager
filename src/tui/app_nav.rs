@@ -236,7 +236,19 @@ impl App {
         if self.engage_inflight.contains(&rest_id) {
             return;
         }
+        self.set_status(action.verb(was_engaged));
+        self.engage_by_id(action, rest_id, was_engaged);
+    }
 
+    pub(super) fn engage_by_id(
+        &mut self,
+        action: EngageAction,
+        rest_id: String,
+        was_engaged: bool,
+    ) {
+        if self.engage_inflight.contains(&rest_id) {
+            return;
+        }
         self.engage_inflight.insert(rest_id.clone());
         self.mutate_tweet_by_id(&rest_id, |t| action.apply(t));
         if !was_engaged {
@@ -244,7 +256,6 @@ impl App {
         } else {
             self.liked_tweet_ids.remove(&rest_id);
         }
-        self.set_status(action.verb(was_engaged));
 
         crate::tui::engage::dispatch(
             action,
@@ -374,10 +385,17 @@ impl App {
     }
 
     pub(super) fn open_tweet_in_browser(&mut self) {
-        let Some(tweet) = self.selected_tweet() else {
-            return;
+        let (url, rest_id, already_liked) = {
+            let Some(tweet) = self.selected_tweet() else {
+                return;
+            };
+            (tweet.url.clone(), tweet.rest_id.clone(), tweet.favorited)
         };
-        self.open_url(&tweet.url.clone());
+        let write_limited = self.write_rate_limit_remaining().is_some();
+        self.open_url(&url);
+        if write_limited && !already_liked {
+            self.engage_by_id(EngageAction::Like, rest_id, false);
+        }
     }
 
     pub(super) fn open_own_profile_in_browser(&mut self) {
@@ -622,7 +640,7 @@ impl App {
     }
 
     pub(super) fn submit_reply(&mut self) {
-        let (text, in_reply_to) = {
+        let (text, in_reply_to, already_liked) = {
             let Some(FocusEntry::Tweet(detail)) = self.focus_stack.last() else {
                 return;
             };
@@ -635,6 +653,7 @@ impl App {
             (
                 bar.editor.input.trim().to_string(),
                 detail.tweet.rest_id.clone(),
+                detail.tweet.favorited,
             )
         };
         if self.block_if_write_limited() {
@@ -650,10 +669,13 @@ impl App {
         self.set_status("sending reply…");
         crate::tui::compose::dispatch_reply(
             text,
-            in_reply_to,
+            in_reply_to.clone(),
             self.client.clone(),
             self.tx.clone(),
         );
+        if !already_liked {
+            self.engage_by_id(EngageAction::Like, in_reply_to, false);
+        }
     }
 
     pub(super) fn handle_reply_result(

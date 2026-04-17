@@ -39,6 +39,8 @@ pub struct Tweet {
 pub struct Media {
     pub kind: MediaKind,
     pub url: String,
+    #[serde(default)]
+    pub video_url: Option<String>,
     pub alt_text: Option<String>,
 }
 

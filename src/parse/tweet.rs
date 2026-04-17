@@ -66,6 +66,7 @@ fn parse_tweet_node(node: &Value) -> Result<Tweet> {
 
     let author = parse_author(node)?;
     let text = extract_text(node, legacy);
+    let text = scrub_urls_in_text(&text, legacy);
     let created_at = parse_created_at(legacy)?;
 
     let reply_count = u64_field(legacy, "reply_count");
@@ -193,6 +194,10 @@ fn parse_media(legacy: &Value) -> Vec<Media> {
                 .get("media_url_https")
                 .and_then(Value::as_str)?
                 .to_string();
+            let video_url = match kind {
+                MediaKind::Photo => None,
+                MediaKind::Video | MediaKind::AnimatedGif => best_video_variant(m),
+            };
             let alt_text = m
                 .get("ext_alt_text")
                 .and_then(Value::as_str)
@@ -200,10 +205,85 @@ fn parse_media(legacy: &Value) -> Vec<Media> {
             Some(Media {
                 kind,
                 url,
+                video_url,
                 alt_text,
             })
         })
         .collect()
+}
+
+fn best_video_variant(m: &Value) -> Option<String> {
+    let variants = m
+        .pointer("/video_info/variants")
+        .and_then(Value::as_array)?;
+    let mut best: Option<(u64, &str)> = None;
+    for v in variants {
+        if v.get("content_type").and_then(Value::as_str) != Some("video/mp4") {
+            continue;
+        }
+        let Some(url) = v.get("url").and_then(Value::as_str) else {
+            continue;
+        };
+        let bitrate = v.get("bitrate").and_then(Value::as_u64).unwrap_or(0);
+        if best.as_ref().is_none_or(|(bb, _)| bitrate > *bb) {
+            best = Some((bitrate, url));
+        }
+    }
+    best.map(|(_, u)| u.to_string())
+}
+
+fn scrub_urls_in_text(text: &str, legacy: &Value) -> String {
+    let mut out = text.to_string();
+
+    let mut media_tco: Vec<String> = Vec::new();
+    for ptr in ["/extended_entities/media", "/entities/media"] {
+        if let Some(arr) = legacy.pointer(ptr).and_then(Value::as_array) {
+            for m in arr {
+                if let Some(u) = m.get("url").and_then(Value::as_str) {
+                    let owned = u.to_string();
+                    if !media_tco.contains(&owned) {
+                        media_tco.push(owned);
+                    }
+                }
+            }
+        }
+    }
+    for tco in &media_tco {
+        out = strip_url(&out, tco);
+    }
+
+    if let Some(arr) = legacy.pointer("/entities/urls").and_then(Value::as_array) {
+        for u in arr {
+            let tco = u.get("url").and_then(Value::as_str).unwrap_or("");
+            let display = u.get("display_url").and_then(Value::as_str).unwrap_or("");
+            if !tco.is_empty() && !display.is_empty() {
+                out = out.replace(tco, display);
+            }
+        }
+    }
+
+    out.trim().to_string()
+}
+
+/// Removes every occurrence of `url` from `text`, collapsing the whitespace
+/// around it so consecutive spaces and orphaned separators don't leak into the
+/// visible text.
+fn strip_url(text: &str, url: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(idx) = rest.find(url) {
+        let before = &rest[..idx];
+        let after = &rest[idx + url.len()..];
+        out.push_str(before.trim_end_matches(|c: char| c.is_whitespace()));
+        let trimmed_after = after.trim_start_matches(|c: char| c.is_whitespace());
+        let had_leading_ws = before.ends_with(|c: char| c.is_whitespace());
+        if !out.is_empty() && !trimmed_after.is_empty() && had_leading_ws {
+            out.push(' ');
+        }
+        rest = trimmed_after;
+    }
+    out.push_str(rest);
+    out
 }
 
 #[cfg(test)]
@@ -351,9 +431,136 @@ mod tests {
         assert_eq!(tweet.media.len(), 3);
         assert!(matches!(tweet.media[0].kind, MediaKind::Photo));
         assert_eq!(tweet.media[0].alt_text.as_deref(), Some("a photo"));
+        assert!(tweet.media[0].video_url.is_none());
         assert!(matches!(tweet.media[1].kind, MediaKind::Video));
         assert!(tweet.media[1].alt_text.is_none());
         assert!(matches!(tweet.media[2].kind, MediaKind::AnimatedGif));
+    }
+
+    #[test]
+    fn parse_video_picks_highest_bitrate_mp4() {
+        let mut v = minimal_tweet_json("670", "video tweet");
+        v["legacy"]["extended_entities"] = json!({
+            "media": [
+                {
+                    "type": "video",
+                    "media_url_https": "https://pbs.twimg.com/ext_tw_video/poster.jpg",
+                    "video_info": {
+                        "variants": [
+                            {"content_type": "application/x-mpegURL", "url": "https://video.twimg.com/x.m3u8"},
+                            {"bitrate": 832000, "content_type": "video/mp4", "url": "https://video.twimg.com/low.mp4"},
+                            {"bitrate": 2176000, "content_type": "video/mp4", "url": "https://video.twimg.com/high.mp4"},
+                            {"bitrate": 1280000, "content_type": "video/mp4", "url": "https://video.twimg.com/mid.mp4"}
+                        ]
+                    }
+                }
+            ]
+        });
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(tweet.media.len(), 1);
+        assert_eq!(
+            tweet.media[0].video_url.as_deref(),
+            Some("https://video.twimg.com/high.mp4")
+        );
+    }
+
+    #[test]
+    fn parse_animated_gif_extracts_mp4() {
+        let mut v = minimal_tweet_json("671", "gif tweet");
+        v["legacy"]["extended_entities"] = json!({
+            "media": [
+                {
+                    "type": "animated_gif",
+                    "media_url_https": "https://pbs.twimg.com/tweet_video_thumb/abc.jpg",
+                    "video_info": {
+                        "variants": [
+                            {"bitrate": 0, "content_type": "video/mp4", "url": "https://video.twimg.com/gif.mp4"}
+                        ]
+                    }
+                }
+            ]
+        });
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(
+            tweet.media[0].video_url.as_deref(),
+            Some("https://video.twimg.com/gif.mp4")
+        );
+    }
+
+    #[test]
+    fn scrub_strips_media_tco_from_text() {
+        let mut v = minimal_tweet_json("700", "look at this pic https://t.co/ABC123");
+        v["legacy"]["extended_entities"] = json!({
+            "media": [
+                {
+                    "type": "photo",
+                    "media_url_https": "https://pbs.twimg.com/media/x.jpg",
+                    "url": "https://t.co/ABC123"
+                }
+            ]
+        });
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(tweet.text, "look at this pic");
+    }
+
+    #[test]
+    fn scrub_replaces_link_tco_with_display_url() {
+        let mut v = minimal_tweet_json("701", "check https://t.co/SHORT for details");
+        v["legacy"]["entities"] = json!({
+            "urls": [
+                {
+                    "url": "https://t.co/SHORT",
+                    "display_url": "example.com/real",
+                    "expanded_url": "https://example.com/real/page"
+                }
+            ]
+        });
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(tweet.text, "check example.com/real for details");
+    }
+
+    #[test]
+    fn scrub_handles_multiple_media_tco_urls() {
+        let mut v = minimal_tweet_json("702", "two pics https://t.co/AAA https://t.co/BBB end");
+        v["legacy"]["extended_entities"] = json!({
+            "media": [
+                {"type": "photo", "media_url_https": "https://pbs.twimg.com/a.jpg", "url": "https://t.co/AAA"},
+                {"type": "photo", "media_url_https": "https://pbs.twimg.com/b.jpg", "url": "https://t.co/BBB"}
+            ]
+        });
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(tweet.text, "two pics end");
+    }
+
+    #[test]
+    fn scrub_trims_trailing_media_tco() {
+        let mut v = minimal_tweet_json("703", "body https://t.co/XYZ");
+        v["legacy"]["extended_entities"] = json!({
+            "media": [
+                {"type": "photo", "media_url_https": "https://pbs.twimg.com/x.jpg", "url": "https://t.co/XYZ"}
+            ]
+        });
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(tweet.text, "body");
+    }
+
+    #[test]
+    fn scrub_leaves_text_without_entities() {
+        let v = minimal_tweet_json("704", "plain text no urls");
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(tweet.text, "plain text no urls");
+    }
+
+    #[test]
+    fn scrub_preserves_link_url_when_display_missing() {
+        let mut v = minimal_tweet_json("705", "see https://t.co/ABC now");
+        v["legacy"]["entities"] = json!({
+            "urls": [
+                {"url": "https://t.co/ABC"}
+            ]
+        });
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(tweet.text, "see https://t.co/ABC now");
     }
 
     #[test]

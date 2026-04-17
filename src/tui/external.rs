@@ -62,6 +62,7 @@ fn macos_video_applescript(path: &Path, bundle: &str) -> String {
     )
 }
 
+#[cfg(target_os = "macos")]
 fn applescript_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }

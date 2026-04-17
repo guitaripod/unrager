@@ -203,7 +203,7 @@ impl App {
         if view.loading || view.exhausted || view.cursor.is_none() || !view.near_bottom() {
             return;
         }
-        self.fetch_notifications_view(true, false);
+        self.fetch_notifications_view(true);
     }
 
     pub(super) fn maybe_load_more_likers(&mut self) {

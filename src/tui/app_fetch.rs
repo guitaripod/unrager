@@ -41,12 +41,11 @@ impl App {
         {
             if let Some(FocusEntry::Notifications(view)) = self.focus_stack.last_mut() {
                 view.loading = false;
-                view.silent_refreshing = false;
                 view.cursor = None;
                 view.exhausted = false;
                 view.set_selected(0);
             }
-            self.fetch_notifications_view(false, false);
+            self.fetch_notifications_view(false);
             return;
         }
         self.source.loading = false;
@@ -229,23 +228,19 @@ impl App {
             crate::tui::focus::NotificationsView::new(),
         ));
         self.active = ActivePane::Detail;
-        self.fetch_notifications_view(false, false);
+        self.fetch_notifications_view(false);
     }
 
-    pub(super) fn fetch_notifications_view(&mut self, append: bool, silent: bool) {
+    pub(super) fn fetch_notifications_view(&mut self, append: bool) {
         let Some(FocusEntry::Notifications(view)) = self.focus_stack.last_mut() else {
             return;
         };
-        if view.loading || view.silent_refreshing {
+        if view.loading {
             tracing::debug!("notification fetch skipped: already loading");
             return;
         }
-        tracing::info!(append, silent, "notification fetch started");
-        if silent {
-            view.silent_refreshing = true;
-        } else {
-            view.loading = true;
-        }
+        tracing::info!(append, "notification fetch started");
+        view.loading = true;
         let cursor = if append { view.cursor.clone() } else { None };
         let client = self.client.clone();
         let tx = self.tx.clone();
@@ -277,11 +272,7 @@ impl App {
                     )),
                 };
             }
-            let _ = tx.send(Event::NotificationPageLoaded {
-                result,
-                append,
-                silent,
-            });
+            let _ = tx.send(Event::NotificationPageLoaded { result, append });
         });
     }
 
@@ -289,32 +280,26 @@ impl App {
         &mut self,
         result: Result<crate::parse::notification::NotificationPage>,
         append: bool,
-        silent: bool,
     ) {
         let Some(FocusEntry::Notifications(view)) = self.focus_stack.last_mut() else {
             tracing::debug!("notification page arrived but pane no longer active, discarding");
             return;
         };
-        if silent {
-            view.silent_refreshing = false;
-        } else {
-            view.loading = false;
-        }
+        view.loading = false;
         match result {
             Ok(page) => {
                 tracing::info!(
                     count = page.notifications.len(),
                     has_cursor = page.next_cursor.is_some(),
                     append,
-                    silent,
                     "notification page loaded"
                 );
                 let mut favorited_ids = Vec::new();
                 for n in &page.notifications {
-                    if n.target_tweet_favorited {
-                        if let Some(tid) = &n.target_tweet_id {
-                            favorited_ids.push(tid.clone());
-                        }
+                    if n.target_tweet_favorited
+                        && let Some(tid) = &n.target_tweet_id
+                    {
+                        favorited_ids.push(tid.clone());
                     }
                 }
                 if append {
@@ -327,18 +312,12 @@ impl App {
                     self.liked_tweet_ids.insert(tid);
                 }
                 self.error = None;
-                if !silent {
-                    self.clear_status();
-                }
+                self.clear_status();
             }
             Err(ref e) => {
-                if silent {
-                    tracing::warn!("silent notification refresh failed: {e}");
-                } else {
-                    tracing::warn!("notification fetch failed: {e}");
-                    view.error = Some(e.to_string());
-                    self.clear_status();
-                }
+                tracing::warn!("notification fetch failed: {e}");
+                view.error = Some(e.to_string());
+                self.clear_status();
             }
         }
     }
@@ -643,20 +622,13 @@ impl App {
     pub(super) fn handle_whisper_poll_tick(&mut self) {
         self.whisper.tick();
         let should_poll = self.whisper.should_poll();
-        if should_poll {
-            if let Some(FocusEntry::Notifications(view)) = self.focus_stack.last()
-                && view.selected() == 0
-                && !view.loading
-                && !view.silent_refreshing
-            {
-                self.fetch_notifications_view(false, true);
-            } else if self.source.selected() == 0
-                && !self.source.loading
-                && !self.source.silent_refreshing
-                && matches!(self.source.kind, Some(SourceKind::Home { following: true }))
-            {
-                self.fetch_source(false, true);
-            }
+        if should_poll
+            && self.source.selected() == 0
+            && !self.source.loading
+            && !self.source.silent_refreshing
+            && matches!(self.source.kind, Some(SourceKind::Home { following: true }))
+        {
+            self.fetch_source(false, true);
         }
         if should_poll {
             self.whisper.poll_inflight = true;
@@ -690,6 +662,16 @@ impl App {
             .iter()
             .filter(|n| !self.notif_seen.is_seen(&n.id))
             .count();
+
+        if let Some(FocusEntry::Notifications(view)) = self.focus_stack.last_mut()
+            && view.selected() == 0
+            && !view.loading
+        {
+            let added = view.prepend_fresh(&raw_notifs);
+            if added > 0 {
+                tracing::debug!(added, "merged fresh notifs into open view");
+            }
+        }
 
         let first_poll = self.whisper.watermark_ts == 0;
 

@@ -234,7 +234,6 @@ pub struct NotificationsView {
     pub notifications: Vec<RawNotification>,
     pub cursor: Option<String>,
     pub loading: bool,
-    pub silent_refreshing: bool,
     pub exhausted: bool,
     pub error: Option<String>,
     pub state: PaneState,
@@ -333,6 +332,24 @@ impl NotificationsView {
         if self.cursor.is_none() || incoming == 0 {
             self.exhausted = true;
         }
+    }
+
+    pub fn prepend_fresh(&mut self, notifs: &[RawNotification]) -> usize {
+        let existing: HashSet<&str> = self.notifications.iter().map(|n| n.id.as_str()).collect();
+        let fresh: Vec<RawNotification> = notifs
+            .iter()
+            .filter(|n| is_actionable_notification(n))
+            .filter(|n| !existing.contains(n.id.as_str()))
+            .cloned()
+            .collect();
+        let added = fresh.len();
+        if added == 0 {
+            return 0;
+        }
+        let mut combined = fresh;
+        combined.append(&mut self.notifications);
+        self.notifications = combined;
+        added
     }
 }
 

@@ -505,12 +505,8 @@ impl App {
                 tracing::info!(%handle, "self handle resolved in background");
                 self.self_handle = Some(handle);
             }
-            Event::NotificationPageLoaded {
-                result,
-                append,
-                silent,
-            } => {
-                self.handle_notification_page_loaded(result, append, silent);
+            Event::NotificationPageLoaded { result, append } => {
+                self.handle_notification_page_loaded(result, append);
             }
             Event::UserTimelineLoaded { result } => {
                 self.handle_user_timeline_loaded(result);

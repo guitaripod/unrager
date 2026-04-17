@@ -190,6 +190,7 @@ pub struct RenderContext<'a> {
     pub media_reg: &'a MediaRegistry,
     pub translations: &'a HashMap<String, String>,
     pub liked_tweet_ids: &'a HashSet<String>,
+    pub write_rate_limit: Option<std::time::Duration>,
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
@@ -243,6 +244,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         media_reg: &app.media,
         translations: &app.translations,
         liked_tweet_ids: &app.liked_tweet_ids,
+        write_rate_limit: app.client.write_rate_limit_remaining(),
     };
 
     if app.is_split() {
@@ -381,10 +383,22 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(Color::Magenta),
         ));
     }
-    if let Some(remaining) = app.client.rate_limit_remaining() {
+    let read_rl = app.client.read_rate_limit_remaining();
+    let write_rl = app.client.write_rate_limit_remaining();
+    if read_rl.is_some() || write_rl.is_some() {
         spans.push(Span::raw("  "));
+        let text = match (read_rl, write_rl) {
+            (Some(r), Some(w)) => format!(
+                "⊘ X cooldown · reads {} · writes {}",
+                format_countdown(r),
+                format_countdown(w),
+            ),
+            (Some(r), None) => format!("⊘ X cooldown · reads {}", format_countdown(r)),
+            (None, Some(w)) => format!("⊘ X cooldown · writes {}", format_countdown(w)),
+            (None, None) => String::new(),
+        };
         spans.push(Span::styled(
-            format!("⊘ rate-limited · {}", format_countdown(remaining)),
+            text,
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         ));
     }
@@ -763,7 +777,6 @@ fn draw_detail(
         }
         FocusEntry::Ask(view) => draw_ask(frame, area, view, ctx, active),
         FocusEntry::Brief(view) => draw_brief(frame, area, view, active),
-        FocusEntry::Compose(view) => draw_compose(frame, area, view, ctx, active),
     }
 }
 
@@ -1331,123 +1344,6 @@ fn draw_ask_input(
     frame.render_widget(para, area);
 }
 
-fn draw_compose(
-    frame: &mut Frame,
-    area: Rect,
-    view: &mut crate::tui::compose::ComposeView,
-    ctx: &RenderContext,
-    active: bool,
-) {
-    let title = format!("reply · @{}", view.tweet.author.handle);
-    let block = block_with_focus(&title, active);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if inner.height < 4 {
-        return;
-    }
-
-    let tweet_preview_h = inner.height.min(5);
-    let input_h = inner.height.saturating_sub(tweet_preview_h);
-    let [tweet_area, input_area] = Layout::vertical([
-        Constraint::Length(tweet_preview_h),
-        Constraint::Length(input_h),
-    ])
-    .areas(inner);
-    draw_ask_tweet_header(frame, tweet_area, &view.tweet, ctx);
-
-    let wrap_width = input_area.width as usize;
-
-    let separator = "─".repeat(wrap_width);
-    let sep_line = Line::from(Span::styled(
-        separator,
-        Style::default().fg(Color::DarkGray),
-    ));
-
-    let prompt_style = if active {
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-
-    let mut lines: Vec<Line<'static>> = vec![sep_line];
-
-    let (cursor_col, cursor_row) = if view.sending || view.editor.input.is_empty() {
-        let mut spans: Vec<Span<'static>> = vec![Span::styled("> ", prompt_style)];
-        if view.sending {
-            spans.push(Span::styled(
-                "sending…",
-                Style::default().fg(Color::DarkGray),
-            ));
-        } else {
-            spans.push(Span::styled(
-                "type your reply…",
-                Style::default().fg(Color::DarkGray),
-            ));
-        }
-        lines.push(Line::from(spans));
-        (2usize, 0usize)
-    } else {
-        let (wrapped, c_col, c_row) =
-            reply_wrap_input("> ", &view.editor.input, view.editor.cursor_pos, wrap_width);
-        for (i, visual_line) in wrapped.into_iter().enumerate() {
-            if i == 0 && visual_line.len() >= 2 {
-                let rest = visual_line[2..].to_string();
-                lines.push(Line::from(vec![
-                    Span::styled("> ", prompt_style),
-                    Span::raw(rest),
-                ]));
-            } else {
-                lines.push(Line::from(Span::raw(visual_line)));
-            }
-        }
-        (c_col, c_row)
-    };
-
-    let char_count = view.editor.char_count();
-    let count_style = if char_count > 280 {
-        Style::default().fg(Color::Red)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-    let mode_tag = match view.editor.mode {
-        crate::tui::editor::VimMode::Insert => "INSERT",
-        crate::tui::editor::VimMode::Normal => "NORMAL",
-    };
-    let mode_style = match view.editor.mode {
-        crate::tui::editor::VimMode::Insert => Style::default().fg(Color::Green),
-        crate::tui::editor::VimMode::Normal => Style::default().fg(Color::Yellow),
-    };
-    lines.push(Line::from(vec![
-        Span::styled(format!("-- {mode_tag} -- "), mode_style),
-        Span::styled(format!("{char_count}/280"), count_style),
-        Span::styled(
-            "  Enter send · Esc cancel",
-            Style::default().fg(Color::DarkGray),
-        ),
-    ]));
-
-    if let Some(ref err) = view.error {
-        lines.push(Line::from(Span::styled(
-            err.clone(),
-            Style::default().fg(Color::Red),
-        )));
-    }
-
-    let para = Paragraph::new(lines);
-    frame.render_widget(para, input_area);
-
-    if active && !view.sending {
-        let cursor_x = input_area.x + cursor_col as u16;
-        let cursor_y = input_area.y + 1 + cursor_row as u16;
-        if cursor_x < input_area.right() && cursor_y < input_area.bottom() {
-            frame.set_cursor_position((cursor_x, cursor_y));
-        }
-    }
-}
-
 fn reply_wrap_input(
     prompt: &str,
     text: &str,
@@ -1700,6 +1596,15 @@ fn draw_tweet_detail(
     active: bool,
     reply_sort: ReplySortOrder,
 ) {
+    let bar_height: u16 = if detail.reply_bar.is_some() { 4 } else { 0 };
+    let (thread_area, bar_area) = if bar_height > 0 && area.height > bar_height + 4 {
+        let [top, bot] =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(bar_height)]).areas(area);
+        (top, Some(bot))
+    } else {
+        (area, None)
+    };
+
     let reply_suffix = if detail.loading {
         " [loading replies…]".to_string()
     } else if detail.replies.is_empty() && detail.error.is_none() {
@@ -1707,16 +1612,27 @@ fn draw_tweet_detail(
     } else if detail.replies.is_empty() {
         String::new()
     } else {
+        let new_count = detail.new_reply_ids.len();
         let sort_label = if matches!(reply_sort, ReplySortOrder::Newest) {
             String::new()
         } else {
             format!(" by {}", reply_sort.label())
         };
-        format!(" · {} replies{}", detail.replies.len(), sort_label)
+        let new_label = if new_count > 0 {
+            format!(" · {new_count} new")
+        } else {
+            String::new()
+        };
+        format!(
+            " · {} replies{}{}",
+            detail.replies.len(),
+            sort_label,
+            new_label
+        )
     };
     let title = format!("tweet @{}{}", detail.tweet.author.handle, reply_suffix);
 
-    let wrap_width = (area.width as usize).saturating_sub(4);
+    let wrap_width = (thread_area.width as usize).saturating_sub(4);
 
     let selected = detail.selected();
     let focal_lines = tweet_lines(&detail.tweet, ctx, false, false, wrap_width, true);
@@ -1726,7 +1642,15 @@ fn draw_tweet_detail(
     for t in &detail.replies {
         let is_seen = ctx.seen.is_seen(&t.rest_id);
         let is_expanded = ctx.expanded.contains(&t.rest_id);
+        let is_new = detail.new_reply_ids.contains(&t.rest_id);
         let mut lines = tweet_lines(t, ctx, is_seen, true, wrap_width, is_expanded);
+        if is_new {
+            if let Some(first) = lines.first_mut() {
+                first
+                    .spans
+                    .insert(0, Span::styled("● ", Style::default().fg(Color::Green)));
+            }
+        }
         if let Some(thread) = ctx.inline_threads.get(&t.rest_id) {
             append_inline_thread(&mut lines, thread, ctx, wrap_width);
         }
@@ -1748,13 +1672,126 @@ fn draw_tweet_detail(
 
     render_scrollable(
         frame,
-        area,
+        thread_area,
         &title,
         items,
         &mut detail.state,
         Some(selected),
         active,
     );
+
+    if let Some(bar_area) = bar_area {
+        if let Some(bar) = &detail.reply_bar {
+            draw_reply_bar(frame, bar_area, bar, active, ctx.write_rate_limit);
+        }
+    }
+}
+
+fn draw_reply_bar(
+    frame: &mut Frame,
+    area: Rect,
+    bar: &crate::tui::compose::ReplyBar,
+    active: bool,
+    write_rate_limit: Option<std::time::Duration>,
+) {
+    let wrap_width = area.width as usize;
+
+    let separator = "─".repeat(wrap_width);
+    let sep_line = Line::from(Span::styled(
+        separator,
+        Style::default().fg(Color::DarkGray),
+    ));
+
+    let prompt_style = if active {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let mut lines: Vec<Line<'static>> = vec![sep_line];
+
+    let (cursor_col, cursor_row) = if bar.sending || bar.editor.input.is_empty() {
+        let mut spans: Vec<Span<'static>> = vec![Span::styled("> ", prompt_style)];
+        if bar.sending {
+            spans.push(Span::styled(
+                "sending…",
+                Style::default().fg(Color::DarkGray),
+            ));
+        } else {
+            spans.push(Span::styled(
+                "type your reply…",
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        lines.push(Line::from(spans));
+        (2usize, 0usize)
+    } else {
+        let (wrapped, c_col, c_row) =
+            reply_wrap_input("> ", &bar.editor.input, bar.editor.cursor_pos, wrap_width);
+        for (i, visual_line) in wrapped.into_iter().enumerate() {
+            if i == 0 && visual_line.len() >= 2 {
+                let rest = visual_line[2..].to_string();
+                lines.push(Line::from(vec![
+                    Span::styled("> ", prompt_style),
+                    Span::raw(rest),
+                ]));
+            } else {
+                lines.push(Line::from(Span::raw(visual_line)));
+            }
+        }
+        (c_col, c_row)
+    };
+
+    let char_count = bar.editor.char_count();
+    let count_style = if char_count > 280 {
+        Style::default().fg(Color::Red)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let mode_tag = match bar.editor.mode {
+        crate::tui::editor::VimMode::Insert => "INSERT",
+        crate::tui::editor::VimMode::Normal => "NORMAL",
+    };
+    let mode_style = match bar.editor.mode {
+        crate::tui::editor::VimMode::Insert => Style::default().fg(Color::Green),
+        crate::tui::editor::VimMode::Normal => Style::default().fg(Color::Yellow),
+    };
+    let hint_span = if let Some(remaining) = write_rate_limit {
+        Span::styled(
+            format!("  ⊘ X cooldown · wait {}", format_countdown(remaining)),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::styled(
+            "  Enter send · Esc close",
+            Style::default().fg(Color::DarkGray),
+        )
+    };
+    lines.push(Line::from(vec![
+        Span::styled(format!("-- {mode_tag} -- "), mode_style),
+        Span::styled(format!("{char_count}/280"), count_style),
+        hint_span,
+    ]));
+
+    if let Some(ref err) = bar.error {
+        lines.push(Line::from(Span::styled(
+            err.clone(),
+            Style::default().fg(Color::Red),
+        )));
+    }
+
+    let para = Paragraph::new(lines);
+    frame.render_widget(para, area);
+
+    if active && !bar.sending {
+        let cursor_x = area.x + cursor_col as u16;
+        let cursor_y = area.y + 1 + cursor_row as u16;
+        if cursor_x < area.right() && cursor_y < area.bottom() {
+            frame.set_cursor_position((cursor_x, cursor_y));
+        }
+    }
 }
 
 fn author_spans(handle: &str, verified: bool, name: &str, show_name: bool) -> Vec<Span<'static>> {
@@ -2613,7 +2650,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  N              toggle display names"),
         Line::from("  I              toggle media auto-expand"),
         Line::from("  Z              toggle dark / light theme palette"),
-        Line::from("  p              my profile"),
+        Line::from("  p              open profile of selected tweet's author"),
         Line::from("  P              open own profile in browser"),
         Line::from("  T              translate tweet to English (toggle)"),
         Line::from("  A              ask gemma (digit = preset, thread context if in detail)"),

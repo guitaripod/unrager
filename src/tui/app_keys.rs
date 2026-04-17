@@ -31,7 +31,10 @@ impl App {
             return;
         }
         if self.active == ActivePane::Detail
-            && matches!(self.focus_stack.last(), Some(FocusEntry::Compose(_)))
+            && matches!(
+                self.focus_stack.last(),
+                Some(FocusEntry::Tweet(d)) if d.reply_bar.is_some()
+            )
         {
             self.handle_key_reply(key);
             return;
@@ -224,10 +227,8 @@ impl App {
                 self.mark_current_seen();
                 self.maybe_load_more();
             }
-            (KeyCode::Char('r'), KeyModifiers::NONE) => {
-                if !self.source.is_notifications() {
-                    self.start_reply();
-                }
+            (KeyCode::Char('r'), KeyModifiers::NONE) if !self.source.is_notifications() => {
+                self.start_reply();
             }
             (KeyCode::Char('r'), KeyModifiers::CONTROL) => self.reload_source(),
             (KeyCode::Char('u'), KeyModifiers::NONE) => self.jump_next_unread(),
@@ -268,29 +269,20 @@ impl App {
                         l.select_next();
                         self.maybe_load_more_likers();
                     }
-                    Some(FocusEntry::Ask(_))
-                    | Some(FocusEntry::Brief(_))
-                    | Some(FocusEntry::Compose(_))
-                    | None => {}
+                    Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
                 }
             }
             (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => {
                 match self.focus_stack.last_mut() {
                     Some(FocusEntry::Tweet(d)) => d.select_prev(),
                     Some(FocusEntry::Likers(l)) => l.select_prev(),
-                    Some(FocusEntry::Ask(_))
-                    | Some(FocusEntry::Brief(_))
-                    | Some(FocusEntry::Compose(_))
-                    | None => {}
+                    Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
                 }
             }
             (KeyCode::Char('g'), KeyModifiers::NONE) => match self.focus_stack.last_mut() {
                 Some(FocusEntry::Tweet(d)) => d.jump_top(),
                 Some(FocusEntry::Likers(l)) => l.jump_top(),
-                Some(FocusEntry::Ask(_))
-                | Some(FocusEntry::Brief(_))
-                | Some(FocusEntry::Compose(_))
-                | None => {}
+                Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
             },
             (KeyCode::Char('G'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
                 match self.focus_stack.last_mut() {
@@ -299,10 +291,7 @@ impl App {
                         l.jump_bottom();
                         self.maybe_load_more_likers();
                     }
-                    Some(FocusEntry::Ask(_))
-                    | Some(FocusEntry::Brief(_))
-                    | Some(FocusEntry::Compose(_))
-                    | None => {}
+                    Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
                 }
             }
             (KeyCode::Char('d'), KeyModifiers::CONTROL) => match self.focus_stack.last_mut() {
@@ -311,18 +300,12 @@ impl App {
                     l.advance(10);
                     self.maybe_load_more_likers();
                 }
-                Some(FocusEntry::Ask(_))
-                | Some(FocusEntry::Brief(_))
-                | Some(FocusEntry::Compose(_))
-                | None => {}
+                Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
             },
             (KeyCode::Char('u'), KeyModifiers::CONTROL) => match self.focus_stack.last_mut() {
                 Some(FocusEntry::Tweet(d)) => d.advance(-10),
                 Some(FocusEntry::Likers(l)) => l.advance(-10),
-                Some(FocusEntry::Ask(_))
-                | Some(FocusEntry::Brief(_))
-                | Some(FocusEntry::Compose(_))
-                | None => {}
+                Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
             },
             (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, _) => {
                 self.active = ActivePane::Source;
@@ -342,16 +325,13 @@ impl App {
                             self.open_user_in_detail(user.handle, Some(user.rest_id));
                         }
                     }
-                    Some(FocusEntry::Ask(_))
-                    | Some(FocusEntry::Brief(_))
-                    | Some(FocusEntry::Compose(_))
-                    | None => {}
+                    Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
                 }
             }
-            (KeyCode::Char('r'), KeyModifiers::NONE) => {
-                if matches!(self.focus_stack.last(), Some(FocusEntry::Tweet(_))) {
-                    self.start_reply();
-                }
+            (KeyCode::Char('r'), KeyModifiers::NONE)
+                if matches!(self.focus_stack.last(), Some(FocusEntry::Tweet(_))) =>
+            {
+                self.start_reply();
             }
             _ => {}
         }
@@ -373,17 +353,24 @@ impl App {
         }
 
         let result = {
-            let Some(FocusEntry::Compose(view)) = self.focus_stack.last_mut() else {
+            let Some(FocusEntry::Tweet(detail)) = self.focus_stack.last_mut() else {
                 return;
             };
-            if view.sending {
+            let Some(bar) = &mut detail.reply_bar else {
+                return;
+            };
+            if bar.sending {
                 return;
             }
-            view.editor.handle_key(key)
+            bar.editor.handle_key(key)
         };
         match result {
             EditorResult::Submit => self.submit_reply(),
-            EditorResult::ExitNormal => self.back_out(false),
+            EditorResult::ExitNormal => {
+                if let Some(FocusEntry::Tweet(detail)) = self.focus_stack.last_mut() {
+                    detail.reply_bar = None;
+                }
+            }
             EditorResult::Consumed => {}
         }
     }

@@ -124,7 +124,7 @@ impl App {
                 );
                 self.filter_hidden_count += hidden;
                 if matches!(kind, SourceKind::Home { following: true }) {
-                    page.tweets.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+                    page.tweets.sort_by_key(|t| std::cmp::Reverse(t.created_at));
                 }
                 let filter_active =
                     matches!(self.filter_mode, FilterMode::On) && self.filter_classifier.is_some();
@@ -757,6 +757,57 @@ impl App {
             }
         }
     }
+
+    pub(super) fn maybe_refresh_thread(&self) {
+        const REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+        let Some(FocusEntry::Tweet(detail)) = self.focus_stack.last() else {
+            return;
+        };
+        if detail.loading {
+            return;
+        }
+        let should_refresh = detail
+            .last_refresh
+            .is_some_and(|t| t.elapsed() >= REFRESH_INTERVAL);
+        if !should_refresh {
+            return;
+        }
+        let focal_id = detail.tweet.rest_id.clone();
+        let client = self.client.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = focus::fetch_thread(&client, &focal_id).await;
+            let _ = tx.send(Event::ThreadRefreshed { focal_id, result });
+        });
+    }
+
+    pub(super) fn handle_thread_refreshed(
+        &mut self,
+        focal_id: String,
+        result: Result<TimelinePage>,
+    ) {
+        let Some(FocusEntry::Tweet(detail)) = self.focus_stack.last_mut() else {
+            return;
+        };
+        if detail.tweet.rest_id != focal_id {
+            return;
+        }
+        match result {
+            Ok(page) => {
+                let selected_id = detail.selected_reply().map(|t| t.rest_id.clone());
+                detail.merge_refreshed_replies(page);
+                detail.sort_replies(self.reply_sort);
+                if let Some(ref id) = selected_id {
+                    if let Some(pos) = detail.replies.iter().position(|t| t.rest_id == *id) {
+                        detail.state.selected = pos + 1;
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::debug!(focal_id, "thread refresh failed: {e}");
+            }
+        }
+    }
 }
 
 pub fn apply_conversation_view(
@@ -793,7 +844,7 @@ pub fn apply_conversation_view(
         .into_values()
         .filter(|t| t.rest_id != detail.tweet.rest_id)
         .collect();
-    conversation.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    conversation.sort_by_key(|t| t.created_at);
 
     let scroll_idx = scroll_to
         .and_then(|target| {

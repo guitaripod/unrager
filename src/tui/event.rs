@@ -149,6 +149,10 @@ pub enum Event {
         in_reply_to: String,
         result: std::result::Result<String, String>,
     },
+    ThreadRefreshed {
+        focal_id: String,
+        result: crate::error::Result<crate::parse::timeline::TimelinePage>,
+    },
     UpdateAvailable {
         version: String,
     },

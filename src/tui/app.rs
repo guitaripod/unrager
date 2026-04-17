@@ -312,10 +312,30 @@ impl App {
         self.client.rate_limit_remaining()
     }
 
-    pub(super) fn block_if_rate_limited(&mut self) -> bool {
-        if let Some(remaining) = self.rate_limit_remaining() {
+    pub fn read_rate_limit_remaining(&self) -> Option<std::time::Duration> {
+        self.client.read_rate_limit_remaining()
+    }
+
+    pub fn write_rate_limit_remaining(&self) -> Option<std::time::Duration> {
+        self.client.write_rate_limit_remaining()
+    }
+
+    pub(super) fn block_if_read_limited(&mut self) -> bool {
+        if let Some(remaining) = self.read_rate_limit_remaining() {
             self.set_status(format!(
-                "rate-limited · retry in {}",
+                "X cooldown on reads · wait {}",
+                ui::format_countdown(remaining)
+            ));
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(super) fn block_if_write_limited(&mut self) -> bool {
+        if let Some(remaining) = self.write_rate_limit_remaining() {
+            self.set_status(format!(
+                "X cooldown on writes · wait {}",
                 ui::format_countdown(remaining)
             ));
             true
@@ -380,10 +400,7 @@ impl App {
     pub fn top_detail(&self) -> Option<&TweetDetail> {
         self.focus_stack.last().and_then(|entry| match entry {
             FocusEntry::Tweet(d) => Some(d),
-            FocusEntry::Likers(_)
-            | FocusEntry::Ask(_)
-            | FocusEntry::Brief(_)
-            | FocusEntry::Compose(_) => None,
+            FocusEntry::Likers(_) | FocusEntry::Ask(_) | FocusEntry::Brief(_) => None,
         })
     }
 
@@ -392,11 +409,12 @@ impl App {
             || self.pending_thread.is_some()
             || self.pending_open.is_some()
             || self.focus_stack.last().is_some_and(|e| match e {
-                FocusEntry::Tweet(d) => d.loading,
+                FocusEntry::Tweet(d) => {
+                    d.loading || d.reply_bar.as_ref().is_some_and(|b| b.sending)
+                }
                 FocusEntry::Likers(l) => l.loading,
                 FocusEntry::Ask(a) => a.streaming,
                 FocusEntry::Brief(b) => b.loading_tweets || b.streaming,
-                FocusEntry::Compose(r) => r.sending,
             })
     }
 
@@ -429,6 +447,7 @@ impl App {
                 }
                 self.tick_status();
                 self.mark_current_seen();
+                self.maybe_refresh_thread();
             }
             Event::Key(key) => self.handle_key(key),
             Event::Resize(_, _) => {
@@ -563,6 +582,9 @@ impl App {
             } => {
                 self.handle_reply_result(in_reply_to, result);
             }
+            Event::ThreadRefreshed { focal_id, result } => {
+                self.handle_thread_refreshed(focal_id, result);
+            }
             Event::UpdateAvailable { version } => {
                 self.update_available = Some(version);
             }
@@ -575,7 +597,7 @@ impl App {
                 self.terminal_focused = true;
                 if matches!(
                     self.focus_stack.last(),
-                    Some(FocusEntry::Ask(_) | FocusEntry::Brief(_) | FocusEntry::Compose(_))
+                    Some(FocusEntry::Ask(_) | FocusEntry::Brief(_))
                 ) && let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone())
                 {
                     ask::preload(ollama);
@@ -585,7 +607,7 @@ impl App {
                 self.terminal_focused = false;
                 if matches!(
                     self.focus_stack.last(),
-                    Some(FocusEntry::Ask(_) | FocusEntry::Brief(_) | FocusEntry::Compose(_))
+                    Some(FocusEntry::Ask(_) | FocusEntry::Brief(_))
                 ) && let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone())
                 {
                     ask::unload(ollama);

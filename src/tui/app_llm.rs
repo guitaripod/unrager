@@ -394,7 +394,7 @@ impl App {
             self.set_status("profile unavailable (no ollama config)");
             return;
         };
-        if self.block_if_rate_limited() {
+        if self.block_if_read_limited() {
             return;
         }
         let (handle, prefetched) = match self.brief_target() {

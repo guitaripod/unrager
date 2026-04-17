@@ -1,7 +1,6 @@
 use crate::gql::client::GqlClient;
 use crate::gql::endpoints;
 use crate::gql::query_ids::Operation;
-use crate::model::Tweet;
 use crate::tui::editor::VimEditor;
 use crate::tui::event::{Event, EventTx};
 use std::sync::Arc;
@@ -9,26 +8,52 @@ use std::sync::Arc;
 const TWEET_CHAR_LIMIT: usize = 280;
 
 #[derive(Debug)]
-pub struct ComposeView {
-    pub tweet: Tweet,
+pub struct ReplyBar {
     pub editor: VimEditor,
     pub sending: bool,
     pub error: Option<String>,
 }
 
-impl ComposeView {
-    pub fn new(tweet: Tweet) -> Self {
+impl Default for ReplyBar {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ReplyBar {
+    pub fn new() -> Self {
         Self {
-            tweet,
             editor: VimEditor::with_limit(TWEET_CHAR_LIMIT),
             sending: false,
             error: None,
         }
     }
+}
 
-    pub fn tweet_id(&self) -> &str {
-        &self.tweet.rest_id
+pub fn friendly_error(raw: &str) -> String {
+    if raw.contains("\"code\":226") || raw.contains("code=226") {
+        return "X flagged this as automated activity · wait a few minutes and try again".into();
     }
+    if raw.contains("\"code\":139") {
+        return "already replied to this tweet".into();
+    }
+    if raw.contains("rate-limited") || raw.contains("rate limit") || raw.contains("429") {
+        return "X cooldown in effect · wait before sending again".into();
+    }
+    if raw.contains("Authorization") && raw.contains("Permissions") {
+        return "X rejected this request (permissions) · account may be flagged".into();
+    }
+    if raw.contains("\"code\":88") {
+        return "X cooldown in effect · wait before sending again".into();
+    }
+    if raw.contains("graphql errors:") {
+        let start = raw.find("graphql errors:").unwrap() + "graphql errors:".len();
+        return format!(
+            "X error:{}",
+            &raw[start..].chars().take(80).collect::<String>()
+        );
+    }
+    raw.chars().take(120).collect()
 }
 
 pub fn dispatch_reply(text: String, in_reply_to: String, client: Arc<GqlClient>, tx: EventTx) {
@@ -38,7 +63,6 @@ pub fn dispatch_reply(text: String, in_reply_to: String, client: Arc<GqlClient>,
     tracing::debug!(
         %in_reply_to,
         text_len = text.len(),
-        variables = %serde_json::to_string(&variables).unwrap_or_default(),
         "dispatching CreateTweet reply"
     );
 
@@ -48,7 +72,6 @@ pub fn dispatch_reply(text: String, in_reply_to: String, client: Arc<GqlClient>,
             .await
         {
             Ok(resp) => {
-                tracing::debug!(%in_reply_to, response = %resp, "CreateTweet raw response");
                 let new_id = resp
                     .pointer("/data/create_tweet/tweet_results/result/rest_id")
                     .and_then(|v| v.as_str())
@@ -59,7 +82,7 @@ pub fn dispatch_reply(text: String, in_reply_to: String, client: Arc<GqlClient>,
                         Ok(id)
                     }
                     None => {
-                        tracing::warn!(%in_reply_to, response = %resp, "reply posted but could not extract id");
+                        tracing::warn!(%in_reply_to, "reply posted but could not extract id");
                         Ok("unknown".to_string())
                     }
                 }

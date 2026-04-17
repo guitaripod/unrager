@@ -7,10 +7,11 @@ use crate::parse::timeline::{self, TimelinePage};
 use crate::tui::app::ReplySortOrder;
 use crate::tui::ask::AskView;
 use crate::tui::brief::BriefView;
-use crate::tui::compose::ComposeView;
+use crate::tui::compose::ReplyBar;
 use crate::tui::source::PaneState;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
 #[derive(Debug)]
 pub struct TweetDetail {
@@ -19,6 +20,9 @@ pub struct TweetDetail {
     pub loading: bool,
     pub error: Option<String>,
     pub state: PaneState,
+    pub reply_bar: Option<ReplyBar>,
+    pub new_reply_ids: HashSet<String>,
+    pub last_refresh: Option<Instant>,
 }
 
 impl TweetDetail {
@@ -29,11 +33,15 @@ impl TweetDetail {
             loading: true,
             error: None,
             state: PaneState::default(),
+            reply_bar: None,
+            new_reply_ids: HashSet::new(),
+            last_refresh: None,
         }
     }
 
     pub fn apply_page(&mut self, page: TimelinePage) {
         self.loading = false;
+        self.last_refresh = Some(Instant::now());
         let focal_id = self.tweet.rest_id.clone();
         self.replies = page
             .tweets
@@ -43,6 +51,32 @@ impl TweetDetail {
             })
             .collect();
         self.state = PaneState::default();
+    }
+
+    pub fn merge_refreshed_replies(&mut self, page: TimelinePage) {
+        self.last_refresh = Some(Instant::now());
+        let focal_id = &self.tweet.rest_id;
+        let existing: HashSet<String> = self.replies.iter().map(|t| t.rest_id.clone()).collect();
+        let new_replies: Vec<Tweet> = page
+            .tweets
+            .into_iter()
+            .filter(|t| {
+                t.rest_id != *focal_id
+                    && t.in_reply_to_tweet_id.as_deref() == Some(focal_id.as_str())
+                    && !existing.contains(&t.rest_id)
+            })
+            .collect();
+        if !new_replies.is_empty() {
+            tracing::info!(
+                focal_id,
+                count = new_replies.len(),
+                "new replies merged from refresh"
+            );
+        }
+        for t in &new_replies {
+            self.new_reply_ids.insert(t.rest_id.clone());
+        }
+        self.replies.extend(new_replies);
     }
 
     pub fn total_items(&self) -> usize {
@@ -94,17 +128,21 @@ impl TweetDetail {
 
     pub fn sort_replies(&mut self, order: ReplySortOrder) {
         match order {
-            ReplySortOrder::Newest => self.replies.sort_by(|a, b| b.created_at.cmp(&a.created_at)),
-            ReplySortOrder::Likes => self.replies.sort_by(|a, b| b.like_count.cmp(&a.like_count)),
+            ReplySortOrder::Newest => self
+                .replies
+                .sort_by_key(|t| std::cmp::Reverse(t.created_at)),
+            ReplySortOrder::Likes => self
+                .replies
+                .sort_by_key(|t| std::cmp::Reverse(t.like_count)),
             ReplySortOrder::Replies => self
                 .replies
-                .sort_by(|a, b| b.reply_count.cmp(&a.reply_count)),
+                .sort_by_key(|t| std::cmp::Reverse(t.reply_count)),
             ReplySortOrder::Retweets => self
                 .replies
-                .sort_by(|a, b| b.retweet_count.cmp(&a.retweet_count)),
+                .sort_by_key(|t| std::cmp::Reverse(t.retweet_count)),
             ReplySortOrder::Views => self
                 .replies
-                .sort_by(|a, b| b.view_count.unwrap_or(0).cmp(&a.view_count.unwrap_or(0))),
+                .sort_by_key(|t| std::cmp::Reverse(t.view_count.unwrap_or(0))),
         }
     }
 
@@ -202,7 +240,6 @@ pub enum FocusEntry {
     Likers(LikersView),
     Ask(AskView),
     Brief(BriefView),
-    Compose(ComposeView),
 }
 
 impl FocusEntry {
@@ -212,7 +249,6 @@ impl FocusEntry {
             Self::Likers(l) => &l.tweet_id,
             Self::Ask(a) => a.tweet_id(),
             Self::Brief(b) => &b.handle,
-            Self::Compose(c) => c.tweet_id(),
         }
     }
 }

@@ -5,6 +5,7 @@ use crate::tui::engage::EngageAction;
 use crate::tui::event::Event;
 use crate::tui::focus::{FocusEntry, TweetDetail};
 use crate::tui::source::{self, SourceKind};
+use crate::tui::ui;
 
 impl App {
     pub(super) fn switch_source(&mut self, kind: SourceKind) {
@@ -206,7 +207,7 @@ impl App {
     }
 
     pub(super) fn engage(&mut self, action: EngageAction) {
-        if self.block_if_rate_limited() {
+        if self.block_if_write_limited() {
             return;
         }
         let (rest_id, was_engaged) = if let Some(tweet) = self.selected_tweet() {
@@ -321,6 +322,10 @@ impl App {
     }
 
     pub(super) fn open_profile(&mut self) {
+        if let Some(handle) = self.selected_author_handle() {
+            self.switch_source(SourceKind::User { handle });
+            return;
+        }
         if let Some(handle) = self.self_handle.clone() {
             self.switch_source(SourceKind::User { handle });
             return;
@@ -338,6 +343,15 @@ impl App {
                 }
             }
         });
+    }
+
+    fn selected_author_handle(&self) -> Option<String> {
+        if self.source.is_notifications() && self.active == ActivePane::Source {
+            let n = self.source.notifications.get(self.source.selected())?;
+            let idx = self.notif_actor_cursor.unwrap_or(0);
+            return n.actors.get(idx).map(|a| a.handle.clone());
+        }
+        self.selected_tweet().map(|t| t.author.handle.clone())
     }
 
     pub(super) fn open_tweet_in_browser(&mut self) {
@@ -499,38 +513,57 @@ impl App {
     }
 
     pub(super) fn start_reply(&mut self) {
-        let Some(tweet) = self.selected_tweet().cloned() else {
+        if self.active == ActivePane::Source && !self.source.is_notifications() {
+            let Some(tweet) = self.source.tweets.get(self.source.selected()).cloned() else {
+                return;
+            };
+            self.mark_current_seen();
+            self.push_tweet(tweet);
+        }
+        let Some(FocusEntry::Tweet(detail)) = self.focus_stack.last_mut() else {
             return;
         };
-        if self.block_if_rate_limited() {
+        if detail.reply_bar.is_some() {
             return;
         }
-        let view = crate::tui::compose::ComposeView::new(tweet);
-        self.focus_stack.push(FocusEntry::Compose(view));
+        detail.reply_bar = Some(crate::tui::compose::ReplyBar::new());
         self.active = ActivePane::Detail;
-        self.set_status("reply: type, Enter send, Esc cancel");
+        if let Some(remaining) = self.write_rate_limit_remaining() {
+            self.set_status(format!(
+                "X cooldown · wait {} before sending",
+                ui::format_countdown(remaining)
+            ));
+        } else {
+            self.set_status("reply: type, Enter send, Esc close");
+        }
     }
 
     pub(super) fn submit_reply(&mut self) {
         let (text, in_reply_to) = {
-            let Some(FocusEntry::Compose(view)) = self.focus_stack.last() else {
+            let Some(FocusEntry::Tweet(detail)) = self.focus_stack.last() else {
                 return;
             };
-            if view.sending || view.editor.input.trim().is_empty() {
+            let Some(bar) = &detail.reply_bar else {
+                return;
+            };
+            if bar.sending || bar.editor.input.trim().is_empty() {
                 return;
             }
             (
-                view.editor.input.trim().to_string(),
-                view.tweet.rest_id.clone(),
+                bar.editor.input.trim().to_string(),
+                detail.tweet.rest_id.clone(),
             )
         };
-        if self.block_if_rate_limited() {
+        if self.block_if_write_limited() {
             return;
         }
-        if let Some(FocusEntry::Compose(view)) = self.focus_stack.last_mut() {
-            view.sending = true;
-            view.error = None;
+        if let Some(FocusEntry::Tweet(detail)) = self.focus_stack.last_mut() {
+            if let Some(bar) = &mut detail.reply_bar {
+                bar.sending = true;
+                bar.error = None;
+            }
         }
+        self.error = None;
         self.set_status("sending reply…");
         crate::tui::compose::dispatch_reply(
             text,
@@ -547,22 +580,29 @@ impl App {
     ) {
         let is_match = matches!(
             self.focus_stack.last(),
-            Some(FocusEntry::Compose(v)) if v.tweet.rest_id == in_reply_to
+            Some(FocusEntry::Tweet(d)) if d.tweet.rest_id == in_reply_to && d.reply_bar.is_some()
         );
         if !is_match {
             return;
         }
         match result {
             Ok(new_id) => {
+                self.error = None;
                 self.set_status(format!("reply sent · {new_id}"));
-                self.back_out(false);
+                if let Some(FocusEntry::Tweet(detail)) = self.focus_stack.last_mut() {
+                    detail.reply_bar = None;
+                }
+                self.fetch_thread(in_reply_to);
             }
             Err(err) => {
-                if let Some(FocusEntry::Compose(view)) = self.focus_stack.last_mut() {
-                    view.sending = false;
-                    view.error = Some(err.clone());
+                let friendly = crate::tui::compose::friendly_error(&err);
+                if let Some(FocusEntry::Tweet(detail)) = self.focus_stack.last_mut() {
+                    if let Some(bar) = &mut detail.reply_bar {
+                        bar.sending = false;
+                        bar.error = Some(friendly.clone());
+                    }
                 }
-                self.error = Some(err);
+                self.error = Some(friendly);
             }
         }
     }

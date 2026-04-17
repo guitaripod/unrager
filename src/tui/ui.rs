@@ -260,8 +260,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             left,
             &mut app.source,
             &ctx,
-            &app.notif_seen,
-            app.notif_actor_cursor,
             app.error.as_deref(),
             source_active,
             filter_ctx,
@@ -280,6 +278,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             &detail_ctx,
             detail_active,
             app.reply_sort,
+            &app.notif_seen,
         );
     } else {
         draw_source_list(
@@ -287,8 +286,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             main,
             &mut app.source,
             &ctx,
-            &app.notif_seen,
-            app.notif_actor_cursor,
             app.error.as_deref(),
             true,
             filter_ctx,
@@ -344,23 +341,11 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     if app.source.exhausted && !app.source.is_empty() {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
-            if app.source.is_notifications() {
-                "[end of notifications]"
-            } else {
-                "[end of timeline]"
-            },
+            "[end of timeline]",
             Style::default().fg(Color::DarkGray),
         ));
     }
-    let unread = if app.source.is_notifications() {
-        let ids: Vec<String> = app
-            .source
-            .notifications
-            .iter()
-            .map(|n| n.id.clone())
-            .collect();
-        app.notif_seen.count_unseen(&ids)
-    } else {
+    let unread = {
         let ids: Vec<String> = app
             .source
             .tweets
@@ -424,7 +409,7 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
         spans.push(Span::raw("  "));
         spans.push(Span::styled("◇", Style::default().fg(Color::Cyan)));
     }
-    if !app.source.is_notifications() && app.notif_unread_badge > 0 {
+    if !app.top_is_notifications() && app.notif_unread_badge > 0 {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
             format!("{}n", app.notif_unread_badge),
@@ -470,14 +455,11 @@ fn block_with_focus(title: &str, active: bool) -> Block<'_> {
         .title(format!(" {title} "))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn draw_source_list(
     frame: &mut Frame,
     area: Rect,
     source: &mut Source,
     ctx: &RenderContext,
-    notif_seen: &SeenStore,
-    notif_actor_cursor: Option<usize>,
     error: Option<&str>,
     active: bool,
     filter_ctx: FilterRenderCtx,
@@ -494,13 +476,7 @@ fn draw_source_list(
 
     if source.is_empty() {
         let msg = if source.loading {
-            if source.is_notifications() {
-                "loading notifications…"
-            } else {
-                "loading timeline…"
-            }
-        } else if source.is_notifications() {
-            error.unwrap_or("no notifications")
+            "loading timeline…"
         } else {
             error.unwrap_or("no tweets")
         };
@@ -512,40 +488,16 @@ fn draw_source_list(
     let wrap_width = (area.width as usize).saturating_sub(4);
     let selected = source.selected();
 
-    let items: Vec<PaneItem> = if source.is_notifications() {
-        source
-            .notifications
-            .iter()
-            .enumerate()
-            .map(|(i, n)| {
-                let seen = notif_seen.is_seen(&n.id);
-                let is_expanded = ctx.expanded.contains(&n.id);
-                let actor_cursor = if i == selected {
-                    notif_actor_cursor
-                } else {
-                    None
-                };
-                let liked = n
-                    .target_tweet_id
-                    .as_ref()
-                    .is_some_and(|tid| ctx.liked_tweet_ids.contains(tid));
-                let lines =
-                    notification_lines(n, seen, wrap_width, is_expanded, actor_cursor, liked);
-                PaneItem::new(lines)
-            })
-            .collect()
-    } else {
-        source
-            .tweets
-            .iter()
-            .map(|t| {
-                let is_seen = ctx.seen.is_seen(&t.rest_id);
-                let is_expanded = ctx.expanded.contains(&t.rest_id);
-                let lines = tweet_lines(t, ctx, is_seen, false, wrap_width, is_expanded);
-                PaneItem::new(lines)
-            })
-            .collect()
-    };
+    let items: Vec<PaneItem> = source
+        .tweets
+        .iter()
+        .map(|t| {
+            let is_seen = ctx.seen.is_seen(&t.rest_id);
+            let is_expanded = ctx.expanded.contains(&t.rest_id);
+            let lines = tweet_lines(t, ctx, is_seen, false, wrap_width, is_expanded);
+            PaneItem::new(lines)
+        })
+        .collect();
 
     render_scrollable(
         frame,
@@ -764,6 +716,7 @@ fn draw_detail(
     ctx: &RenderContext,
     active: bool,
     reply_sort: ReplySortOrder,
+    notif_seen: &SeenStore,
 ) {
     let Some(entry) = entry else {
         return;
@@ -775,9 +728,64 @@ fn draw_detail(
         FocusEntry::Likers(view) => {
             draw_likers_detail(frame, area, view, ctx.raw_display_names, active)
         }
+        FocusEntry::Notifications(view) => {
+            draw_notifications_detail(frame, area, view, ctx, notif_seen, active)
+        }
         FocusEntry::Ask(view) => draw_ask(frame, area, view, ctx, active),
         FocusEntry::Brief(view) => draw_brief(frame, area, view, active),
     }
+}
+
+fn draw_notifications_detail(
+    frame: &mut Frame,
+    area: Rect,
+    view: &mut crate::tui::focus::NotificationsView,
+    ctx: &RenderContext,
+    notif_seen: &SeenStore,
+    active: bool,
+) {
+    let title = "notifications";
+    if view.is_empty() {
+        let msg = if view.loading {
+            "loading notifications…"
+        } else {
+            view.error.as_deref().unwrap_or("no notifications")
+        };
+        let body = Paragraph::new(msg).block(block_with_focus(title, active));
+        frame.render_widget(body, area);
+        return;
+    }
+    let wrap_width = (area.width as usize).saturating_sub(4);
+    let selected = view.selected();
+    let items: Vec<PaneItem> = view
+        .notifications
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            let seen = notif_seen.is_seen(&n.id);
+            let is_expanded = ctx.expanded.contains(&n.id);
+            let actor_cursor = if i == selected {
+                view.actor_cursor
+            } else {
+                None
+            };
+            let liked = n
+                .target_tweet_id
+                .as_ref()
+                .is_some_and(|tid| ctx.liked_tweet_ids.contains(tid));
+            let lines = notification_lines(n, seen, wrap_width, is_expanded, actor_cursor, liked);
+            PaneItem::new(lines)
+        })
+        .collect();
+    render_scrollable(
+        frame,
+        area,
+        title,
+        items,
+        &mut view.state,
+        Some(selected),
+        active,
+    );
 }
 
 fn draw_brief(
@@ -2641,7 +2649,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  Ctrl-r         reload current source"),
         Line::from("  y              yank fixupx URL to clipboard"),
         Line::from("  Y              yank selected tweet JSON"),
-        Line::from("  n              open notifications"),
+        Line::from("  n              open notifications as detail pane"),
         Line::from("  o              open tweet in browser"),
         Line::from("  O              open author profile in browser"),
         Line::from("  m              open first media URL externally"),

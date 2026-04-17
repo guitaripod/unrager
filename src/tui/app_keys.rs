@@ -161,13 +161,15 @@ impl App {
                 }
             }
             (KeyCode::Char('X'), _) => {
-                if self.active == ActivePane::Source && !self.source.is_notifications() {
+                if self.active == ActivePane::Source {
                     if let Some(tweet) = self.source.tweets.get(self.source.selected()).cloned() {
                         self.mark_current_seen();
                         self.push_tweet(tweet);
                     }
                     self.toggle_inline_thread();
-                } else if self.active == ActivePane::Detail {
+                } else if self.active == ActivePane::Detail
+                    && !matches!(self.focus_stack.last(), Some(FocusEntry::Notifications(_)))
+                {
                     self.toggle_inline_thread();
                 }
             }
@@ -183,7 +185,7 @@ impl App {
             (KeyCode::Char('R'), _) => self.toggle_user_replies(),
             (KeyCode::Char('L'), _) => self.show_likers_for_selected(),
             (KeyCode::Char('n'), KeyModifiers::NONE) => {
-                self.switch_source(SourceKind::Notifications);
+                self.open_notifications();
             }
             (KeyCode::Char('o'), KeyModifiers::NONE) => self.open_tweet_in_browser(),
             (KeyCode::Char('O'), _) => self.open_author_in_browser(),
@@ -202,19 +204,11 @@ impl App {
     fn handle_key_source(&mut self, key: KeyEvent) {
         match (key.code, key.modifiers) {
             (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => {
-                if self.step_actor_cursor(1) {
-                    return;
-                }
-                self.notif_actor_cursor = None;
                 self.source.select_next();
                 self.mark_current_seen();
                 self.maybe_load_more();
             }
             (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => {
-                if self.step_actor_cursor(-1) {
-                    return;
-                }
-                self.notif_actor_cursor = None;
                 self.source.select_prev();
                 self.mark_current_seen();
             }
@@ -227,7 +221,7 @@ impl App {
                 self.mark_current_seen();
                 self.maybe_load_more();
             }
-            (KeyCode::Char('r'), KeyModifiers::NONE) if !self.source.is_notifications() => {
+            (KeyCode::Char('r'), KeyModifiers::NONE) => {
                 self.start_reply();
             }
             (KeyCode::Char('r'), KeyModifiers::CONTROL) => self.reload_source(),
@@ -236,10 +230,7 @@ impl App {
                 self.mark_all_seen_in_source();
             }
             (KeyCode::Enter, _) | (KeyCode::Char('l'), KeyModifiers::NONE) => {
-                if self.source.is_notifications() {
-                    self.open_selected_notification();
-                } else if let Some(tweet) = self.source.tweets.get(self.source.selected()).cloned()
-                {
+                if let Some(tweet) = self.source.tweets.get(self.source.selected()).cloned() {
                     self.mark_current_seen();
                     self.push_tweet(tweet);
                 }
@@ -263,25 +254,45 @@ impl App {
     fn handle_key_detail(&mut self, key: KeyEvent) {
         match (key.code, key.modifiers) {
             (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => {
+                let stepped = self.step_actor_cursor(1);
+                if stepped {
+                    return;
+                }
                 match self.focus_stack.last_mut() {
                     Some(FocusEntry::Tweet(d)) => d.select_next(),
                     Some(FocusEntry::Likers(l)) => {
                         l.select_next();
                         self.maybe_load_more_likers();
                     }
+                    Some(FocusEntry::Notifications(n)) => {
+                        n.actor_cursor = None;
+                        n.select_next();
+                        self.mark_current_notif_seen();
+                        self.maybe_load_more_notifications();
+                    }
                     Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
                 }
             }
             (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => {
+                let stepped = self.step_actor_cursor(-1);
+                if stepped {
+                    return;
+                }
                 match self.focus_stack.last_mut() {
                     Some(FocusEntry::Tweet(d)) => d.select_prev(),
                     Some(FocusEntry::Likers(l)) => l.select_prev(),
+                    Some(FocusEntry::Notifications(n)) => {
+                        n.actor_cursor = None;
+                        n.select_prev();
+                        self.mark_current_notif_seen();
+                    }
                     Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
                 }
             }
             (KeyCode::Char('g'), KeyModifiers::NONE) => match self.focus_stack.last_mut() {
                 Some(FocusEntry::Tweet(d)) => d.jump_top(),
                 Some(FocusEntry::Likers(l)) => l.jump_top(),
+                Some(FocusEntry::Notifications(n)) => n.jump_top(),
                 Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
             },
             (KeyCode::Char('G'), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
@@ -290,6 +301,10 @@ impl App {
                     Some(FocusEntry::Likers(l)) => {
                         l.jump_bottom();
                         self.maybe_load_more_likers();
+                    }
+                    Some(FocusEntry::Notifications(n)) => {
+                        n.jump_bottom();
+                        self.maybe_load_more_notifications();
                     }
                     Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
                 }
@@ -300,11 +315,16 @@ impl App {
                     l.advance(10);
                     self.maybe_load_more_likers();
                 }
+                Some(FocusEntry::Notifications(n)) => {
+                    n.advance(10);
+                    self.maybe_load_more_notifications();
+                }
                 Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
             },
             (KeyCode::Char('u'), KeyModifiers::CONTROL) => match self.focus_stack.last_mut() {
                 Some(FocusEntry::Tweet(d)) => d.advance(-10),
                 Some(FocusEntry::Likers(l)) => l.advance(-10),
+                Some(FocusEntry::Notifications(n)) => n.advance(-10),
                 Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
             },
             (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, _) => {
@@ -325,6 +345,7 @@ impl App {
                             self.open_user_in_detail(user.handle, Some(user.rest_id));
                         }
                     }
+                    Some(FocusEntry::Notifications(_)) => self.open_selected_notification(),
                     Some(FocusEntry::Ask(_)) | Some(FocusEntry::Brief(_)) | None => {}
                 }
             }
@@ -398,6 +419,7 @@ impl App {
         match command::parse(&input) {
             Ok(Command::SwitchSource(kind)) => self.switch_source(kind),
             Ok(Command::OpenTweet(id)) => self.open_tweet_by_id(id),
+            Ok(Command::OpenNotifications) => self.open_notifications(),
             Ok(Command::Quit) => self.running = false,
             Ok(Command::Help) => {
                 self.status =
@@ -571,10 +593,10 @@ impl App {
     }
 
     fn actor_count_for_current_notif(&self) -> Option<usize> {
-        if !self.source.is_notifications() {
+        let FocusEntry::Notifications(view) = self.focus_stack.last()? else {
             return None;
-        }
-        let notif = self.source.notifications.get(self.source.selected())?;
+        };
+        let notif = view.notifications.get(view.selected())?;
         if notif.notification_type != "Follow"
             || notif.actors.len() < 2
             || !self.expanded_bodies.contains(&notif.id)
@@ -588,30 +610,43 @@ impl App {
         let Some(count) = self.actor_count_for_current_notif() else {
             return false;
         };
-        let current = self.notif_actor_cursor.unwrap_or(0) as isize;
+        let Some(FocusEntry::Notifications(view)) = self.focus_stack.last_mut() else {
+            return false;
+        };
+        let current = view.actor_cursor.unwrap_or(0) as isize;
         let next = current + delta;
         if next < 0 || next >= count as isize {
             return false;
         }
-        self.notif_actor_cursor = Some(next as usize);
+        view.actor_cursor = Some(next as usize);
         true
     }
 
     fn toggle_expand_selected(&mut self) {
-        if self.source.is_notifications() && self.active == ActivePane::Source {
-            if let Some(notif) = self.source.notifications.get(self.source.selected()) {
-                let id = notif.id.clone();
-                let is_multi_follow = notif.notification_type == "Follow" && notif.actors.len() > 1;
-                if !self.expanded_bodies.remove(&id) {
-                    self.expanded_bodies.insert(id);
-                    if is_multi_follow {
-                        self.notif_actor_cursor = Some(0);
-                    }
-                    self.set_status("expanded");
-                } else {
-                    self.notif_actor_cursor = None;
-                    self.set_status("collapsed");
+        if self.active == ActivePane::Detail
+            && matches!(self.focus_stack.last(), Some(FocusEntry::Notifications(_)))
+        {
+            let Some(FocusEntry::Notifications(view)) = self.focus_stack.last_mut() else {
+                return;
+            };
+            let Some(notif) = view.notifications.get(view.selected()) else {
+                return;
+            };
+            let id = notif.id.clone();
+            let is_multi_follow = notif.notification_type == "Follow" && notif.actors.len() > 1;
+            if !self.expanded_bodies.remove(&id) {
+                self.expanded_bodies.insert(id);
+                if let Some(FocusEntry::Notifications(v)) = self.focus_stack.last_mut()
+                    && is_multi_follow
+                {
+                    v.actor_cursor = Some(0);
                 }
+                self.set_status("expanded");
+            } else {
+                if let Some(FocusEntry::Notifications(v)) = self.focus_stack.last_mut() {
+                    v.actor_cursor = None;
+                }
+                self.set_status("collapsed");
             }
             return;
         }

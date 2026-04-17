@@ -3,7 +3,6 @@ use crate::gql::GqlClient;
 use crate::gql::endpoints;
 use crate::gql::query_ids::Operation;
 use crate::model::Tweet;
-use crate::parse::notification::{NotificationPage, RawNotification};
 use crate::parse::timeline::{self, TimelinePage};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -45,7 +44,6 @@ pub enum SourceKind {
     Bookmarks {
         query: String,
     },
-    Notifications,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,7 +80,6 @@ impl SourceKind {
             Self::Mentions { target: None } => "mentions".into(),
             Self::Mentions { target: Some(h) } => format!("mentions: @{h}"),
             Self::Bookmarks { query } => format!("bookmarks: {query}"),
-            Self::Notifications => "notifications".into(),
         }
     }
 }
@@ -91,7 +88,6 @@ impl SourceKind {
 pub struct Source {
     pub kind: Option<SourceKind>,
     pub tweets: Vec<Tweet>,
-    pub notifications: Vec<RawNotification>,
     pub cursor: Option<String>,
     pub loading: bool,
     pub silent_refreshing: bool,
@@ -115,16 +111,8 @@ impl Source {
             .unwrap_or_else(|| "(empty)".to_string())
     }
 
-    pub fn is_notifications(&self) -> bool {
-        matches!(self.kind, Some(SourceKind::Notifications))
-    }
-
     pub fn len(&self) -> usize {
-        if self.is_notifications() {
-            self.notifications.len()
-        } else {
-            self.tweets.len()
-        }
+        self.tweets.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -180,35 +168,6 @@ impl Source {
         added
     }
 
-    pub fn reset_with_notifications(&mut self, page: NotificationPage) {
-        self.notifications = page
-            .notifications
-            .into_iter()
-            .filter(is_actionable_notification)
-            .collect();
-        self.cursor = page.next_cursor;
-        self.exhausted = self.cursor.is_none();
-        let last = self.notifications.len().saturating_sub(1);
-        let current = self.state.selected.min(last);
-        self.state = PaneState::with_selected(current);
-    }
-
-    pub fn append_notifications(&mut self, page: NotificationPage) {
-        let existing: HashSet<&str> = self.notifications.iter().map(|n| n.id.as_str()).collect();
-        let deduped: Vec<RawNotification> = page
-            .notifications
-            .into_iter()
-            .filter(is_actionable_notification)
-            .filter(|n| !existing.contains(n.id.as_str()))
-            .collect();
-        let incoming = deduped.len();
-        self.notifications.extend(deduped);
-        self.cursor = page.next_cursor;
-        if self.cursor.is_none() || incoming == 0 {
-            self.exhausted = true;
-        }
-    }
-
     pub fn select_next(&mut self) {
         if self.is_empty() {
             return;
@@ -253,13 +212,6 @@ impl Source {
     }
 }
 
-fn is_actionable_notification(n: &RawNotification) -> bool {
-    !matches!(
-        n.notification_type.as_str(),
-        "Recommendation" | "System" | "Trending" | "Topic" | "Spaces" | "Community" | "List"
-    )
-}
-
 pub async fn fetch_page(
     client: &GqlClient,
     kind: &SourceKind,
@@ -280,9 +232,6 @@ pub async fn fetch_page(
             fetch_search(client, &query, "Latest", cursor).await
         }
         SourceKind::Bookmarks { query } => fetch_bookmarks(client, query, cursor).await,
-        SourceKind::Notifications => Err(Error::GraphqlShape(
-            "use fetch_notifications for notification source".into(),
-        )),
     }
 }
 

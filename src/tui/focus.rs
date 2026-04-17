@@ -3,6 +3,7 @@ use crate::gql::GqlClient;
 use crate::gql::endpoints;
 use crate::gql::query_ids::Operation;
 use crate::model::{Tweet, User};
+use crate::parse::notification::{NotificationPage, RawNotification};
 use crate::parse::timeline::{self, TimelinePage};
 use crate::tui::app::ReplySortOrder;
 use crate::tui::ask::AskView;
@@ -233,11 +234,129 @@ impl LikersView {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct NotificationsView {
+    pub notifications: Vec<RawNotification>,
+    pub cursor: Option<String>,
+    pub loading: bool,
+    pub silent_refreshing: bool,
+    pub exhausted: bool,
+    pub error: Option<String>,
+    pub state: PaneState,
+    pub actor_cursor: Option<usize>,
+}
+
+impl NotificationsView {
+    pub fn new() -> Self {
+        Self {
+            loading: true,
+            ..Self::default()
+        }
+    }
+
+    pub fn selected(&self) -> usize {
+        self.state.selected
+    }
+
+    pub fn set_selected(&mut self, idx: usize) {
+        self.state.selected = idx;
+    }
+
+    pub fn len(&self) -> usize {
+        self.notifications.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.notifications.is_empty()
+    }
+
+    pub fn select_next(&mut self) {
+        if self.is_empty() {
+            return;
+        }
+        let current = self.selected();
+        if current + 1 < self.len() {
+            self.set_selected(current + 1);
+        }
+    }
+
+    pub fn select_prev(&mut self) {
+        let current = self.selected();
+        if current > 0 {
+            self.set_selected(current - 1);
+        }
+    }
+
+    pub fn advance(&mut self, delta: isize) {
+        if self.is_empty() {
+            return;
+        }
+        let current = self.selected() as isize;
+        let next = (current + delta).clamp(0, self.len() as isize - 1) as usize;
+        self.set_selected(next);
+    }
+
+    pub fn jump_top(&mut self) {
+        self.state = PaneState::default();
+    }
+
+    pub fn jump_bottom(&mut self) {
+        if !self.is_empty() {
+            self.set_selected(self.len() - 1);
+        }
+    }
+
+    pub fn near_bottom(&self) -> bool {
+        if self.is_empty() {
+            return true;
+        }
+        self.selected() + 5 >= self.len()
+    }
+
+    pub fn reset_with(&mut self, page: NotificationPage) {
+        self.notifications = page
+            .notifications
+            .into_iter()
+            .filter(is_actionable_notification)
+            .collect();
+        self.cursor = page.next_cursor;
+        self.exhausted = self.cursor.is_none();
+        let last = self.notifications.len().saturating_sub(1);
+        let current = self.state.selected.min(last);
+        self.state = PaneState::with_selected(current);
+        self.actor_cursor = None;
+    }
+
+    pub fn append(&mut self, page: NotificationPage) {
+        let existing: HashSet<&str> = self.notifications.iter().map(|n| n.id.as_str()).collect();
+        let deduped: Vec<RawNotification> = page
+            .notifications
+            .into_iter()
+            .filter(is_actionable_notification)
+            .filter(|n| !existing.contains(n.id.as_str()))
+            .collect();
+        let incoming = deduped.len();
+        self.notifications.extend(deduped);
+        self.cursor = page.next_cursor;
+        if self.cursor.is_none() || incoming == 0 {
+            self.exhausted = true;
+        }
+    }
+}
+
+fn is_actionable_notification(n: &RawNotification) -> bool {
+    !matches!(
+        n.notification_type.as_str(),
+        "Recommendation" | "System" | "Trending" | "Topic" | "Spaces" | "Community" | "List"
+    )
+}
+
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum FocusEntry {
     Tweet(TweetDetail),
     Likers(LikersView),
+    Notifications(NotificationsView),
     Ask(AskView),
     Brief(BriefView),
 }
@@ -247,6 +366,7 @@ impl FocusEntry {
         match self {
             Self::Tweet(d) => &d.tweet.rest_id,
             Self::Likers(l) => &l.tweet_id,
+            Self::Notifications(_) => "notifications",
             Self::Ask(a) => a.tweet_id(),
             Self::Brief(b) => &b.handle,
         }

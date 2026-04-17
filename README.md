@@ -97,7 +97,7 @@ The command palette supports `:home`, `:user <handle>`, `:search <query>`, `:men
   <img src="assets/notifications.png" alt="notifications view showing likes, replies, retweets, and follows" width="800">
 </p>
 
-Press `n` or `:notifs` to browse notifications. Likes, retweets, follows, and quotes come from the main notifications feed; replies are merged from the mentions endpoint. Type icons stay vivid for scanning, handles keep their palette color. Press `x` to expand a snippet, `Enter` to open the target tweet in a threaded detail view.
+Press `n` or `:notifs` to open notifications as a detail pane without losing your place in the source timeline. Likes, retweets, follows, and quotes come from the main notifications feed; replies are merged from the mentions endpoint. Type icons stay vivid for scanning, handles keep their palette color. Press `x` to expand a snippet, `Enter` to open the target tweet in a stacked detail view on top. Esc pops back to the notifications list; Esc again pops back to the source timeline.
 
 <p align="center">
   <img src="assets/notifications-detail.png" alt="notifications with split detail pane showing a threaded conversation" width="800">
@@ -154,7 +154,7 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 | `s` | Cycle reply sort in detail pane |
 | `p` | Open selected author's profile (falls back to own) |
 | `P` | Open own profile in browser |
-| `n` | Open notifications view |
+| `n` | Open notifications as a detail pane |
 | `o` | Open tweet in browser |
 | `O` | Open tweet author's profile in browser |
 | `m` | Open media externally |

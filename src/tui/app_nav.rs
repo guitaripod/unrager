@@ -21,7 +21,6 @@ impl App {
     }
 
     pub(super) fn replace_source(&mut self, kind: SourceKind) {
-        let is_notifs = matches!(kind, SourceKind::Notifications);
         self.source = source::Source::new(kind);
         self.error = None;
         self.focus_stack.clear();
@@ -35,12 +34,7 @@ impl App {
         self.translations.clear();
         self.translation_inflight.clear();
         self.engage_inflight.clear();
-        self.notif_actor_cursor = None;
-        if is_notifs {
-            self.fetch_notifications_source(false, false);
-        } else {
-            self.fetch_source(false, false);
-        }
+        self.fetch_source(false, false);
         self.save_session();
     }
 
@@ -106,12 +100,7 @@ impl App {
 
     pub(super) fn selected_tweet(&self) -> Option<&Tweet> {
         match self.active {
-            ActivePane::Source => {
-                if self.source.is_notifications() {
-                    return None;
-                }
-                self.source.tweets.get(self.source.selected())
-            }
+            ActivePane::Source => self.source.tweets.get(self.source.selected()),
             ActivePane::Detail => {
                 let detail = self.top_detail()?;
                 detail.selected_reply().or(Some(&detail.tweet))
@@ -120,62 +109,80 @@ impl App {
     }
 
     pub(super) fn mark_current_seen(&mut self) {
-        if self.source.is_notifications() {
-            if let Some(n) = self.source.notifications.get(self.source.selected()) {
-                self.notif_seen.mark_seen(&n.id);
-            }
-        } else if let Some(t) = self.source.tweets.get(self.source.selected()) {
+        if let Some(t) = self.source.tweets.get(self.source.selected()) {
             self.seen.mark_seen(&t.rest_id);
         }
     }
 
+    pub(super) fn mark_current_notif_seen(&mut self) {
+        let Some(FocusEntry::Notifications(view)) = self.focus_stack.last() else {
+            return;
+        };
+        if let Some(n) = view.notifications.get(view.selected()) {
+            self.notif_seen.mark_seen(&n.id);
+        }
+    }
+
     pub(super) fn jump_next_unread(&mut self) {
+        if self.active == ActivePane::Detail
+            && matches!(self.focus_stack.last(), Some(FocusEntry::Notifications(_)))
+        {
+            self.jump_next_unread_notif();
+            return;
+        }
         let start = self.source.selected() + 1;
-        if self.source.is_notifications() {
-            for i in start..self.source.notifications.len() {
-                if !self.notif_seen.is_seen(&self.source.notifications[i].id) {
-                    self.source.set_selected(i);
-                    self.mark_current_seen();
-                    self.maybe_load_more();
-                    return;
-                }
+        for i in start..self.source.tweets.len() {
+            if !self.seen.is_seen(&self.source.tweets[i].rest_id) {
+                self.source.set_selected(i);
+                self.mark_current_seen();
+                self.maybe_load_more();
+                return;
             }
-            self.set_status("no more unread notifications");
-        } else {
-            for i in start..self.source.tweets.len() {
-                if !self.seen.is_seen(&self.source.tweets[i].rest_id) {
-                    self.source.set_selected(i);
-                    self.mark_current_seen();
-                    self.maybe_load_more();
-                    return;
-                }
+        }
+        self.set_status("no more unread tweets in this source");
+    }
+
+    fn jump_next_unread_notif(&mut self) {
+        let Some(FocusEntry::Notifications(view)) = self.focus_stack.last_mut() else {
+            return;
+        };
+        let start = view.selected() + 1;
+        let mut hit = None;
+        for i in start..view.notifications.len() {
+            if !self.notif_seen.is_seen(&view.notifications[i].id) {
+                hit = Some(i);
+                break;
             }
-            self.set_status("no more unread tweets in this source");
+        }
+        match hit {
+            Some(i) => {
+                view.set_selected(i);
+                self.mark_current_notif_seen();
+                self.maybe_load_more_notifications();
+            }
+            None => self.set_status("no more unread notifications"),
         }
     }
 
     pub(super) fn mark_all_seen_in_source(&mut self) {
-        if self.source.is_notifications() {
-            let ids: Vec<String> = self
-                .source
-                .notifications
-                .iter()
-                .map(|n| n.id.clone())
-                .collect();
+        if self.active == ActivePane::Detail
+            && let Some(FocusEntry::Notifications(view)) = self.focus_stack.last()
+        {
+            let ids: Vec<String> = view.notifications.iter().map(|n| n.id.clone()).collect();
             let n = ids.len();
             self.notif_seen.mark_all(ids);
             self.set_status(format!("marked {n} notifications as read"));
-        } else {
-            let ids: Vec<String> = self
-                .source
-                .tweets
-                .iter()
-                .map(|t| t.rest_id.clone())
-                .collect();
-            let n = ids.len();
-            self.seen.mark_all(ids);
-            self.set_status(format!("marked {n} tweets as read"));
+            return;
         }
+        let ids: Vec<String> = self
+            .source
+            .tweets
+            .iter()
+            .map(|t| t.rest_id.clone())
+            .collect();
+        let n = ids.len();
+        self.seen.mark_all(ids);
+        self.set_status(format!("marked {n} tweets as read"));
     }
 
     pub(super) fn maybe_load_more(&mut self) {
@@ -183,12 +190,18 @@ impl App {
             return;
         }
         if self.source.near_bottom() {
-            if self.source.is_notifications() {
-                self.fetch_notifications_source(true, false);
-            } else {
-                self.fetch_source(true, false);
-            }
+            self.fetch_source(true, false);
         }
+    }
+
+    pub(super) fn maybe_load_more_notifications(&mut self) {
+        let Some(FocusEntry::Notifications(view)) = self.focus_stack.last() else {
+            return;
+        };
+        if view.loading || view.exhausted || view.cursor.is_none() || !view.near_bottom() {
+            return;
+        }
+        self.fetch_notifications_view(true, false);
     }
 
     pub(super) fn maybe_load_more_likers(&mut self) {
@@ -294,12 +307,14 @@ impl App {
     }
 
     pub(super) fn selected_notification_tweet_id(&self) -> Option<String> {
-        if !self.source.is_notifications() || self.active != ActivePane::Source {
+        if self.active != ActivePane::Detail {
             return None;
         }
-        self.source
-            .notifications
-            .get(self.source.selected())
+        let FocusEntry::Notifications(view) = self.focus_stack.last()? else {
+            return None;
+        };
+        view.notifications
+            .get(view.selected())
             .and_then(|n| n.target_tweet_id.clone())
     }
 
@@ -346,9 +361,11 @@ impl App {
     }
 
     fn selected_author_handle(&self) -> Option<String> {
-        if self.source.is_notifications() && self.active == ActivePane::Source {
-            let n = self.source.notifications.get(self.source.selected())?;
-            let idx = self.notif_actor_cursor.unwrap_or(0);
+        if self.active == ActivePane::Detail
+            && let Some(FocusEntry::Notifications(view)) = self.focus_stack.last()
+        {
+            let n = view.notifications.get(view.selected())?;
+            let idx = view.actor_cursor.unwrap_or(0);
             return n.actors.get(idx).map(|a| a.handle.clone());
         }
         self.selected_tweet().map(|t| t.author.handle.clone())
@@ -513,7 +530,7 @@ impl App {
     }
 
     pub(super) fn start_reply(&mut self) {
-        if self.active == ActivePane::Source && !self.source.is_notifications() {
+        if self.active == ActivePane::Source {
             let Some(tweet) = self.source.tweets.get(self.source.selected()).cloned() else {
                 return;
             };

@@ -14,11 +14,7 @@ use std::time::Instant;
 impl App {
     pub fn load_initial(&mut self) {
         self.spawn_self_handle_resolve();
-        if self.source.is_notifications() {
-            self.fetch_notifications_source(false, false);
-        } else {
-            self.fetch_source(false, false);
-        }
+        self.fetch_source(false, false);
     }
 
     pub(super) fn spawn_self_handle_resolve(&self) {
@@ -40,16 +36,25 @@ impl App {
     }
 
     pub(super) fn reload_source(&mut self) {
+        if self.active == ActivePane::Detail
+            && matches!(self.focus_stack.last(), Some(FocusEntry::Notifications(_)))
+        {
+            if let Some(FocusEntry::Notifications(view)) = self.focus_stack.last_mut() {
+                view.loading = false;
+                view.silent_refreshing = false;
+                view.cursor = None;
+                view.exhausted = false;
+                view.set_selected(0);
+            }
+            self.fetch_notifications_view(false, false);
+            return;
+        }
         self.source.loading = false;
         self.source.silent_refreshing = false;
         self.source.cursor = None;
         self.source.exhausted = false;
         self.source.set_selected(0);
-        if self.source.is_notifications() {
-            self.fetch_notifications_source(false, false);
-        } else {
-            self.fetch_source(false, false);
-        }
+        self.fetch_source(false, false);
     }
 
     pub(super) fn fetch_source(&mut self, append: bool, silent: bool) {
@@ -215,24 +220,35 @@ impl App {
         }
     }
 
-    pub(super) fn fetch_notifications_source(&mut self, append: bool, silent: bool) {
-        if self.source.loading || self.source.silent_refreshing {
+    pub(super) fn open_notifications(&mut self) {
+        if matches!(self.focus_stack.last(), Some(FocusEntry::Notifications(_))) {
+            self.active = ActivePane::Detail;
+            return;
+        }
+        self.focus_stack.push(FocusEntry::Notifications(
+            crate::tui::focus::NotificationsView::new(),
+        ));
+        self.active = ActivePane::Detail;
+        self.fetch_notifications_view(false, false);
+    }
+
+    pub(super) fn fetch_notifications_view(&mut self, append: bool, silent: bool) {
+        let Some(FocusEntry::Notifications(view)) = self.focus_stack.last_mut() else {
+            return;
+        };
+        if view.loading || view.silent_refreshing {
             tracing::debug!("notification fetch skipped: already loading");
             return;
         }
         tracing::info!(append, silent, "notification fetch started");
         if silent {
-            self.source.silent_refreshing = true;
+            view.silent_refreshing = true;
         } else {
-            self.source.loading = true;
+            view.loading = true;
         }
+        let cursor = if append { view.cursor.clone() } else { None };
         let client = self.client.clone();
         let tx = self.tx.clone();
-        let cursor = if append {
-            self.source.cursor.clone()
-        } else {
-            None
-        };
         tokio::spawn(async move {
             let timeout_dur = tokio::time::Duration::from_secs(15);
             let mut result = match tokio::time::timeout(
@@ -275,19 +291,14 @@ impl App {
         append: bool,
         silent: bool,
     ) {
-        if !self.source.is_notifications() {
-            tracing::debug!("notification page arrived but source changed, discarding");
-            if silent {
-                self.source.silent_refreshing = false;
-            } else {
-                self.source.loading = false;
-            }
+        let Some(FocusEntry::Notifications(view)) = self.focus_stack.last_mut() else {
+            tracing::debug!("notification page arrived but pane no longer active, discarding");
             return;
-        }
+        };
         if silent {
-            self.source.silent_refreshing = false;
+            view.silent_refreshing = false;
         } else {
-            self.source.loading = false;
+            view.loading = false;
         }
         match result {
             Ok(page) => {
@@ -298,17 +309,22 @@ impl App {
                     silent,
                     "notification page loaded"
                 );
+                let mut favorited_ids = Vec::new();
                 for n in &page.notifications {
                     if n.target_tweet_favorited {
                         if let Some(tid) = &n.target_tweet_id {
-                            self.liked_tweet_ids.insert(tid.clone());
+                            favorited_ids.push(tid.clone());
                         }
                     }
                 }
                 if append {
-                    self.source.append_notifications(page);
+                    view.append(page);
                 } else {
-                    self.source.reset_with_notifications(page);
+                    view.reset_with(page);
+                }
+                view.error = None;
+                for tid in favorited_ids {
+                    self.liked_tweet_ids.insert(tid);
                 }
                 self.error = None;
                 if !silent {
@@ -320,7 +336,7 @@ impl App {
                     tracing::warn!("silent notification refresh failed: {e}");
                 } else {
                     tracing::warn!("notification fetch failed: {e}");
-                    self.error = Some(e.to_string());
+                    view.error = Some(e.to_string());
                     self.clear_status();
                 }
             }
@@ -483,14 +499,13 @@ impl App {
     }
 
     pub(super) fn open_selected_notification(&mut self) {
-        let Some(notif) = self
-            .source
-            .notifications
-            .get(self.source.selected())
-            .cloned()
-        else {
+        let Some(FocusEntry::Notifications(view)) = self.focus_stack.last() else {
             return;
         };
+        let Some(notif) = view.notifications.get(view.selected()).cloned() else {
+            return;
+        };
+        let actor_idx = view.actor_cursor.unwrap_or(0);
         self.notif_seen.mark_seen(&notif.id);
 
         match notif.notification_type.as_str() {
@@ -503,8 +518,7 @@ impl App {
                 }
             }
             "Follow" => {
-                let idx = self.notif_actor_cursor.unwrap_or(0);
-                if let Some(actor) = notif.actors.get(idx) {
+                if let Some(actor) = notif.actors.get(actor_idx) {
                     self.open_user_in_detail(actor.handle.clone(), Some(actor.rest_id.clone()));
                 } else {
                     self.set_status("no actor for this follow notification");
@@ -517,14 +531,14 @@ impl App {
     }
 
     pub(super) fn show_likers_for_selected(&mut self) {
+        if self.active == ActivePane::Detail
+            && matches!(self.focus_stack.last(), Some(FocusEntry::Notifications(_)))
+        {
+            self.set_status("L works on tweets, not notifications");
+            return;
+        }
         let tweet = match self.active {
-            ActivePane::Source => {
-                if self.source.is_notifications() {
-                    self.set_status("L works on tweets, not notifications");
-                    return;
-                }
-                self.source.tweets.get(self.source.selected()).cloned()
-            }
+            ActivePane::Source => self.source.tweets.get(self.source.selected()).cloned(),
             ActivePane::Detail => self.selected_tweet().cloned(),
         };
         let Some(tweet) = tweet else {
@@ -629,14 +643,18 @@ impl App {
     pub(super) fn handle_whisper_poll_tick(&mut self) {
         self.whisper.tick();
         let should_poll = self.whisper.should_poll();
-        if should_poll
-            && self.source.selected() == 0
-            && !self.source.loading
-            && !self.source.silent_refreshing
-        {
-            if self.source.is_notifications() {
-                self.fetch_notifications_source(false, true);
-            } else if matches!(self.source.kind, Some(SourceKind::Home { following: true })) {
+        if should_poll {
+            if let Some(FocusEntry::Notifications(view)) = self.focus_stack.last()
+                && view.selected() == 0
+                && !view.loading
+                && !view.silent_refreshing
+            {
+                self.fetch_notifications_view(false, true);
+            } else if self.source.selected() == 0
+                && !self.source.loading
+                && !self.source.silent_refreshing
+                && matches!(self.source.kind, Some(SourceKind::Home { following: true }))
+            {
                 self.fetch_source(false, true);
             }
         }

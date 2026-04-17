@@ -154,7 +154,6 @@ pub struct App {
     pub whisper: WhisperState,
     pub notif_seen: SeenStore,
     pub notif_unread_badge: usize,
-    pub notif_actor_cursor: Option<usize>,
     pub(super) client: Arc<GqlClient>,
     pub(super) tx: EventTx,
     pub(super) pending_thread: Option<crate::tui::event::RequestId>,
@@ -289,7 +288,6 @@ impl App {
             whisper: whisper_state,
             notif_seen,
             notif_unread_badge: 0,
-            notif_actor_cursor: None,
             client,
             tx,
             pending_thread: None,
@@ -400,8 +398,15 @@ impl App {
     pub fn top_detail(&self) -> Option<&TweetDetail> {
         self.focus_stack.last().and_then(|entry| match entry {
             FocusEntry::Tweet(d) => Some(d),
-            FocusEntry::Likers(_) | FocusEntry::Ask(_) | FocusEntry::Brief(_) => None,
+            FocusEntry::Likers(_)
+            | FocusEntry::Notifications(_)
+            | FocusEntry::Ask(_)
+            | FocusEntry::Brief(_) => None,
         })
+    }
+
+    pub fn top_is_notifications(&self) -> bool {
+        matches!(self.focus_stack.last(), Some(FocusEntry::Notifications(_)))
     }
 
     pub fn is_any_loading(&self) -> bool {
@@ -413,6 +418,7 @@ impl App {
                     d.loading || d.reply_bar.as_ref().is_some_and(|b| b.sending)
                 }
                 FocusEntry::Likers(l) => l.loading,
+                FocusEntry::Notifications(n) => n.loading,
                 FocusEntry::Ask(a) => a.streaming,
                 FocusEntry::Brief(b) => b.loading_tweets || b.streaming,
             })
@@ -962,7 +968,9 @@ mod tests {
         assert_eq!(app.history.len(), 2);
         assert_eq!(app.history_cursor, 1);
 
-        app.switch_source(SourceKind::Notifications);
+        app.switch_source(SourceKind::User {
+            handle: "bob".into(),
+        });
         assert_eq!(app.history.len(), 3);
         assert_eq!(app.history_cursor, 2);
     }
@@ -973,7 +981,9 @@ mod tests {
         app.switch_source(SourceKind::User {
             handle: "alice".into(),
         });
-        app.switch_source(SourceKind::Notifications);
+        app.switch_source(SourceKind::User {
+            handle: "bob".into(),
+        });
         assert_eq!(app.history_cursor, 2);
 
         app.history_back();
@@ -985,7 +995,10 @@ mod tests {
 
         app.history_forward();
         assert_eq!(app.history_cursor, 2);
-        assert!(matches!(app.source.kind, Some(SourceKind::Notifications)));
+        assert!(matches!(
+            app.source.kind,
+            Some(SourceKind::User { ref handle }) if handle == "bob"
+        ));
     }
 
     #[tokio::test]
@@ -1061,7 +1074,9 @@ mod tests {
     #[tokio::test]
     async fn handle_timeline_loaded_ignores_stale_source() {
         let (mut app, _rx, _tmp) = dummy_app();
-        app.source = Source::new(SourceKind::Notifications);
+        app.source = Source::new(SourceKind::User {
+            handle: "stranger".into(),
+        });
 
         let page = make_page(vec![make_tweet("1", "from wrong source")]);
         app.handle_timeline_loaded(SourceKind::Home { following: true }, Ok(page), false, false);
@@ -1153,7 +1168,6 @@ mod tests {
                 error: None,
             },
         );
-        app.notif_actor_cursor = Some(3);
 
         app.switch_source(SourceKind::User {
             handle: "someone".into(),
@@ -1165,7 +1179,6 @@ mod tests {
         assert!(app.translation_inflight.is_empty());
         assert!(app.engage_inflight.is_empty());
         assert!(app.inline_threads.is_empty());
-        assert!(app.notif_actor_cursor.is_none());
     }
 
     #[tokio::test]
@@ -1174,7 +1187,9 @@ mod tests {
         app.switch_source(SourceKind::User {
             handle: "alice".into(),
         });
-        app.switch_source(SourceKind::Notifications);
+        app.switch_source(SourceKind::User {
+            handle: "carol".into(),
+        });
         assert_eq!(app.history.len(), 3);
 
         app.history_back();
@@ -1271,11 +1286,26 @@ mod tests {
         assert_eq!(selected.rest_id, "r2");
     }
 
-    #[test]
-    fn selected_tweet_returns_none_on_notifications() {
+    #[tokio::test]
+    async fn open_notifications_pushes_focus_entry() {
         let (mut app, _rx, _tmp) = dummy_app();
-        app.source = Source::new(SourceKind::Notifications);
+        assert!(app.focus_stack.is_empty());
 
-        assert!(app.selected_tweet().is_none());
+        app.open_notifications();
+
+        assert_eq!(app.focus_stack.len(), 1);
+        assert!(matches!(
+            app.focus_stack.last(),
+            Some(FocusEntry::Notifications(_))
+        ));
+        assert_eq!(app.active, ActivePane::Detail);
+    }
+
+    #[tokio::test]
+    async fn open_notifications_is_idempotent() {
+        let (mut app, _rx, _tmp) = dummy_app();
+        app.open_notifications();
+        app.open_notifications();
+        assert_eq!(app.focus_stack.len(), 1);
     }
 }

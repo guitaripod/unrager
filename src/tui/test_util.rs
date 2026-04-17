@@ -78,7 +78,6 @@ pub fn dummy_app() -> (App, mpsc::UnboundedReceiver<Event>, TempDir) {
         whisper: WhisperState::new(),
         notif_seen,
         notif_unread_badge: 0,
-        notif_actor_cursor: None,
         client,
         tx,
         pending_thread: None,

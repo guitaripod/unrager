@@ -1,8 +1,10 @@
 use super::app::{ActivePane, App, FeedMode};
+use crate::config;
 use crate::model::Tweet;
 use crate::tui::ask;
 use crate::tui::engage::EngageAction;
 use crate::tui::event::Event;
+use crate::tui::external;
 use crate::tui::focus::{FocusEntry, TweetDetail};
 use crate::tui::source::{self, SourceKind};
 use crate::tui::ui;
@@ -399,11 +401,59 @@ impl App {
         let Some(tweet) = self.selected_tweet() else {
             return;
         };
-        let Some(media) = tweet.media.first() else {
+        if tweet.media.is_empty() {
             self.set_status("no media on selected tweet");
             return;
+        }
+        let cache_dir = match config::cache_dir() {
+            Ok(p) => p.join("media"),
+            Err(e) => {
+                self.error = Some(format!("cache dir: {e}"));
+                return;
+            }
         };
-        self.open_url(&media.url.clone());
+        let tweet_dir = cache_dir.join(&tweet.rest_id);
+        let targets = external::collect_open_targets(tweet, &tweet_dir);
+        let count = targets.len();
+        let tweet_id = tweet.rest_id.clone();
+        let label = if count > 1 {
+            format!("opening {count} files…")
+        } else {
+            "opening media…".to_string()
+        };
+        tracing::info!(
+            %tweet_id,
+            count,
+            "open_media_external: dispatching download + native viewer",
+        );
+        self.set_status(label);
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = external::download_and_open(targets).await;
+            if let Err(e) = &result {
+                tracing::warn!(error = %e, "open_media_external failed");
+            }
+            let _ = tx.send(Event::MediaOpenResult { result });
+        });
+    }
+
+    pub(super) fn handle_media_open_result(
+        &mut self,
+        result: std::result::Result<Vec<std::path::PathBuf>, String>,
+    ) {
+        match result {
+            Ok(paths) if paths.len() == 1 => {
+                self.set_status(format!("opened {}", paths[0].display()));
+            }
+            Ok(paths) => {
+                if let Some(dir) = paths.first().and_then(|p| p.parent()) {
+                    self.set_status(format!("opened {} · {}", paths[0].display(), dir.display()));
+                } else {
+                    self.set_status(format!("opened {} files", paths.len()));
+                }
+            }
+            Err(e) => self.error = Some(e),
+        }
     }
 
     pub(super) fn open_url(&mut self, url: &str) {

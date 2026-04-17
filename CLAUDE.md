@@ -83,6 +83,7 @@ When debugging a silent failure — a fetch that seems stuck, missing data, a TU
 - `~/.cache/unrager/seen.db` — read tracking (auto-pruned to 30 days)
 - `~/.cache/unrager/filter.db` — filter verdict cache (auto-pruned to 30 days)
 - `~/.cache/unrager/query-ids.json` — scraped GraphQL query ID cache
+- `~/.cache/unrager/media/<tweet_id>/` — downloaded attachments for external viewer (`m` key); one subdir per tweet so Linux image viewers can arrow through siblings
 
 ## Keeping README in sync
 

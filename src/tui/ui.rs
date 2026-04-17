@@ -2652,7 +2652,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  n              open notifications as detail pane"),
         Line::from("  o              open tweet in browser"),
         Line::from("  O              open author profile in browser"),
-        Line::from("  m              open first media URL externally"),
+        Line::from("  m              open all attachments in native viewer"),
         Line::from("  t              toggle relative / absolute timestamps"),
         Line::from("  M              toggle metric counts"),
         Line::from("  N              toggle display names"),

@@ -485,6 +485,9 @@ impl App {
             Event::MediaFailed { url, err } => {
                 self.media.mark_failed(&url, err);
             }
+            Event::MediaOpenResult { result } => {
+                self.handle_media_open_result(result);
+            }
             Event::TweetClassified { rest_id, verdict } => {
                 self.handle_tweet_classified(rest_id, verdict);
             }

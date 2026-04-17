@@ -62,6 +62,9 @@ pub enum Event {
         url: String,
         err: String,
     },
+    MediaOpenResult {
+        result: std::result::Result<Vec<std::path::PathBuf>, String>,
+    },
     TweetClassified {
         rest_id: String,
         verdict: crate::tui::filter::FilterDecision,

@@ -10,6 +10,7 @@ pub mod compose;
 pub mod editor;
 pub mod engage;
 pub mod event;
+pub mod external;
 pub mod filter;
 pub mod focus;
 pub mod media;

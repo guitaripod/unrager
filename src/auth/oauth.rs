@@ -135,7 +135,7 @@ async fn run_pkce_flow() -> Result<Tokens> {
     eprintln!("If nothing opens, visit this URL manually:");
     eprintln!("  {authorize_url}");
     eprintln!();
-    let _ = std::process::Command::new("xdg-open")
+    let _ = std::process::Command::new(crate::config::default_opener())
         .arg(&authorize_url)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())

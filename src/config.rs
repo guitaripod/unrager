@@ -11,8 +11,20 @@ pub struct AppConfig {
     pub query_ids: std::collections::HashMap<String, String>,
 }
 
+/// Platform-native "open a URL or path in the default app" command.
+/// `xdg-open` doesn't exist on macOS; `open` doesn't exist on Linux.
+#[cfg(target_os = "macos")]
+pub const fn default_opener() -> &'static str {
+    "open"
+}
+
+#[cfg(not(target_os = "macos"))]
+pub const fn default_opener() -> &'static str {
+    "xdg-open"
+}
+
 fn default_browser() -> String {
-    "xdg-open".into()
+    default_opener().into()
 }
 
 impl AppConfig {
@@ -32,7 +44,7 @@ impl AppConfig {
 
     pub fn browser_parts(&self) -> (&str, Vec<&str>) {
         let mut parts = self.browser.split_whitespace();
-        let program = parts.next().unwrap_or("xdg-open");
+        let program = parts.next().unwrap_or(default_opener());
         let args: Vec<&str> = parts.collect();
         (program, args)
     }

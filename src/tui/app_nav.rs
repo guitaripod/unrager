@@ -499,6 +499,15 @@ impl App {
     pub(super) fn copy_to_clipboard(&mut self, text: String, note: &str) {
         use std::io::Write;
         use std::process::{Command, Stdio};
+
+        #[cfg(target_os = "macos")]
+        let result = Command::new("pbcopy")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+
+        #[cfg(not(target_os = "macos"))]
         let result = Command::new("wl-copy")
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
@@ -512,6 +521,7 @@ impl App {
                     .stderr(Stdio::null())
                     .spawn()
             });
+
         match result {
             Ok(mut child) => {
                 if let Some(mut stdin) = child.stdin.take() {

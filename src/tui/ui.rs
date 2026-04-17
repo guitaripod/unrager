@@ -296,6 +296,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     draw_footer(frame, bottom, app);
 
+    crate::tui::clock::render(frame, main, &app.app_config.clock);
+
     if app.mode == InputMode::Help {
         draw_help_overlay(frame, frame.area(), app.help_scroll);
     }
@@ -1895,6 +1897,7 @@ const GLYPH_PHOTO: &str = "▣";
 const GLYPH_VIDEO: &str = "▶";
 const GLYPH_GIF: &str = "↻";
 const GLYPH_YOUTUBE: &str = "▶";
+const GLYPH_ARTICLE: &str = "❏";
 
 fn tweet_lines(
     t: &Tweet,
@@ -1951,6 +1954,7 @@ fn tweet_lines(
             crate::model::MediaKind::Video => (GLYPH_VIDEO, Color::Indexed(203)),
             crate::model::MediaKind::AnimatedGif => (GLYPH_GIF, Color::Indexed(214)),
             crate::model::MediaKind::YouTube { .. } => (GLYPH_YOUTUBE, Color::Indexed(203)),
+            crate::model::MediaKind::Article { .. } => (GLYPH_ARTICLE, Color::Indexed(75)),
         };
         header.push(Span::raw("  "));
         let label = if photo_count > 1 {
@@ -2065,6 +2069,7 @@ fn tweet_lines(
                 crate::model::MediaKind::Video => (GLYPH_VIDEO, Color::Indexed(203)),
                 crate::model::MediaKind::AnimatedGif => (GLYPH_GIF, Color::Indexed(214)),
                 crate::model::MediaKind::YouTube { .. } => (GLYPH_YOUTUBE, Color::Indexed(203)),
+                crate::model::MediaKind::Article { .. } => (GLYPH_ARTICLE, Color::Indexed(75)),
             };
             header_spans.push(Span::raw("  "));
             header_spans.push(Span::styled(glyph.to_string(), Style::default().fg(color)));
@@ -2160,15 +2165,33 @@ fn tweet_lines(
 
     if opts.media_enabled {
         for m in &t.media {
-            if let crate::model::MediaKind::YouTube { video_id } = &m.kind {
-                lines.extend(render_youtube_card(
-                    ctx,
-                    video_id,
-                    &m.url,
-                    image_max_cols(wrap_width),
-                    ctx.opts.media_max_rows,
-                    &indent,
-                ));
+            match &m.kind {
+                crate::model::MediaKind::YouTube { video_id } => {
+                    lines.extend(render_youtube_card(
+                        ctx,
+                        video_id,
+                        &m.url,
+                        image_max_cols(wrap_width),
+                        ctx.opts.media_max_rows,
+                        &indent,
+                    ));
+                }
+                crate::model::MediaKind::Article {
+                    title,
+                    preview_text,
+                    ..
+                } => {
+                    lines.extend(render_article_card(
+                        ctx,
+                        title,
+                        preview_text,
+                        &m.url,
+                        image_max_cols(wrap_width),
+                        ctx.opts.media_max_rows,
+                        &indent,
+                    ));
+                }
+                _ => {}
             }
         }
     }
@@ -2296,6 +2319,168 @@ fn render_youtube_card(
         Span::raw(title_pad),
         Span::styled("│", border_style),
     ]));
+
+    lines.push(Line::from(vec![
+        indent.clone(),
+        Span::styled("└", border_style),
+        Span::styled("─".repeat(inner_w), border_style),
+        Span::styled("┘", border_style),
+    ]));
+
+    lines
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_article_card(
+    ctx: &RenderContext,
+    title: &str,
+    preview_text: &str,
+    cover_url: &str,
+    max_cols: usize,
+    max_rows: usize,
+    indent: &Span<'static>,
+) -> Vec<Line<'static>> {
+    use unicode_width::UnicodeWidthStr;
+
+    const X_BLUE: Color = Color::Rgb(0x1d, 0x9b, 0xf0);
+    let border_style = Style::default().fg(Color::Indexed(240));
+    let badge_style = Style::default().fg(X_BLUE).add_modifier(Modifier::BOLD);
+    let title_style = Style::default()
+        .fg(Color::White)
+        .add_modifier(Modifier::BOLD);
+    let preview_style = Style::default().fg(Color::Indexed(250));
+    let meta_style = Style::default().fg(Color::Indexed(244));
+
+    let has_cover = !cover_url.is_empty();
+    let image_cells = if has_cover {
+        image_cells_for_card(ctx.media_reg, cover_url, max_cols, max_rows)
+    } else {
+        None
+    };
+    let inner_w: usize = match image_cells {
+        Some((c, _)) => c as usize,
+        None => max_cols.saturating_sub(2).max(20),
+    };
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    let label = "  ❏ Article ";
+    let label_w = UnicodeWidthStr::width(label);
+    let top_right_dashes = inner_w.saturating_sub(label_w);
+    lines.push(Line::from(vec![
+        indent.clone(),
+        Span::styled("┌", border_style),
+        Span::styled("  ", border_style),
+        Span::styled("❏", badge_style),
+        Span::styled(
+            " Article ",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("─".repeat(top_right_dashes), border_style),
+        Span::styled("┐", border_style),
+    ]));
+
+    if has_cover {
+        match image_cells {
+            Some((nc, nr)) => {
+                if let Some(MediaEntry::ReadyKitty { id, .. }) = ctx.media_reg.get(cover_url) {
+                    for row in 0..nr as usize {
+                        let placeholder = placeholder_row_span(*id, row, nc as usize);
+                        lines.push(Line::from(vec![
+                            indent.clone(),
+                            Span::styled("│", border_style),
+                            placeholder,
+                            Span::styled("│", border_style),
+                        ]));
+                    }
+                } else if let Some(MediaEntry::ReadyPixels { pixels, w, h }) =
+                    ctx.media_reg.get(cover_url)
+                {
+                    let empty_indent = Span::raw("");
+                    let sextants = media::render_sextants(
+                        pixels,
+                        *w,
+                        *h,
+                        nc as usize,
+                        nr as usize,
+                        &empty_indent,
+                    );
+                    for row in sextants {
+                        lines.push(wrap_row_in_border(indent, row, inner_w, &border_style));
+                    }
+                } else {
+                    for _ in 0..nr as usize {
+                        lines.push(blank_body_row(indent, inner_w, &border_style));
+                    }
+                }
+            }
+            None => {
+                for _ in 0..4 {
+                    lines.push(blank_body_row(indent, inner_w, &border_style));
+                }
+            }
+        }
+
+        lines.push(Line::from(vec![
+            indent.clone(),
+            Span::styled("├", border_style),
+            Span::styled("─".repeat(inner_w), border_style),
+            Span::styled("┤", border_style),
+        ]));
+    }
+
+    let body_w = inner_w.saturating_sub(2).max(1);
+    let pad = " ".to_string();
+
+    if title.is_empty() && preview_text.is_empty() {
+        let fallback = pad_to_width(&truncate_to_width("x.com/i/article/…", body_w), body_w);
+        lines.push(Line::from(vec![
+            indent.clone(),
+            Span::styled("│", border_style),
+            Span::raw(pad.clone()),
+            Span::styled(fallback, meta_style),
+            Span::raw(pad.clone()),
+            Span::styled("│", border_style),
+        ]));
+    } else {
+        if !title.is_empty() {
+            for wline in wrap_text(title, body_w).into_iter().take(2) {
+                let padded = pad_to_width(&wline, body_w);
+                lines.push(Line::from(vec![
+                    indent.clone(),
+                    Span::styled("│", border_style),
+                    Span::raw(pad.clone()),
+                    Span::styled(padded, title_style),
+                    Span::raw(pad.clone()),
+                    Span::styled("│", border_style),
+                ]));
+            }
+        }
+        if !preview_text.is_empty() {
+            for wline in wrap_text(preview_text, body_w).into_iter().take(2) {
+                let padded = pad_to_width(&wline, body_w);
+                lines.push(Line::from(vec![
+                    indent.clone(),
+                    Span::styled("│", border_style),
+                    Span::raw(pad.clone()),
+                    Span::styled(padded, preview_style),
+                    Span::raw(pad.clone()),
+                    Span::styled("│", border_style),
+                ]));
+            }
+        }
+        let domain = pad_to_width(&truncate_to_width("x.com", body_w), body_w);
+        lines.push(Line::from(vec![
+            indent.clone(),
+            Span::styled("│", border_style),
+            Span::raw(pad.clone()),
+            Span::styled(domain, meta_style),
+            Span::raw(pad.clone()),
+            Span::styled("│", border_style),
+        ]));
+    }
 
     lines.push(Line::from(vec![
         indent.clone(),
@@ -2486,7 +2671,7 @@ fn emit_placement_for_tweet(
                     }
                 }
             }
-            crate::model::MediaKind::YouTube { .. } => {
+            crate::model::MediaKind::YouTube { .. } | crate::model::MediaKind::Article { .. } => {
                 // Card interior is max_cols - 2 (left/right borders).
                 let inner_cols = (max_cols.saturating_sub(2)).max(10) as u32;
                 if let Some(MediaEntry::ReadyKitty { id, w, h }) = registry.get(&media_item.url) {

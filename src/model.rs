@@ -50,5 +50,12 @@ pub enum MediaKind {
     Photo,
     Video,
     AnimatedGif,
-    YouTube { video_id: String },
+    YouTube {
+        video_id: String,
+    },
+    Article {
+        article_id: String,
+        title: String,
+        preview_text: String,
+    },
 }

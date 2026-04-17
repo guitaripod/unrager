@@ -605,10 +605,11 @@ impl App {
         if !self.media.supported() {
             return;
         }
-        // YouTube cards always render in the feed; their thumbnails and oEmbed
-        // metadata need to load without waiting for auto-expand.
+        // YouTube and Article cards always render in the feed; their cover
+        // thumbnails and YouTube oEmbed metadata load without waiting for
+        // auto-expand.
         for t in tweets {
-            self.media.ensure_tweet_youtube_thumbnails(t, &self.tx);
+            self.media.ensure_tweet_card_thumbnails(t, &self.tx);
             self.youtube.ensure_tweet(t, &self.tx);
         }
         if !self.media_auto_expand {

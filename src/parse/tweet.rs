@@ -101,7 +101,10 @@ fn parse_tweet_node(node: &Value) -> Result<Tweet> {
     let mut media = parse_media(legacy);
     let (youtube_media, youtube_tcos) = parse_youtube_embeds(legacy);
     media.extend(youtube_media);
+    let (article_media, article_tcos) = parse_article_embed(node, legacy);
+    media.extend(article_media);
     let text = strip_tco_urls(&text, &youtube_tcos);
+    let text = strip_tco_urls(&text, &article_tcos);
 
     let url = format!("https://x.com/{}/status/{}", author.handle, rest_id);
 
@@ -198,7 +201,7 @@ fn parse_media(legacy: &Value) -> Vec<Media> {
                 .and_then(Value::as_str)?
                 .to_string();
             let video_url = match kind {
-                MediaKind::Photo | MediaKind::YouTube { .. } => None,
+                MediaKind::Photo | MediaKind::YouTube { .. } | MediaKind::Article { .. } => None,
                 MediaKind::Video | MediaKind::AnimatedGif => best_video_variant(m),
             };
             let alt_text = m
@@ -262,6 +265,137 @@ fn parse_youtube_embeds(legacy: &Value) -> (Vec<Media>, Vec<String>) {
         }
     }
     (embeds, display_urls)
+}
+
+/// Extracts the X article preview from `node.article.article_results.result`
+/// (when `articles_preview_enabled` is on) and, when an article is found, also
+/// returns the display_url of its `entities.urls[]` entry so the t.co link
+/// can be stripped from the tweet body. Falls back to URL-only detection
+/// (minimal card, empty title/preview) if the article object is absent.
+fn parse_article_embed(node: &Value, legacy: &Value) -> (Vec<Media>, Vec<String>) {
+    let mut embeds = Vec::new();
+    let mut display_urls = Vec::new();
+
+    let inline = node
+        .pointer("/article/article_results/result")
+        .and_then(parse_article_result);
+
+    if let Some((article_id, title, preview_text, cover_url)) = inline {
+        collect_article_display_url(legacy, &article_id, &mut display_urls);
+        embeds.push(Media {
+            kind: MediaKind::Article {
+                article_id,
+                title,
+                preview_text,
+            },
+            url: cover_url,
+            video_url: None,
+            alt_text: None,
+        });
+        return (embeds, display_urls);
+    }
+
+    if let Some(arr) = legacy.pointer("/entities/urls").and_then(Value::as_array) {
+        for u in arr {
+            let expanded = u.get("expanded_url").and_then(Value::as_str).unwrap_or("");
+            let Some(article_id) = extract_article_id(expanded) else {
+                continue;
+            };
+            if let Some(display) = u.get("display_url").and_then(Value::as_str) {
+                display_urls.push(display.to_string());
+            }
+            embeds.push(Media {
+                kind: MediaKind::Article {
+                    article_id,
+                    title: String::new(),
+                    preview_text: String::new(),
+                },
+                url: String::new(),
+                video_url: None,
+                alt_text: None,
+            });
+        }
+    }
+
+    (embeds, display_urls)
+}
+
+fn parse_article_result(result: &Value) -> Option<(String, String, String, String)> {
+    let article_id = result
+        .get("rest_id")
+        .and_then(Value::as_str)
+        .map(str::to_string)?;
+    let title = result
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let preview_text = result
+        .get("preview_text")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let cover_url = result
+        .pointer("/cover_media/media_info/original_img_url")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    Some((
+        article_id,
+        decode_html_entities(&title),
+        decode_html_entities(&preview_text),
+        cover_url,
+    ))
+}
+
+fn collect_article_display_url(legacy: &Value, article_id: &str, out: &mut Vec<String>) {
+    let Some(arr) = legacy.pointer("/entities/urls").and_then(Value::as_array) else {
+        return;
+    };
+    for u in arr {
+        let expanded = u.get("expanded_url").and_then(Value::as_str).unwrap_or("");
+        if extract_article_id(expanded).as_deref() == Some(article_id) {
+            if let Some(display) = u.get("display_url").and_then(Value::as_str) {
+                out.push(display.to_string());
+            }
+        }
+    }
+}
+
+/// Returns the numeric article id from an X article URL. Accepts both the
+/// canonical `/i/article/{id}` shape and the per-user `/{handle}/article/{id}`
+/// shape. Ignores extra path segments and query strings.
+pub fn extract_article_id(url: &str) -> Option<String> {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    let rest = rest
+        .strip_prefix("www.")
+        .or_else(|| rest.strip_prefix("m."))
+        .unwrap_or(rest);
+
+    let (host, path_query) = rest.split_once('/')?;
+    if host != "x.com" && host != "twitter.com" {
+        return None;
+    }
+
+    let path = path_query.split(['?', '#']).next().unwrap_or("");
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let id = match segments.as_slice() {
+        ["i", "article", id, ..] => *id,
+        [_handle, "article", id, ..] => *id,
+        _ => return None,
+    };
+    if is_numeric_id(id) {
+        Some(id.to_string())
+    } else {
+        None
+    }
+}
+
+fn is_numeric_id(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())
 }
 
 /// Returns the 11-character YouTube video id from a watch URL, short URL, or
@@ -827,6 +961,154 @@ mod tests {
         let tweet = parse_tweet_result(&v).unwrap();
         assert!(tweet.media.is_empty());
         assert_eq!(tweet.text, "read example.com/article about foo");
+    }
+
+    #[test]
+    fn article_id_from_canonical_url() {
+        assert_eq!(
+            extract_article_id("https://x.com/i/article/1789876543210987654"),
+            Some("1789876543210987654".into())
+        );
+        assert_eq!(
+            extract_article_id("https://twitter.com/i/article/1234"),
+            Some("1234".into())
+        );
+    }
+
+    #[test]
+    fn article_id_from_user_url() {
+        assert_eq!(
+            extract_article_id("https://x.com/someuser/article/1789876543210987654"),
+            Some("1789876543210987654".into())
+        );
+        assert_eq!(
+            extract_article_id("https://x.com/foo/article/42/extra/path"),
+            Some("42".into())
+        );
+    }
+
+    #[test]
+    fn article_id_rejects_non_article() {
+        assert_eq!(extract_article_id("https://x.com/i/status/1234"), None);
+        assert_eq!(extract_article_id("https://example.com/i/article/1"), None);
+        assert_eq!(extract_article_id("https://x.com/"), None);
+        assert_eq!(
+            extract_article_id("https://x.com/user/status/123/article/456"),
+            None
+        );
+    }
+
+    #[test]
+    fn article_id_rejects_non_numeric() {
+        assert_eq!(extract_article_id("https://x.com/i/article/abc"), None);
+        assert_eq!(extract_article_id("https://x.com/i/article/"), None);
+    }
+
+    #[test]
+    fn parse_injects_inline_article_with_cover() {
+        let mut v = minimal_tweet_json("3000", "read my article https://t.co/ART");
+        v["legacy"]["entities"] = json!({
+            "urls": [
+                {
+                    "url": "https://t.co/ART",
+                    "display_url": "x.com/i/article/99…",
+                    "expanded_url": "https://x.com/i/article/9911223344"
+                }
+            ]
+        });
+        v["article"] = json!({
+            "article_results": {
+                "result": {
+                    "rest_id": "9911223344",
+                    "title": "Why rage filters matter",
+                    "preview_text": "A short teaser shown in the card.",
+                    "cover_media": {
+                        "media_info": {
+                            "original_img_url": "https://pbs.twimg.com/media/ABC.jpg"
+                        }
+                    }
+                }
+            }
+        });
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(tweet.media.len(), 1);
+        match &tweet.media[0].kind {
+            MediaKind::Article {
+                article_id,
+                title,
+                preview_text,
+            } => {
+                assert_eq!(article_id, "9911223344");
+                assert_eq!(title, "Why rage filters matter");
+                assert_eq!(preview_text, "A short teaser shown in the card.");
+            }
+            other => panic!("expected Article, got {other:?}"),
+        }
+        assert_eq!(tweet.media[0].url, "https://pbs.twimg.com/media/ABC.jpg");
+        assert_eq!(tweet.text, "read my article");
+    }
+
+    #[test]
+    fn parse_article_fallback_from_url_only() {
+        let mut v = minimal_tweet_json("3001", "check this https://t.co/AR2");
+        v["legacy"]["entities"] = json!({
+            "urls": [
+                {
+                    "url": "https://t.co/AR2",
+                    "display_url": "x.com/i/article/77…",
+                    "expanded_url": "https://x.com/i/article/7788"
+                }
+            ]
+        });
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(tweet.media.len(), 1);
+        match &tweet.media[0].kind {
+            MediaKind::Article {
+                article_id,
+                title,
+                preview_text,
+            } => {
+                assert_eq!(article_id, "7788");
+                assert!(title.is_empty());
+                assert!(preview_text.is_empty());
+            }
+            other => panic!("expected Article, got {other:?}"),
+        }
+        assert!(tweet.media[0].url.is_empty());
+        assert_eq!(tweet.text, "check this");
+    }
+
+    #[test]
+    fn parse_article_decodes_entities_in_title() {
+        let mut v = minimal_tweet_json("3002", "read this");
+        v["legacy"]["entities"] = json!({
+            "urls": [{
+                "url": "https://t.co/X",
+                "display_url": "x.com/i/article/42",
+                "expanded_url": "https://x.com/i/article/42"
+            }]
+        });
+        v["article"] = json!({
+            "article_results": {
+                "result": {
+                    "rest_id": "42",
+                    "title": "Tom &amp; Jerry &lt;deep dive&gt;",
+                    "preview_text": "it&#39;s a classic"
+                }
+            }
+        });
+        let tweet = parse_tweet_result(&v).unwrap();
+        match &tweet.media[0].kind {
+            MediaKind::Article {
+                title,
+                preview_text,
+                ..
+            } => {
+                assert_eq!(title, "Tom & Jerry <deep dive>");
+                assert_eq!(preview_text, "it's a classic");
+            }
+            _ => panic!("expected Article"),
+        }
     }
 
     #[test]

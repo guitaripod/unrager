@@ -175,6 +175,7 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 ## More
 
 - **Inline media** — photos render inside the terminal via the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) on Ghostty, Kitty, and WezTerm. Multiple images side-by-side. Toggle with `I`. Falls back to `▣`/`▶`/`↻` glyphs elsewhere.
+- **Inline cards** — YouTube links and X Articles render as bordered preview cards with cover image, title, and metadata. `m` opens the source URL in your browser.
 - **Originals mode** — `V` on home feeds hides replies, quotes, and retweets. `◇` appears in the status bar. Persists across sessions.
 - **Notifications view** — press `n` or `:notifs` to browse notifications in a dedicated feed. Enter opens the target tweet or navigates to the actor's profile. Ambient whisper continues in the status bar independently.
 - **Read tracking** — tweets mark as read on cursor. For You feed hides already-seen tweets and deduplicates across pages. `u` jumps to next unread.
@@ -182,6 +183,7 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 - **Zebra striping** — alternating row backgrounds, auto-detects light/dark terminal theme via OSC 11.
 - **Share** — `y` copies a [fixupx](https://fixupx.com) embed URL, `o` opens in browser, `m` downloads every attachment on the selected tweet (all photos, GIFs, and video MP4s). On macOS images go to QuickLook (`qlmanage -p`) — space/Esc closes and focus returns to the terminal — while videos open in QuickTime Player via an osascript wrapper that polls for the document close and reactivates the spawning terminal, so Cmd+W alone gets you back to unrager. Linux uses `xdg-open` for everything. Cache lives under `~/.cache/unrager/media/<tweet_id>/`.
 - **Configurable browser** — `config.toml` supports `{}` URL placeholder for Chromium `--app={}` kiosk mode.
+- **Digital clock overlay** — optional floating clock with big block-character digits. Every element is toggleable via `[clock]` in `config.toml` (see below) — time, date, seconds, 12/24h, position, accent color, border. Set `enabled = false` to hide completely.
 - **Session persistence** — source, selection, toggles, split width, feed mode, reply sort all survive restarts.
 
 <details>
@@ -244,6 +246,23 @@ Config paths are platform-native: Linux uses `~/.config/unrager/` + `~/.cache/un
 | `~/.cache/unrager/seen.db` | Read-tracking SQLite |
 | `~/.cache/unrager/filter.db` | Filter verdict cache |
 | `~/.cache/unrager/media/<tweet_id>/` | Downloaded attachments for `m` (external viewer) |
+
+### Clock
+
+Every field has a default — omit `[clock]` entirely to get the defaults (enabled, top-right, time + date, 24h).
+
+```toml
+[clock]
+enabled = true
+position = "top_right"   # top_left | top_right | bottom_left | bottom_right
+show_time = true
+show_date = true
+show_seconds = false
+format_24h = true
+date_format = "%a %d %b" # any chrono strftime string
+accent = "cyan"          # ANSI name, 0–255 index, or #rrggbb
+border = true
+```
 
 </details>
 

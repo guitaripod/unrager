@@ -242,11 +242,14 @@ impl MediaRegistry {
         self.ensure_tweet_media_filtered(tweet, tx, |_| true);
     }
 
-    /// Variant that only queues YouTube thumbnail downloads, used in the source
-    /// feed where photos stay cold until the user expands them but YouTube
-    /// cards always render and need their thumbnail eagerly.
-    pub fn ensure_tweet_youtube_thumbnails(&mut self, tweet: &Tweet, tx: &EventTx) {
-        self.ensure_tweet_media_filtered(tweet, tx, |k| matches!(k, MediaKind::YouTube { .. }));
+    /// Variant that only queues thumbnails for inline cards (YouTube, X
+    /// articles) used in the source feed, where photos stay cold until the
+    /// user expands them but cards always render and need their cover art
+    /// eagerly.
+    pub fn ensure_tweet_card_thumbnails(&mut self, tweet: &Tweet, tx: &EventTx) {
+        self.ensure_tweet_media_filtered(tweet, tx, |k| {
+            matches!(k, MediaKind::YouTube { .. } | MediaKind::Article { .. })
+        });
     }
 
     fn ensure_tweet_media_filtered(
@@ -270,7 +273,10 @@ impl MediaRegistry {
                 continue;
             }
             match &media.kind {
-                MediaKind::Photo | MediaKind::YouTube { .. } => {
+                MediaKind::Article { .. } if media.url.is_empty() => {
+                    continue;
+                }
+                MediaKind::Photo | MediaKind::YouTube { .. } | MediaKind::Article { .. } => {
                     self.insert_entry(media.url.clone(), MediaEntry::Loading);
                     let url = media.url.clone();
                     let sem = self.semaphore.clone();

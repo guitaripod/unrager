@@ -243,10 +243,7 @@ pub struct NotificationsView {
 
 impl NotificationsView {
     pub fn new() -> Self {
-        Self {
-            loading: true,
-            ..Self::default()
-        }
+        Self::default()
     }
 
     pub fn selected(&self) -> usize {

@@ -25,13 +25,29 @@ pub struct GqlClient {
     cache_path: PathBuf,
     next_allowed: AsyncMutex<Instant>,
     client_uuid: String,
-    rate_limit_until: Mutex<Option<std::time::Instant>>,
+    read_rate_limit_until: Mutex<Option<std::time::Instant>>,
+    write_rate_limit_until: Mutex<Option<std::time::Instant>>,
     transaction_key: Mutex<Option<TransactionKeyMaterial>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RateLimitKind {
+    Read,
+    Write,
 }
 
 enum Method {
     Get,
     Post,
+}
+
+impl Method {
+    fn kind(&self) -> RateLimitKind {
+        match self {
+            Method::Get => RateLimitKind::Read,
+            Method::Post => RateLimitKind::Write,
+        }
+    }
 }
 
 impl GqlClient {
@@ -49,7 +65,8 @@ impl GqlClient {
             cache_path,
             next_allowed: AsyncMutex::new(Instant::now()),
             client_uuid,
-            rate_limit_until: Mutex::new(None),
+            read_rate_limit_until: Mutex::new(None),
+            write_rate_limit_until: Mutex::new(None),
             transaction_key: Mutex::new(None),
         })
     }
@@ -88,7 +105,7 @@ impl GqlClient {
         variables: &Value,
         features: &Value,
     ) -> Result<Value> {
-        if let Some(remaining) = self.rate_limit_remaining() {
+        if let Some(remaining) = self.rate_limit_remaining_for(method.kind()) {
             return Err(Error::RateLimited {
                 remaining_secs: remaining.as_secs().max(1),
             });
@@ -141,7 +158,7 @@ impl GqlClient {
         };
 
         let res = req.send().await?;
-        self.parse(res).await
+        self.parse(res, method.kind()).await
     }
 
     fn lookup_qid(&self, op: Operation) -> Option<QueryId> {
@@ -271,7 +288,7 @@ impl GqlClient {
         crate::gql::transaction::generate_id(material, method, path)
     }
 
-    async fn parse(&self, res: reqwest::Response) -> Result<Value> {
+    async fn parse(&self, res: reqwest::Response, kind: RateLimitKind) -> Result<Value> {
         let status = res.status();
         if status.as_u16() == 429 {
             let reset_hdr = res
@@ -280,7 +297,7 @@ impl GqlClient {
                 .and_then(|v| v.to_str().ok())
                 .and_then(|s| s.parse::<u64>().ok());
             let remaining = compute_rate_limit_remaining(reset_hdr);
-            self.record_rate_limit(remaining);
+            self.record_rate_limit(kind, remaining);
             return Err(Error::RateLimited {
                 remaining_secs: remaining.as_secs().max(1),
             });
@@ -311,15 +328,43 @@ impl GqlClient {
 }
 
 impl GqlClient {
-    pub fn rate_limit_remaining(&self) -> Option<Duration> {
-        let until = *self.rate_limit_until.lock().ok()?;
+    fn rate_limit_remaining_for(&self, kind: RateLimitKind) -> Option<Duration> {
+        let slot = match kind {
+            RateLimitKind::Read => &self.read_rate_limit_until,
+            RateLimitKind::Write => &self.write_rate_limit_until,
+        };
+        let until = *slot.lock().ok()?;
         let until = until?;
         let now = std::time::Instant::now();
         if until > now { Some(until - now) } else { None }
     }
 
-    fn record_rate_limit(&self, remaining: Duration) {
-        if let Ok(mut guard) = self.rate_limit_until.lock() {
+    pub fn read_rate_limit_remaining(&self) -> Option<Duration> {
+        self.rate_limit_remaining_for(RateLimitKind::Read)
+    }
+
+    pub fn write_rate_limit_remaining(&self) -> Option<Duration> {
+        self.rate_limit_remaining_for(RateLimitKind::Write)
+    }
+
+    pub fn rate_limit_remaining(&self) -> Option<Duration> {
+        match (
+            self.read_rate_limit_remaining(),
+            self.write_rate_limit_remaining(),
+        ) {
+            (Some(r), Some(w)) => Some(r.max(w)),
+            (Some(r), None) => Some(r),
+            (None, Some(w)) => Some(w),
+            (None, None) => None,
+        }
+    }
+
+    fn record_rate_limit(&self, kind: RateLimitKind, remaining: Duration) {
+        let slot = match kind {
+            RateLimitKind::Read => &self.read_rate_limit_until,
+            RateLimitKind::Write => &self.write_rate_limit_until,
+        };
+        if let Ok(mut guard) = slot.lock() {
             *guard = Some(std::time::Instant::now() + remaining);
         }
     }

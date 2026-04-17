@@ -111,7 +111,7 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
   <img src="assets/profile.png" alt="own profile showing tweets with full metrics and expanded bodies" width="800">
 </p>
 
-`p` opens your own profile with full metrics forced visible. `:user <handle>` opens anyone's timeline. Press `R` to toggle between their tweets and replies. `V` switches between all tweets and originals only (hides replies, quotes, retweets).
+`p` opens the profile of whoever your cursor is on — the selected tweet's author, the notification actor, or your own profile if nothing's selected. Your own profile renders with full metrics forced visible. `:user <handle>` opens anyone's timeline. Press `R` to toggle between their tweets and replies. `V` switches between all tweets and originals only (hides replies, quotes, retweets).
 
 ## Help overlay
 
@@ -152,7 +152,7 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 | `N` | Toggle display names |
 | `t` | Toggle relative / absolute timestamps |
 | `s` | Cycle reply sort in detail pane |
-| `p` | Own profile |
+| `p` | Open selected author's profile (falls back to own) |
 | `P` | Open own profile in browser |
 | `n` | Open notifications view |
 | `o` | Open tweet in browser |

@@ -14,6 +14,7 @@ use crate::tui::session::{self, SessionState};
 use crate::tui::source::{Source, SourceKind};
 use crate::tui::ui;
 use crate::tui::whisper::{self, WhisperEntry, WhisperState};
+use crate::tui::youtube::YoutubeRegistry;
 use ratatui::DefaultTerminal;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -132,6 +133,7 @@ pub struct App {
     pub expanded_bodies: HashSet<String>,
     pub inline_threads: HashMap<String, InlineThread>,
     pub media: MediaRegistry,
+    pub youtube: YoutubeRegistry,
     pub media_auto_expand: bool,
     pub feed_mode: FeedMode,
     pub self_handle: Option<String>,
@@ -266,6 +268,7 @@ impl App {
             expanded_bodies: HashSet::new(),
             inline_threads: HashMap::new(),
             media: MediaRegistry::new(),
+            youtube: YoutubeRegistry::new(),
             media_auto_expand: false,
             feed_mode: loaded_feed_mode,
             reply_sort: loaded_reply_sort,
@@ -357,6 +360,14 @@ impl App {
 
     pub fn filter_pending_count(&self) -> usize {
         self.filter_inflight.len()
+    }
+
+    /// Queues every external resource a tweet needs: image thumbnails (kitty
+    /// or halfblock) and YouTube oEmbed metadata. Both registries are
+    /// idempotent on repeat calls.
+    pub fn ensure_tweet_resources(&mut self, tweet: &Tweet) {
+        self.media.ensure_tweet_media(tweet, &self.tx);
+        self.youtube.ensure_tweet(tweet, &self.tx);
     }
 
     pub fn is_own_profile(&self) -> bool {
@@ -484,6 +495,9 @@ impl App {
             }
             Event::MediaFailed { url, err } => {
                 self.media.mark_failed(&url, err);
+            }
+            Event::YoutubeMetaLoaded { video_id, result } => {
+                self.youtube.apply_result(&video_id, result);
             }
             Event::MediaOpenResult { result } => {
                 self.handle_media_open_result(result);

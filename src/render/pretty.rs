@@ -46,10 +46,11 @@ fn render_into(out: &mut String, t: &Tweet, indent_level: usize) {
 
     if !t.media.is_empty() {
         for m in &t.media {
-            let kind = match m.kind {
+            let kind = match &m.kind {
                 MediaKind::Photo => "photo",
                 MediaKind::Video => "video",
                 MediaKind::AnimatedGif => "gif",
+                MediaKind::YouTube { .. } => "youtube",
             };
             let alt = m
                 .alt_text

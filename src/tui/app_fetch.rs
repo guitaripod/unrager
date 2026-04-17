@@ -460,12 +460,12 @@ impl App {
                     self.set_status("no tweets from this user");
                     return;
                 };
-                self.media.ensure_tweet_media(&focal, &self.tx);
+                self.ensure_tweet_resources(&focal);
                 let mut detail = TweetDetail::new(focal);
                 detail.loading = false;
                 detail.replies = tweets.collect();
                 for t in &detail.replies {
-                    self.media.ensure_tweet_media(t, &self.tx);
+                    self.ensure_tweet_resources(t);
                 }
                 self.focus_stack.push(FocusEntry::Tweet(detail));
                 self.active = ActivePane::Detail;
@@ -602,7 +602,16 @@ impl App {
     }
 
     pub(super) fn queue_source_media(&mut self, tweets: &[Tweet]) {
-        if !self.media.supported() || !self.media_auto_expand {
+        if !self.media.supported() {
+            return;
+        }
+        // YouTube cards always render in the feed; their thumbnails and oEmbed
+        // metadata need to load without waiting for auto-expand.
+        for t in tweets {
+            self.media.ensure_tweet_youtube_thumbnails(t, &self.tx);
+            self.youtube.ensure_tweet(t, &self.tx);
+        }
+        if !self.media_auto_expand {
             return;
         }
         for t in tweets {
@@ -615,7 +624,7 @@ impl App {
             return;
         }
         for t in replies {
-            self.media.ensure_tweet_media(t, &self.tx);
+            self.ensure_tweet_resources(t);
         }
     }
 

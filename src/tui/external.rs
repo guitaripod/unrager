@@ -74,20 +74,38 @@ pub struct OpenTarget {
 
 /// Collect every openable asset on a tweet, in display order.
 /// Videos and GIFs use `video_url` (the playable mp4) when available, falling
-/// back to the poster jpg so the user always gets *something*.
+/// back to the poster jpg so the user always gets *something*. YouTube embeds
+/// are skipped — they go through `collect_remote_urls` instead since opening
+/// them means handing youtube.com to the OS default handler, not downloading.
 pub fn collect_open_targets(tweet: &Tweet, tweet_dir: &Path) -> Vec<OpenTarget> {
     let mut out = Vec::with_capacity(tweet.media.len());
     for (i, media) in tweet.media.iter().enumerate() {
-        let url = match media.kind {
+        let url = match &media.kind {
             MediaKind::Photo => media.url.clone(),
             MediaKind::Video | MediaKind::AnimatedGif => {
                 media.video_url.clone().unwrap_or_else(|| media.url.clone())
             }
+            MediaKind::YouTube { .. } => continue,
         };
         let path = tweet_dir.join(file_name_for(i, &url));
         out.push(OpenTarget { url, path });
     }
     out
+}
+
+/// YouTube URLs to hand to the OS default handler directly, without any
+/// download step.
+pub fn collect_remote_urls(tweet: &Tweet) -> Vec<String> {
+    tweet
+        .media
+        .iter()
+        .filter_map(|m| match &m.kind {
+            MediaKind::YouTube { video_id } => {
+                Some(format!("https://www.youtube.com/watch?v={video_id}"))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 fn file_name_for(idx: usize, url: &str) -> String {

@@ -188,6 +188,7 @@ pub struct RenderContext<'a> {
     pub expanded: &'a HashSet<String>,
     pub inline_threads: &'a HashMap<String, InlineThread>,
     pub media_reg: &'a MediaRegistry,
+    pub youtube: &'a crate::tui::youtube::YoutubeRegistry,
     pub translations: &'a HashMap<String, String>,
     pub liked_tweet_ids: &'a HashSet<String>,
     pub write_rate_limit: Option<std::time::Duration>,
@@ -242,6 +243,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         expanded: &app.expanded_bodies,
         inline_threads: &app.inline_threads,
         media_reg: &app.media,
+        youtube: &app.youtube,
         translations: &app.translations,
         liked_tweet_ids: &app.liked_tweet_ids,
         write_rate_limit: app.client.write_rate_limit_remaining(),
@@ -1892,6 +1894,7 @@ const GLYPH_IS_REPLY: &str = "⮎";
 const GLYPH_PHOTO: &str = "▣";
 const GLYPH_VIDEO: &str = "▶";
 const GLYPH_GIF: &str = "↻";
+const GLYPH_YOUTUBE: &str = "▶";
 
 fn tweet_lines(
     t: &Tweet,
@@ -1909,7 +1912,7 @@ fn tweet_lines(
         .filter(|m| matches!(m.kind, crate::model::MediaKind::Photo))
         .count();
     let has_photo_media = photo_count > 0;
-    let first_media_kind = t.media.first().map(|m| m.kind);
+    let first_media_kind = t.media.first().map(|m| &m.kind);
 
     let effective_expanded = expanded || opts.media_auto_expand;
 
@@ -1947,6 +1950,7 @@ fn tweet_lines(
             crate::model::MediaKind::Photo => (GLYPH_PHOTO, Color::Indexed(75)),
             crate::model::MediaKind::Video => (GLYPH_VIDEO, Color::Indexed(203)),
             crate::model::MediaKind::AnimatedGif => (GLYPH_GIF, Color::Indexed(214)),
+            crate::model::MediaKind::YouTube { .. } => (GLYPH_YOUTUBE, Color::Indexed(203)),
         };
         header.push(Span::raw("  "));
         let label = if photo_count > 1 {
@@ -2056,10 +2060,11 @@ fn tweet_lines(
             ),
         ];
         if let Some(first_media) = qt.media.first() {
-            let (glyph, color) = match first_media.kind {
+            let (glyph, color) = match &first_media.kind {
                 crate::model::MediaKind::Photo => (GLYPH_PHOTO, Color::Indexed(75)),
                 crate::model::MediaKind::Video => (GLYPH_VIDEO, Color::Indexed(203)),
                 crate::model::MediaKind::AnimatedGif => (GLYPH_GIF, Color::Indexed(214)),
+                crate::model::MediaKind::YouTube { .. } => (GLYPH_YOUTUBE, Color::Indexed(203)),
             };
             header_spans.push(Span::raw("  "));
             header_spans.push(Span::styled(glyph.to_string(), Style::default().fg(color)));
@@ -2153,11 +2158,242 @@ fn tweet_lines(
         }
     }
 
+    if opts.media_enabled {
+        for m in &t.media {
+            if let crate::model::MediaKind::YouTube { video_id } = &m.kind {
+                lines.extend(render_youtube_card(
+                    ctx,
+                    video_id,
+                    &m.url,
+                    image_max_cols(wrap_width),
+                    ctx.opts.media_max_rows,
+                    &indent,
+                ));
+            }
+        }
+    }
+
     lines
 }
 
 fn image_max_cols(wrap_width: usize) -> usize {
     wrap_width.saturating_sub(4).clamp(10, 80)
+}
+
+fn render_youtube_card(
+    ctx: &RenderContext,
+    video_id: &str,
+    thumbnail_url: &str,
+    max_cols: usize,
+    max_rows: usize,
+    indent: &Span<'static>,
+) -> Vec<Line<'static>> {
+    use crate::tui::youtube::MetaState;
+    use unicode_width::UnicodeWidthStr;
+
+    const YT_RED: Color = Color::Rgb(0xff, 0x00, 0x33);
+    let border_style = Style::default().fg(Color::Indexed(240));
+    let play_style = Style::default().fg(YT_RED).add_modifier(Modifier::BOLD);
+    let brand_style = Style::default()
+        .fg(Color::White)
+        .add_modifier(Modifier::BOLD);
+    let title_style = Style::default().fg(Color::White);
+    let meta_style = Style::default().fg(Color::Indexed(244));
+
+    let (title, author) = match ctx.youtube.get(video_id) {
+        Some(MetaState::Ready(m)) => (m.title.clone(), m.author_name.clone()),
+        Some(MetaState::Failed) => (String::new(), String::new()),
+        Some(MetaState::Loading) | None => ("loading…".to_string(), String::new()),
+    };
+
+    let image_cells = image_cells_for_card(ctx.media_reg, thumbnail_url, max_cols, max_rows);
+    let inner_w: usize = match image_cells {
+        Some((c, _)) => c as usize,
+        None => max_cols.saturating_sub(2).max(20),
+    };
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    let label = "  ▶ YouTube ";
+    let label_w = UnicodeWidthStr::width(label);
+    let top_right_dashes = inner_w.saturating_sub(label_w);
+    lines.push(Line::from(vec![
+        indent.clone(),
+        Span::styled("┌", border_style),
+        Span::styled("  ", border_style),
+        Span::styled("▶", play_style),
+        Span::styled(" YouTube ", brand_style),
+        Span::styled("─".repeat(top_right_dashes), border_style),
+        Span::styled("┐", border_style),
+    ]));
+
+    match image_cells {
+        Some((nc, nr)) => {
+            if let Some(MediaEntry::ReadyKitty { id, .. }) = ctx.media_reg.get(thumbnail_url) {
+                for row in 0..nr as usize {
+                    let placeholder = placeholder_row_span(*id, row, nc as usize);
+                    lines.push(Line::from(vec![
+                        indent.clone(),
+                        Span::styled("│", border_style),
+                        placeholder,
+                        Span::styled("│", border_style),
+                    ]));
+                }
+            } else if let Some(MediaEntry::ReadyPixels { pixels, w, h }) =
+                ctx.media_reg.get(thumbnail_url)
+            {
+                let empty_indent = Span::raw("");
+                let sextants =
+                    media::render_sextants(pixels, *w, *h, nc as usize, nr as usize, &empty_indent);
+                for row in sextants {
+                    lines.push(wrap_row_in_border(indent, row, inner_w, &border_style));
+                }
+            } else {
+                for _ in 0..nr as usize {
+                    lines.push(blank_body_row(indent, inner_w, &border_style));
+                }
+            }
+        }
+        None => {
+            for _ in 0..4 {
+                lines.push(blank_body_row(indent, inner_w, &border_style));
+            }
+        }
+    }
+
+    lines.push(Line::from(vec![
+        indent.clone(),
+        Span::styled("├", border_style),
+        Span::styled("─".repeat(inner_w), border_style),
+        Span::styled("┤", border_style),
+    ]));
+
+    let title_pad = " ".to_string();
+    let title_body_w = inner_w.saturating_sub(2).max(1);
+    let title_display = truncate_to_width(&title, title_body_w);
+    let title_padded = pad_to_width(&title_display, title_body_w);
+    lines.push(Line::from(vec![
+        indent.clone(),
+        Span::styled("│", border_style),
+        Span::raw(title_pad.clone()),
+        Span::styled(title_padded, title_style.add_modifier(Modifier::BOLD)),
+        Span::raw(title_pad.clone()),
+        Span::styled("│", border_style),
+    ]));
+
+    let author_line = if author.is_empty() {
+        "youtube.com".to_string()
+    } else {
+        format!("by {author} · youtube.com")
+    };
+    let author_display = truncate_to_width(&author_line, title_body_w);
+    let author_padded = pad_to_width(&author_display, title_body_w);
+    lines.push(Line::from(vec![
+        indent.clone(),
+        Span::styled("│", border_style),
+        Span::raw(title_pad.clone()),
+        Span::styled(author_padded, meta_style),
+        Span::raw(title_pad),
+        Span::styled("│", border_style),
+    ]));
+
+    lines.push(Line::from(vec![
+        indent.clone(),
+        Span::styled("└", border_style),
+        Span::styled("─".repeat(inner_w), border_style),
+        Span::styled("┘", border_style),
+    ]));
+
+    lines
+}
+
+fn image_cells_for_card(
+    registry: &MediaRegistry,
+    url: &str,
+    max_cols: usize,
+    max_rows: usize,
+) -> Option<(u32, u32)> {
+    let entry = registry.get(url)?;
+    let inner_cols = (max_cols.saturating_sub(2)).max(10) as u32;
+    match entry {
+        MediaEntry::ReadyKitty { w, h, .. } => {
+            let cell = registry.cell_size()?;
+            let (nc, nr) = media::kitty_image_cells(cell, *w, *h, inner_cols);
+            let (c, r) = media::fit_cells_to_pane(nc, nr, inner_cols, max_rows as u32);
+            if c == 0 || r == 0 { None } else { Some((c, r)) }
+        }
+        MediaEntry::ReadyPixels { w, h, .. } => {
+            let (nc, nr) =
+                media::kitty_image_cells(media::CellSize { w: 10, h: 20 }, *w, *h, inner_cols);
+            let (c, r) = media::fit_cells_to_pane(nc, nr, inner_cols, max_rows as u32);
+            if c == 0 || r == 0 { None } else { Some((c, r)) }
+        }
+        _ => None,
+    }
+}
+
+fn blank_body_row(indent: &Span<'static>, inner_w: usize, border_style: &Style) -> Line<'static> {
+    Line::from(vec![
+        indent.clone(),
+        Span::styled("│", *border_style),
+        Span::raw(" ".repeat(inner_w)),
+        Span::styled("│", *border_style),
+    ])
+}
+
+fn wrap_row_in_border(
+    indent: &Span<'static>,
+    mut row: Line<'static>,
+    inner_w: usize,
+    border_style: &Style,
+) -> Line<'static> {
+    use unicode_width::UnicodeWidthStr;
+    let row_w: usize = row
+        .spans
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+        .sum();
+    let pad = inner_w.saturating_sub(row_w);
+    let mut spans = vec![indent.clone(), Span::styled("│", *border_style)];
+    spans.append(&mut row.spans);
+    if pad > 0 {
+        spans.push(Span::raw(" ".repeat(pad)));
+    }
+    spans.push(Span::styled("│", *border_style));
+    Line::from(spans)
+}
+
+fn placeholder_row_span(id: u32, row: usize, cols: usize) -> Span<'static> {
+    media::placeholder_row_for(id, row, cols)
+}
+
+fn truncate_to_width(s: &str, w: usize) -> String {
+    use unicode_width::UnicodeWidthChar;
+    let mut out = String::new();
+    let mut width = 0;
+    for c in s.chars() {
+        let cw = UnicodeWidthChar::width(c).unwrap_or(0);
+        if width + cw > w {
+            if w >= 1 && width < w {
+                out.push('…');
+            }
+            return out;
+        }
+        out.push(c);
+        width += cw;
+    }
+    out
+}
+
+fn pad_to_width(s: &str, w: usize) -> String {
+    use unicode_width::UnicodeWidthStr;
+    let cur = UnicodeWidthStr::width(s);
+    if cur >= w {
+        return s.to_string();
+    }
+    let mut out = s.to_string();
+    out.push_str(&" ".repeat(w - cur));
+    out
 }
 
 fn render_image_lines(
@@ -2240,15 +2476,28 @@ fn emit_placement_for_tweet(
 ) {
     let max_cols = image_max_cols(wrap_width);
     for media_item in tweet.media.iter().take(4) {
-        if !matches!(media_item.kind, crate::model::MediaKind::Photo) {
-            continue;
-        }
-        if let Some(MediaEntry::ReadyKitty { id, w, h }) = registry.get(&media_item.url) {
-            let (nc, nr) = media::kitty_image_cells(cell, *w, *h, max_cols as u32);
-            let (c, r) = media::fit_cells_to_pane(nc, nr, max_cols as u32, max_rows as u32);
-            if c > 0 && r > 0 {
-                media::emit_kitty_placement(*id, c, r);
+        match &media_item.kind {
+            crate::model::MediaKind::Photo => {
+                if let Some(MediaEntry::ReadyKitty { id, w, h }) = registry.get(&media_item.url) {
+                    let (nc, nr) = media::kitty_image_cells(cell, *w, *h, max_cols as u32);
+                    let (c, r) = media::fit_cells_to_pane(nc, nr, max_cols as u32, max_rows as u32);
+                    if c > 0 && r > 0 {
+                        media::emit_kitty_placement(*id, c, r);
+                    }
+                }
             }
+            crate::model::MediaKind::YouTube { .. } => {
+                // Card interior is max_cols - 2 (left/right borders).
+                let inner_cols = (max_cols.saturating_sub(2)).max(10) as u32;
+                if let Some(MediaEntry::ReadyKitty { id, w, h }) = registry.get(&media_item.url) {
+                    let (nc, nr) = media::kitty_image_cells(cell, *w, *h, inner_cols);
+                    let (c, r) = media::fit_cells_to_pane(nc, nr, inner_cols, max_rows as u32);
+                    if c > 0 && r > 0 {
+                        media::emit_kitty_placement(*id, c, r);
+                    }
+                }
+            }
+            _ => {}
         }
     }
     if let Some(qt) = &tweet.quoted_tweet {

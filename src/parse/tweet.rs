@@ -98,7 +98,10 @@ fn parse_tweet_node(node: &Value) -> Result<Tweet> {
         .and_then(|q| parse_tweet_result(q).ok())
         .map(Box::new);
 
-    let media = parse_media(legacy);
+    let mut media = parse_media(legacy);
+    let (youtube_media, youtube_tcos) = parse_youtube_embeds(legacy);
+    media.extend(youtube_media);
+    let text = strip_tco_urls(&text, &youtube_tcos);
 
     let url = format!("https://x.com/{}/status/{}", author.handle, rest_id);
 
@@ -195,7 +198,7 @@ fn parse_media(legacy: &Value) -> Vec<Media> {
                 .and_then(Value::as_str)?
                 .to_string();
             let video_url = match kind {
-                MediaKind::Photo => None,
+                MediaKind::Photo | MediaKind::YouTube { .. } => None,
                 MediaKind::Video | MediaKind::AnimatedGif => best_video_variant(m),
             };
             let alt_text = m
@@ -230,6 +233,93 @@ fn best_video_variant(m: &Value) -> Option<String> {
         }
     }
     best.map(|(_, u)| u.to_string())
+}
+
+/// Scans `entities.urls` for YouTube links and returns synthesized Media entries
+/// plus the `display_url` tokens whose substitutions should be stripped from the
+/// tweet body. scrub_urls_in_text has already replaced t.co with display_url by
+/// the time we strip, so we match on display_url.
+fn parse_youtube_embeds(legacy: &Value) -> (Vec<Media>, Vec<String>) {
+    let mut embeds = Vec::new();
+    let mut display_urls = Vec::new();
+    let Some(arr) = legacy.pointer("/entities/urls").and_then(Value::as_array) else {
+        return (embeds, display_urls);
+    };
+    for u in arr {
+        let expanded = u.get("expanded_url").and_then(Value::as_str).unwrap_or("");
+        let Some(video_id) = extract_youtube_id(expanded) else {
+            continue;
+        };
+        let thumbnail = format!("https://img.youtube.com/vi/{video_id}/mqdefault.jpg");
+        embeds.push(Media {
+            kind: MediaKind::YouTube { video_id },
+            url: thumbnail,
+            video_url: None,
+            alt_text: None,
+        });
+        if let Some(display) = u.get("display_url").and_then(Value::as_str) {
+            display_urls.push(display.to_string());
+        }
+    }
+    (embeds, display_urls)
+}
+
+/// Returns the 11-character YouTube video id from a watch URL, short URL, or
+/// embed URL. Accepts both `youtube.com` and `youtu.be`, http or https, with or
+/// without `www.`/`m.`, and ignores extra query parameters.
+pub fn extract_youtube_id(url: &str) -> Option<String> {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    let rest = rest
+        .strip_prefix("www.")
+        .or_else(|| rest.strip_prefix("m."))
+        .unwrap_or(rest);
+
+    let (host, path_query) = rest.split_once('/')?;
+
+    let raw_id = match host {
+        "youtu.be" => path_query.split(['?', '&', '#']).next().unwrap_or(""),
+        "youtube.com" => {
+            if let Some(after) = path_query.strip_prefix("watch") {
+                let query = after.strip_prefix('?').unwrap_or(after);
+                query
+                    .split('&')
+                    .find_map(|kv| kv.strip_prefix("v="))
+                    .unwrap_or("")
+            } else if let Some(after) = path_query.strip_prefix("shorts/") {
+                after.split(['?', '&', '#', '/']).next().unwrap_or("")
+            } else if let Some(after) = path_query.strip_prefix("embed/") {
+                after.split(['?', '&', '#', '/']).next().unwrap_or("")
+            } else if let Some(after) = path_query.strip_prefix("live/") {
+                after.split(['?', '&', '#', '/']).next().unwrap_or("")
+            } else {
+                ""
+            }
+        }
+        _ => return None,
+    };
+
+    if is_valid_youtube_id(raw_id) {
+        Some(raw_id.to_string())
+    } else {
+        None
+    }
+}
+
+fn is_valid_youtube_id(s: &str) -> bool {
+    s.len() == 11
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+fn strip_tco_urls(text: &str, tcos: &[String]) -> String {
+    let mut out = text.to_string();
+    for tco in tcos {
+        out = strip_url(&out, tco);
+    }
+    out.trim().to_string()
 }
 
 fn scrub_urls_in_text(text: &str, legacy: &Value) -> String {
@@ -628,6 +718,115 @@ mod tests {
         assert!(tweet.favorited);
         assert!(tweet.retweeted);
         assert!(tweet.bookmarked);
+    }
+
+    #[test]
+    fn youtube_id_from_watch_url() {
+        assert_eq!(
+            extract_youtube_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ"),
+            Some("dQw4w9WgXcQ".into())
+        );
+        assert_eq!(
+            extract_youtube_id("https://youtube.com/watch?v=dQw4w9WgXcQ&t=42s"),
+            Some("dQw4w9WgXcQ".into())
+        );
+        assert_eq!(
+            extract_youtube_id("https://m.youtube.com/watch?v=dQw4w9WgXcQ"),
+            Some("dQw4w9WgXcQ".into())
+        );
+    }
+
+    #[test]
+    fn youtube_id_from_short_url() {
+        assert_eq!(
+            extract_youtube_id("https://youtu.be/dQw4w9WgXcQ"),
+            Some("dQw4w9WgXcQ".into())
+        );
+        assert_eq!(
+            extract_youtube_id("https://youtu.be/dQw4w9WgXcQ?t=42"),
+            Some("dQw4w9WgXcQ".into())
+        );
+    }
+
+    #[test]
+    fn youtube_id_from_shorts_embed_live() {
+        assert_eq!(
+            extract_youtube_id("https://www.youtube.com/shorts/abcdefghijk"),
+            Some("abcdefghijk".into())
+        );
+        assert_eq!(
+            extract_youtube_id("https://www.youtube.com/embed/abcdefghijk"),
+            Some("abcdefghijk".into())
+        );
+        assert_eq!(
+            extract_youtube_id("https://www.youtube.com/live/abcdefghijk"),
+            Some("abcdefghijk".into())
+        );
+    }
+
+    #[test]
+    fn youtube_id_rejects_non_youtube() {
+        assert_eq!(
+            extract_youtube_id("https://example.com/watch?v=abcdefghijk"),
+            None
+        );
+        assert_eq!(extract_youtube_id("https://youtube.com/"), None);
+        assert_eq!(
+            extract_youtube_id("https://youtube.com/channel/UCabc"),
+            None
+        );
+    }
+
+    #[test]
+    fn youtube_id_rejects_malformed_id() {
+        assert_eq!(extract_youtube_id("https://youtu.be/short"), None);
+        assert_eq!(
+            extract_youtube_id("https://youtu.be/waytoolongidentifier"),
+            None
+        );
+        assert_eq!(extract_youtube_id("https://youtu.be/has space1"), None);
+    }
+
+    #[test]
+    fn parse_injects_youtube_media_and_strips_display_url() {
+        let mut v = minimal_tweet_json("2100", "watch this https://t.co/YT vibes");
+        v["legacy"]["entities"] = json!({
+            "urls": [
+                {
+                    "url": "https://t.co/YT",
+                    "display_url": "youtu.be/dQw4w9WgXcQ",
+                    "expanded_url": "https://youtu.be/dQw4w9WgXcQ"
+                }
+            ]
+        });
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(tweet.media.len(), 1);
+        match &tweet.media[0].kind {
+            MediaKind::YouTube { video_id } => assert_eq!(video_id, "dQw4w9WgXcQ"),
+            other => panic!("expected YouTube kind, got {other:?}"),
+        }
+        assert_eq!(
+            tweet.media[0].url,
+            "https://img.youtube.com/vi/dQw4w9WgXcQ/mqdefault.jpg"
+        );
+        assert_eq!(tweet.text, "watch this vibes");
+    }
+
+    #[test]
+    fn parse_leaves_non_youtube_url_untouched() {
+        let mut v = minimal_tweet_json("2101", "read https://t.co/AB about foo");
+        v["legacy"]["entities"] = json!({
+            "urls": [
+                {
+                    "url": "https://t.co/AB",
+                    "display_url": "example.com/article",
+                    "expanded_url": "https://example.com/article"
+                }
+            ]
+        });
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert!(tweet.media.is_empty());
+        assert_eq!(tweet.text, "read example.com/article about foo");
     }
 
     #[test]

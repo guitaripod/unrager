@@ -44,10 +44,11 @@ pub struct Media {
     pub alt_text: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MediaKind {
     Photo,
     Video,
     AnimatedGif,
+    YouTube { video_id: String },
 }

@@ -93,7 +93,7 @@ impl App {
             self.liked_tweet_ids.insert(tweet.rest_id.clone());
         }
         let focal_id = tweet.rest_id.clone();
-        self.media.ensure_tweet_media(&tweet, &self.tx);
+        self.ensure_tweet_resources(&tweet);
         let detail = TweetDetail::new(tweet);
         self.focus_stack.push(FocusEntry::Tweet(detail));
         self.active = ActivePane::Detail;
@@ -398,12 +398,15 @@ impl App {
     }
 
     pub(super) fn open_media_external(&mut self) {
-        let Some(tweet) = self.selected_tweet() else {
+        let Some(tweet) = self.selected_tweet().cloned() else {
             return;
         };
         if tweet.media.is_empty() {
             self.set_status("no media on selected tweet");
             return;
+        }
+        for url in external::collect_remote_urls(&tweet) {
+            self.open_url(&url);
         }
         let cache_dir = match config::cache_dir() {
             Ok(p) => p.join("media"),
@@ -413,7 +416,10 @@ impl App {
             }
         };
         let tweet_dir = cache_dir.join(&tweet.rest_id);
-        let targets = external::collect_open_targets(tweet, &tweet_dir);
+        let targets = external::collect_open_targets(&tweet, &tweet_dir);
+        if targets.is_empty() {
+            return;
+        }
         let count = targets.len();
         let tweet_id = tweet.rest_id.clone();
         let label = if count > 1 {

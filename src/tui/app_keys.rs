@@ -660,7 +660,7 @@ impl App {
         };
         if !self.expanded_bodies.remove(&tweet.rest_id) {
             self.expanded_bodies.insert(tweet.rest_id.clone());
-            self.media.ensure_tweet_media(&tweet, &self.tx);
+            self.ensure_tweet_resources(&tweet);
             self.set_status("expanded");
         } else {
             self.set_status("collapsed");
@@ -677,7 +677,7 @@ impl App {
         }
         self.expanded_bodies.insert(id.clone());
         if let Some(tweet) = self.selected_tweet().cloned() {
-            self.media.ensure_tweet_media(&tweet, &self.tx);
+            self.ensure_tweet_resources(&tweet);
         }
         self.inline_threads.insert(
             id.clone(),

@@ -21,6 +21,7 @@ pub mod source;
 pub(crate) mod test_util;
 pub mod ui;
 pub mod whisper;
+pub mod youtube;
 
 use crate::error::Result;
 use app::App;

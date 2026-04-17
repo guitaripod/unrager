@@ -62,6 +62,10 @@ pub enum Event {
         url: String,
         err: String,
     },
+    YoutubeMetaLoaded {
+        video_id: String,
+        result: std::result::Result<crate::tui::youtube::YoutubeMeta, String>,
+    },
     MediaOpenResult {
         result: std::result::Result<Vec<std::path::PathBuf>, String>,
     },

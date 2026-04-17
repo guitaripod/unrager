@@ -239,19 +239,38 @@ impl MediaRegistry {
     }
 
     pub fn ensure_tweet_media(&mut self, tweet: &Tweet, tx: &EventTx) {
+        self.ensure_tweet_media_filtered(tweet, tx, |_| true);
+    }
+
+    /// Variant that only queues YouTube thumbnail downloads, used in the source
+    /// feed where photos stay cold until the user expands them but YouTube
+    /// cards always render and need their thumbnail eagerly.
+    pub fn ensure_tweet_youtube_thumbnails(&mut self, tweet: &Tweet, tx: &EventTx) {
+        self.ensure_tweet_media_filtered(tweet, tx, |k| matches!(k, MediaKind::YouTube { .. }));
+    }
+
+    fn ensure_tweet_media_filtered(
+        &mut self,
+        tweet: &Tweet,
+        tx: &EventTx,
+        keep: impl Fn(&MediaKind) -> bool + Copy,
+    ) {
         if !self.supported() {
             return;
         }
         if let Some(qt) = &tweet.quoted_tweet {
-            self.ensure_tweet_media(qt, tx);
+            self.ensure_tweet_media_filtered(qt, tx, keep);
         }
         let is_kitty = self.is_kitty();
         for media in &tweet.media {
+            if !keep(&media.kind) {
+                continue;
+            }
             if self.entries.contains_key(&media.url) {
                 continue;
             }
-            match media.kind {
-                MediaKind::Photo => {
+            match &media.kind {
+                MediaKind::Photo | MediaKind::YouTube { .. } => {
                     self.insert_entry(media.url.clone(), MediaEntry::Loading);
                     let url = media.url.clone();
                     let sem = self.semaphore.clone();
@@ -293,7 +312,9 @@ impl MediaRegistry {
                 MediaKind::Video | MediaKind::AnimatedGif => {
                     self.insert_entry(
                         media.url.clone(),
-                        MediaEntry::Unsupported { kind: media.kind },
+                        MediaEntry::Unsupported {
+                            kind: media.kind.clone(),
+                        },
                     );
                 }
             }
@@ -506,6 +527,13 @@ fn placeholder_row(row: usize, cols: usize, style: Style) -> Span<'static> {
         s.push(col_dia);
     }
     Span::styled(s, style)
+}
+
+/// Builds a single placeholder row span for a kitty image with the given id.
+/// Useful when the caller wants to embed the row inside a custom layout
+/// (like a bordered card) rather than using `placeholder_lines`.
+pub fn placeholder_row_for(id: u32, row: usize, cols: usize) -> Span<'static> {
+    placeholder_row(row, cols, Style::default().fg(id_color(id)))
 }
 
 fn id_color(id: u32) -> Color {

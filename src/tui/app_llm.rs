@@ -164,7 +164,7 @@ impl App {
         };
         self.source
             .tweets
-            .sort_by(|a, b| b.created_at.cmp(&a.created_at));
+            .sort_by_key(|t| std::cmp::Reverse(t.created_at));
         if let Some(id) = selected_id {
             if let Some(idx) = self.source.tweets.iter().position(|t| t.rest_id == id) {
                 self.source.state.selected = idx;

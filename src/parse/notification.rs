@@ -99,7 +99,7 @@ pub fn parse_notifications_timeline(response: &Value) -> Result<NotificationPage
     }
 
     page.notifications
-        .sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        .sort_by_key(|n| std::cmp::Reverse(n.timestamp));
 
     let mut type_counts: std::collections::BTreeMap<&str, usize> =
         std::collections::BTreeMap::new();

@@ -161,7 +161,7 @@ pub fn start(
             })
             .collect();
 
-        authored.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        authored.sort_by_key(|t| std::cmp::Reverse(t.created_at));
         dedupe_by_rest_id(&mut authored);
 
         if authored.len() > MAX_TWEETS {

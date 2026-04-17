@@ -330,6 +330,11 @@ impl App {
             (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, _) => {
                 self.active = ActivePane::Source;
             }
+            (KeyCode::Char('r'), KeyModifiers::CONTROL) => match self.focus_stack.last() {
+                Some(FocusEntry::Tweet(_)) => self.refresh_current_thread(),
+                Some(FocusEntry::Notifications(_)) => self.reload_source(),
+                _ => {}
+            },
             (KeyCode::Char('s'), KeyModifiers::NONE) => self.cycle_reply_sort(),
             (KeyCode::Enter, _) | (KeyCode::Char('l'), KeyModifiers::NONE) => {
                 match self.focus_stack.last() {

@@ -160,7 +160,8 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 | `m` | Open media externally |
 | `y` | Yank fixupx URL to clipboard |
 | `Y` | Yank tweet JSON to clipboard |
-| `r` | Reload source |
+| `r` | Reply to selected tweet |
+| `Ctrl-r` | Reload source / refresh thread replies |
 | `u` | Jump to next unread |
 | `U` | Mark all as read |
 | `]` / `[` | History forward / back |

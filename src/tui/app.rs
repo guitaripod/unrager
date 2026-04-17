@@ -453,7 +453,6 @@ impl App {
                 }
                 self.tick_status();
                 self.mark_current_seen();
-                self.maybe_refresh_thread();
             }
             Event::Key(key) => self.handle_key(key),
             Event::Resize(_, _) => {

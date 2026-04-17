@@ -2646,7 +2646,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  U              mark all loaded as read"),
         Line::from(""),
         Line::from(Span::styled("ACTIONS", heading)),
-        Line::from("  Ctrl-r         reload current source"),
+        Line::from("  Ctrl-r         reload source / refresh thread replies"),
         Line::from("  y              yank fixupx URL to clipboard"),
         Line::from("  Y              yank selected tweet JSON"),
         Line::from("  n              open notifications as detail pane"),

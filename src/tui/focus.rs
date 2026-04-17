@@ -12,7 +12,6 @@ use crate::tui::compose::ReplyBar;
 use crate::tui::source::PaneState;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::time::Instant;
 
 #[derive(Debug)]
 pub struct TweetDetail {
@@ -23,7 +22,6 @@ pub struct TweetDetail {
     pub state: PaneState,
     pub reply_bar: Option<ReplyBar>,
     pub new_reply_ids: HashSet<String>,
-    pub last_refresh: Option<Instant>,
 }
 
 impl TweetDetail {
@@ -36,13 +34,11 @@ impl TweetDetail {
             state: PaneState::default(),
             reply_bar: None,
             new_reply_ids: HashSet::new(),
-            last_refresh: None,
         }
     }
 
     pub fn apply_page(&mut self, page: TimelinePage) {
         self.loading = false;
-        self.last_refresh = Some(Instant::now());
         let focal_id = self.tweet.rest_id.clone();
         self.replies = page
             .tweets
@@ -55,7 +51,6 @@ impl TweetDetail {
     }
 
     pub fn merge_refreshed_replies(&mut self, page: TimelinePage) {
-        self.last_refresh = Some(Instant::now());
         let focal_id = &self.tweet.rest_id;
         let existing: HashSet<String> = self.replies.iter().map(|t| t.rest_id.clone()).collect();
         let new_replies: Vec<Tweet> = page

@@ -776,21 +776,15 @@ impl App {
         }
     }
 
-    pub(super) fn maybe_refresh_thread(&self) {
-        const REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+    pub(super) fn refresh_current_thread(&mut self) {
         let Some(FocusEntry::Tweet(detail)) = self.focus_stack.last() else {
             return;
         };
         if detail.loading {
             return;
         }
-        let should_refresh = detail
-            .last_refresh
-            .is_some_and(|t| t.elapsed() >= REFRESH_INTERVAL);
-        if !should_refresh {
-            return;
-        }
         let focal_id = detail.tweet.rest_id.clone();
+        self.set_status("refreshing thread…");
         let client = self.client.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
@@ -812,17 +806,25 @@ impl App {
         }
         match result {
             Ok(page) => {
+                let before = detail.replies.len();
                 let selected_id = detail.selected_reply().map(|t| t.rest_id.clone());
                 detail.merge_refreshed_replies(page);
                 detail.sort_replies(self.reply_sort);
-                if let Some(ref id) = selected_id {
-                    if let Some(pos) = detail.replies.iter().position(|t| t.rest_id == *id) {
-                        detail.state.selected = pos + 1;
-                    }
+                if let Some(ref id) = selected_id
+                    && let Some(pos) = detail.replies.iter().position(|t| t.rest_id == *id)
+                {
+                    detail.state.selected = pos + 1;
+                }
+                let added = detail.replies.len().saturating_sub(before);
+                if added == 0 {
+                    self.set_status("thread up to date");
+                } else {
+                    self.set_status(format!("+{added} new"));
                 }
             }
             Err(e) => {
                 tracing::debug!(focal_id, "thread refresh failed: {e}");
+                self.set_status("refresh failed");
             }
         }
     }

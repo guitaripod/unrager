@@ -2152,8 +2152,8 @@ fn tweet_lines(
                         title,
                         preview_text,
                         &m.url,
-                        image_max_cols(wrap_width),
-                        ctx.opts.media_max_rows,
+                        card_image_max_cols(wrap_width),
+                        card_image_max_rows(ctx.opts.media_max_rows),
                         &indent,
                     ));
                 }
@@ -2169,8 +2169,8 @@ fn tweet_lines(
                         description,
                         domain,
                         &m.url,
-                        image_max_cols(wrap_width),
-                        ctx.opts.media_max_rows,
+                        card_image_max_cols(wrap_width),
+                        card_image_max_rows(ctx.opts.media_max_rows),
                         &indent,
                     ));
                 }
@@ -2197,6 +2197,14 @@ fn tweet_lines(
 
 fn image_max_cols(wrap_width: usize) -> usize {
     wrap_width.saturating_sub(4).clamp(10, 80)
+}
+
+fn card_image_max_cols(wrap_width: usize) -> usize {
+    image_max_cols(wrap_width).min(50)
+}
+
+fn card_image_max_rows(media_max_rows: usize) -> usize {
+    media_max_rows.min(8)
 }
 
 /// Maps a `MediaKind` to its header-row glyph and accent color from

@@ -317,6 +317,66 @@ impl Theme {
         }
     }
 
+    /// Derives a Mordor-tinted variant from `base`, overriding the cool
+    /// blue/pink accents with the image's fiery palette so UI highlights read
+    /// naturally over the For You wallpaper. Preserves text, error, and
+    /// semantic colors (retweet green, like pink) so engagement glyphs keep
+    /// their conventional meaning.
+    pub fn mordor_from(base: &Theme) -> Self {
+        const FIRE: Color = rgb(0xf4, 0x74, 0x38);
+        const EMBER: Color = rgb(0xe8, 0x90, 0x40);
+        const FORGE: Color = rgb(0x5c, 0x18, 0x10);
+        const GOLD: Color = rgb(0xf4, 0xc0, 0x3f);
+        const ASH: Color = rgb(0x2a, 0x1e, 0x1c);
+        const ASH_DIM: Color = rgb(0x1f, 0x16, 0x12);
+        const WARM_WHITE: Color = rgb(0xfd, 0xe3, 0xb5);
+
+        Self {
+            name: "mordor",
+            is_dark: true,
+
+            accent: FIRE,
+            border_active: FIRE,
+            sel_marker_active: FIRE,
+            brand_bg: FORGE,
+            brand_fg: WARM_WHITE,
+
+            url: EMBER,
+            verified: GOLD,
+            follow: FIRE,
+            hashtag: GOLD,
+            mention: EMBER,
+            quote: EMBER,
+            quote_block: EMBER,
+
+            media_photo: EMBER,
+            media_article: EMBER,
+
+            sel_bg_active: ASH,
+            sel_bg_inactive: ASH_DIM,
+            zebra_bg: ASH_DIM,
+            clock_bg: ASH_DIM,
+            divider: ASH,
+
+            new_unread: FIRE,
+            update: GOLD,
+            milestone: GOLD,
+
+            mode_normal_bg: FIRE,
+            mode_normal_fg: rgb(0x1a, 0x0c, 0x06),
+            mode_cmd_bg: GOLD,
+            mode_cmd_fg: rgb(0x1a, 0x0c, 0x06),
+            mode_cmd_cursor: FIRE,
+            mode_vim_normal: FIRE,
+
+            ask_user: GOLD,
+            ask_assistant: EMBER,
+            heading: WARM_WHITE,
+
+            ..base.clone()
+        }
+    }
+
     pub fn by_name(name: &str, is_dark: bool) -> Option<Self> {
         match name.trim().to_ascii_lowercase().as_str() {
             "x-dark" | "xdark" | "dark" => Some(Self::x_dark()),

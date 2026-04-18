@@ -4,6 +4,7 @@ mod app_keys;
 mod app_llm;
 mod app_nav;
 pub mod ask;
+pub mod background;
 pub mod brief;
 pub mod clock;
 pub mod command;

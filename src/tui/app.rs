@@ -4,6 +4,7 @@ use crate::error::Result;
 use crate::gql::GqlClient;
 use crate::model::Tweet;
 use crate::tui::ask;
+use crate::tui::background::Background;
 use crate::tui::brief::BriefView;
 use crate::tui::event::{Event, EventTx};
 use crate::tui::filter::{Classifier, FilterCache, FilterConfig, FilterMode, FilterState};
@@ -134,6 +135,7 @@ pub struct App {
     pub expanded_bodies: HashSet<String>,
     pub inline_threads: HashMap<String, InlineThread>,
     pub media: MediaRegistry,
+    pub background: Background,
     pub youtube: YoutubeRegistry,
     pub media_auto_expand: bool,
     pub feed_mode: FeedMode,
@@ -251,7 +253,13 @@ impl App {
         let warm_client = client.clone();
         tokio::spawn(async move { warm_client.warm_transaction_key().await });
 
-        Ok(Self {
+        let media = MediaRegistry::new();
+        let mut background = Background::new();
+        if media.is_kitty() {
+            background.enable_and_prime();
+        }
+
+        let app = Self {
             running: true,
             mode: InputMode::Normal,
             command_buffer: String::new(),
@@ -278,7 +286,8 @@ impl App {
             theme_name,
             expanded_bodies: HashSet::new(),
             inline_threads: HashMap::new(),
-            media: MediaRegistry::new(),
+            media,
+            background,
             youtube: YoutubeRegistry::new(),
             media_auto_expand: false,
             feed_mode: loaded_feed_mode,
@@ -312,7 +321,9 @@ impl App {
             changelog: None,
             changelog_scroll: 0,
             changelog_loading: false,
-        })
+        };
+        app.apply_effective_theme();
+        Ok(app)
     }
 
     pub fn set_status(&mut self, msg: impl Into<String>) {
@@ -423,8 +434,27 @@ impl App {
         let resolved_name = theme.name.to_string();
         self.is_dark = theme.is_dark;
         self.theme_name = name.trim().to_ascii_lowercase();
-        crate::tui::theme::set_active(theme);
+        self.apply_effective_theme();
         Ok(resolved_name)
+    }
+
+    /// Reconciles the active theme with the current source. When the For You
+    /// feed is active, we overlay Mordor-tinted accents to match the
+    /// wallpaper. On any other source, the user's chosen theme is installed
+    /// verbatim. Call this whenever `theme_name`, `is_dark`, or
+    /// `source.kind` changes.
+    pub fn apply_effective_theme(&self) {
+        let base = crate::tui::theme::Theme::by_name(&self.theme_name, self.is_dark)
+            .unwrap_or_else(|| crate::tui::theme::Theme::for_mode(self.is_dark));
+        let effective = if matches!(
+            self.source.kind,
+            Some(SourceKind::Home { following: false })
+        ) {
+            crate::tui::theme::Theme::mordor_from(&base)
+        } else {
+            base
+        };
+        crate::tui::theme::set_active(effective);
     }
 
     pub fn is_split(&self) -> bool {
@@ -477,8 +507,10 @@ impl App {
                 if defer {
                     return Ok(());
                 }
-                ui::emit_media_placements(self, terminal.size()?.width);
+                let (tw, th) = terminal.size().map(|r| (r.width, r.height))?;
+                ui::emit_media_placements(self, tw);
                 terminal.draw(|frame| ui::draw(frame, self))?;
+                ui::update_background(self, tw, th);
                 self.last_render_at = Some(Instant::now());
                 self.dirty = false;
             }
@@ -492,8 +524,10 @@ impl App {
             }
             Event::Key(key) => self.handle_key(key),
             Event::Resize(_, _) => {
-                ui::emit_media_placements(self, terminal.size()?.width);
+                let (tw, th) = terminal.size().map(|r| (r.width, r.height))?;
+                ui::emit_media_placements(self, tw);
                 terminal.draw(|frame| ui::draw(frame, self))?;
+                ui::update_background(self, tw, th);
             }
             Event::TimelineLoaded {
                 kind,

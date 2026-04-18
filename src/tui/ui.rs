@@ -2963,6 +2963,26 @@ fn render_image_lines(
     }
 }
 
+/// Drives the For You background wallpaper. Called AFTER `terminal.draw()`
+/// so its cursor home-jump (needed for kitty direct-placement) never races
+/// ratatui's diff writes for the current frame — ratatui always emits CUP
+/// for the first cell of the next frame, so the cursor side-effect of our
+/// DECRC is self-correcting.
+///
+/// Returns `true` when a placement was created or removed, so the caller can
+/// force-invalidate ratatui's previous buffer if it needs a clean full
+/// redraw on the next frame.
+pub fn update_background(app: &mut App, terminal_width: u16, terminal_height: u16) -> bool {
+    if !app.background.enabled() {
+        return false;
+    }
+    if matches!(app.source.kind, Some(SourceKind::Home { following: false })) {
+        app.background.show(terminal_width, terminal_height)
+    } else {
+        app.background.hide()
+    }
+}
+
 pub fn emit_media_placements(app: &App, terminal_width: u16) {
     if !app.media.is_kitty() {
         return;

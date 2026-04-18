@@ -36,6 +36,7 @@ impl App {
         self.translations.clear();
         self.translation_inflight.clear();
         self.engage_inflight.clear();
+        self.apply_effective_theme();
         self.fetch_source(false, false);
         self.save_session();
     }

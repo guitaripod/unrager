@@ -285,11 +285,6 @@ impl MediaRegistry {
                     if media.url.is_empty() {
                         continue;
                     }
-                    // X serves video/gif posters at the video's native aspect
-                    // (often 9:16 for phone-recorded clips). The web client
-                    // renders them inside a square tile; mirror that by
-                    // center-cropping to 1:1.
-                    let square = matches!(media.kind, MediaKind::Video | MediaKind::AnimatedGif);
                     self.insert_entry(media.url.clone(), MediaEntry::Loading);
                     let url = media.url.clone();
                     let sem = self.semaphore.clone();
@@ -299,7 +294,7 @@ impl MediaRegistry {
                         self.next_id += 1;
                         tokio::spawn(async move {
                             let _permit = sem.acquire_owned().await.ok();
-                            match fetch_and_transmit_kitty(id, &url, square).await {
+                            match fetch_and_transmit_kitty(id, &url).await {
                                 Ok((w, h)) => {
                                     let _ = tx.send(Event::MediaLoadedKitty { url, id, w, h });
                                 }
@@ -314,7 +309,7 @@ impl MediaRegistry {
                     } else {
                         tokio::spawn(async move {
                             let _permit = sem.acquire_owned().await.ok();
-                            match fetch_and_decode(&url, square).await {
+                            match fetch_and_decode(&url).await {
                                 Ok((pixels, w, h)) => {
                                     let _ = tx.send(Event::MediaLoadedPixels { url, pixels, w, h });
                                 }
@@ -398,7 +393,6 @@ const SRC_MAX_DIM: u32 = 800;
 async fn fetch_and_transmit_kitty(
     id: u32,
     url: &str,
-    square_crop: bool,
 ) -> Result<(u32, u32), Box<dyn std::error::Error + Send + Sync>> {
     let bytes = reqwest::Client::new()
         .get(url)
@@ -409,10 +403,7 @@ async fn fetch_and_transmit_kitty(
         .await?;
     let (raw, w, h) =
         tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, u32, u32), image::ImageError> {
-            let mut img = image::load_from_memory(&bytes)?;
-            if square_crop {
-                img = center_square(img);
-            }
+            let img = image::load_from_memory(&bytes)?;
             let img = downscale(img, SRC_MAX_DIM);
             let rgba = img.to_rgba8();
             let (w, h) = rgba.dimensions();
@@ -425,7 +416,6 @@ async fn fetch_and_transmit_kitty(
 
 async fn fetch_and_decode(
     url: &str,
-    square_crop: bool,
 ) -> Result<(Arc<Vec<u8>>, u32, u32), Box<dyn std::error::Error + Send + Sync>> {
     let bytes = reqwest::Client::new()
         .get(url)
@@ -436,10 +426,7 @@ async fn fetch_and_decode(
         .await?;
     let (raw, w, h) =
         tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, u32, u32), image::ImageError> {
-            let mut img = image::load_from_memory(&bytes)?;
-            if square_crop {
-                img = center_square(img);
-            }
+            let img = image::load_from_memory(&bytes)?;
             let img = downscale(img, 512);
             let rgba = img.to_rgba8();
             let (w, h) = rgba.dimensions();
@@ -447,18 +434,6 @@ async fn fetch_and_decode(
         })
         .await??;
     Ok((Arc::new(raw), w, h))
-}
-
-fn center_square(img: image::DynamicImage) -> image::DynamicImage {
-    use image::GenericImageView;
-    let (w, h) = img.dimensions();
-    let side = w.min(h);
-    if w == h || side == 0 {
-        return img;
-    }
-    let x = (w - side) / 2;
-    let y = (h - side) / 2;
-    img.crop_imm(x, y, side, side)
 }
 
 fn downscale(img: image::DynamicImage, max_dim: u32) -> image::DynamicImage {

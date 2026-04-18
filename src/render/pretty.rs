@@ -52,6 +52,8 @@ fn render_into(out: &mut String, t: &Tweet, indent_level: usize) {
                 MediaKind::AnimatedGif => "gif",
                 MediaKind::YouTube { .. } => "youtube",
                 MediaKind::Article { .. } => "article",
+                MediaKind::LinkCard { .. } => "link",
+                MediaKind::Poll { .. } => "poll",
             };
             let alt = m
                 .alt_text

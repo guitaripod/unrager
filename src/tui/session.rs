@@ -20,6 +20,8 @@ pub struct SessionState {
     pub reply_sort: Option<ReplySortOrder>,
     #[serde(default)]
     pub whisper_cursor: Option<String>,
+    #[serde(default)]
+    pub theme: Option<String>,
 }
 
 pub fn load(path: &Path) -> Option<SessionState> {
@@ -54,6 +56,7 @@ mod tests {
             feed_mode: Some(FeedMode::Originals),
             reply_sort: Some(ReplySortOrder::Likes),
             whisper_cursor: Some("cursor-abc".into()),
+            theme: Some("x-dark".into()),
         };
         save(tmp.path(), &state).unwrap();
         let loaded = load(tmp.path()).unwrap();
@@ -80,6 +83,7 @@ mod tests {
             feed_mode: None,
             reply_sort: None,
             whisper_cursor: None,
+            theme: None,
         };
         save(tmp.path(), &state).unwrap();
         let loaded = load(tmp.path()).unwrap();

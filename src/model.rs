@@ -58,4 +58,21 @@ pub enum MediaKind {
         title: String,
         preview_text: String,
     },
+    LinkCard {
+        title: String,
+        description: String,
+        domain: String,
+        target_url: String,
+    },
+    Poll {
+        options: Vec<PollOption>,
+        ends_at: Option<DateTime<Utc>>,
+        counts_final: bool,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PollOption {
+    pub label: String,
+    pub count: u64,
 }

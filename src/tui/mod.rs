@@ -20,6 +20,7 @@ pub mod session;
 pub mod source;
 #[cfg(test)]
 pub(crate) mod test_util;
+pub mod theme;
 pub mod ui;
 pub mod whisper;
 pub mod youtube;

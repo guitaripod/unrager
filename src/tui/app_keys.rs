@@ -109,13 +109,11 @@ impl App {
                 };
             }
             (KeyCode::Char('Z'), _) => {
-                self.is_dark = !self.is_dark;
-                let msg = if self.is_dark {
-                    "theme: dark"
-                } else {
-                    "theme: light"
-                };
-                self.set_status(msg);
+                let next = if self.is_dark { "x-light" } else { "x-dark" };
+                if let Ok(resolved) = self.set_theme(next) {
+                    self.set_status(format!("theme: {resolved}"));
+                    self.save_session();
+                }
             }
             (KeyCode::Char(','), KeyModifiers::NONE) if self.is_split() => {
                 self.split_pct = self.split_pct.saturating_sub(5).max(20);
@@ -425,6 +423,13 @@ impl App {
             Ok(Command::SwitchSource(kind)) => self.switch_source(kind),
             Ok(Command::OpenTweet(id)) => self.open_tweet_by_id(id),
             Ok(Command::OpenNotifications) => self.open_notifications(),
+            Ok(Command::SetTheme(name)) => match self.set_theme(&name) {
+                Ok(resolved) => {
+                    self.set_status(format!("theme: {resolved}"));
+                    self.save_session();
+                }
+                Err(e) => self.error = Some(e),
+            },
             Ok(Command::Quit) => self.running = false,
             Ok(Command::Help) => {
                 self.status =

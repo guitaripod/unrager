@@ -149,7 +149,7 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 | `x` | Expand / collapse tweet body |
 | `X` | Inline thread replies |
 | `I` | Toggle media auto-expand |
-| `Z` | Toggle dark / light theme palette |
+| `Z` | Toggle x-dark / x-light theme |
 | `M` | Toggle metric counts |
 | `N` | Toggle display names |
 | `t` | Toggle relative / absolute timestamps |
@@ -174,13 +174,14 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 
 ## More
 
-- **Inline media** — photos render inside the terminal via the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) on Ghostty, Kitty, and WezTerm. Multiple images side-by-side. Toggle with `I`. Falls back to `▣`/`▶`/`↻` glyphs elsewhere.
-- **Inline cards** — YouTube links and X Articles render as bordered preview cards with cover image, title, and metadata. `m` opens the source URL in your browser.
+- **Inline media** — photos, video posters, and GIF first-frames render inside the terminal via the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) on Ghostty, Kitty, and WezTerm. Multiple images side-by-side. Toggle with `I`. Falls back to `▣`/`▶`/`↻` glyphs elsewhere.
+- **Inline cards** — YouTube links, X Articles, generic link previews (any brand), and polls render as bordered preview cards with cover image, title, description, and metadata. `m` opens the source URL in your browser.
 - **Originals mode** — `V` on home feeds hides replies, quotes, and retweets. `◇` appears in the status bar. Persists across sessions.
 - **Notifications view** — press `n` or `:notifs` to browse notifications in a dedicated feed. Enter opens the target tweet or navigates to the actor's profile. Ambient whisper continues in the status bar independently.
 - **Read tracking** — tweets mark as read on cursor. For You feed hides already-seen tweets and deduplicates across pages. `u` jumps to next unread.
-- **Color-hashed handles** — FNV-1a hash into a 20-color palette, consistent across every mention in every tweet body.
-- **Zebra striping** — alternating row backgrounds, auto-detects light/dark terminal theme via OSC 11.
+- **Theme engine** — built-in `x-dark` (X.com brand colors layered over a Rosé Pine surface palette) and `x-light` (X.com brand over Solarized Light). Swap live with `:theme x-dark|x-light|auto` or toggle with `Z`. The choice persists across sessions. The Twitter blue, like-pink, retweet-green, and quote-purple are real X brand hex values; greys, borders, and the ribbon palette come from Rosé Pine / Solarized so the TUI sits comfortably inside those terminals.
+- **Color-hashed handles** — FNV-1a hash into a per-theme 20-color palette, consistent across every mention in every tweet body.
+- **Zebra striping** — alternating row backgrounds drawn from the active theme.
 - **Share** — `y` copies a [fixupx](https://fixupx.com) embed URL, `o` opens in browser, `m` downloads every attachment on the selected tweet (all photos, GIFs, and video MP4s). On macOS images go to QuickLook (`qlmanage -p`) — space/Esc closes and focus returns to the terminal — while videos open in QuickTime Player via an osascript wrapper that polls for the document close and reactivates the spawning terminal, so Cmd+W alone gets you back to unrager. Linux uses `xdg-open` for everything. Cache lives under `~/.cache/unrager/media/<tweet_id>/`.
 - **Configurable browser** — `config.toml` supports `{}` URL placeholder for Chromium `--app={}` kiosk mode.
 - **Digital clock overlay** — optional floating clock with big block-character digits. Every element is toggleable via `[clock]` in `config.toml` (see below) — time, date, seconds, 12/24h, position, accent color, border. Set `enabled = false` to hide completely.
@@ -239,13 +240,22 @@ Config paths are platform-native: Linux uses `~/.config/unrager/` + `~/.cache/un
 
 | File (Linux) | Purpose |
 |---|---|
-| `~/.config/unrager/config.toml` | General settings (browser command, etc.) |
+| `~/.config/unrager/config.toml` | General settings (browser command, theme, etc.) |
 | `~/.config/unrager/session.json` | TUI session (source, selection, toggles) |
 | `~/.config/unrager/tokens.json` | OAuth 2.0 tokens (mode `0600`) |
 | `~/.config/unrager/filter.toml` | Rage filter rubric (auto-created) |
 | `~/.cache/unrager/seen.db` | Read-tracking SQLite |
 | `~/.cache/unrager/filter.db` | Filter verdict cache |
 | `~/.cache/unrager/media/<tweet_id>/` | Downloaded attachments for `m` (external viewer) |
+
+### Theme
+
+```toml
+[theme]
+name = "auto"   # auto | x-dark | x-light
+```
+
+`auto` follows the terminal background detected at startup (OSC 11). The `Z` key and `:theme <name>` command both override and persist whatever you pick. The clock's `accent` field accepts `"auto"` (default — follows the theme accent), an ANSI color name, a 256-color index, or a `#rrggbb` hex.
 
 ### Clock
 

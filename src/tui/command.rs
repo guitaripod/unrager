@@ -5,6 +5,7 @@ pub enum Command {
     SwitchSource(SourceKind),
     OpenTweet(String),
     OpenNotifications,
+    SetTheme(String),
     Quit,
     Help,
 }
@@ -78,6 +79,15 @@ pub fn parse(input: &str) -> Result<Command, ParseError> {
             let id = crate::util::parse_tweet_ref(tail)
                 .map_err(|e| ParseError(format!("bad tweet ref: {e}")))?;
             Ok(Command::OpenTweet(id))
+        }
+        "theme" => {
+            if tail.is_empty() {
+                return Err(ParseError(format!(
+                    "theme requires a name ({})",
+                    crate::tui::theme::Theme::builtin_names().join(", ")
+                )));
+            }
+            Ok(Command::SetTheme(tail.to_string()))
         }
         other => Err(ParseError(format!("unknown command: {other}"))),
     }

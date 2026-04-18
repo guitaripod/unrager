@@ -103,8 +103,11 @@ fn parse_tweet_node(node: &Value) -> Result<Tweet> {
     media.extend(youtube_media);
     let (article_media, article_tcos) = parse_article_embed(node, legacy);
     media.extend(article_media);
+    let (card_media, card_tcos) = parse_card_embed(node, legacy);
+    media.extend(card_media);
     let text = strip_tco_urls(&text, &youtube_tcos);
     let text = strip_tco_urls(&text, &article_tcos);
+    let text = strip_tco_urls(&text, &card_tcos);
 
     let url = format!("https://x.com/{}/status/{}", author.handle, rest_id);
 
@@ -201,8 +204,8 @@ fn parse_media(legacy: &Value) -> Vec<Media> {
                 .and_then(Value::as_str)?
                 .to_string();
             let video_url = match kind {
-                MediaKind::Photo | MediaKind::YouTube { .. } | MediaKind::Article { .. } => None,
                 MediaKind::Video | MediaKind::AnimatedGif => best_video_variant(m),
+                _ => None,
             };
             let alt_text = m
                 .get("ext_alt_text")
@@ -318,6 +321,195 @@ fn parse_article_embed(node: &Value, legacy: &Value) -> (Vec<Media>, Vec<String>
     }
 
     (embeds, display_urls)
+}
+
+/// Parses the generic Twitter `card` attached to a tweet. Handles two card
+/// families:
+///
+/// - Link preview cards (`summary`, `summary_large_image`, `player`, and any
+///   future variant built from the same bindings) become a
+///   `MediaKind::LinkCard` with title/description/domain/cover image drawn
+///   from `binding_values`. This is deliberately brand-agnostic: we read
+///   standard keys instead of hardcoding hosts.
+/// - Poll cards (`poll{2,3,4}choice_text_only`) become a `MediaKind::Poll`
+///   with choice/count pairs, end datetime, and finalization flag.
+///
+/// Skips cards whose t.co has already been claimed by a prior embed parser
+/// (YouTube or X article) so we don't render the same link twice.
+fn parse_card_embed(node: &Value, legacy: &Value) -> (Vec<Media>, Vec<String>) {
+    let mut embeds = Vec::new();
+    let mut display_urls = Vec::new();
+    let Some(card_legacy) = node.pointer("/card/legacy") else {
+        return (embeds, display_urls);
+    };
+    let name = card_legacy
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+
+    if name.starts_with("poll") && name.ends_with("choice_text_only") {
+        if let Some(poll) = parse_poll_card(card_legacy) {
+            embeds.push(poll);
+        }
+        return (embeds, display_urls);
+    }
+
+    let card_tco = card_legacy
+        .get("url")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if card_tco.is_empty() {
+        return (embeds, display_urls);
+    }
+
+    let (target_url, display_url) = lookup_card_target(legacy, card_tco);
+    if let Some(expanded) = target_url.as_deref() {
+        if extract_youtube_id(expanded).is_some() || extract_article_id(expanded).is_some() {
+            return (embeds, display_urls);
+        }
+    }
+    let title = card_binding_string(card_legacy, "title").unwrap_or_default();
+    let description = card_binding_string(card_legacy, "description").unwrap_or_default();
+    let domain = card_binding_string(card_legacy, "domain")
+        .or_else(|| card_binding_string(card_legacy, "vanity_url"))
+        .unwrap_or_else(|| {
+            display_url
+                .as_deref()
+                .map(host_of)
+                .unwrap_or_default()
+                .to_string()
+        });
+    let cover = pick_card_image(card_legacy);
+
+    if title.is_empty() && description.is_empty() && cover.is_empty() {
+        return (embeds, display_urls);
+    }
+
+    embeds.push(Media {
+        kind: MediaKind::LinkCard {
+            title: decode_html_entities(&title),
+            description: decode_html_entities(&description),
+            domain,
+            target_url: target_url.unwrap_or_default(),
+        },
+        url: cover,
+        video_url: None,
+        alt_text: None,
+    });
+
+    if let Some(d) = display_url {
+        display_urls.push(d);
+    }
+    (embeds, display_urls)
+}
+
+fn parse_poll_card(card_legacy: &Value) -> Option<Media> {
+    let mut options: Vec<crate::model::PollOption> = Vec::new();
+    for i in 1..=4 {
+        let label = card_binding_string(card_legacy, &format!("choice{i}_label"));
+        let count = card_binding_string(card_legacy, &format!("choice{i}_count"))
+            .and_then(|s| s.parse::<u64>().ok());
+        match (label, count) {
+            (Some(label), Some(count)) if !label.is_empty() => {
+                options.push(crate::model::PollOption { label, count });
+            }
+            _ => break,
+        }
+    }
+    if options.is_empty() {
+        return None;
+    }
+    let ends_at = card_binding_string(card_legacy, "end_datetime_utc")
+        .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+        .map(|dt| dt.with_timezone(&Utc));
+    let counts_final = card_binding_bool(card_legacy, "counts_are_final").unwrap_or(false);
+    Some(Media {
+        kind: MediaKind::Poll {
+            options,
+            ends_at,
+            counts_final,
+        },
+        url: String::new(),
+        video_url: None,
+        alt_text: None,
+    })
+}
+
+fn card_binding(card_legacy: &Value, key: &str) -> Option<Value> {
+    let arr = card_legacy.get("binding_values")?;
+    if let Some(obj) = arr.as_object() {
+        return obj.get(key).and_then(|v| v.get("value")).cloned();
+    }
+    let list = arr.as_array()?;
+    list.iter()
+        .find(|b| b.get("key").and_then(Value::as_str) == Some(key))
+        .and_then(|b| b.get("value"))
+        .cloned()
+}
+
+fn card_binding_string(card_legacy: &Value, key: &str) -> Option<String> {
+    let v = card_binding(card_legacy, key)?;
+    v.get("string_value")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn card_binding_bool(card_legacy: &Value, key: &str) -> Option<bool> {
+    card_binding(card_legacy, key)?
+        .get("boolean_value")
+        .and_then(Value::as_bool)
+}
+
+fn card_binding_image(card_legacy: &Value, key: &str) -> Option<String> {
+    let v = card_binding(card_legacy, key)?;
+    v.pointer("/image_value/url")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn pick_card_image(card_legacy: &Value) -> String {
+    const CANDIDATES: [&str; 8] = [
+        "thumbnail_image_original",
+        "thumbnail_image_x_large",
+        "thumbnail_image_large",
+        "thumbnail_image",
+        "thumbnail_image_small",
+        "player_image_original",
+        "player_image_large",
+        "player_image",
+    ];
+    for key in CANDIDATES {
+        if let Some(url) = card_binding_image(card_legacy, key) {
+            if !url.is_empty() {
+                return url;
+            }
+        }
+    }
+    String::new()
+}
+
+fn lookup_card_target(legacy: &Value, card_tco: &str) -> (Option<String>, Option<String>) {
+    let Some(arr) = legacy.pointer("/entities/urls").and_then(Value::as_array) else {
+        return (None, None);
+    };
+    for u in arr {
+        if u.get("url").and_then(Value::as_str) == Some(card_tco) {
+            let expanded = u
+                .get("expanded_url")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let display = u
+                .get("display_url")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            return (expanded, display);
+        }
+    }
+    (None, None)
+}
+
+fn host_of(display_url: &str) -> &str {
+    display_url.split('/').next().unwrap_or(display_url)
 }
 
 fn parse_article_result(result: &Value) -> Option<(String, String, String, String)> {

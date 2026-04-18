@@ -53,6 +53,7 @@ pub fn dummy_app() -> (App, mpsc::UnboundedReceiver<Event>, TempDir) {
         split_pct: 50,
         spinner_frame: 0,
         is_dark: true,
+        theme_name: "x-dark".into(),
         expanded_bodies: HashSet::new(),
         inline_threads: HashMap::new(),
         media: MediaRegistry::new(),

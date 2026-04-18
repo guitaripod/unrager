@@ -87,7 +87,10 @@ pub fn collect_open_targets(tweet: &Tweet, tweet_dir: &Path) -> Vec<OpenTarget> 
             MediaKind::Video | MediaKind::AnimatedGif => {
                 media.video_url.clone().unwrap_or_else(|| media.url.clone())
             }
-            MediaKind::YouTube { .. } | MediaKind::Article { .. } => continue,
+            MediaKind::YouTube { .. }
+            | MediaKind::Article { .. }
+            | MediaKind::LinkCard { .. }
+            | MediaKind::Poll { .. } => continue,
         };
         let path = tweet_dir.join(file_name_for(i, &url));
         out.push(OpenTarget { url, path });
@@ -95,8 +98,8 @@ pub fn collect_open_targets(tweet: &Tweet, tweet_dir: &Path) -> Vec<OpenTarget> 
     out
 }
 
-/// URLs for inline cards (YouTube, X articles) to hand to the OS default
-/// handler directly, without any download step.
+/// URLs for inline cards (YouTube, X articles, generic link cards) to hand to
+/// the OS default handler directly, without any download step.
 pub fn collect_remote_urls(tweet: &Tweet) -> Vec<String> {
     tweet
         .media
@@ -107,6 +110,9 @@ pub fn collect_remote_urls(tweet: &Tweet) -> Vec<String> {
             }
             MediaKind::Article { article_id, .. } => {
                 Some(format!("https://x.com/i/article/{article_id}"))
+            }
+            MediaKind::LinkCard { target_url, .. } if !target_url.is_empty() => {
+                Some(target_url.clone())
             }
             _ => None,
         })

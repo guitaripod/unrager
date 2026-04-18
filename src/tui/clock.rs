@@ -1,4 +1,5 @@
 use crate::config::{ClockConfig, ClockPosition, HourFormat};
+use crate::tui::theme;
 use chrono::Local;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
@@ -6,32 +7,15 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph};
 
-fn parse_color(name: &str) -> Color {
-    match name.to_ascii_lowercase().as_str() {
-        "black" => Color::Black,
-        "red" => Color::Red,
-        "green" => Color::Green,
-        "yellow" => Color::Yellow,
-        "blue" => Color::Blue,
-        "magenta" => Color::Magenta,
-        "cyan" => Color::Cyan,
-        "white" => Color::White,
-        "gray" | "grey" => Color::Gray,
-        "darkgray" | "darkgrey" => Color::DarkGray,
-        "lightred" => Color::LightRed,
-        "lightgreen" => Color::LightGreen,
-        "lightyellow" => Color::LightYellow,
-        "lightblue" => Color::LightBlue,
-        "lightmagenta" => Color::LightMagenta,
-        "lightcyan" => Color::LightCyan,
-        hex if hex.starts_with('#') && hex.len() == 7 => {
-            let r = u8::from_str_radix(&hex[1..3], 16).unwrap_or(0);
-            let g = u8::from_str_radix(&hex[3..5], 16).unwrap_or(255);
-            let b = u8::from_str_radix(&hex[5..7], 16).unwrap_or(255);
-            Color::Rgb(r, g, b)
-        }
-        idx if idx.parse::<u8>().is_ok() => Color::Indexed(idx.parse().unwrap()),
-        _ => Color::Cyan,
+/// Resolve the configured accent string. The literal sentinel `"auto"` and
+/// the empty string follow the active theme; any other value is parsed as a
+/// named ANSI color, hex `#rrggbb`, or 256-color index.
+fn resolve_accent(raw: &str) -> Color {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") {
+        theme::with(|t| t.accent)
+    } else {
+        theme::parse_color(trimmed)
     }
 }
 
@@ -160,9 +144,9 @@ pub fn render_inline(frame: &mut Frame, area: Rect, cfg: &ClockConfig) {
     if !cfg.enabled || (!cfg.show_time && !cfg.show_date) || area.width == 0 || area.height == 0 {
         return;
     }
-    let accent = parse_color(&cfg.accent);
+    let accent = resolve_accent(&cfg.accent);
     let time_style = Style::default().fg(accent).add_modifier(Modifier::BOLD);
-    let dim = Style::default().fg(Color::DarkGray);
+    let dim = Style::default().fg(theme::with(|t| t.text_muted));
     let mut spans: Vec<Span<'static>> = Vec::new();
     if cfg.show_time {
         spans.push(Span::styled(time_string(cfg), time_style));
@@ -205,9 +189,10 @@ pub fn render(frame: &mut Frame, area: Rect, cfg: &ClockConfig) {
         return;
     }
 
-    let accent = parse_color(&cfg.accent);
+    let accent = resolve_accent(&cfg.accent);
+    let (clock_bg, border_fg, dim_fg) = theme::with(|t| (t.clock_bg, t.border, t.text_muted));
     let time_style = Style::default().fg(accent).add_modifier(Modifier::BOLD);
-    let date_style = Style::default().fg(Color::DarkGray);
+    let date_style = Style::default().fg(dim_fg);
 
     let time = cfg.show_time.then(|| time_string(cfg));
     let date = cfg.show_date.then(|| date_string(cfg));
@@ -248,12 +233,12 @@ pub fn render(frame: &mut Frame, area: Rect, cfg: &ClockConfig) {
     }
 
     let para = Paragraph::new(lines);
-    let bg = Style::default().bg(Color::Indexed(234));
+    let bg = Style::default().bg(clock_bg);
     if cfg.border {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(Color::DarkGray))
+            .border_style(Style::default().fg(border_fg))
             .padding(Padding::horizontal(1))
             .style(bg);
         frame.render_widget(para.block(block), target);

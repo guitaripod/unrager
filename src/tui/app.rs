@@ -130,6 +130,7 @@ pub struct App {
     pub split_pct: u16,
     pub spinner_frame: usize,
     pub is_dark: bool,
+    pub theme_name: String,
     pub expanded_bodies: HashSet<String>,
     pub inline_threads: HashMap<String, InlineThread>,
     pub media: MediaRegistry,
@@ -223,6 +224,15 @@ impl App {
             .and_then(|s| s.reply_sort)
             .unwrap_or_default();
 
+        let theme_name = loaded
+            .as_ref()
+            .and_then(|s| s.theme.clone())
+            .unwrap_or_else(|| app_config.theme.name.clone());
+        let theme = crate::tui::theme::Theme::by_name(&theme_name, is_dark)
+            .unwrap_or_else(|| crate::tui::theme::Theme::for_mode(is_dark));
+        let theme_is_dark = theme.is_dark;
+        crate::tui::theme::set_active(theme);
+
         let mut source = Source::new(initial_kind.clone());
         source.set_selected(initial_selected);
 
@@ -264,7 +274,8 @@ impl App {
             display_names: loaded_display_names,
             split_pct: 50,
             spinner_frame: 0,
-            is_dark,
+            is_dark: theme_is_dark,
+            theme_name,
             expanded_bodies: HashSet::new(),
             inline_threads: HashMap::new(),
             media: MediaRegistry::new(),
@@ -396,10 +407,24 @@ impl App {
             } else {
                 None
             },
+            theme: Some(self.theme_name.clone()),
         };
         if let Err(e) = session::save(&self.session_path, &state) {
             tracing::warn!("failed to save session: {e}");
         }
+    }
+
+    /// Install `name` as the active theme, updating `is_dark` to match
+    /// the resolved variant. Returns `Err` with a human-readable message
+    /// when the name is unknown. Persists via `save_session` on the caller.
+    pub fn set_theme(&mut self, name: &str) -> std::result::Result<String, String> {
+        let theme = crate::tui::theme::Theme::by_name(name, self.is_dark)
+            .ok_or_else(|| format!("unknown theme: {name}"))?;
+        let resolved_name = theme.name.to_string();
+        self.is_dark = theme.is_dark;
+        self.theme_name = name.trim().to_ascii_lowercase();
+        crate::tui::theme::set_active(theme);
+        Ok(resolved_name)
     }
 
     pub fn is_split(&self) -> bool {

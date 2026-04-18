@@ -10,6 +10,7 @@ use crate::tui::media::{self, MediaEntry, MediaRegistry, media_badge_failed, med
 use crate::tui::seen::SeenStore;
 use crate::tui::source::PaneState;
 use crate::tui::source::{Source, SourceKind};
+use crate::tui::theme::{self, Theme};
 use crate::util::short_count;
 use chrono::{DateTime, Utc};
 use ratatui::Frame;
@@ -19,9 +20,13 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
 
-static PALETTE_IS_DARK: AtomicBool = AtomicBool::new(true);
+/// Shorthand for acquiring a read guard on the active theme. Render
+/// code is single-threaded, so the only contention is a write from a key
+/// handler that swaps the theme — which never races the render loop.
+fn th() -> std::sync::RwLockReadGuard<'static, Theme> {
+    theme::active()
+}
 
 pub struct PaneItem {
     pub lines: Vec<Line<'static>>,
@@ -34,10 +39,11 @@ impl PaneItem {
 }
 
 fn highlight_bg(active: bool) -> Color {
+    let t = th();
     if active {
-        Color::Indexed(238)
+        t.sel_bg_active
     } else {
-        Color::Indexed(236)
+        t.sel_bg_inactive
     }
 }
 
@@ -65,18 +71,15 @@ fn pad_line_to_width(line: &mut Line<'static>, target_width: u16, bg: Color) {
 }
 
 fn prepend_selection_marker(line: &mut Line<'static>, active: bool, highlight_bg: Color) {
-    let (marker_text, marker_style) = if active {
-        (
-            "▌ ",
-            Style::default().fg(Color::Indexed(75)).bg(highlight_bg),
-        )
-    } else {
-        (
-            "▌ ",
-            Style::default().fg(Color::Indexed(240)).bg(highlight_bg),
-        )
+    let marker_fg = {
+        let t = th();
+        if active {
+            t.sel_marker_active
+        } else {
+            t.sel_marker_inactive
+        }
     };
-    let marker = Span::styled(marker_text, marker_style);
+    let marker = Span::styled("▌ ", Style::default().fg(marker_fg).bg(highlight_bg));
 
     if let Some(first) = line.spans.first_mut() {
         let content = first.content.as_ref();
@@ -161,7 +164,7 @@ fn render_scrollable(
         if i + 1 < n_items {
             flat.push(Line::from(Span::styled(
                 "─".repeat(row_width as usize),
-                Style::default().fg(Color::Indexed(236)),
+                Style::default().fg(th().divider),
             )));
         }
     }
@@ -175,7 +178,6 @@ pub struct RenderOpts {
     pub timestamps: TimestampStyle,
     pub metrics: MetricsStyle,
     pub display_names: DisplayNameStyle,
-    pub is_dark: bool,
     pub media_enabled: bool,
     pub media_auto_expand: bool,
     pub media_max_rows: usize,
@@ -195,7 +197,6 @@ pub struct RenderContext<'a> {
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
-    PALETTE_IS_DARK.store(app.is_dark, Ordering::Relaxed);
     let [top, main, bottom] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(0),
@@ -225,7 +226,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         } else {
             app.display_names
         },
-        is_dark: app.is_dark,
         media_enabled: app.media.supported(),
         media_auto_expand: app.media_auto_expand,
         media_max_rows: (pane_h.saturating_sub(4) / 2).clamp(6, 24),
@@ -323,30 +323,31 @@ pub(super) fn format_countdown(remaining: std::time::Duration) -> String {
 }
 
 fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
+    let t = th();
     let mut spans = vec![
         Span::styled(
             " unrager ",
             Style::default()
-                .bg(Color::Blue)
-                .fg(Color::White)
+                .bg(t.brand_bg)
+                .fg(t.brand_fg)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
-        Span::styled(app.source.title(), Style::default().fg(Color::White)),
+        Span::styled(app.source.title(), Style::default().fg(t.text)),
     ];
     if app.source.loading {
         let frame = SPINNER_FRAMES[app.spinner_frame % SPINNER_FRAMES.len()];
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
             format!("{frame} loading"),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(t.warning),
         ));
     }
     if app.source.exhausted && !app.source.is_empty() {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
             "[end of timeline]",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(t.text_muted),
         ));
     }
     let unread = {
@@ -362,14 +363,14 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
             format!("{unread}↑"),
-            Style::default().fg(Color::Green),
+            Style::default().fg(t.success),
         ));
     }
     if app.focus_stack.len() > 1 {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
             format!("{}◆", app.focus_stack.len()),
-            Style::default().fg(Color::Magenta),
+            Style::default().fg(t.new_unread),
         ));
     }
     let read_rl = app.client.read_rate_limit_remaining();
@@ -388,7 +389,7 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
         };
         spans.push(Span::styled(
             text,
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            Style::default().fg(t.error).add_modifier(Modifier::BOLD),
         ));
     }
     if app.filter_classifier.is_some()
@@ -398,37 +399,34 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
             format!("−{}", app.filter_hidden_count),
-            Style::default().fg(Color::Green),
+            Style::default().fg(t.success),
         ));
     } else if app.filter_classifier.is_none() {
         spans.push(Span::raw("  "));
-        spans.push(Span::styled(
-            "filter⌀",
-            Style::default().fg(Color::DarkGray),
-        ));
+        spans.push(Span::styled("filter⌀", Style::default().fg(t.text_muted)));
     }
     if matches!(app.feed_mode, crate::tui::app::FeedMode::Originals)
         && matches!(app.source.kind, Some(SourceKind::Home { .. }))
     {
         spans.push(Span::raw("  "));
-        spans.push(Span::styled("◇", Style::default().fg(Color::Cyan)));
+        spans.push(Span::styled("◇", Style::default().fg(t.accent)));
     }
     if !app.top_is_notifications() && app.notif_unread_badge > 0 {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
             format!("{}n", app.notif_unread_badge),
             Style::default()
-                .fg(Color::Magenta)
+                .fg(t.new_unread)
                 .add_modifier(Modifier::BOLD),
         ));
     }
     if !app.whisper.text.is_empty() {
         spans.push(Span::raw("  "));
         let whisper_color = match app.whisper.phase {
-            crate::tui::whisper::WhisperPhase::Quiet => Color::DarkGray,
-            crate::tui::whisper::WhisperPhase::Active => Color::White,
-            crate::tui::whisper::WhisperPhase::Surge => Color::Yellow,
-            crate::tui::whisper::WhisperPhase::Cooling => Color::DarkGray,
+            crate::tui::whisper::WhisperPhase::Quiet => t.whisper_quiet,
+            crate::tui::whisper::WhisperPhase::Active => t.whisper_active,
+            crate::tui::whisper::WhisperPhase::Surge => t.whisper_surge,
+            crate::tui::whisper::WhisperPhase::Cooling => t.whisper_cooling,
         };
         spans.push(Span::styled(
             app.whisper.text.clone(),
@@ -441,7 +439,7 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
             format!("↑{version}"),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(t.update),
         ));
     }
     let clock_cfg = &app.app_config.clock;
@@ -476,10 +474,11 @@ fn split_right(area: Rect, right_w: u16) -> (Rect, Rect) {
 }
 
 fn block_with_focus(title: &str, active: bool) -> Block<'_> {
+    let t = th();
     let border_style = if active {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(t.border_active)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(t.border)
     };
     Block::default()
         .borders(Borders::ALL)
@@ -550,23 +549,20 @@ fn notification_lines(
     actor_cursor: Option<usize>,
     liked: bool,
 ) -> Vec<Line<'static>> {
+    let t = th();
     let mut lines = Vec::with_capacity(2);
 
     let dim = seen;
-    let meta_color = if dim {
-        Color::Indexed(239)
-    } else {
-        Color::DarkGray
-    };
+    let meta_color = if dim { t.text_faint } else { t.text_muted };
 
     let (icon, icon_color) = match n.notification_type.as_str() {
-        "Like" => ("♥", Color::Red),
-        "Retweet" => ("⟲", Color::Green),
-        "Follow" => ("→", Color::Blue),
-        "Reply" => ("↳", Color::Yellow),
-        "Quote" => ("❝", Color::Magenta),
-        "Mention" => ("@", Color::Cyan),
-        "Milestone" => ("★", Color::Yellow),
+        "Like" => ("♥", t.like),
+        "Retweet" => ("⟲", t.retweet),
+        "Follow" => ("→", t.follow),
+        "Reply" => ("↳", t.reply_notif),
+        "Quote" => ("❝", t.quote),
+        "Mention" => ("@", t.mention),
+        "Milestone" => ("★", t.milestone),
         _ => ("·", meta_color),
     };
 
@@ -583,7 +579,7 @@ fn notification_lines(
     let (bullet, bullet_style) = if dim {
         ("  ", Style::default())
     } else {
-        ("● ", Style::default().fg(Color::Green))
+        ("● ", Style::default().fg(t.unread_dot))
     };
 
     let mut header: Vec<Span<'static>> = vec![
@@ -597,11 +593,11 @@ fn notification_lines(
     if !n.actors.is_empty() {
         let first = &n.actors[0];
         let handle_style = Style::default()
-            .fg(handle_color(&first.handle))
+            .fg(theme::handle_color(&first.handle))
             .add_modifier(Modifier::BOLD);
         header.push(Span::styled(format!("@{}", first.handle), handle_style));
         if first.verified {
-            header.push(Span::styled(" ✓", Style::default().fg(Color::Blue)));
+            header.push(Span::styled(" ✓", Style::default().fg(t.verified)));
         }
 
         let others = n
@@ -612,11 +608,11 @@ fn notification_lines(
             header.push(Span::styled(", ", Style::default().fg(meta_color)));
             let second = &n.actors[1];
             let h2_style = Style::default()
-                .fg(handle_color(&second.handle))
+                .fg(theme::handle_color(&second.handle))
                 .add_modifier(Modifier::BOLD);
             header.push(Span::styled(format!("@{}", second.handle), h2_style));
             if second.verified {
-                header.push(Span::styled(" ✓", Style::default().fg(Color::Blue)));
+                header.push(Span::styled(" ✓", Style::default().fg(t.verified)));
             }
         } else {
             header.push(Span::styled(
@@ -625,22 +621,16 @@ fn notification_lines(
             ));
         }
 
+        let verb_color = if dim { t.text_faint } else { t.text_muted };
         header.push(Span::styled(
             format!(" {verb}"),
-            Style::default().fg(if dim {
-                Color::Indexed(242)
-            } else {
-                Color::Gray
-            }),
+            Style::default().fg(verb_color),
         ));
     } else {
+        let verb_color = if dim { t.text_faint } else { t.text_muted };
         header.push(Span::styled(
             verb.to_string(),
-            Style::default().fg(if dim {
-                Color::Indexed(242)
-            } else {
-                Color::Gray
-            }),
+            Style::default().fg(verb_color),
         ));
     }
 
@@ -664,7 +654,7 @@ fn notification_lines(
         header.push(Span::raw("  "));
         header.push(Span::styled(
             GLYPH_LIKES.to_string(),
-            engaged_style(COLOR_LIKED),
+            engaged_style(t.liked),
         ));
     }
 
@@ -672,9 +662,9 @@ fn notification_lines(
 
     if let Some(snippet) = &n.target_tweet_snippet {
         let snippet_style = if dim {
-            Style::default().fg(Color::Indexed(241))
+            Style::default().fg(t.text_dim)
         } else {
-            Style::default().fg(Color::Indexed(252))
+            Style::default().fg(t.text)
         };
         let indent = "    ";
         let inner_width = wrap_width.saturating_sub(indent.len() + 2);
@@ -701,29 +691,27 @@ fn notification_lines(
 
     if expanded && n.notification_type == "Follow" && n.actors.len() > 1 {
         let detail_style = if dim {
-            Style::default().fg(Color::Indexed(242))
+            Style::default().fg(t.text_faint)
         } else {
-            Style::default().fg(Color::Gray)
+            Style::default().fg(t.text_muted)
         };
         for (i, actor) in n.actors.iter().enumerate() {
             let is_cursor = actor_cursor == Some(i);
             let marker = if is_cursor {
                 Span::styled(
                     "  ▶ → ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
                 )
             } else {
-                Span::styled("    → ", Style::default().fg(Color::Blue))
+                Span::styled("    → ", Style::default().fg(t.follow))
             };
             let mut row: Vec<Span<'static>> = vec![marker];
             let h_style = Style::default()
-                .fg(handle_color(&actor.handle))
+                .fg(theme::handle_color(&actor.handle))
                 .add_modifier(Modifier::BOLD);
             row.push(Span::styled(format!("@{}", actor.handle), h_style));
             if actor.verified {
-                row.push(Span::styled(" ✓", Style::default().fg(Color::Blue)));
+                row.push(Span::styled(" ✓", Style::default().fg(t.verified)));
             }
             if !actor.name.is_empty() {
                 row.push(Span::styled(format!("  {}", actor.name), detail_style));
@@ -851,9 +839,10 @@ fn draw_brief(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    let t = th();
     let mut lines: Vec<Line<'static>> = Vec::new();
     if view.loading_tweets {
-        let dim = Style::default().fg(Color::DarkGray);
+        let dim = Style::default().fg(t.text_muted);
         lines.push(Line::from(Span::styled(
             format!("jacking into @{}'s timeline · newest-first", view.handle),
             dim,
@@ -873,23 +862,23 @@ fn draw_brief(
             )
         };
         lines.push(Line::from(vec![
-            Span::styled("▸ ", Style::default().fg(Color::Cyan)),
-            Span::styled(progress, Style::default().fg(Color::Gray)),
+            Span::styled("▸ ", Style::default().fg(t.accent)),
+            Span::styled(progress, Style::default().fg(t.text_muted)),
         ]));
     } else {
         let has_bold = view.text.contains("**");
         let cleaned = sanitize_brief_output(&view.text);
         if !has_bold && view.text.trim().is_empty() && view.streaming {
             let angle = current_brief_angle();
-            let dim = Style::default().fg(Color::DarkGray);
+            let dim = Style::default().fg(t.text_muted);
             lines.push(Line::from(Span::styled(
                 "cognition pass · reading the sample",
                 dim.add_modifier(Modifier::ITALIC),
             )));
             lines.push(Line::from(""));
             lines.push(Line::from(vec![
-                Span::styled("▸ ", Style::default().fg(Color::Cyan)),
-                Span::styled(angle, Style::default().fg(Color::Gray)),
+                Span::styled("▸ ", Style::default().fg(t.accent)),
+                Span::styled(angle, Style::default().fg(t.text_muted)),
             ]));
         } else if has_bold {
             lines.extend(render_markdown(cleaned));
@@ -897,7 +886,7 @@ fn draw_brief(
             lines.push(Line::from(Span::styled(
                 "model returned no bold thesis · showing raw output below",
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(t.warning)
                     .add_modifier(Modifier::ITALIC),
             )));
             lines.push(Line::from(""));
@@ -908,14 +897,14 @@ fn draw_brief(
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             format!("aborted: {err}"),
-            Style::default().fg(Color::Red),
+            Style::default().fg(t.error),
         )));
     }
     if view.complete && view.error.is_none() {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "R re-read · Esc close",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(t.text_muted),
         )));
     }
 
@@ -1031,28 +1020,29 @@ fn draw_likers_detail(
         .users
         .iter()
         .map(|user| {
+            let t = th();
             let mut row: Vec<Span<'static>> = vec![
                 Span::raw("  "),
                 Span::styled(
                     user.handle.clone(),
                     Style::default()
-                        .fg(handle_color(&user.handle))
+                        .fg(theme::handle_color(&user.handle))
                         .add_modifier(Modifier::BOLD),
                 ),
             ];
             if user.verified {
-                row.push(Span::styled(" ✓", Style::default().fg(Color::Blue)));
+                row.push(Span::styled(" ✓", Style::default().fg(t.verified)));
             }
             if matches!(display_names, DisplayNameStyle::Visible) && !user.name.is_empty() {
                 row.push(Span::styled(
                     format!("  {}", user.name),
-                    Style::default().fg(Color::Gray),
+                    Style::default().fg(t.text_muted),
                 ));
             }
             if user.followers > 0 {
                 row.push(Span::styled(
                     format!("  {} followers", short_count(user.followers)),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.text_muted),
                 ));
             }
             PaneItem::new(vec![Line::from(row)])
@@ -1155,18 +1145,19 @@ fn ask_chip_rows(view: &crate::tui::ask::AskView, width: u16) -> u16 {
 }
 
 fn draw_ask_tweet_header(frame: &mut Frame, area: Rect, tweet: &Tweet, ctx: &RenderContext) {
+    let t = th();
     let wrap_width = (area.width as usize).saturating_sub(2);
     let handle_line = Line::from(vec![
         Span::styled(
             format!("@{}", tweet.author.handle),
             Style::default()
-                .fg(handle_color(&tweet.author.handle))
+                .fg(theme::handle_color(&tweet.author.handle))
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
         Span::styled(
             format_timestamp(tweet.created_at, ctx.opts.timestamps),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(t.text_muted),
         ),
     ]);
     let mut body_lines: Vec<Line<'static>> = vec![handle_line];
@@ -1188,7 +1179,7 @@ fn draw_ask_tweet_header(frame: &mut Frame, area: Rect, tweet: &Tweet, ctx: &Ren
     let separator = "─".repeat(wrap_width);
     body_lines.push(Line::from(Span::styled(
         separator,
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(t.text_muted),
     )));
 
     let para = Paragraph::new(body_lines).wrap(Wrap { trim: false });
@@ -1206,15 +1197,16 @@ fn draw_ask_conversation(
 ) {
     use crate::tui::ask::AskMessage;
 
+    let t = th();
     let mut lines: Vec<Line<'static>> = Vec::new();
     if messages.is_empty() {
         lines.push(Line::from(Span::styled(
             "Ask anything about this post (answered by local gemma).",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(t.text_muted),
         )));
         lines.push(Line::from(Span::styled(
             "Press Enter to send; empty prompt uses 'Explain this post'.",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(t.text_muted),
         )));
     }
     for (idx, msg) in messages.iter().enumerate() {
@@ -1225,9 +1217,7 @@ fn draw_ask_conversation(
             AskMessage::User(text) => {
                 lines.push(Line::from(Span::styled(
                     "you",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.ask_user).add_modifier(Modifier::BOLD),
                 )));
                 for raw_line in text.lines() {
                     lines.push(Line::from(Span::raw(raw_line.to_string())));
@@ -1235,18 +1225,18 @@ fn draw_ask_conversation(
             }
             AskMessage::Assistant(m) => {
                 let header_style = Style::default()
-                    .fg(Color::Magenta)
+                    .fg(t.ask_assistant)
                     .add_modifier(Modifier::BOLD);
                 let mut header_spans = vec![Span::styled("gemma", header_style)];
                 if !m.complete && streaming && idx + 1 == messages.len() {
-                    header_spans.push(Span::styled(" …", Style::default().fg(Color::DarkGray)));
+                    header_spans.push(Span::styled(" …", Style::default().fg(t.text_muted)));
                 }
                 lines.push(Line::from(header_spans));
                 if m.text.is_empty() && !m.complete {
                     lines.push(Line::from(Span::styled(
                         "thinking…",
                         Style::default()
-                            .fg(Color::DarkGray)
+                            .fg(t.text_muted)
                             .add_modifier(Modifier::ITALIC),
                     )));
                 }
@@ -1258,7 +1248,7 @@ fn draw_ask_conversation(
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             format!("error: {err}"),
-            Style::default().fg(Color::Red),
+            Style::default().fg(t.error),
         )));
     }
 
@@ -1297,21 +1287,17 @@ fn draw_ask_input(
     spinner: &[&str],
     chip_rows: u16,
 ) {
+    let t = th();
     let streaming = view.streaming;
     let input = view.editor.input.as_str();
 
     let separator = "─".repeat(area.width as usize);
-    let sep_line = Line::from(Span::styled(
-        separator,
-        Style::default().fg(Color::DarkGray),
-    ));
+    let sep_line = Line::from(Span::styled(separator, Style::default().fg(t.text_muted)));
 
     let prompt_style = if active {
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD)
+        Style::default().fg(t.accent).add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(t.text_muted)
     };
     let mut input_spans: Vec<Span<'static>> = vec![Span::styled("> ", prompt_style)];
     if streaming {
@@ -1323,21 +1309,19 @@ fn draw_ask_input(
         let frame_str = spinner.get(idx).copied().unwrap_or("·").to_string();
         input_spans.push(Span::styled(
             format!("{frame_str} thinking…"),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(t.text_muted),
         ));
     } else if input.is_empty() {
         input_spans.push(Span::styled(
             "type or [1–5] preset",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(t.text_muted),
         ));
     } else {
         input_spans.push(Span::raw(input.to_string()));
         if active {
             input_spans.push(Span::styled(
                 "▏",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
             ));
         }
     }
@@ -1347,18 +1331,16 @@ fn draw_ask_input(
     let mut chip_spans: Vec<Span<'static>> = Vec::new();
     for (idx, preset) in view.available_presets() {
         if !chip_spans.is_empty() {
-            chip_spans.push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
+            chip_spans.push(Span::styled("  ", Style::default().fg(t.text_muted)));
         }
         let enabled = view.preset_enabled(preset) && chips_active;
         let (num_style, label_style) = if enabled {
             (
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-                Style::default().fg(Color::Gray),
+                Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+                Style::default().fg(t.text),
             )
         } else {
-            let dim = Style::default().fg(Color::DarkGray);
+            let dim = Style::default().fg(t.text_muted);
             (dim, dim)
         };
         chip_spans.push(Span::styled(format!("[{idx}] "), num_style));
@@ -1371,8 +1353,8 @@ fn draw_ask_input(
         crate::tui::editor::VimMode::Normal => "NORMAL",
     };
     let mode_style = match view.editor.mode {
-        crate::tui::editor::VimMode::Insert => Style::default().fg(Color::Green),
-        crate::tui::editor::VimMode::Normal => Style::default().fg(Color::Yellow),
+        crate::tui::editor::VimMode::Insert => Style::default().fg(t.mode_vim_insert),
+        crate::tui::editor::VimMode::Normal => Style::default().fg(t.mode_vim_normal),
     };
     let mode_line = Line::from(Span::styled(format!("-- {mode_tag} --"), mode_style));
 
@@ -1440,6 +1422,7 @@ fn reply_wrap_input(
 }
 
 fn render_markdown(text: &str) -> Vec<Line<'static>> {
+    let t = th();
     let mut out: Vec<Line<'static>> = Vec::new();
     let mut in_code_fence = false;
     for raw in text.split('\n') {
@@ -1451,7 +1434,7 @@ fn render_markdown(text: &str) -> Vec<Line<'static>> {
         if in_code_fence {
             out.push(Line::from(vec![
                 Span::styled("  ", Style::default()),
-                Span::styled(line.to_string(), Style::default().fg(Color::Yellow)),
+                Span::styled(line.to_string(), Style::default().fg(t.code)),
             ]));
             continue;
         }
@@ -1460,7 +1443,7 @@ fn render_markdown(text: &str) -> Vec<Line<'static>> {
             let mut prefixed = vec![Span::styled(
                 "#".repeat(level as usize) + " ",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(t.text_muted)
                     .add_modifier(Modifier::BOLD),
             )];
             prefixed.extend(spans);
@@ -1471,7 +1454,7 @@ fn render_markdown(text: &str) -> Vec<Line<'static>> {
             let gutter = Span::styled(
                 "│ ",
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(t.quote_block)
                     .add_modifier(Modifier::BOLD),
             );
             let mut spans: Vec<Span<'static>> = vec![gutter];
@@ -1484,7 +1467,7 @@ fn render_markdown(text: &str) -> Vec<Line<'static>> {
             if indent > 0 {
                 spans.push(Span::raw(" ".repeat(indent)));
             }
-            spans.push(Span::styled("• ", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled("• ", Style::default().fg(t.text_muted)));
             spans.extend(parse_md_inline(&rest, Modifier::empty()));
             out.push(Line::from(spans));
             continue;
@@ -1623,7 +1606,7 @@ fn flush_md_span(
         style = style.add_modifier(modifier);
     }
     if code {
-        style = style.fg(Color::Yellow);
+        style = style.fg(th().code);
     }
     spans.push(Span::styled(std::mem::take(buf), style));
 }
@@ -1679,19 +1662,19 @@ fn draw_tweet_detail(
     let mut items: Vec<PaneItem> = Vec::with_capacity(1 + detail.replies.len());
     items.push(PaneItem::new(focal_lines));
 
-    for t in &detail.replies {
-        let is_seen = ctx.seen.is_seen(&t.rest_id);
-        let is_expanded = ctx.expanded.contains(&t.rest_id);
-        let is_new = detail.new_reply_ids.contains(&t.rest_id);
-        let mut lines = tweet_lines(t, ctx, is_seen, true, wrap_width, is_expanded);
+    for tw in &detail.replies {
+        let is_seen = ctx.seen.is_seen(&tw.rest_id);
+        let is_expanded = ctx.expanded.contains(&tw.rest_id);
+        let is_new = detail.new_reply_ids.contains(&tw.rest_id);
+        let mut lines = tweet_lines(tw, ctx, is_seen, true, wrap_width, is_expanded);
         if is_new {
             if let Some(first) = lines.first_mut() {
                 first
                     .spans
-                    .insert(0, Span::styled("● ", Style::default().fg(Color::Green)));
+                    .insert(0, Span::styled("● ", Style::default().fg(th().success)));
             }
         }
-        if let Some(thread) = ctx.inline_threads.get(&t.rest_id) {
+        if let Some(thread) = ctx.inline_threads.get(&tw.rest_id) {
             append_inline_thread(&mut lines, thread, ctx, wrap_width);
         }
         items.push(PaneItem::new(lines));
@@ -1700,13 +1683,13 @@ fn draw_tweet_detail(
     if detail.replies.is_empty() && detail.loading {
         items.push(PaneItem::new(vec![Line::from(Span::styled(
             "  loading replies…",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(th().warning),
         ))]));
     }
     if let Some(err) = &detail.error {
         items.push(PaneItem::new(vec![Line::from(Span::styled(
             format!("  error: {err}"),
-            Style::default().fg(Color::Red),
+            Style::default().fg(th().error),
         ))]));
     }
 
@@ -1734,20 +1717,16 @@ fn draw_reply_bar(
     active: bool,
     write_rate_limit: Option<std::time::Duration>,
 ) {
+    let t = th();
     let wrap_width = area.width as usize;
 
     let separator = "─".repeat(wrap_width);
-    let sep_line = Line::from(Span::styled(
-        separator,
-        Style::default().fg(Color::DarkGray),
-    ));
+    let sep_line = Line::from(Span::styled(separator, Style::default().fg(t.text_muted)));
 
     let prompt_style = if active {
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD)
+        Style::default().fg(t.accent).add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(t.text_muted)
     };
 
     let mut lines: Vec<Line<'static>> = vec![sep_line];
@@ -1755,14 +1734,11 @@ fn draw_reply_bar(
     let (cursor_col, cursor_row) = if bar.sending || bar.editor.input.is_empty() {
         let mut spans: Vec<Span<'static>> = vec![Span::styled("> ", prompt_style)];
         if bar.sending {
-            spans.push(Span::styled(
-                "sending…",
-                Style::default().fg(Color::DarkGray),
-            ));
+            spans.push(Span::styled("sending…", Style::default().fg(t.text_muted)));
         } else {
             spans.push(Span::styled(
                 "type your reply…",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(t.text_muted),
             ));
         }
         lines.push(Line::from(spans));
@@ -1786,27 +1762,27 @@ fn draw_reply_bar(
 
     let char_count = bar.editor.char_count();
     let count_style = if char_count > 280 {
-        Style::default().fg(Color::Red)
+        Style::default().fg(t.error)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(t.text_muted)
     };
     let mode_tag = match bar.editor.mode {
         crate::tui::editor::VimMode::Insert => "INSERT",
         crate::tui::editor::VimMode::Normal => "NORMAL",
     };
     let mode_style = match bar.editor.mode {
-        crate::tui::editor::VimMode::Insert => Style::default().fg(Color::Green),
-        crate::tui::editor::VimMode::Normal => Style::default().fg(Color::Yellow),
+        crate::tui::editor::VimMode::Insert => Style::default().fg(t.mode_vim_insert),
+        crate::tui::editor::VimMode::Normal => Style::default().fg(t.mode_vim_normal),
     };
     let hint_span = if let Some(remaining) = write_rate_limit {
         Span::styled(
             format!("  ⊘ X cooldown · wait {}", format_countdown(remaining)),
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            Style::default().fg(t.error).add_modifier(Modifier::BOLD),
         )
     } else {
         Span::styled(
             "  Enter send · Esc close",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(t.text_muted),
         )
     };
     lines.push(Line::from(vec![
@@ -1818,7 +1794,7 @@ fn draw_reply_bar(
     if let Some(ref err) = bar.error {
         lines.push(Line::from(Span::styled(
             err.clone(),
-            Style::default().fg(Color::Red),
+            Style::default().fg(t.error),
         )));
     }
 
@@ -1835,87 +1811,30 @@ fn draw_reply_bar(
 }
 
 fn author_spans(handle: &str, verified: bool, name: &str, show_name: bool) -> Vec<Span<'static>> {
-    let color = handle_color(handle);
+    let t = th();
+    let color = theme::handle_color(handle);
     let mut spans = vec![Span::styled(
         format!("@{handle}"),
         Style::default().fg(color).add_modifier(Modifier::BOLD),
     )];
     if verified {
-        spans.push(Span::styled(" ✓", Style::default().fg(Color::Blue)));
+        spans.push(Span::styled(" ✓", Style::default().fg(t.verified)));
     }
     if show_name && !name.is_empty() {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
             name.to_string(),
-            Style::default().fg(Color::Gray),
+            Style::default().fg(t.text_muted),
         ));
     }
     spans
 }
 
-const HANDLE_PALETTE_DARK: &[Color] = &[
-    Color::Indexed(39),
-    Color::Indexed(45),
-    Color::Indexed(51),
-    Color::Indexed(48),
-    Color::Indexed(82),
-    Color::Indexed(118),
-    Color::Indexed(154),
-    Color::Indexed(226),
-    Color::Indexed(220),
-    Color::Indexed(214),
-    Color::Indexed(208),
-    Color::Indexed(203),
-    Color::Indexed(198),
-    Color::Indexed(205),
-    Color::Indexed(213),
-    Color::Indexed(177),
-    Color::Indexed(141),
-    Color::Indexed(105),
-    Color::Indexed(75),
-    Color::Indexed(80),
-];
-
-const HANDLE_PALETTE_LIGHT: &[Color] = &[
-    Color::Indexed(19),
-    Color::Indexed(25),
-    Color::Indexed(24),
-    Color::Indexed(22),
-    Color::Indexed(28),
-    Color::Indexed(29),
-    Color::Indexed(64),
-    Color::Indexed(100),
-    Color::Indexed(94),
-    Color::Indexed(130),
-    Color::Indexed(124),
-    Color::Indexed(88),
-    Color::Indexed(52),
-    Color::Indexed(126),
-    Color::Indexed(132),
-    Color::Indexed(90),
-    Color::Indexed(92),
-    Color::Indexed(55),
-    Color::Indexed(57),
-    Color::Indexed(60),
-];
-
-fn handle_color(handle: &str) -> Color {
-    let mut h: u64 = 0xcbf29ce484222325;
-    for b in handle.as_bytes() {
-        h ^= b.to_ascii_lowercase() as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    let palette = if PALETTE_IS_DARK.load(Ordering::Relaxed) {
-        HANDLE_PALETTE_DARK
-    } else {
-        HANDLE_PALETTE_LIGHT
-    };
-    palette[(h as usize) % palette.len()]
-}
-
 const TEXT_LINES_IN_CARD: usize = 3;
 
-pub const ZEBRA_BG: Color = Color::Indexed(236);
+pub fn zebra_bg() -> Color {
+    th().zebra_bg
+}
 const GLYPH_REPLIES: &str = "↳";
 const GLYPH_RETWEETS: &str = "⟲";
 const GLYPH_LIKES: &str = "♥";
@@ -1926,6 +1845,8 @@ const GLYPH_VIDEO: &str = "▶";
 const GLYPH_GIF: &str = "↻";
 const GLYPH_YOUTUBE: &str = "▶";
 const GLYPH_ARTICLE: &str = "❏";
+const GLYPH_LINK: &str = "🔗";
+const GLYPH_POLL: &str = "▥";
 
 fn tweet_lines(
     t: &Tweet,
@@ -1940,24 +1861,32 @@ fn tweet_lines(
     let photo_count = t
         .media
         .iter()
-        .filter(|m| matches!(m.kind, crate::model::MediaKind::Photo))
+        .filter(|m| {
+            matches!(
+                m.kind,
+                crate::model::MediaKind::Photo
+                    | crate::model::MediaKind::Video
+                    | crate::model::MediaKind::AnimatedGif
+            )
+        })
         .count();
     let has_photo_media = photo_count > 0;
     let first_media_kind = t.media.first().map(|m| &m.kind);
 
     let effective_expanded = expanded || opts.media_auto_expand;
 
+    let theme_guard = th();
     let dot = if seen {
         Span::raw("  ")
     } else {
-        Span::styled("● ", Style::default().fg(Color::Green))
+        Span::styled("● ", Style::default().fg(theme_guard.unread_dot))
     };
 
     let mut header: Vec<Span<'static>> = vec![dot];
     if t.in_reply_to_tweet_id.is_some() && !in_reply_context {
         header.push(Span::styled(
             format!("{GLYPH_IS_REPLY} "),
-            Style::default().fg(Color::Indexed(244)),
+            Style::default().fg(theme_guard.text_muted),
         ));
     }
     let show_name = matches!(opts.display_names, DisplayNameStyle::Visible);
@@ -1967,23 +1896,23 @@ fn tweet_lines(
         &t.author.name,
         show_name,
     ));
-    header.push(Span::styled("  ·  ", Style::default().fg(Color::DarkGray)));
+    header.push(Span::styled(
+        "  ·  ",
+        Style::default().fg(theme_guard.text_muted),
+    ));
     header.push(Span::styled(
         format_timestamp(t.created_at, opts.timestamps),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme_guard.text_muted),
     ));
     if translated_text.is_some() {
         header.push(Span::raw("  "));
-        header.push(Span::styled("[EN]", Style::default().fg(Color::Cyan)));
+        header.push(Span::styled(
+            "[EN]",
+            Style::default().fg(theme_guard.translation),
+        ));
     }
     if let Some(kind) = first_media_kind {
-        let (glyph, color) = match kind {
-            crate::model::MediaKind::Photo => (GLYPH_PHOTO, Color::Indexed(75)),
-            crate::model::MediaKind::Video => (GLYPH_VIDEO, Color::Indexed(203)),
-            crate::model::MediaKind::AnimatedGif => (GLYPH_GIF, Color::Indexed(214)),
-            crate::model::MediaKind::YouTube { .. } => (GLYPH_YOUTUBE, Color::Indexed(203)),
-            crate::model::MediaKind::Article { .. } => (GLYPH_ARTICLE, Color::Indexed(75)),
-        };
+        let (glyph, color) = media_kind_badge(kind, &theme_guard);
         header.push(Span::raw("  "));
         let label = if photo_count > 1 {
             format!("{glyph}×{photo_count}")
@@ -2009,16 +1938,11 @@ fn tweet_lines(
 
     let mut lines: Vec<Line<'static>> = vec![Line::from(header)];
 
-    let primary_color = if opts.is_dark {
-        Color::White
-    } else {
-        Color::Black
-    };
     let body_base_style = if seen {
-        Style::default().fg(Color::Indexed(241))
+        Style::default().fg(theme_guard.text_dim)
     } else {
         Style::default()
-            .fg(primary_color)
+            .fg(theme_guard.text)
             .add_modifier(Modifier::BOLD)
     };
 
@@ -2064,15 +1988,15 @@ fn tweet_lines(
             indent.clone(),
             Span::styled(
                 format!("… +{} more  (press x to expand)", total_text_lines - cap),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme_guard.text_muted),
             ),
         ]));
     }
 
     if let Some(qt) = &t.quoted_tweet {
         let qt_wrap = wrap_width.saturating_sub(6);
-        let qt_style = Style::default().fg(Color::DarkGray);
-        let qt_handle_color = handle_color(&qt.author.handle);
+        let qt_style = Style::default().fg(theme_guard.text_muted);
+        let qt_handle_color = theme::handle_color(&qt.author.handle);
         let gutter_top = Span::styled("┌ ", qt_style);
         let gutter_mid = Span::styled("│ ", qt_style);
         let gutter_bot = Span::styled("└", qt_style);
@@ -2092,13 +2016,7 @@ fn tweet_lines(
             ),
         ];
         if let Some(first_media) = qt.media.first() {
-            let (glyph, color) = match &first_media.kind {
-                crate::model::MediaKind::Photo => (GLYPH_PHOTO, Color::Indexed(75)),
-                crate::model::MediaKind::Video => (GLYPH_VIDEO, Color::Indexed(203)),
-                crate::model::MediaKind::AnimatedGif => (GLYPH_GIF, Color::Indexed(214)),
-                crate::model::MediaKind::YouTube { .. } => (GLYPH_YOUTUBE, Color::Indexed(203)),
-                crate::model::MediaKind::Article { .. } => (GLYPH_ARTICLE, Color::Indexed(75)),
-            };
+            let (glyph, color) = media_kind_badge(&first_media.kind, &theme_guard);
             header_spans.push(Span::raw("  "));
             header_spans.push(Span::styled(glyph.to_string(), Style::default().fg(color)));
         }
@@ -2127,15 +2045,22 @@ fn tweet_lines(
         }
 
         if effective_expanded && opts.media_enabled {
-            let qt_photos: Vec<&str> = qt
+            let qt_visuals: Vec<&crate::model::Media> = qt
                 .media
                 .iter()
-                .filter(|m| matches!(m.kind, crate::model::MediaKind::Photo))
-                .map(|m| m.url.as_str())
+                .filter(|m| {
+                    matches!(
+                        m.kind,
+                        crate::model::MediaKind::Photo
+                            | crate::model::MediaKind::Video
+                            | crate::model::MediaKind::AnimatedGif
+                    )
+                })
                 .collect();
-            let qt_indent = Span::styled("  │ ", Style::default().fg(Color::DarkGray));
+            let qt_indent = Span::styled("  │ ", Style::default().fg(theme_guard.text_muted));
             let qt_max_cols = image_max_cols(qt_wrap);
-            for url in &qt_photos {
+            for m in &qt_visuals {
+                let url = m.url.as_str();
                 match render_image_lines(
                     ctx.media_reg,
                     url,
@@ -2149,6 +2074,9 @@ fn tweet_lines(
                         _ => lines.push(media_badge_loading()),
                     },
                 }
+                if let Some(cap) = motion_caption_with_indent(&m.kind, &qt_indent) {
+                    lines.push(cap);
+                }
             }
         }
 
@@ -2156,16 +2084,23 @@ fn tweet_lines(
     }
 
     if effective_expanded && opts.media_enabled && has_photo_media {
-        let photo_urls: Vec<&str> = t
+        let visuals: Vec<&crate::model::Media> = t
             .media
             .iter()
-            .filter(|m| matches!(m.kind, crate::model::MediaKind::Photo))
-            .map(|m| m.url.as_str())
+            .filter(|m| {
+                matches!(
+                    m.kind,
+                    crate::model::MediaKind::Photo
+                        | crate::model::MediaKind::Video
+                        | crate::model::MediaKind::AnimatedGif
+                )
+            })
             .collect();
-        let visible_count = photo_urls.len().min(4);
-        let overflow = photo_urls.len().saturating_sub(visible_count);
+        let visible_count = visuals.len().min(4);
+        let overflow = visuals.len().saturating_sub(visible_count);
         let max_cols = image_max_cols(wrap_width);
-        for url in &photo_urls[..visible_count] {
+        for m in &visuals[..visible_count] {
+            let url = m.url.as_str();
             match render_image_lines(
                 ctx.media_reg,
                 url,
@@ -2179,13 +2114,16 @@ fn tweet_lines(
                     _ => lines.push(media_badge_loading()),
                 },
             }
+            if let Some(cap) = motion_caption(&m.kind) {
+                lines.push(cap);
+            }
         }
         if overflow > 0 {
             lines.push(Line::from(vec![
                 indent.clone(),
                 Span::styled(
                     format!("[+{overflow} more]"),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme_guard.text_muted),
                 ),
             ]));
         }
@@ -2219,6 +2157,36 @@ fn tweet_lines(
                         &indent,
                     ));
                 }
+                crate::model::MediaKind::LinkCard {
+                    title,
+                    description,
+                    domain,
+                    ..
+                } => {
+                    lines.extend(render_link_card(
+                        ctx,
+                        title,
+                        description,
+                        domain,
+                        &m.url,
+                        image_max_cols(wrap_width),
+                        ctx.opts.media_max_rows,
+                        &indent,
+                    ));
+                }
+                crate::model::MediaKind::Poll {
+                    options,
+                    ends_at,
+                    counts_final,
+                } => {
+                    lines.extend(render_poll_card(
+                        options,
+                        *ends_at,
+                        *counts_final,
+                        image_max_cols(wrap_width),
+                        &indent,
+                    ));
+                }
                 _ => {}
             }
         }
@@ -2229,6 +2197,46 @@ fn tweet_lines(
 
 fn image_max_cols(wrap_width: usize) -> usize {
     wrap_width.saturating_sub(4).clamp(10, 80)
+}
+
+/// Maps a `MediaKind` to its header-row glyph and accent color from
+/// the active theme. Centralised so the source-list, quote-tweet, and
+/// motion-caption sites can't drift.
+fn media_kind_badge(kind: &crate::model::MediaKind, t: &Theme) -> (&'static str, Color) {
+    match kind {
+        crate::model::MediaKind::Photo => (GLYPH_PHOTO, t.media_photo),
+        crate::model::MediaKind::Video => (GLYPH_VIDEO, t.media_video),
+        crate::model::MediaKind::AnimatedGif => (GLYPH_GIF, t.media_gif),
+        crate::model::MediaKind::YouTube { .. } => (GLYPH_YOUTUBE, t.youtube_red),
+        crate::model::MediaKind::Article { .. } => (GLYPH_ARTICLE, t.media_article),
+        crate::model::MediaKind::LinkCard { .. } => (GLYPH_LINK, t.media_link),
+        crate::model::MediaKind::Poll { .. } => (GLYPH_POLL, t.media_poll),
+    }
+}
+
+/// Caption row shown under a video/gif thumbnail so the user knows the
+/// visual is playable (press `m` to open externally).
+fn motion_caption(kind: &crate::model::MediaKind) -> Option<Line<'static>> {
+    motion_caption_with_indent(kind, &Span::raw("  "))
+}
+
+fn motion_caption_with_indent(
+    kind: &crate::model::MediaKind,
+    indent: &Span<'static>,
+) -> Option<Line<'static>> {
+    let t = th();
+    let (glyph, label, color) = match kind {
+        crate::model::MediaKind::Video => (GLYPH_VIDEO, "video", t.media_video),
+        crate::model::MediaKind::AnimatedGif => (GLYPH_GIF, "gif", t.media_gif),
+        _ => return None,
+    };
+    Some(Line::from(vec![
+        indent.clone(),
+        Span::styled(
+            format!("{glyph} {label}"),
+            Style::default().fg(color).add_modifier(Modifier::ITALIC),
+        ),
+    ]))
 }
 
 fn render_youtube_card(
@@ -2242,14 +2250,16 @@ fn render_youtube_card(
     use crate::tui::youtube::MetaState;
     use unicode_width::UnicodeWidthStr;
 
-    const YT_RED: Color = Color::Rgb(0xff, 0x00, 0x33);
-    let border_style = Style::default().fg(Color::Indexed(240));
-    let play_style = Style::default().fg(YT_RED).add_modifier(Modifier::BOLD);
-    let brand_style = Style::default()
-        .fg(Color::White)
+    let t = th();
+    let border_style = Style::default().fg(t.card_border);
+    let play_style = Style::default()
+        .fg(t.youtube_red)
         .add_modifier(Modifier::BOLD);
-    let title_style = Style::default().fg(Color::White);
-    let meta_style = Style::default().fg(Color::Indexed(244));
+    let brand_style = Style::default()
+        .fg(t.card_title)
+        .add_modifier(Modifier::BOLD);
+    let title_style = Style::default().fg(t.card_title);
+    let meta_style = Style::default().fg(t.card_meta);
 
     let (title, author) = match ctx.youtube.get(video_id) {
         Some(MetaState::Ready(m)) => (m.title.clone(), m.author_name.clone()),
@@ -2370,14 +2380,16 @@ fn render_article_card(
 ) -> Vec<Line<'static>> {
     use unicode_width::UnicodeWidthStr;
 
-    const X_BLUE: Color = Color::Rgb(0x1d, 0x9b, 0xf0);
-    let border_style = Style::default().fg(Color::Indexed(240));
-    let badge_style = Style::default().fg(X_BLUE).add_modifier(Modifier::BOLD);
-    let title_style = Style::default()
-        .fg(Color::White)
+    let t = th();
+    let border_style = Style::default().fg(t.card_border);
+    let badge_style = Style::default()
+        .fg(t.media_article)
         .add_modifier(Modifier::BOLD);
-    let preview_style = Style::default().fg(Color::Indexed(250));
-    let meta_style = Style::default().fg(Color::Indexed(244));
+    let title_style = Style::default()
+        .fg(t.card_title)
+        .add_modifier(Modifier::BOLD);
+    let preview_style = Style::default().fg(t.card_body);
+    let meta_style = Style::default().fg(t.card_meta);
 
     let has_cover = !cover_url.is_empty();
     let image_cells = if has_cover {
@@ -2403,7 +2415,7 @@ fn render_article_card(
         Span::styled(
             " Article ",
             Style::default()
-                .fg(Color::White)
+                .fg(t.card_title)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled("─".repeat(top_right_dashes), border_style),
@@ -2518,6 +2530,316 @@ fn render_article_card(
     ]));
 
     lines
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_link_card(
+    ctx: &RenderContext,
+    title: &str,
+    description: &str,
+    domain: &str,
+    cover_url: &str,
+    max_cols: usize,
+    max_rows: usize,
+    indent: &Span<'static>,
+) -> Vec<Line<'static>> {
+    use unicode_width::UnicodeWidthStr;
+
+    let t = th();
+    let border_style = Style::default().fg(t.card_border);
+    let badge_style = Style::default()
+        .fg(t.media_link)
+        .add_modifier(Modifier::BOLD);
+    let label_style = Style::default()
+        .fg(t.card_title)
+        .add_modifier(Modifier::BOLD);
+    let title_style = Style::default()
+        .fg(t.card_title)
+        .add_modifier(Modifier::BOLD);
+    let body_style = Style::default().fg(t.card_body);
+    let meta_style = Style::default().fg(t.card_meta);
+
+    let has_cover = !cover_url.is_empty();
+    let image_cells = if has_cover {
+        image_cells_for_card(ctx.media_reg, cover_url, max_cols, max_rows)
+    } else {
+        None
+    };
+    let inner_w: usize = match image_cells {
+        Some((c, _)) => c as usize,
+        None => max_cols.saturating_sub(2).max(20),
+    };
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    let label = "  🔗 Link ";
+    let label_w = UnicodeWidthStr::width(label);
+    let top_right_dashes = inner_w.saturating_sub(label_w);
+    lines.push(Line::from(vec![
+        indent.clone(),
+        Span::styled("┌", border_style),
+        Span::styled("  ", border_style),
+        Span::styled("🔗", badge_style),
+        Span::styled(" Link ", label_style),
+        Span::styled("─".repeat(top_right_dashes), border_style),
+        Span::styled("┐", border_style),
+    ]));
+
+    if has_cover {
+        match image_cells {
+            Some((nc, nr)) => {
+                if let Some(MediaEntry::ReadyKitty { id, .. }) = ctx.media_reg.get(cover_url) {
+                    for row in 0..nr as usize {
+                        let placeholder = placeholder_row_span(*id, row, nc as usize);
+                        lines.push(Line::from(vec![
+                            indent.clone(),
+                            Span::styled("│", border_style),
+                            placeholder,
+                            Span::styled("│", border_style),
+                        ]));
+                    }
+                } else if let Some(MediaEntry::ReadyPixels { pixels, w, h }) =
+                    ctx.media_reg.get(cover_url)
+                {
+                    let empty_indent = Span::raw("");
+                    let sextants = media::render_sextants(
+                        pixels,
+                        *w,
+                        *h,
+                        nc as usize,
+                        nr as usize,
+                        &empty_indent,
+                    );
+                    for row in sextants {
+                        lines.push(wrap_row_in_border(indent, row, inner_w, &border_style));
+                    }
+                } else {
+                    for _ in 0..nr as usize {
+                        lines.push(blank_body_row(indent, inner_w, &border_style));
+                    }
+                }
+            }
+            None => {
+                for _ in 0..4 {
+                    lines.push(blank_body_row(indent, inner_w, &border_style));
+                }
+            }
+        }
+
+        lines.push(Line::from(vec![
+            indent.clone(),
+            Span::styled("├", border_style),
+            Span::styled("─".repeat(inner_w), border_style),
+            Span::styled("┤", border_style),
+        ]));
+    }
+
+    let body_w = inner_w.saturating_sub(2).max(1);
+    let pad = " ".to_string();
+
+    if !title.is_empty() {
+        for wline in wrap_text(title, body_w).into_iter().take(2) {
+            let padded = pad_to_width(&wline, body_w);
+            lines.push(Line::from(vec![
+                indent.clone(),
+                Span::styled("│", border_style),
+                Span::raw(pad.clone()),
+                Span::styled(padded, title_style),
+                Span::raw(pad.clone()),
+                Span::styled("│", border_style),
+            ]));
+        }
+    }
+    if !description.is_empty() {
+        for wline in wrap_text(description, body_w).into_iter().take(2) {
+            let padded = pad_to_width(&wline, body_w);
+            lines.push(Line::from(vec![
+                indent.clone(),
+                Span::styled("│", border_style),
+                Span::raw(pad.clone()),
+                Span::styled(padded, body_style),
+                Span::raw(pad.clone()),
+                Span::styled("│", border_style),
+            ]));
+        }
+    }
+    let footer = if domain.is_empty() { "link" } else { domain };
+    let footer_padded = pad_to_width(&truncate_to_width(footer, body_w), body_w);
+    lines.push(Line::from(vec![
+        indent.clone(),
+        Span::styled("│", border_style),
+        Span::raw(pad.clone()),
+        Span::styled(footer_padded, meta_style),
+        Span::raw(pad.clone()),
+        Span::styled("│", border_style),
+    ]));
+
+    lines.push(Line::from(vec![
+        indent.clone(),
+        Span::styled("└", border_style),
+        Span::styled("─".repeat(inner_w), border_style),
+        Span::styled("┘", border_style),
+    ]));
+
+    lines
+}
+
+fn render_poll_card(
+    options: &[crate::model::PollOption],
+    ends_at: Option<chrono::DateTime<chrono::Utc>>,
+    counts_final: bool,
+    max_cols: usize,
+    indent: &Span<'static>,
+) -> Vec<Line<'static>> {
+    use unicode_width::UnicodeWidthStr;
+
+    let t = th();
+    let border_style = Style::default().fg(t.card_border);
+    let badge_style = Style::default()
+        .fg(t.media_poll)
+        .add_modifier(Modifier::BOLD);
+    let label_style = Style::default()
+        .fg(t.card_title)
+        .add_modifier(Modifier::BOLD);
+    let label_text_style = Style::default().fg(t.card_title);
+    let bar_lead_style = Style::default()
+        .fg(t.media_poll)
+        .add_modifier(Modifier::BOLD);
+    let bar_style = Style::default().fg(t.card_border);
+    let meta_style = Style::default().fg(t.card_meta);
+    let pct_style = Style::default()
+        .fg(t.card_title)
+        .add_modifier(Modifier::BOLD);
+
+    let inner_w = max_cols.saturating_sub(2).max(20);
+    let total_votes: u64 = options.iter().map(|o| o.count).sum();
+    let leader_idx = options
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, o)| o.count)
+        .map(|(i, _)| i);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    let header_label = "  ▥ Poll ";
+    let header_w = UnicodeWidthStr::width(header_label);
+    let top_dashes = inner_w.saturating_sub(header_w);
+    lines.push(Line::from(vec![
+        indent.clone(),
+        Span::styled("┌", border_style),
+        Span::styled("  ", border_style),
+        Span::styled("▥", badge_style),
+        Span::styled(" Poll ", label_style),
+        Span::styled("─".repeat(top_dashes), border_style),
+        Span::styled("┐", border_style),
+    ]));
+
+    let body_w = inner_w.saturating_sub(2).max(1);
+    let pad = " ".to_string();
+
+    for (i, opt) in options.iter().enumerate() {
+        let pct = if total_votes > 0 {
+            (opt.count as f64 * 100.0 / total_votes as f64).round() as u64
+        } else {
+            0
+        };
+        let is_leader = leader_idx == Some(i) && total_votes > 0;
+
+        let pct_text = format!("{pct:>3}%");
+        let label_cap = body_w.saturating_sub(pct_text.len() + 1).max(1);
+        let label_display = truncate_to_width(&opt.label, label_cap);
+        let label_width = UnicodeWidthStr::width(label_display.as_str());
+        let spacer = body_w.saturating_sub(label_width + pct_text.len());
+        let mut row_spans = vec![
+            indent.clone(),
+            Span::styled("│", border_style),
+            Span::raw(pad.clone()),
+            Span::styled(
+                label_display,
+                if is_leader {
+                    label_text_style.add_modifier(Modifier::BOLD)
+                } else {
+                    label_text_style
+                },
+            ),
+            Span::raw(" ".repeat(spacer)),
+            Span::styled(pct_text, pct_style),
+            Span::raw(pad.clone()),
+            Span::styled("│", border_style),
+        ];
+        lines.push(Line::from(row_spans.split_off(0)));
+
+        let bar_w = body_w;
+        let filled = ((bar_w as u64 * opt.count) / total_votes.max(1)) as usize;
+        let filled = filled.min(bar_w);
+        let empty = bar_w - filled;
+        let filled_str = "█".repeat(filled);
+        let empty_str = "░".repeat(empty);
+        lines.push(Line::from(vec![
+            indent.clone(),
+            Span::styled("│", border_style),
+            Span::raw(pad.clone()),
+            Span::styled(
+                filled_str,
+                if is_leader { bar_lead_style } else { bar_style },
+            ),
+            Span::styled(empty_str, bar_style),
+            Span::raw(pad.clone()),
+            Span::styled("│", border_style),
+        ]));
+    }
+
+    let footer = poll_footer(total_votes, ends_at, counts_final);
+    let footer_padded = pad_to_width(&truncate_to_width(&footer, body_w), body_w);
+    lines.push(Line::from(vec![
+        indent.clone(),
+        Span::styled("│", border_style),
+        Span::raw(pad.clone()),
+        Span::styled(footer_padded, meta_style),
+        Span::raw(pad.clone()),
+        Span::styled("│", border_style),
+    ]));
+
+    lines.push(Line::from(vec![
+        indent.clone(),
+        Span::styled("└", border_style),
+        Span::styled("─".repeat(inner_w), border_style),
+        Span::styled("┘", border_style),
+    ]));
+
+    lines
+}
+
+fn poll_footer(
+    total: u64,
+    ends_at: Option<chrono::DateTime<chrono::Utc>>,
+    counts_final: bool,
+) -> String {
+    let votes = format!(
+        "{} vote{}",
+        crate::util::short_count(total),
+        if total == 1 { "" } else { "s" }
+    );
+    if counts_final {
+        return format!("{votes} · final");
+    }
+    if let Some(end) = ends_at {
+        let now = chrono::Utc::now();
+        if end <= now {
+            return format!("{votes} · ended");
+        }
+        let remaining = end - now;
+        let mins = remaining.num_minutes().max(0);
+        let human = if mins >= 24 * 60 {
+            format!("{}d left", mins / (24 * 60))
+        } else if mins >= 60 {
+            format!("{}h left", mins / 60)
+        } else {
+            format!("{mins}m left")
+        };
+        return format!("{votes} · {human}");
+    }
+    votes
 }
 
 fn image_cells_for_card(
@@ -2690,7 +3012,9 @@ fn emit_placement_for_tweet(
     let max_cols = image_max_cols(wrap_width);
     for media_item in tweet.media.iter().take(4) {
         match &media_item.kind {
-            crate::model::MediaKind::Photo => {
+            crate::model::MediaKind::Photo
+            | crate::model::MediaKind::Video
+            | crate::model::MediaKind::AnimatedGif => {
                 if let Some(MediaEntry::ReadyKitty { id, w, h }) = registry.get(&media_item.url) {
                     let (nc, nr) = media::kitty_image_cells(cell, *w, *h, max_cols as u32);
                     let (c, r) = media::fit_cells_to_pane(nc, nr, max_cols as u32, max_rows as u32);
@@ -2699,8 +3023,9 @@ fn emit_placement_for_tweet(
                     }
                 }
             }
-            crate::model::MediaKind::YouTube { .. } | crate::model::MediaKind::Article { .. } => {
-                // Card interior is max_cols - 2 (left/right borders).
+            crate::model::MediaKind::YouTube { .. }
+            | crate::model::MediaKind::Article { .. }
+            | crate::model::MediaKind::LinkCard { .. } => {
                 let inner_cols = (max_cols.saturating_sub(2)).max(10) as u32;
                 if let Some(MediaEntry::ReadyKitty { id, w, h }) = registry.get(&media_item.url) {
                     let (nc, nr) = media::kitty_image_cells(cell, *w, *h, inner_cols);
@@ -2725,28 +3050,29 @@ fn append_inline_thread(
     ctx: &RenderContext,
     wrap_width: usize,
 ) {
+    let t = th();
     lines.push(Line::from(Span::styled(
         "  ── replies ──",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(t.text_muted),
     )));
     if thread.loading {
         lines.push(Line::from(Span::styled(
             "    loading thread…",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(t.warning),
         )));
         return;
     }
     if let Some(err) = &thread.error {
         lines.push(Line::from(Span::styled(
             format!("    error: {err}"),
-            Style::default().fg(Color::Red),
+            Style::default().fg(t.error),
         )));
         return;
     }
     if thread.replies.is_empty() {
         lines.push(Line::from(Span::styled(
             "    no replies",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(t.text_muted),
         )));
         return;
     }
@@ -2756,7 +3082,7 @@ fn append_inline_thread(
         let reply_lines = tweet_lines(reply, ctx, false, true, child_wrap, true);
         let gutter_str: String = format!("  {:>width$}│ ", "", width = depth * 2);
         for mut line in reply_lines {
-            let gutter = Span::styled(gutter_str.clone(), Style::default().fg(Color::DarkGray));
+            let gutter = Span::styled(gutter_str.clone(), Style::default().fg(t.text_muted));
             let mut new_spans = vec![gutter];
             new_spans.append(&mut line.spans);
             lines.push(Line::from(new_spans));
@@ -2850,18 +3176,17 @@ fn reply_count_span(t: &Tweet) -> Option<Span<'static>> {
     }
     Some(Span::styled(
         format!("{GLYPH_REPLIES} {}", short_count(t.reply_count)),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(th().text_muted),
     ))
 }
-
-const COLOR_LIKED: Color = Color::Indexed(203);
 
 fn engaged_style(color: Color) -> Style {
     Style::default().fg(color).add_modifier(Modifier::BOLD)
 }
 
 fn extra_stats_spans(t: &Tweet) -> Vec<Span<'static>> {
-    let dim = Style::default().fg(Color::DarkGray);
+    let theme_guard = th();
+    let dim = Style::default().fg(theme_guard.text_muted);
     let mut parts: Vec<Span<'static>> = Vec::new();
     let push = |span: Span<'static>, parts: &mut Vec<Span<'static>>| {
         if !parts.is_empty() {
@@ -2880,7 +3205,7 @@ fn extra_stats_spans(t: &Tweet) -> Vec<Span<'static>> {
     }
     if t.like_count > 0 || t.favorited {
         let style = if t.favorited {
-            engaged_style(COLOR_LIKED)
+            engaged_style(theme_guard.liked)
         } else {
             dim
         };
@@ -2909,7 +3234,7 @@ fn engagement_only_spans(t: &Tweet) -> Vec<Span<'static>> {
     }
     vec![Span::styled(
         GLYPH_LIKES.to_string(),
-        engaged_style(COLOR_LIKED),
+        engaged_style(th().liked),
     )]
 }
 
@@ -2941,20 +3266,20 @@ fn push_word(word: &str, spans: &mut Vec<Span<'static>>) {
     if word.starts_with('@') && word.len() > 1 {
         let handle = word[1..].trim_end_matches(|c: char| !(c.is_ascii_alphanumeric() || c == '_'));
         let color = if handle.is_empty() {
-            Color::Cyan
+            th().accent
         } else {
-            handle_color(handle)
+            theme::handle_color(handle)
         };
         spans.push(Span::styled(word.to_string(), Style::default().fg(color)));
     } else if word.starts_with('#') && word.len() > 1 {
         spans.push(Span::styled(
             word.to_string(),
-            Style::default().fg(Color::Magenta),
+            Style::default().fg(th().hashtag),
         ));
     } else if word.starts_with("http://") || word.starts_with("https://") {
         spans.push(Span::styled(
             word.to_string(),
-            Style::default().fg(Color::Blue),
+            Style::default().fg(th().url),
         ));
     } else {
         spans.push(Span::raw(word.to_string()));
@@ -3006,21 +3331,19 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     };
     let (left, right) = split_right(area, clock_w);
 
+    let t = th();
     if app.mode == InputMode::Command {
         let spans = vec![
             Span::styled(
                 "CMD ",
                 Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Magenta)
+                    .fg(t.mode_cmd_fg)
+                    .bg(t.mode_cmd_bg)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  :"),
-            Span::styled(
-                app.command_buffer.clone(),
-                Style::default().fg(Color::White),
-            ),
-            Span::styled("▎", Style::default().fg(Color::Yellow)),
+            Span::styled(app.command_buffer.clone(), Style::default().fg(t.text)),
+            Span::styled("▎", Style::default().fg(t.mode_cmd_cursor)),
         ];
         frame.render_widget(Paragraph::new(Line::from(spans)), left);
         if clock_w > 0 {
@@ -3033,8 +3356,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled(
             "NORMAL ",
             Style::default()
-                .fg(Color::Black)
-                .bg(Color::Yellow)
+                .fg(t.mode_normal_fg)
+                .bg(t.mode_normal_bg)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
@@ -3043,8 +3366,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         spans.push(Span::styled(
             format!(" error: {err} "),
             Style::default()
-                .fg(Color::White)
-                .bg(Color::Red)
+                .fg(t.brand_fg)
+                .bg(t.error)
                 .add_modifier(Modifier::BOLD),
         ));
     } else {
@@ -3056,12 +3379,12 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         };
         spans.push(Span::styled(
             format!("{sel}/{count}"),
-            Style::default().fg(Color::Gray),
+            Style::default().fg(t.text_muted),
         ));
         spans.push(Span::raw("   "));
         spans.push(Span::styled(
             app.status.clone(),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(t.text_muted),
         ));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), left);
@@ -3084,11 +3407,10 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
 
     frame.render_widget(Clear, popup);
 
-    let dim = Style::default().fg(Color::DarkGray);
-    let heading = Style::default()
-        .fg(Color::White)
-        .add_modifier(Modifier::BOLD);
-    let icon_style = Style::default().fg(Color::Yellow);
+    let t = th();
+    let dim = Style::default().fg(t.text_muted);
+    let heading = Style::default().fg(t.heading).add_modifier(Modifier::BOLD);
+    let icon_style = Style::default().fg(t.warning);
 
     let lines = vec![
         Line::from(Span::styled("unrager", heading)),
@@ -3115,6 +3437,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  :notifs                     notifications"),
         Line::from("  :bookmarks <query>          bookmark search"),
         Line::from("  :read / :thread <id|url>    open a tweet"),
+        Line::from("  :theme <auto|x-dark|x-light> swap theme live"),
         Line::from("  ] / [                       history fwd / back"),
         Line::from(""),
         Line::from(Span::styled("READ TRACKING", heading)),
@@ -3133,7 +3456,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  M              toggle metric counts"),
         Line::from("  N              toggle display names"),
         Line::from("  I              toggle media auto-expand"),
-        Line::from("  Z              toggle dark / light theme palette"),
+        Line::from("  Z              cycle x-dark / x-light theme"),
         Line::from("  p              open profile of selected tweet's author"),
         Line::from("  P              open own profile in browser"),
         Line::from("  T              translate tweet to English (toggle)"),
@@ -3171,7 +3494,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from(vec![
             Span::styled("  ♥  ", icon_style),
             Span::raw("likes ("),
-            Span::styled("red", Style::default().fg(COLOR_LIKED)),
+            Span::styled("red", Style::default().fg(t.liked)),
             Span::raw(" = you liked)"),
         ]),
         Line::from(vec![Span::styled("  ◉  ", icon_style), Span::raw("views")]),
@@ -3190,27 +3513,27 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from(""),
         Line::from(Span::styled("  status bar", heading)),
         Line::from(vec![
-            Span::styled("  N↑ ", Style::default().fg(Color::Green)),
+            Span::styled("  N↑ ", Style::default().fg(t.success)),
             Span::raw("N unread tweets loaded"),
         ]),
         Line::from(vec![
-            Span::styled("  −N ", Style::default().fg(Color::Green)),
+            Span::styled("  −N ", Style::default().fg(t.success)),
             Span::raw("N tweets hidden by rage filter"),
         ]),
         Line::from(vec![
-            Span::styled("  filter⌀ ", Style::default().fg(Color::DarkGray)),
+            Span::styled("  filter⌀ ", Style::default().fg(t.text_muted)),
             Span::raw("filter off (run `unrager doctor` to diagnose)"),
         ]),
         Line::from(vec![
-            Span::styled("  ◇  ", Style::default().fg(Color::Cyan)),
+            Span::styled("  ◇  ", Style::default().fg(t.accent)),
             Span::raw("originals-only mode active"),
         ]),
         Line::from(vec![
-            Span::styled("  N◆ ", Style::default().fg(Color::Magenta)),
+            Span::styled("  N◆ ", Style::default().fg(t.new_unread)),
             Span::raw("N detail panes stacked"),
         ]),
         Line::from(vec![
-            Span::styled("  ↑X.Y.Z ", Style::default().fg(Color::Yellow)),
+            Span::styled("  ↑X.Y.Z ", Style::default().fg(t.update)),
             Span::raw("newer version available (`unrager update`)"),
         ]),
         Line::from(""),
@@ -3221,7 +3544,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Yellow))
+                .border_style(Style::default().fg(t.accent))
                 .title(" ? "),
         )
         .scroll((scroll, 0))
@@ -3243,16 +3566,11 @@ fn draw_changelog_overlay(frame: &mut Frame, area: Rect, app: &App) {
 
     frame.render_widget(Clear, popup);
 
-    let dim = Style::default().fg(Color::DarkGray);
-    let version_style = Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::BOLD);
-    let current_style = Style::default()
-        .fg(Color::Green)
-        .add_modifier(Modifier::BOLD);
-    let heading_style = Style::default()
-        .fg(Color::White)
-        .add_modifier(Modifier::BOLD);
+    let t = th();
+    let dim = Style::default().fg(t.text_muted);
+    let version_style = Style::default().fg(t.update).add_modifier(Modifier::BOLD);
+    let current_style = Style::default().fg(t.success).add_modifier(Modifier::BOLD);
+    let heading_style = Style::default().fg(t.heading).add_modifier(Modifier::BOLD);
 
     let mut lines: Vec<Line> = Vec::new();
 
@@ -3311,7 +3629,7 @@ fn draw_changelog_overlay(frame: &mut Frame, area: Rect, app: &App) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Yellow))
+                .border_style(Style::default().fg(t.accent))
                 .title(" changelog "),
         )
         .scroll((app.changelog_scroll, 0))

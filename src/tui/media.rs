@@ -1,8 +1,8 @@
-use crate::model::{Media, MediaKind, Tweet};
+use crate::model::{MediaKind, Tweet};
 use crate::tui::event::{Event, EventTx};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use std::collections::{HashMap, VecDeque};
 use std::io::Write;
@@ -154,9 +154,6 @@ pub enum MediaEntry {
         h: u32,
     },
     Failed(String),
-    Unsupported {
-        kind: MediaKind,
-    },
 }
 
 impl MediaEntry {
@@ -243,12 +240,15 @@ impl MediaRegistry {
     }
 
     /// Variant that only queues thumbnails for inline cards (YouTube, X
-    /// articles) used in the source feed, where photos stay cold until the
-    /// user expands them but cards always render and need their cover art
-    /// eagerly.
+    /// articles, generic link cards) used in the source feed, where photos
+    /// stay cold until the user expands them but cards always render and need
+    /// their cover art eagerly.
     pub fn ensure_tweet_card_thumbnails(&mut self, tweet: &Tweet, tx: &EventTx) {
         self.ensure_tweet_media_filtered(tweet, tx, |k| {
-            matches!(k, MediaKind::YouTube { .. } | MediaKind::Article { .. })
+            matches!(
+                k,
+                MediaKind::YouTube { .. } | MediaKind::Article { .. } | MediaKind::LinkCard { .. }
+            )
         });
     }
 
@@ -276,7 +276,20 @@ impl MediaRegistry {
                 MediaKind::Article { .. } if media.url.is_empty() => {
                     continue;
                 }
-                MediaKind::Photo | MediaKind::YouTube { .. } | MediaKind::Article { .. } => {
+                MediaKind::Photo
+                | MediaKind::Video
+                | MediaKind::AnimatedGif
+                | MediaKind::YouTube { .. }
+                | MediaKind::Article { .. }
+                | MediaKind::LinkCard { .. } => {
+                    if media.url.is_empty() {
+                        continue;
+                    }
+                    // X serves video/gif posters at the video's native aspect
+                    // (often 9:16 for phone-recorded clips). The web client
+                    // renders them inside a square tile; mirror that by
+                    // center-cropping to 1:1.
+                    let square = matches!(media.kind, MediaKind::Video | MediaKind::AnimatedGif);
                     self.insert_entry(media.url.clone(), MediaEntry::Loading);
                     let url = media.url.clone();
                     let sem = self.semaphore.clone();
@@ -286,7 +299,7 @@ impl MediaRegistry {
                         self.next_id += 1;
                         tokio::spawn(async move {
                             let _permit = sem.acquire_owned().await.ok();
-                            match fetch_and_transmit_kitty(id, &url).await {
+                            match fetch_and_transmit_kitty(id, &url, square).await {
                                 Ok((w, h)) => {
                                     let _ = tx.send(Event::MediaLoadedKitty { url, id, w, h });
                                 }
@@ -301,7 +314,7 @@ impl MediaRegistry {
                     } else {
                         tokio::spawn(async move {
                             let _permit = sem.acquire_owned().await.ok();
-                            match fetch_and_decode(&url).await {
+                            match fetch_and_decode(&url, square).await {
                                 Ok((pixels, w, h)) => {
                                     let _ = tx.send(Event::MediaLoadedPixels { url, pixels, w, h });
                                 }
@@ -315,14 +328,7 @@ impl MediaRegistry {
                         });
                     }
                 }
-                MediaKind::Video | MediaKind::AnimatedGif => {
-                    self.insert_entry(
-                        media.url.clone(),
-                        MediaEntry::Unsupported {
-                            kind: media.kind.clone(),
-                        },
-                    );
-                }
+                MediaKind::Poll { .. } => {}
             }
         }
     }
@@ -392,6 +398,7 @@ const SRC_MAX_DIM: u32 = 800;
 async fn fetch_and_transmit_kitty(
     id: u32,
     url: &str,
+    square_crop: bool,
 ) -> Result<(u32, u32), Box<dyn std::error::Error + Send + Sync>> {
     let bytes = reqwest::Client::new()
         .get(url)
@@ -402,7 +409,10 @@ async fn fetch_and_transmit_kitty(
         .await?;
     let (raw, w, h) =
         tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, u32, u32), image::ImageError> {
-            let img = image::load_from_memory(&bytes)?;
+            let mut img = image::load_from_memory(&bytes)?;
+            if square_crop {
+                img = center_square(img);
+            }
             let img = downscale(img, SRC_MAX_DIM);
             let rgba = img.to_rgba8();
             let (w, h) = rgba.dimensions();
@@ -415,6 +425,7 @@ async fn fetch_and_transmit_kitty(
 
 async fn fetch_and_decode(
     url: &str,
+    square_crop: bool,
 ) -> Result<(Arc<Vec<u8>>, u32, u32), Box<dyn std::error::Error + Send + Sync>> {
     let bytes = reqwest::Client::new()
         .get(url)
@@ -425,7 +436,10 @@ async fn fetch_and_decode(
         .await?;
     let (raw, w, h) =
         tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, u32, u32), image::ImageError> {
-            let img = image::load_from_memory(&bytes)?;
+            let mut img = image::load_from_memory(&bytes)?;
+            if square_crop {
+                img = center_square(img);
+            }
             let img = downscale(img, 512);
             let rgba = img.to_rgba8();
             let (w, h) = rgba.dimensions();
@@ -433,6 +447,18 @@ async fn fetch_and_decode(
         })
         .await??;
     Ok((Arc::new(raw), w, h))
+}
+
+fn center_square(img: image::DynamicImage) -> image::DynamicImage {
+    use image::GenericImageView;
+    let (w, h) = img.dimensions();
+    let side = w.min(h);
+    if w == h || side == 0 {
+        return img;
+    }
+    let x = (w - side) / 2;
+    let y = (h - side) / 2;
+    img.crop_imm(x, y, side, side)
 }
 
 fn downscale(img: image::DynamicImage, max_dim: u32) -> image::DynamicImage {
@@ -680,46 +706,17 @@ pub fn render_sextants(
 }
 
 pub fn media_badge_loading() -> Line<'static> {
+    let color = crate::tui::theme::with(|t| t.media_loading);
     Line::from(vec![
         Span::raw("  "),
-        Span::styled("[img ↓]", Style::default().fg(Color::DarkGray)),
+        Span::styled("[img ↓]", Style::default().fg(color)),
     ])
 }
 
 pub fn media_badge_failed() -> Line<'static> {
+    let color = crate::tui::theme::with(|t| t.media_failed);
     Line::from(vec![
         Span::raw("  "),
-        Span::styled("[img ×]", Style::default().fg(Color::Red)),
+        Span::styled("[img ×]", Style::default().fg(color)),
     ])
-}
-
-pub fn media_badge_video() -> Line<'static> {
-    Line::from(vec![
-        Span::raw("  "),
-        Span::styled(
-            "[▶ video]",
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::ITALIC),
-        ),
-    ])
-}
-
-pub fn media_badge_gif() -> Line<'static> {
-    Line::from(vec![
-        Span::raw("  "),
-        Span::styled(
-            "[gif]",
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::ITALIC),
-        ),
-    ])
-}
-
-pub fn first_renderable_photo(tweet: &Tweet) -> Option<&Media> {
-    tweet
-        .media
-        .iter()
-        .find(|m| matches!(m.kind, MediaKind::Photo))
 }

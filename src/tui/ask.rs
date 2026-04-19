@@ -28,7 +28,7 @@ pub const PRESETS: &[Preset] = &[
         needs_replies: false,
     },
     Preset {
-        label: "Summary",
+        label: "Replies",
         prompt: "Summarize the key points of the replies in 3–5 bullets. Focus on dominant reactions and any notable disagreements.",
         needs_replies: true,
     },
@@ -70,11 +70,18 @@ pub enum AskMessage {
     Assistant(AskAssistantMsg),
 }
 
+#[derive(Debug, Clone)]
+pub struct ThreadContext {
+    pub root: Tweet,
+    pub siblings: Vec<Tweet>,
+}
+
 #[derive(Debug)]
 pub struct AskView {
     pub tweet: Tweet,
     pub replies: Vec<Tweet>,
     pub replies_loading: bool,
+    pub thread: Option<ThreadContext>,
     pub messages: Vec<AskMessage>,
     pub editor: VimEditor,
     pub streaming: bool,
@@ -89,6 +96,7 @@ impl AskView {
             tweet,
             replies,
             replies_loading,
+            thread: None,
             messages: Vec::new(),
             editor: VimEditor::normal(),
             streaming: false,
@@ -96,6 +104,11 @@ impl AskView {
             state: PaneState::default(),
             auto_follow: true,
         }
+    }
+
+    pub fn with_thread(mut self, thread: ThreadContext) -> Self {
+        self.thread = Some(thread);
+        self
     }
 
     pub fn tweet_id(&self) -> &str {
@@ -217,6 +230,7 @@ pub fn send(
     ollama: OllamaConfig,
     tweet: Tweet,
     replies: Vec<Tweet>,
+    thread: Option<ThreadContext>,
     turns: Vec<(Role, String)>,
     tx: EventTx,
 ) {
@@ -226,13 +240,15 @@ pub fn send(
             tweet_id = %tweet_id,
             turns = turns.len(),
             replies = replies.len(),
+            thread_siblings = thread.as_ref().map(|t| t.siblings.len()).unwrap_or(0),
+            has_thread = thread.is_some(),
             "ask stream start"
         );
         let images = fetch_images(&tweet).await;
         if !images.is_empty() {
             debug!(tweet_id = %tweet_id, count = images.len(), "ask images attached");
         }
-        let messages = build_messages(&tweet, &replies, &turns, images);
+        let messages = build_messages(&tweet, &replies, thread.as_ref(), &turns, images);
         stream_ollama(&ollama, &tweet_id, messages, &tx).await;
     });
 }
@@ -240,6 +256,7 @@ pub fn send(
 fn build_messages(
     tweet: &Tweet,
     replies: &[Tweet],
+    thread: Option<&ThreadContext>,
     turns: &[(Role, String)],
     images: Vec<String>,
 ) -> Vec<Value> {
@@ -252,7 +269,27 @@ fn build_messages(
         match role {
             Role::User => {
                 let content = if first_user {
-                    let mut buf = format!("@{handle} posted:\n{tweet_text}\n");
+                    let mut buf = String::new();
+                    if let Some(ctx) = thread {
+                        let root_handle = &ctx.root.author.handle;
+                        let root_text = &ctx.root.text;
+                        buf.push_str(&format!(
+                            "Thread root — @{root_handle} posted:\n{root_text}\n"
+                        ));
+                        if !ctx.siblings.is_empty() {
+                            buf.push_str("\nOther replies in the thread (context):\n");
+                            for s in ctx.siblings.iter().take(MAX_REPLIES_IN_CONTEXT) {
+                                let snippet: String = s.text.chars().take(400).collect();
+                                let snippet = snippet.replace('\n', " ");
+                                buf.push_str(&format!("- @{}: {}\n", s.author.handle, snippet));
+                            }
+                        }
+                        buf.push_str(&format!(
+                            "\nThe user is asking specifically about this reply:\n@{handle} replied:\n{tweet_text}\n"
+                        ));
+                    } else {
+                        buf.push_str(&format!("@{handle} posted:\n{tweet_text}\n"));
+                    }
                     if !replies.is_empty() {
                         buf.push_str("\nReplies to the post:\n");
                         for reply in replies.iter().take(MAX_REPLIES_IN_CONTEXT) {

@@ -257,22 +257,51 @@ impl App {
             return;
         };
         ask::preload(ollama);
-        let replies_in_detail = if self.active == super::app::ActivePane::Detail {
+
+        let in_detail = self.active == super::app::ActivePane::Detail;
+        let thread_context: Option<ask::ThreadContext> = if in_detail {
+            self.top_detail().and_then(|d| {
+                if d.tweet.rest_id == tweet.rest_id {
+                    None
+                } else {
+                    let siblings: Vec<Tweet> = d
+                        .replies
+                        .iter()
+                        .filter(|r| r.rest_id != tweet.rest_id)
+                        .cloned()
+                        .collect();
+                    Some(ask::ThreadContext {
+                        root: d.tweet.clone(),
+                        siblings,
+                    })
+                }
+            })
+        } else {
+            None
+        };
+
+        let replies_in_detail = if in_detail && thread_context.is_none() {
             self.top_detail()
                 .filter(|d| d.tweet.rest_id == tweet.rest_id)
                 .map(|d| d.replies.clone())
         } else {
             None
         };
-        let should_fetch = replies_in_detail.is_none() && tweet.reply_count > 0;
+        let should_fetch =
+            thread_context.is_none() && replies_in_detail.is_none() && tweet.reply_count > 0;
         let replies = replies_in_detail.unwrap_or_default();
         tracing::info!(
             tweet_id = %tweet.rest_id,
             replies = replies.len(),
+            siblings = thread_context.as_ref().map(|c| c.siblings.len()).unwrap_or(0),
+            has_thread = thread_context.is_some(),
             will_fetch = should_fetch,
             "ask view opened"
         );
-        let view = AskView::new(tweet.clone(), replies, should_fetch);
+        let mut view = AskView::new(tweet.clone(), replies, should_fetch);
+        if let Some(ctx) = thread_context {
+            view = view.with_thread(ctx);
+        }
         self.focus_stack.push(FocusEntry::Ask(view));
         self.active = super::app::ActivePane::Detail;
         self.set_status("ask: digit = preset, type for custom, Enter to send");
@@ -343,9 +372,10 @@ impl App {
         view.auto_follow = true;
         let tweet = view.tweet.clone();
         let replies = view.replies.clone();
+        let thread = view.thread.clone();
         let turns = view.turn_texts();
         let tx = self.tx.clone();
-        ask::send(ollama, tweet, replies, turns, tx);
+        ask::send(ollama, tweet, replies, thread, turns, tx);
     }
 
     pub(super) fn ask_fire_preset(&mut self, index: usize) {

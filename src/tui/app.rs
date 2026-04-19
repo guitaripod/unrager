@@ -44,6 +44,7 @@ pub enum InputMode {
     Command,
     Help,
     Changelog,
+    Leader,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1474,5 +1475,41 @@ mod tests {
         app.open_notifications();
         app.open_notifications();
         assert_eq!(app.focus_stack.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn space_enters_leader_mode() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let (mut app, _rx, _tmp) = dummy_app();
+        assert_eq!(app.mode, InputMode::Normal);
+        app.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        assert_eq!(app.mode, InputMode::Leader);
+    }
+
+    #[tokio::test]
+    async fn leader_o_toggles_feed_mode_and_exits() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let (mut app, _rx, _tmp) = dummy_app();
+        app.source = Source::new(SourceKind::Home { following: false });
+        assert!(matches!(app.feed_mode, FeedMode::All));
+
+        app.mode = InputMode::Leader;
+        app.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
+
+        assert!(matches!(app.feed_mode, FeedMode::Originals));
+        assert_eq!(app.mode, InputMode::Normal);
+    }
+
+    #[tokio::test]
+    async fn leader_unmapped_key_cancels_silently() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let (mut app, _rx, _tmp) = dummy_app();
+        app.mode = InputMode::Leader;
+        let feed_before = app.feed_mode;
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
+
+        assert_eq!(app.mode, InputMode::Normal);
+        assert_eq!(app.feed_mode, feed_before);
     }
 }

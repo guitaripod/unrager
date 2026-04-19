@@ -5,7 +5,6 @@ use crate::tui::command::{self, Command};
 use crate::tui::engage::EngageAction;
 use crate::tui::event::Event;
 use crate::tui::focus::FocusEntry;
-use crate::tui::source::SourceKind;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 enum AskAction {
@@ -16,6 +15,10 @@ impl App {
     pub(super) fn handle_key(&mut self, key: KeyEvent) {
         if matches!(self.mode, InputMode::Command) {
             self.handle_key_command(key);
+            return;
+        }
+        if matches!(self.mode, InputMode::Leader) {
+            self.handle_key_leader(key);
             return;
         }
         if self.active == ActivePane::Detail
@@ -102,18 +105,8 @@ impl App {
                     });
                 }
             }
-            (KeyCode::Char('t'), KeyModifiers::NONE) => {
-                self.timestamps = match self.timestamps {
-                    TimestampStyle::Relative => TimestampStyle::Absolute,
-                    TimestampStyle::Absolute => TimestampStyle::Relative,
-                };
-            }
-            (KeyCode::Char('Z'), _) => {
-                let next = if self.is_dark { "x-light" } else { "x-dark" };
-                if let Ok(resolved) = self.set_theme(next) {
-                    self.set_status(format!("theme: {resolved}"));
-                    self.save_session();
-                }
+            (KeyCode::Char(' '), KeyModifiers::NONE) => {
+                self.mode = InputMode::Leader;
             }
             (KeyCode::Char(','), KeyModifiers::NONE) if self.is_split() => {
                 self.split_pct = self.split_pct.saturating_sub(5).max(20);
@@ -121,43 +114,7 @@ impl App {
             (KeyCode::Char('.'), KeyModifiers::NONE) if self.is_split() => {
                 self.split_pct = (self.split_pct + 5).min(80);
             }
-            (KeyCode::Char('V'), _) => self.toggle_feed_mode(),
-            (KeyCode::Char('F'), _) => self.toggle_home_mode(),
-            (KeyCode::Char('M'), _) => {
-                self.metrics = match self.metrics {
-                    MetricsStyle::Visible => MetricsStyle::Hidden,
-                    MetricsStyle::Hidden => MetricsStyle::Visible,
-                };
-                let msg = match self.metrics {
-                    MetricsStyle::Visible => "metrics on",
-                    MetricsStyle::Hidden => "metrics off",
-                };
-                self.set_status(msg);
-                self.save_session();
-            }
-            (KeyCode::Char('N'), _) => {
-                self.display_names = match self.display_names {
-                    DisplayNameStyle::Visible => DisplayNameStyle::Hidden,
-                    DisplayNameStyle::Hidden => DisplayNameStyle::Visible,
-                };
-                let msg = match self.display_names {
-                    DisplayNameStyle::Visible => "display names on",
-                    DisplayNameStyle::Hidden => "display names off (handles only)",
-                };
-                self.set_status(msg);
-                self.save_session();
-            }
             (KeyCode::Char('x'), KeyModifiers::NONE) => self.toggle_expand_selected(),
-            (KeyCode::Char('I'), _) => {
-                self.media_auto_expand = !self.media_auto_expand;
-                if self.media_auto_expand {
-                    let tweets = self.source.tweets.clone();
-                    self.queue_source_media(&tweets);
-                    self.set_status("media auto-expand on");
-                } else {
-                    self.set_status("media auto-expand off");
-                }
-            }
             (KeyCode::Char('X'), _) => {
                 if self.active == ActivePane::Source {
                     if let Some(tweet) = self.source.tweets.get(self.source.selected()).cloned() {
@@ -177,7 +134,6 @@ impl App {
             (KeyCode::Char('A'), _) => self.open_ask_for_selected(),
             (KeyCode::Char('B'), _) => self.open_brief_for_target(),
             (KeyCode::Char('f'), KeyModifiers::NONE) => self.engage(EngageAction::Like),
-            (KeyCode::Char('c'), KeyModifiers::NONE) => self.toggle_filter(),
             (KeyCode::Char('y'), KeyModifiers::NONE) => self.yank_url(),
             (KeyCode::Char('Y'), _) => self.yank_json(),
             (KeyCode::Char('R'), _) => self.toggle_user_replies(),
@@ -241,9 +197,6 @@ impl App {
             (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
                 self.source.advance(-10);
                 self.mark_current_seen();
-            }
-            (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, _) => {
-                self.switch_source(SourceKind::Home { following: false });
             }
             _ => {}
         }
@@ -416,6 +369,73 @@ impl App {
         }
     }
 
+    fn handle_key_leader(&mut self, key: KeyEvent) {
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.running = false;
+            return;
+        }
+        self.mode = InputMode::Normal;
+        match (key.code, key.modifiers) {
+            (KeyCode::Char('o'), _) => self.toggle_feed_mode(),
+            (KeyCode::Char('f'), _) => self.toggle_home_mode(),
+            (KeyCode::Char('m'), _) => {
+                self.metrics = match self.metrics {
+                    MetricsStyle::Visible => MetricsStyle::Hidden,
+                    MetricsStyle::Hidden => MetricsStyle::Visible,
+                };
+                let msg = match self.metrics {
+                    MetricsStyle::Visible => "metrics on",
+                    MetricsStyle::Hidden => "metrics off",
+                };
+                self.set_status(msg);
+                self.save_session();
+            }
+            (KeyCode::Char('n'), _) => {
+                self.display_names = match self.display_names {
+                    DisplayNameStyle::Visible => DisplayNameStyle::Hidden,
+                    DisplayNameStyle::Hidden => DisplayNameStyle::Visible,
+                };
+                let msg = match self.display_names {
+                    DisplayNameStyle::Visible => "display names on",
+                    DisplayNameStyle::Hidden => "display names off (handles only)",
+                };
+                self.set_status(msg);
+                self.save_session();
+            }
+            (KeyCode::Char('d'), _) => {
+                self.timestamps = match self.timestamps {
+                    TimestampStyle::Relative => TimestampStyle::Absolute,
+                    TimestampStyle::Absolute => TimestampStyle::Relative,
+                };
+                let msg = match self.timestamps {
+                    TimestampStyle::Relative => "timestamps: relative",
+                    TimestampStyle::Absolute => "timestamps: absolute",
+                };
+                self.set_status(msg);
+                self.save_session();
+            }
+            (KeyCode::Char('t'), _) => {
+                let next = if self.is_dark { "x-light" } else { "x-dark" };
+                if let Ok(resolved) = self.set_theme(next) {
+                    self.set_status(format!("theme: {resolved}"));
+                    self.save_session();
+                }
+            }
+            (KeyCode::Char('i'), _) => {
+                self.media_auto_expand = !self.media_auto_expand;
+                if self.media_auto_expand {
+                    let tweets = self.source.tweets.clone();
+                    self.queue_source_media(&tweets);
+                    self.set_status("media auto-expand on");
+                } else {
+                    self.set_status("media auto-expand off");
+                }
+            }
+            (KeyCode::Char('r'), _) => self.toggle_filter(),
+            _ => {}
+        }
+    }
+
     fn run_command_buffer(&mut self) {
         let input = std::mem::take(&mut self.command_buffer);
         self.mode = InputMode::Normal;
@@ -433,7 +453,7 @@ impl App {
             Ok(Command::Quit) => self.running = false,
             Ok(Command::Help) => {
                 self.status =
-                    "help: j/k nav, Enter open, h back, q pop, : command, ] forward, [ back".into();
+                    "help: j/k nav, Enter open, Esc/q back, <space> leader, : command".into();
             }
             Err(e) => {
                 self.error = Some(e.0);

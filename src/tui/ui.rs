@@ -304,6 +304,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.mode == InputMode::Changelog {
         draw_changelog_overlay(frame, frame.area(), app);
     }
+    if app.mode == InputMode::Leader {
+        draw_leader_overlay(frame, frame.area(), app);
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -3453,14 +3456,22 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  g / G          top / bottom of the list"),
         Line::from("  Tab            swap active pane (when split)"),
         Line::from("  , / .          narrow / widen the source pane split"),
-        Line::from("  h / ←          go home (source); back (detail)"),
         Line::from("  Enter / l      open selected tweet into detail pane"),
-        Line::from("  Esc            back out (detail → history → home)"),
-        Line::from("  q              same as Esc, quits when on home: following"),
+        Line::from(
+            "  Esc / q        back out (detail → history → home); q quits on home:following",
+        ),
+        Line::from(""),
+        Line::from(Span::styled("LEADER  <space>", heading)),
+        Line::from("  <space> o      toggle all / originals on home"),
+        Line::from("  <space> f      toggle For You / Following on home"),
+        Line::from("  <space> m      toggle metric counts"),
+        Line::from("  <space> n      toggle display names"),
+        Line::from("  <space> d      toggle relative / absolute timestamps"),
+        Line::from("  <space> t      cycle x-dark / x-light theme"),
+        Line::from("  <space> i      toggle media auto-expand"),
+        Line::from("  <space> r      toggle rage filter"),
         Line::from(""),
         Line::from(Span::styled("SOURCES", heading)),
-        Line::from("  V              toggle all / originals on home"),
-        Line::from("  F              toggle For You / Following on home"),
         Line::from("  R              toggle tweets / replies on profile"),
         Line::from("  L              who liked this tweet (own tweets only)"),
         Line::from("  :home [following]           home feed"),
@@ -3485,11 +3496,6 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  o              open tweet in browser (auto-likes when write-rate-limited)"),
         Line::from("  O              open author profile in browser"),
         Line::from("  m              open all attachments in native viewer"),
-        Line::from("  t              toggle relative / absolute timestamps"),
-        Line::from("  M              toggle metric counts"),
-        Line::from("  N              toggle display names"),
-        Line::from("  I              toggle media auto-expand"),
-        Line::from("  Z              cycle x-dark / x-light theme"),
         Line::from("  p              open profile of selected tweet's author"),
         Line::from("  P              open own profile in browser"),
         Line::from("  T              translate tweet to English (toggle)"),
@@ -3497,7 +3503,6 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  B              run a profile on the selected author (R re-read)"),
         Line::from("  r              reply to selected tweet (auto-likes the target on submit)"),
         Line::from("  f              like / unlike"),
-        Line::from("  c              toggle rage filter"),
         Line::from("  s              cycle reply sort order"),
         Line::from("  x              expand / collapse tweet body"),
         Line::from("  X              toggle inline thread replies"),
@@ -3668,6 +3673,116 @@ fn draw_changelog_overlay(frame: &mut Frame, area: Rect, app: &App) {
         .scroll((app.changelog_scroll, 0))
         .wrap(Wrap { trim: false });
     frame.render_widget(changelog, popup);
+}
+
+fn draw_leader_overlay(frame: &mut Frame, area: Rect, app: &App) {
+    let t = th();
+    let dim = Style::default().fg(t.text_muted);
+    let key_style = Style::default().fg(t.accent).add_modifier(Modifier::BOLD);
+    let on_style = Style::default().fg(t.success);
+    let off_style = Style::default().fg(t.text_muted);
+
+    let on_off = |on: bool| -> Span<'static> {
+        if on {
+            Span::styled(" on", on_style)
+        } else {
+            Span::styled(" off", off_style)
+        }
+    };
+
+    let originals_on = matches!(app.feed_mode, crate::tui::app::FeedMode::Originals);
+    let following_on = matches!(
+        app.source.kind,
+        Some(crate::tui::source::SourceKind::Home { following: true })
+    );
+    let metrics_on = matches!(app.metrics, crate::tui::app::MetricsStyle::Visible);
+    let names_on = matches!(
+        app.display_names,
+        crate::tui::app::DisplayNameStyle::Visible
+    );
+    let absolute_on = matches!(app.timestamps, crate::tui::app::TimestampStyle::Absolute);
+    let images_on = app.media_auto_expand;
+    let filter_on = matches!(app.filter_mode, crate::tui::filter::FilterMode::On);
+
+    let rows: Vec<(&str, &str, Option<Span>)> = vec![
+        ("o", "originals only", Some(on_off(originals_on))),
+        (
+            "f",
+            "feed",
+            Some(Span::styled(
+                if following_on {
+                    " following"
+                } else {
+                    " for you"
+                },
+                on_style,
+            )),
+        ),
+        ("m", "metrics", Some(on_off(metrics_on))),
+        ("n", "display names", Some(on_off(names_on))),
+        (
+            "d",
+            "date format",
+            Some(Span::styled(
+                if absolute_on {
+                    " absolute"
+                } else {
+                    " relative"
+                },
+                on_style,
+            )),
+        ),
+        (
+            "t",
+            "theme",
+            Some(Span::styled(
+                format!(" {}", app.theme_name),
+                Style::default().fg(t.success),
+            )),
+        ),
+        ("i", "images auto-expand", Some(on_off(images_on))),
+        ("r", "rage filter", Some(on_off(filter_on))),
+    ];
+
+    let mut lines: Vec<Line> = Vec::with_capacity(rows.len() + 3);
+    lines.push(Line::from(Span::styled(
+        "leader — pick a toggle",
+        Style::default().fg(t.heading).add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+    for (k, label, suffix) in rows {
+        let mut spans = vec![
+            Span::raw(" "),
+            Span::styled(k.to_string(), key_style),
+            Span::raw("  "),
+            Span::raw(label.to_string()),
+        ];
+        if let Some(s) = suffix {
+            spans.push(s);
+        }
+        lines.push(Line::from(spans));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(" Esc  cancel", dim)));
+
+    let w: u16 = 34;
+    let h: u16 = (lines.len() as u16).saturating_add(2).min(area.height);
+    let x = area.width.saturating_sub(w + 2);
+    let y = area.height.saturating_sub(h + 2);
+    let popup = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
+    frame.render_widget(Clear, popup);
+    let popup_widget = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(t.accent))
+            .title(" <space> "),
+    );
+    frame.render_widget(popup_widget, popup);
 }
 
 #[cfg(test)]

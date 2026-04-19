@@ -51,6 +51,7 @@ impl Background {
         if !self.transmitted {
             transmit_png();
             self.transmitted = true;
+            tracing::info!(bytes = BG_PNG.len(), "mordor wallpaper transmitted");
         }
     }
 
@@ -63,9 +64,11 @@ impl Background {
     }
 
     /// Emits placement covering the full terminal. Idempotent while the
-    /// dimensions are unchanged; re-emits when the terminal resizes.
-    /// Returns `true` if the placement was newly created or re-sized, so the
-    /// caller can force a full redraw to settle cell alignment.
+    /// dimensions are unchanged. When dimensions *do* change, the stale
+    /// placement is explicitly removed before the new one is emitted —
+    /// relying on kitty's "replace same (i,p)" semantics is unreliable
+    /// across terminals (ghostty drops the visual on resize otherwise).
+    /// Returns `true` if the placement was newly created or re-sized.
     pub fn show(&mut self, cols: u16, rows: u16) -> bool {
         if !self.enabled || cols == 0 || rows == 0 {
             return false;
@@ -73,30 +76,40 @@ impl Background {
         if self.placed_dims == Some((cols, rows)) {
             return false;
         }
+        if self.placed_dims.is_some() {
+            remove_placement();
+        }
         place(cols, rows);
+        let was = self.placed_dims;
         self.placed_dims = Some((cols, rows));
+        tracing::info!(cols, rows, prev = ?was, "mordor wallpaper placed");
         true
     }
 
-    /// Deletes the active placement (keeps the transmitted image cached for
-    /// the next activation). Returns `true` if a placement was actually
-    /// removed.
+    /// Fully deletes the image from the terminal's cache and resets
+    /// session state so the next activation retransmits and re-places
+    /// cleanly. The ~300 KB retransmit happens at most once per Mordor
+    /// entry, which is negligible compared to the reliability win — some
+    /// terminals (notably ghostty at time of writing) don't fully clear
+    /// the on-screen pixels for `d=p` placement-only deletes.
     pub fn hide(&mut self) -> bool {
-        if !self.enabled || self.placed_dims.is_none() {
+        if !self.enabled {
             return false;
         }
-        unplace();
+        delete_image();
+        self.enabled = false;
+        self.transmitted = false;
         self.placed_dims = None;
+        tracing::info!("mordor wallpaper hidden");
         true
     }
 
-    /// Force-deletes any kitty image with our reserved id, regardless of
-    /// whether this session ever enabled the wallpaper. Kitty caches
-    /// transmitted images across program invocations, so a previous run that
-    /// placed the wallpaper can leave it visible on start-up. Safe to call
-    /// when no such image exists — kitty silently ignores the delete.
+    /// Force-deletes the image itself (and any placements) so a prior
+    /// session's cached wallpaper can't bleed through. Called once at
+    /// startup before we transmit our own copy. Safe when nothing exists —
+    /// kitty silently ignores deletes for unknown image ids.
     pub fn clear_stale(&self) {
-        unplace();
+        delete_image();
     }
 }
 
@@ -133,8 +146,22 @@ fn place(cols: u16, rows: u16) {
     let _ = out.flush();
 }
 
-fn unplace() {
+/// Deletes only the on-screen placement identified by `(BG_IMAGE_ID,
+/// BG_PLACEMENT_ID)`. The transmitted image stays in kitty's cache so a
+/// subsequent `place()` is cheap.
+fn remove_placement() {
     let mut out = std::io::stdout().lock();
-    let _ = write!(out, "\x1b_Ga=d,d=i,i={BG_IMAGE_ID},q=2\x1b\\");
+    let _ = write!(
+        out,
+        "\x1b_Ga=d,d=p,i={BG_IMAGE_ID},p={BG_PLACEMENT_ID},q=2\x1b\\"
+    );
+    let _ = out.flush();
+}
+
+/// Deletes the image and frees its storage. Used only for startup cleanup
+/// — during normal toggles `remove_placement()` is correct.
+fn delete_image() {
+    let mut out = std::io::stdout().lock();
+    let _ = write!(out, "\x1b_Ga=d,d=I,i={BG_IMAGE_ID},q=2\x1b\\");
     let _ = out.flush();
 }

@@ -146,6 +146,8 @@ pub struct App {
     pub inline_threads: HashMap<String, InlineThread>,
     pub media: MediaRegistry,
     pub background: Background,
+    pub(super) sound: Option<crate::tui::sound::Player>,
+    pub(super) last_mordor_active: bool,
     pub youtube: YoutubeRegistry,
     pub media_auto_expand: bool,
     pub feed_mode: FeedMode,
@@ -266,6 +268,7 @@ impl App {
 
         let media = MediaRegistry::new();
         let background = Background::new();
+        let sound = super::sound::Player::init(&cache_dir, &config_dir, &app_config.sound);
         if media.is_kitty() {
             // Kitty caches images across program invocations by id, so a
             // wallpaper placement from a prior dark-terminal run would
@@ -305,6 +308,8 @@ impl App {
             inline_threads: HashMap::new(),
             media,
             background,
+            sound,
+            last_mordor_active: false,
             youtube: YoutubeRegistry::new(),
             media_auto_expand: false,
             feed_mode: loaded_feed_mode,
@@ -490,6 +495,23 @@ impl App {
                 self.source.kind,
                 Some(SourceKind::Home { following: false })
             )
+    }
+
+    /// Starts the opt-in ambient loop on the false→true edge of Mordor mode
+    /// and stops it on the inverse edge. Cheap — safe to call on every
+    /// event tick.
+    fn sync_mordor_sound(&mut self) {
+        let now = self.mordor_active();
+        if now != self.last_mordor_active
+            && let Some(player) = &self.sound
+        {
+            if now {
+                player.start_loop();
+            } else {
+                player.stop_loop();
+            }
+        }
+        self.last_mordor_active = now;
     }
 
     pub fn is_split(&self) -> bool {
@@ -726,6 +748,7 @@ impl App {
                 }
             }
         }
+        self.sync_mordor_sound();
         Ok(())
     }
 }

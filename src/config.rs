@@ -14,6 +14,35 @@ pub struct AppConfig {
     pub clock: ClockConfig,
     #[serde(default)]
     pub theme: ThemeConfig,
+    #[serde(default)]
+    pub sound: SoundConfig,
+}
+
+/// Mordor-mode audio configuration. Only `source` is required. When a
+/// valid source is present AND `ffmpeg` is on `$PATH`, `sound::Player`
+/// slices/fades/downmixes the file into a small Opus loop under
+/// `~/.cache/unrager/`. Everything else degrades gracefully.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SoundConfig {
+    pub source: Option<String>,
+    #[serde(default)]
+    pub start: Option<String>,
+    #[serde(default)]
+    pub end: Option<String>,
+    #[serde(default)]
+    pub duration: Option<f32>,
+    #[serde(default = "default_fade_ms")]
+    pub fade_ms: u32,
+    #[serde(default = "default_volume")]
+    pub volume: f32,
+}
+
+fn default_fade_ms() -> u32 {
+    50
+}
+
+fn default_volume() -> f32 {
+    0.5
 }
 
 #[derive(Debug, Clone, Deserialize)]

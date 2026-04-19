@@ -18,6 +18,7 @@ pub mod focus;
 pub mod media;
 pub mod seen;
 pub mod session;
+pub mod sound;
 pub mod source;
 #[cfg(test)]
 pub(crate) mod test_util;

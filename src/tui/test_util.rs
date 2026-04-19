@@ -59,6 +59,8 @@ pub fn dummy_app() -> (App, mpsc::UnboundedReceiver<Event>, TempDir) {
         inline_threads: HashMap::new(),
         media: MediaRegistry::new(),
         background: crate::tui::background::Background::new(),
+        sound: None,
+        last_mordor_active: false,
         youtube: crate::tui::youtube::YoutubeRegistry::new(),
         media_auto_expand: false,
         feed_mode: FeedMode::All,

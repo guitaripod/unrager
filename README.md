@@ -67,7 +67,7 @@ model = "gemma4:latest"
 host = "http://localhost:11434"
 ```
 
-Toggle with `c`. The status bar shows `−N` when the filter is actively hiding tweets, or `filter⌀` (dim) when Ollama isn't reachable or no `gemma4` model is installed — `unrager doctor` explains why.
+Toggle with `<space> r`. The status bar shows `−N` when the filter is actively hiding tweets, or `filter⌀` (dim) when Ollama isn't reachable or no `gemma4` model is installed — `unrager doctor` explains why.
 
 ## Reading threads
 
@@ -75,7 +75,7 @@ Toggle with `c`. The status bar shows `−N` when the filter is actively hiding 
   <img src="assets/detail.png" alt="split pane showing a tweet with replies sorted by likes" width="800">
 </p>
 
-`Enter` opens a tweet into a split detail pane. The focal tweet and all its replies form one scrollable list. Push deeper into any reply with `Enter`, pop back with `h`. Press `s` to cycle reply sort order — newest, likes, replies, retweets, views — it persists across sessions. `X` expands inline thread replies without leaving the current view.
+`Enter` opens a tweet into a split detail pane. The focal tweet and all its replies form one scrollable list. Push deeper into any reply with `Enter`, pop back with `Esc`. Press `s` to cycle reply sort order — newest, likes, replies, retweets, views — it persists across sessions. `X` expands inline thread replies without leaving the current view.
 
 Submitting a reply with `r` auto-likes the tweet you're replying to (unless it's already liked) — reciprocal-like etiquette without the manual step. If X is write-rate-limiting you and you fall back to the browser via `o` to compose there, the TUI still fires the auto-like on your behalf.
 
@@ -113,7 +113,7 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
   <img src="assets/profile.png" alt="own profile showing tweets with full metrics and expanded bodies" width="800">
 </p>
 
-`p` opens the profile of whoever your cursor is on — the selected tweet's author, the notification actor, or your own profile if nothing's selected. Your own profile renders with full metrics forced visible. `:user <handle>` opens anyone's timeline. Press `R` to toggle between their tweets and replies. `V` switches between all tweets and originals only (hides replies, quotes, retweets).
+`p` opens the profile of whoever your cursor is on — the selected tweet's author, the notification actor, or your own profile if nothing's selected. Your own profile renders with full metrics forced visible. `:user <handle>` opens anyone's timeline. Press `R` to toggle between their tweets and replies. `<space> o` switches between all tweets and originals only (hides replies, quotes, retweets).
 
 ## Help overlay
 
@@ -132,27 +132,27 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 | `g` / `G` | Top / bottom |
 | `Ctrl-d` / `Ctrl-u` | Half-page down / up |
 | `Enter` / `l` | Open tweet into detail pane |
-| `h` / `←` | Go home (source); back to source (detail) |
-| `q` / `Esc` | Pop detail or quit |
+| `q` / `Esc` | Pop detail (or quit on home:following) |
 | `Tab` | Swap active pane |
 | `,` / `.` | Narrow / widen split |
 | `:` | Command palette |
 | `?` | Help overlay |
-| `V` | Toggle all / originals on home feed |
-| `F` | Toggle For You / Following |
+| `<space>` | Leader — which-key popup for session toggles |
+| `<space> o` | Toggle all / originals on home feed |
+| `<space> f` | Toggle For You / Following |
+| `<space> m` | Toggle metric counts |
+| `<space> n` | Toggle display names |
+| `<space> d` | Toggle relative / absolute timestamps |
+| `<space> t` | Cycle x-dark / x-light theme |
+| `<space> i` | Toggle media auto-expand |
+| `<space> r` | Toggle rage filter |
 | `R` | Toggle tweets / replies on user profile |
 | `T` | Translate selected tweet to English (toggle) |
 | `A` | Ask gemma about the selected post |
 | `B` | Deep profile brief on the selected author |
 | `f` | Like / unlike |
-| `c` | Toggle rage filter |
 | `x` | Expand / collapse tweet body |
 | `X` | Inline thread replies |
-| `I` | Toggle media auto-expand |
-| `Z` | Toggle x-dark / x-light theme |
-| `M` | Toggle metric counts |
-| `N` | Toggle display names |
-| `t` | Toggle relative / absolute timestamps |
 | `s` | Cycle reply sort in detail pane |
 | `p` | Open selected author's profile (falls back to own) |
 | `P` | Open own profile in browser |
@@ -247,6 +247,7 @@ Config paths are platform-native: Linux uses `~/.config/unrager/` + `~/.cache/un
 | `~/.cache/unrager/seen.db` | Read-tracking SQLite |
 | `~/.cache/unrager/filter.db` | Filter verdict cache |
 | `~/.cache/unrager/media/<tweet_id>/` | Downloaded attachments for `m` (external viewer) |
+| `~/.cache/unrager/mordor-user-<hash>.opus` | Sliced Mordor loop (generated from `[sound] source`) |
 
 ### Theme
 
@@ -258,6 +259,44 @@ name = "auto"   # auto | x-dark | x-light
 `auto` follows the terminal background detected at startup (OSC 11). The `Z` key and `:theme <name>` command both override and persist whatever you pick. The clock's `accent` field accepts `"auto"` (default — follows the theme accent), an ANSI color name, a 256-color index, or a `#rrggbb` hex.
 
 The Mordor wallpaper and fiery accents on the For You feed require *both* a dark theme and a dark terminal background. A light terminal suppresses them even if your theme is `x-dark`, so the cream that bleeds through transparent cells doesn't clash with the image. Terminal-background detection is done once at startup; if you switch your system between light and dark while unrager is running, re-run `:theme x-light` / `:theme x-dark` or restart to re-detect.
+
+### Mordor-mode audio
+
+Opt-in: set `UNRAGER_SOUND=1` AND configure an audio file — unrager then plays it on loop while Mordor mode is active and stops the instant you leave For You or switch to a light theme. There is no built-in fallback: if you don't configure a source, Mordor mode is silent. No audio libraries are linked into the binary — playback shells out to whichever of `ffplay`, `mpv`, `paplay`, `pw-play`, `afplay`, or `aplay` is on your `$PATH`.
+
+**To use your own audio, point at it in `config.toml`:**
+
+```toml
+[sound]
+source = "/path/to/your/audio.flac"   # any format ffmpeg can read
+```
+
+That's the whole minimum config. On next launch unrager slices, fades, downmixes, and encodes the file into a small Opus loop cached under `~/.cache/unrager/mordor-user-<hash>.opus` (~3 KB per second of audio). Requires `ffmpeg` on `$PATH` for the one-time encode.
+
+**All optional keys:**
+
+```toml
+[sound]
+source = "/path/to/your/audio.flac"
+start = "0:55"           # MM:SS, HH:MM:SS, or raw seconds (default: 0)
+end = "1:40"             # same formats — or use `duration` instead
+duration = 45            # seconds after `start` — ignored if `end` is set
+fade_ms = 50             # fade-in/out at loop boundaries (default: 50)
+volume = 0.5             # 0.0–1.0 pre-master gain (default: 0.5)
+```
+
+The cache key is a hash of the source path, its mtime, and every knob above, so editing any of them (or replacing the source file) invalidates the cache and re-encodes on the next launch. Stale encodes accumulate in `~/.cache/unrager/` — delete `mordor-user-*.opus` manually if you want to reclaim a few KB.
+
+**Precedence** — unrager tries these in order, using the first that works:
+
+1. `[sound] source = "..."` in `config.toml` (requires `ffmpeg` on `$PATH`)
+2. A pre-encoded file you dropped at `~/.config/unrager/mordor-sound.{opus,ogg,oga,flac,mp3,wav}` — used raw, no processing
+
+If `ffmpeg` is missing, or the configured `source` can't be found, or the encode fails, unrager logs a warning and falls through to the next option. If neither source is present, Mordor mode is silent.
+
+**Backend compatibility** — `ffplay`/`mpv` decode everything and get gapless looping via `-loop 0` / `--loop=inf`. `paplay` handles WAV/FLAC/Ogg (libsndfile), `afplay` handles WAV/MP3/FLAC (CoreAudio), `aplay`/`pw-play` are WAV-only. Players without native loop support run inside a shell `while :; do … done` with a small pulse between iterations.
+
+**Verifying it's working** — `tail -f ~/.cache/unrager/unrager.log.$(date +%Y-%m-%d) | grep -i mordor` while you toggle into For You. You should see `sound enabled backend=Ffplay format=Opus path=.../mordor-user-*.opus` when the config is picked up, `mordor loop started` on every Mordor entry, and `mordor loop stopped` on exit. If you see nothing, either `UNRAGER_SOUND=1` isn't set, no source is configured, or the encode failed — earlier log lines will say which.
 
 ### Clock
 

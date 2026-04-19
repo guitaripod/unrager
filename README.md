@@ -257,6 +257,8 @@ name = "auto"   # auto | x-dark | x-light
 
 `auto` follows the terminal background detected at startup (OSC 11). The `Z` key and `:theme <name>` command both override and persist whatever you pick. The clock's `accent` field accepts `"auto"` (default — follows the theme accent), an ANSI color name, a 256-color index, or a `#rrggbb` hex.
 
+The Mordor wallpaper and fiery accents on the For You feed require *both* a dark theme and a dark terminal background. A light terminal suppresses them even if your theme is `x-dark`, so the cream that bleeds through transparent cells doesn't clash with the image. Terminal-background detection is done once at startup; if you switch your system between light and dark while unrager is running, re-run `:theme x-light` / `:theme x-dark` or restart to re-detect.
+
 ### Clock
 
 Every field has a default — omit `[clock]` entirely to get the defaults (enabled, top-right, time + date, 24h).

@@ -131,6 +131,14 @@ pub struct App {
     pub split_pct: u16,
     pub spinner_frame: usize,
     pub is_dark: bool,
+    /// The host terminal's background brightness, captured once at startup
+    /// via termbg's OSC 11 query. Frozen for the lifetime of the process —
+    /// re-running termbg inside the TUI would fight crossterm's
+    /// `EventStream` for stdin, so mid-session system light↔dark toggles
+    /// are not auto-detected. Users whose system theme changes can work
+    /// around this with `:theme x-light` / `:theme x-dark` (which flips
+    /// `is_dark` and so toggles the other half of the Mordor AND gate), or
+    /// restart the app to re-detect.
     pub terminal_is_dark: bool,
     pub theme_name: String,
     pub expanded_bodies: HashSet<String>,
@@ -467,8 +475,13 @@ impl App {
     }
 
     /// Whether the Mordor wallpaper + fiery accent tint should currently be
-    /// visible. Centralised so the theme layer and the kitty background
-    /// layer can't disagree.
+    /// visible. Centralised so the theme layer (`apply_effective_theme`)
+    /// and the kitty background layer (`ui::update_background`) can't
+    /// disagree. Both halves of the gate must be true: the chosen theme
+    /// (`is_dark`) and the terminal background (`terminal_is_dark`). The
+    /// theme half updates live on `:theme`; the terminal half is frozen at
+    /// startup — see the `terminal_is_dark` field for the rationale and
+    /// the user-facing workaround.
     pub fn mordor_active(&self) -> bool {
         self.is_dark
             && self.terminal_is_dark

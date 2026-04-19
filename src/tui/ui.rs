@@ -2973,13 +2973,18 @@ fn render_image_lines(
 /// force-invalidate ratatui's previous buffer if it needs a clean full
 /// redraw on the next frame.
 pub fn update_background(app: &mut App, terminal_width: u16, terminal_height: u16) -> bool {
-    if !app.background.enabled() {
-        return false;
-    }
-    if matches!(app.source.kind, Some(SourceKind::Home { following: false })) {
+    if app.mordor_active() {
+        if !app.background.enabled() {
+            if !app.media.is_kitty() {
+                return false;
+            }
+            app.background.enable_and_prime();
+        }
         app.background.show(terminal_width, terminal_height)
-    } else {
+    } else if app.background.enabled() {
         app.background.hide()
+    } else {
+        false
     }
 }
 

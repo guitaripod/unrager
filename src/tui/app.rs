@@ -131,6 +131,7 @@ pub struct App {
     pub split_pct: u16,
     pub spinner_frame: usize,
     pub is_dark: bool,
+    pub terminal_is_dark: bool,
     pub theme_name: String,
     pub expanded_bodies: HashSet<String>,
     pub inline_threads: HashMap<String, InlineThread>,
@@ -147,6 +148,7 @@ pub struct App {
     pub filter_verdicts: HashMap<String, FilterState>,
     pub filter_inflight: HashSet<String>,
     pub filter_hidden_count: usize,
+    pub filter_counted_ids: HashSet<String>,
     pub pending_classification: Vec<Tweet>,
     pub translations: HashMap<String, String>,
     pub translation_inflight: HashSet<String>,
@@ -254,9 +256,14 @@ impl App {
         tokio::spawn(async move { warm_client.warm_transaction_key().await });
 
         let media = MediaRegistry::new();
-        let mut background = Background::new();
+        let background = Background::new();
         if media.is_kitty() {
-            background.enable_and_prime();
+            // Kitty caches images across program invocations by id, so a
+            // wallpaper placement from a prior dark-terminal run would
+            // otherwise remain visible in a subsequent light-terminal session
+            // until another program displaces it. Delete up-front; we prime
+            // lazily in `update_background` once Mordor is actually active.
+            background.clear_stale();
         }
 
         let app = Self {
@@ -283,6 +290,7 @@ impl App {
             split_pct: 50,
             spinner_frame: 0,
             is_dark: theme_is_dark,
+            terminal_is_dark: is_dark,
             theme_name,
             expanded_bodies: HashSet::new(),
             inline_threads: HashMap::new(),
@@ -300,6 +308,7 @@ impl App {
             filter_verdicts: HashMap::new(),
             filter_inflight: HashSet::new(),
             filter_hidden_count: 0,
+            filter_counted_ids: HashSet::new(),
             pending_classification: Vec::new(),
             translations: HashMap::new(),
             translation_inflight: HashSet::new(),
@@ -438,23 +447,35 @@ impl App {
         Ok(resolved_name)
     }
 
-    /// Reconciles the active theme with the current source. When the For You
-    /// feed is active, we overlay Mordor-tinted accents to match the
-    /// wallpaper. On any other source, the user's chosen theme is installed
-    /// verbatim. Call this whenever `theme_name`, `is_dark`, or
-    /// `source.kind` changes.
+    /// Reconciles the active theme with the current source. Mordor-tinted
+    /// accents overlay the For You feed only when *both* the chosen theme
+    /// and the host terminal are dark — a light terminal would bleed cream
+    /// through transparent cells, and a light theme would clash with the
+    /// fiery palette. Using both signals means a runtime `:theme` switch
+    /// propagates the tint live via `is_dark`, while startup termbg still
+    /// guards against session/terminal mismatches (e.g. x-dark theme saved
+    /// from a prior dark-terminal run, now opened in a light terminal).
     pub fn apply_effective_theme(&self) {
         let base = crate::tui::theme::Theme::by_name(&self.theme_name, self.is_dark)
             .unwrap_or_else(|| crate::tui::theme::Theme::for_mode(self.is_dark));
-        let effective = if matches!(
-            self.source.kind,
-            Some(SourceKind::Home { following: false })
-        ) {
+        let effective = if self.mordor_active() {
             crate::tui::theme::Theme::mordor_from(&base)
         } else {
             base
         };
         crate::tui::theme::set_active(effective);
+    }
+
+    /// Whether the Mordor wallpaper + fiery accent tint should currently be
+    /// visible. Centralised so the theme layer and the kitty background
+    /// layer can't disagree.
+    pub fn mordor_active(&self) -> bool {
+        self.is_dark
+            && self.terminal_is_dark
+            && matches!(
+                self.source.kind,
+                Some(SourceKind::Home { following: false })
+            )
     }
 
     pub fn is_split(&self) -> bool {
@@ -710,6 +731,28 @@ mod tests {
         (tmp, store)
     }
 
+    fn off_filter(counted: &mut HashSet<String>) -> crate::tui::app_fetch::FilterContext<'_> {
+        crate::tui::app_fetch::FilterContext {
+            mode: FilterMode::Off,
+            has_classifier: false,
+            cache: None,
+            counted_ids: counted,
+        }
+    }
+
+    fn on_filter<'a>(
+        cache: Option<&'a FilterCache>,
+        has_classifier: bool,
+        counted: &'a mut HashSet<String>,
+    ) -> crate::tui::app_fetch::FilterContext<'a> {
+        crate::tui::app_fetch::FilterContext {
+            mode: FilterMode::On,
+            has_classifier,
+            cache,
+            counted_ids: counted,
+        }
+    }
+
     #[test]
     fn filter_seen_on_home_for_you() {
         let (_tmp, mut seen) = fresh_seen();
@@ -721,14 +764,13 @@ mod tests {
             make_tweet("3", "new"),
         ]);
         let kind = SourceKind::Home { following: false };
+        let mut counted = HashSet::new();
         filter_incoming_page(
             &mut page,
             &kind,
             FeedMode::All,
-            FilterMode::Off,
-            false,
-            None,
             &seen,
+            off_filter(&mut counted),
         );
         assert_eq!(page.tweets.len(), 1);
         assert_eq!(page.tweets[0].rest_id, "3");
@@ -741,14 +783,13 @@ mod tests {
         seen.mark_seen("2");
         let mut page = make_page(vec![make_tweet("1", "a"), make_tweet("2", "b")]);
         let kind = SourceKind::Home { following: false };
+        let mut counted = HashSet::new();
         filter_incoming_page(
             &mut page,
             &kind,
             FeedMode::All,
-            FilterMode::Off,
-            false,
-            None,
             &seen,
+            off_filter(&mut counted),
         );
         assert_eq!(page.tweets.len(), 2);
     }
@@ -759,14 +800,13 @@ mod tests {
         seen.mark_seen("1");
         let mut page = make_page(vec![make_tweet("1", "seen"), make_tweet("2", "unseen")]);
         let kind = SourceKind::Home { following: true };
+        let mut counted = HashSet::new();
         filter_incoming_page(
             &mut page,
             &kind,
             FeedMode::All,
-            FilterMode::Off,
-            false,
-            None,
             &seen,
+            off_filter(&mut counted),
         );
         assert_eq!(page.tweets.len(), 2);
     }
@@ -779,14 +819,13 @@ mod tests {
         let kind = SourceKind::User {
             handle: "someone".into(),
         };
+        let mut counted = HashSet::new();
         filter_incoming_page(
             &mut page,
             &kind,
             FeedMode::All,
-            FilterMode::Off,
-            false,
-            None,
             &seen,
+            off_filter(&mut counted),
         );
         assert_eq!(page.tweets.len(), 1);
     }
@@ -803,14 +842,13 @@ mod tests {
 
         let mut page = make_page(vec![reply, quote, rt, original]);
         let kind = SourceKind::Home { following: false };
+        let mut counted = HashSet::new();
         filter_incoming_page(
             &mut page,
             &kind,
             FeedMode::Originals,
-            FilterMode::Off,
-            false,
-            None,
             &seen,
+            off_filter(&mut counted),
         );
         assert_eq!(page.tweets.len(), 1);
         assert_eq!(page.tweets[0].rest_id, "4");
@@ -826,14 +864,13 @@ mod tests {
         let kind = SourceKind::User {
             handle: "someone".into(),
         };
+        let mut counted = HashSet::new();
         filter_incoming_page(
             &mut page,
             &kind,
             FeedMode::Originals,
-            FilterMode::Off,
-            false,
-            None,
             &seen,
+            off_filter(&mut counted),
         );
         assert_eq!(page.tweets.len(), 1);
     }
@@ -852,19 +889,61 @@ mod tests {
             make_tweet("3", "kept"),
         ]);
         let kind = SourceKind::Home { following: false };
+        let mut counted = HashSet::new();
         let hidden = filter_incoming_page(
             &mut page,
             &kind,
             FeedMode::All,
-            FilterMode::On,
-            true,
-            Some(&cache),
             &seen,
+            on_filter(Some(&cache), true, &mut counted),
         );
         assert_eq!(hidden, 1);
         assert_eq!(page.tweets.len(), 2);
         assert_eq!(page.tweets[0].rest_id, "1");
         assert_eq!(page.tweets[1].rest_id, "3");
+    }
+
+    #[test]
+    fn filter_cache_does_not_recount_same_id() {
+        let (_tmp, seen) = fresh_seen();
+        let cache_tmp = NamedTempFile::new().unwrap();
+        let mut cache = FilterCache::open(cache_tmp.path(), "test_hash".to_string()).unwrap();
+        cache.put("hidden1", FilterDecision::Hide);
+        cache.put("hidden2", FilterDecision::Hide);
+        let kind = SourceKind::Home { following: true };
+        let mut counted = HashSet::new();
+
+        let mut page = make_page(vec![
+            make_tweet("hidden1", "h"),
+            make_tweet("hidden2", "h"),
+            make_tweet("keep", "k"),
+        ]);
+        let first = filter_incoming_page(
+            &mut page,
+            &kind,
+            FeedMode::All,
+            &seen,
+            on_filter(Some(&cache), true, &mut counted),
+        );
+        assert_eq!(first, 2);
+        assert_eq!(counted.len(), 2);
+
+        let mut page2 = make_page(vec![
+            make_tweet("hidden1", "h"),
+            make_tweet("hidden2", "h"),
+            make_tweet("hidden3", "h"),
+        ]);
+        cache.put("hidden3", FilterDecision::Hide);
+        let second = filter_incoming_page(
+            &mut page2,
+            &kind,
+            FeedMode::All,
+            &seen,
+            on_filter(Some(&cache), true, &mut counted),
+        );
+        assert_eq!(second, 1, "already-counted ids must not increment again");
+        assert_eq!(counted.len(), 3);
+        assert!(page2.tweets.is_empty());
     }
 
     #[test]
@@ -876,14 +955,18 @@ mod tests {
 
         let mut page = make_page(vec![make_tweet("1", "should stay")]);
         let kind = SourceKind::Home { following: false };
+        let mut counted = HashSet::new();
         let hidden = filter_incoming_page(
             &mut page,
             &kind,
             FeedMode::All,
-            FilterMode::Off,
-            true,
-            Some(&cache),
             &seen,
+            crate::tui::app_fetch::FilterContext {
+                mode: FilterMode::Off,
+                has_classifier: true,
+                cache: Some(&cache),
+                counted_ids: &mut counted,
+            },
         );
         assert_eq!(hidden, 0);
         assert_eq!(page.tweets.len(), 1);
@@ -898,14 +981,13 @@ mod tests {
 
         let mut page = make_page(vec![make_tweet("1", "should stay")]);
         let kind = SourceKind::Home { following: false };
+        let mut counted = HashSet::new();
         let hidden = filter_incoming_page(
             &mut page,
             &kind,
             FeedMode::All,
-            FilterMode::On,
-            false,
-            Some(&cache),
             &seen,
+            on_filter(Some(&cache), false, &mut counted),
         );
         assert_eq!(hidden, 0);
         assert_eq!(page.tweets.len(), 1);
@@ -929,14 +1011,13 @@ mod tests {
             make_tweet("4", "survives"),
         ]);
         let kind = SourceKind::Home { following: false };
+        let mut counted = HashSet::new();
         let hidden = filter_incoming_page(
             &mut page,
             &kind,
             FeedMode::Originals,
-            FilterMode::On,
-            true,
-            Some(&cache),
             &seen,
+            on_filter(Some(&cache), true, &mut counted),
         );
         assert_eq!(hidden, 1);
         assert_eq!(page.tweets.len(), 1);
@@ -1228,6 +1309,7 @@ mod tests {
         app.filter_verdicts
             .insert("1".into(), crate::tui::filter::FilterState::Unclassified);
         app.filter_inflight.insert("1".into());
+        app.filter_counted_ids.insert("1".into());
         app.translations.insert("1".into(), "hello".into());
         app.translation_inflight.insert("1".into());
         app.engage_inflight.insert("1".into());
@@ -1246,6 +1328,7 @@ mod tests {
 
         assert!(app.filter_verdicts.is_empty());
         assert!(app.filter_inflight.is_empty());
+        assert!(app.filter_counted_ids.is_empty());
         assert!(app.translations.is_empty());
         assert!(app.translation_inflight.is_empty());
         assert!(app.engage_inflight.is_empty());

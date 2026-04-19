@@ -102,7 +102,9 @@ impl App {
         self.filter_verdicts
             .insert(rest_id.clone(), FilterState::Classified(verdict));
         if matches!(verdict, FilterDecision::Hide) {
-            self.filter_hidden_count += 1;
+            if self.filter_counted_ids.insert(rest_id.clone()) {
+                self.filter_hidden_count += 1;
+            }
             let in_pending = self
                 .pending_classification
                 .iter()

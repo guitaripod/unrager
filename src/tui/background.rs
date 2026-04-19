@@ -89,6 +89,15 @@ impl Background {
         self.placed_dims = None;
         true
     }
+
+    /// Force-deletes any kitty image with our reserved id, regardless of
+    /// whether this session ever enabled the wallpaper. Kitty caches
+    /// transmitted images across program invocations, so a previous run that
+    /// placed the wallpaper can leave it visible on start-up. Safe to call
+    /// when no such image exists — kitty silently ignores the delete.
+    pub fn clear_stale(&self) {
+        unplace();
+    }
 }
 
 fn transmit_png() {

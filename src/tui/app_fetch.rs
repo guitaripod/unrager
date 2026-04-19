@@ -121,10 +121,13 @@ impl App {
                     &mut page,
                     &kind,
                     self.feed_mode,
-                    self.filter_mode,
-                    self.filter_classifier.is_some(),
-                    self.filter_cache.as_ref(),
                     &self.seen,
+                    FilterContext {
+                        mode: self.filter_mode,
+                        has_classifier: self.filter_classifier.is_some(),
+                        cache: self.filter_cache.as_ref(),
+                        counted_ids: &mut self.filter_counted_ids,
+                    },
                 );
                 self.filter_hidden_count += hidden;
                 if matches!(kind, SourceKind::Home { following: true }) {
@@ -894,14 +897,19 @@ pub fn build_reply_tree(root_id: &str, tweets: &[Tweet]) -> Vec<(usize, Tweet)> 
     result
 }
 
+pub struct FilterContext<'a> {
+    pub mode: FilterMode,
+    pub has_classifier: bool,
+    pub cache: Option<&'a FilterCache>,
+    pub counted_ids: &'a mut HashSet<String>,
+}
+
 pub fn filter_incoming_page(
     page: &mut TimelinePage,
     kind: &SourceKind,
     feed_mode: FeedMode,
-    filter_mode: FilterMode,
-    has_classifier: bool,
-    filter_cache: Option<&FilterCache>,
     seen: &SeenStore,
+    filter: FilterContext<'_>,
 ) -> usize {
     if matches!(kind, SourceKind::Home { following: false }) {
         let unseen: Vec<_> = page
@@ -922,12 +930,18 @@ pub fn filter_incoming_page(
         });
     }
     let mut hidden = 0;
-    if matches!(filter_mode, FilterMode::On) && has_classifier {
-        if let Some(cache) = filter_cache {
-            let before = page.tweets.len();
-            page.tweets
-                .retain(|t| !matches!(cache.get(&t.rest_id), Some(FilterDecision::Hide)));
-            hidden = before - page.tweets.len();
+    if matches!(filter.mode, FilterMode::On) && filter.has_classifier {
+        if let Some(cache) = filter.cache {
+            page.tweets.retain(|t| {
+                if matches!(cache.get(&t.rest_id), Some(FilterDecision::Hide)) {
+                    if filter.counted_ids.insert(t.rest_id.clone()) {
+                        hidden += 1;
+                    }
+                    false
+                } else {
+                    true
+                }
+            });
         }
     }
     hidden

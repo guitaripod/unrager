@@ -32,6 +32,7 @@ impl App {
         self.filter_verdicts.clear();
         self.filter_inflight.clear();
         self.filter_hidden_count = 0;
+        self.filter_counted_ids.clear();
         self.pending_classification.clear();
         self.translations.clear();
         self.translation_inflight.clear();

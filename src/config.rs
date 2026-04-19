@@ -1,5 +1,4 @@
 use crate::error::{Error, Result};
-use crate::tui::theme::ThemeConfig;
 use directories::ProjectDirs;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -12,8 +11,9 @@ pub struct AppConfig {
     pub query_ids: std::collections::HashMap<String, String>,
     #[serde(default)]
     pub clock: ClockConfig,
+    #[cfg(feature = "tui")]
     #[serde(default)]
-    pub theme: ThemeConfig,
+    pub theme: crate::tui::theme::ThemeConfig,
     #[serde(default)]
     pub sound: SoundConfig,
 }

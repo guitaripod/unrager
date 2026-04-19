@@ -172,6 +172,80 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 
 </details>
 
+## Install modes
+
+`unrager` is modular. Pick the install you want — you can always re-install with a different flavor later.
+
+### Oneliner (prebuilt binary)
+
+```sh
+# Everything: TUI + HTTP server + embedded web client (default)
+curl -fsSL https://raw.githubusercontent.com/guitaripod/unrager/master/install.sh | bash
+
+# TUI + CLI only (no server, no web bundle) — ~8 MB smaller
+UNRAGER_FLAVOR=tui curl -fsSL https://raw.githubusercontent.com/guitaripod/unrager/master/install.sh | bash
+
+# CLI only (no TUI, no server) — ~11 MB smaller
+UNRAGER_FLAVOR=cli curl -fsSL https://raw.githubusercontent.com/guitaripod/unrager/master/install.sh | bash
+```
+
+Re-run the installer with a different `UNRAGER_FLAVOR` to switch — it replaces the binary in place. The installer also supports `UNRAGER_INSTALL_DIR` (default `~/.local/bin`) and `--uninstall`.
+
+### From source
+
+```sh
+# Everything (default)
+cargo install unrager
+
+# TUI + CLI only
+cargo install unrager --no-default-features --features tui
+
+# CLI only
+cargo install unrager --no-default-features
+```
+
+Approximate release-build sizes: full **23 MB**, TUI-only **15 MB**, CLI-only **12 MB**. Feature flags gate:
+
+| Feature | What it pulls | What you lose without it |
+|---|---|---|
+| `tui` (default) | ratatui, crossterm, image, termbg | bare `unrager` can't launch; `user`/`notifs`/`doctor` subcommands hidden |
+| `server` (default, implies `tui`) | axum, tower, rust-embed + the WASM bundle | `unrager serve`, web client, mobile clients |
+
+Upgrading later: `cargo install unrager --force` — no uninstall step, cargo replaces the binary in place.
+
+## Serving (web, iOS, Android)
+
+`unrager serve` (requires the `server` feature, on by default) exposes an HTTP API and a Dioxus web client from the same binary. Pair with Tailscale and you can read every feed on any device without duplicating logic.
+
+```sh
+unrager serve                          # bind 127.0.0.1:7777
+unrager serve --bind 0.0.0.0:7777      # reach across Tailscale
+unrager serve --open                   # pop the web client open on start
+```
+
+Over Tailscale, set an ACL so only your tailnet devices can hit the port. The server expects Tailscale to be the trust boundary — there is no app-level auth.
+
+**Building the web client**:
+
+```sh
+cargo binstall dioxus-cli              # one-time: install the `dx` CLI
+just web                               # dx bundle → copy into crates/unrager-app/dist/
+cargo install --path .                 # install the binary with the bundle embedded
+```
+
+**Mobile targets** (Dioxus 0.7, one Rust codebase):
+
+```sh
+just mobile-ios                        # .app bundle, sideload via Xcode
+just mobile-android                    # .apk, `adb install`
+```
+
+Mobile builds require the platform SDKs (Xcode / Android NDK). Reqwest on Android needs `openssl = { features = ["vendored"] }` — see the Dioxus mobile docs. Native apps point at your Tailscale hostname via `UNRAGER_SERVER_URL`.
+
+Feature parity with the TUI: all seven sources, tweet detail + thread, compose/reply, like, media (photos, videos, gifs, link cards, polls, YouTube), filter/ask/brief/translate streaming over SSE, session persistence, settings page, command palette (⌘K), help overlay (?).
+
+While `unrager serve` is running it owns the filter + seen caches; the TUI detects the lockfile (`~/.cache/unrager/server.lock`) — run one or the other.
+
 ## More
 
 - **Inline media** — photos, video posters, and GIF first-frames render inside the terminal via the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) on Ghostty, Kitty, and WezTerm. Multiple images side-by-side. Toggle with `I`. Falls back to `▣`/`▶`/`↻` glyphs elsewhere.

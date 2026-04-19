@@ -2,6 +2,7 @@ use clap::Parser;
 use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt, util::SubscriberInitExt};
 use unrager::cli::{self, Cli, Command};
 use unrager::error::Result;
+#[cfg(feature = "tui")]
 use unrager::tui;
 
 #[tokio::main]
@@ -13,7 +14,7 @@ async fn main() {
 
     let result = match cli.command {
         Some(command) => dispatch(command).await,
-        None => tui::run().await,
+        None => run_default().await,
     };
 
     if let Err(e) = result {
@@ -27,28 +28,48 @@ async fn main() {
     }
 }
 
+#[cfg(feature = "tui")]
+async fn run_default() -> Result<()> {
+    tui::run().await
+}
+
+#[cfg(not(feature = "tui"))]
+async fn run_default() -> Result<()> {
+    eprintln!(
+        "this build of unrager does not include the TUI. use a subcommand (try `unrager --help`) \
+         or reinstall with `cargo install unrager --features tui --force`."
+    );
+    std::process::exit(2);
+}
+
 async fn dispatch(command: Command) -> Result<()> {
     match command {
         Command::Whoami(args) => cli::whoami::run(args).await,
         Command::Read(args) => cli::read::run(args).await,
         Command::Thread(args) => cli::thread::run(args).await,
         Command::Home(args) => cli::home::run(args).await,
+        #[cfg(feature = "tui")]
         Command::User(args) => cli::user::run(args).await,
         Command::Search(args) => cli::search::run(args).await,
         Command::Mentions(args) => cli::mentions::run(args).await,
+        #[cfg(feature = "tui")]
         Command::Notifs(args) => cli::notifs::run(args).await,
         Command::Bookmarks(args) => cli::bookmarks::run(args).await,
         Command::Tweet(args) => cli::tweet::run(args).await,
         Command::Reply(args) => cli::reply::run(args).await,
         Command::Auth(args) => cli::auth::run(args).await,
+        #[cfg(feature = "tui")]
         Command::Doctor(args) => cli::doctor::run(args).await,
         Command::Update(args) => cli::update::run(args).await,
+        #[cfg(feature = "server")]
+        Command::Serve(args) => cli::serve::run(args).await,
     }
 }
 
 fn install_panic_hook() {
     let original = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        #[cfg(feature = "tui")]
         ratatui::restore();
         original(info);
     }));

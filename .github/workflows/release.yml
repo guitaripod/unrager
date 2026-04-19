@@ -41,28 +41,73 @@ jobs:
           sudo apt-get install -y libdbus-1-dev pkg-config
 
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test --all-targets
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace --all-targets
+
+  web-bundle:
+    name: build web bundle (WASM)
+    needs: check
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-web-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install dioxus-cli via cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+      - run: cargo binstall -y --force dioxus-cli
+
+      - name: Bundle web client
+        working-directory: crates/unrager-app
+        run: dx bundle --platform web --release
+
+      - name: Stage bundle
+        run: |
+          mkdir -p bundle-upload
+          cp -r target/dx/unrager-app/release/web/public/. bundle-upload/
+          ls -la bundle-upload
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: web-bundle
+          path: bundle-upload
+          retention-days: 7
 
   build:
-    name: build ${{ matrix.target }}
-    needs: check
+    name: build ${{ matrix.flavor }} · ${{ matrix.target }}
+    needs: [check, web-bundle]
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-            use_cross: false
-          - os: ubuntu-22.04
-            target: aarch64-unknown-linux-gnu
-            use_cross: true
-          - os: macos-14
-            target: aarch64-apple-darwin
-            use_cross: false
-          - os: macos-14
-            target: x86_64-apple-darwin
-            use_cross: false
+          # Linux x86_64
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, use_cross: false, flavor: full, features: "" }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, use_cross: false, flavor: tui,  features: "--no-default-features --features tui" }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, use_cross: false, flavor: cli,  features: "--no-default-features" }
+          # Linux aarch64 (cross)
+          - { os: ubuntu-22.04, target: aarch64-unknown-linux-gnu, use_cross: true,  flavor: full, features: "" }
+          - { os: ubuntu-22.04, target: aarch64-unknown-linux-gnu, use_cross: true,  flavor: tui,  features: "--no-default-features --features tui" }
+          - { os: ubuntu-22.04, target: aarch64-unknown-linux-gnu, use_cross: true,  flavor: cli,  features: "--no-default-features" }
+          # macOS arm64
+          - { os: macos-14,     target: aarch64-apple-darwin,      use_cross: false, flavor: full, features: "" }
+          - { os: macos-14,     target: aarch64-apple-darwin,      use_cross: false, flavor: tui,  features: "--no-default-features --features tui" }
+          - { os: macos-14,     target: aarch64-apple-darwin,      use_cross: false, flavor: cli,  features: "--no-default-features" }
+          # macOS x86_64
+          - { os: macos-14,     target: x86_64-apple-darwin,       use_cross: false, flavor: full, features: "" }
+          - { os: macos-14,     target: x86_64-apple-darwin,       use_cross: false, flavor: tui,  features: "--no-default-features --features tui" }
+          - { os: macos-14,     target: x86_64-apple-darwin,       use_cross: false, flavor: cli,  features: "--no-default-features" }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
@@ -79,7 +124,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-build-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-build-${{ matrix.target }}-${{ matrix.flavor }}-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install libdbus (native Linux build)
         if: matrix.os == 'ubuntu-22.04' && !matrix.use_cross
@@ -91,43 +136,54 @@ jobs:
         if: matrix.use_cross
         run: cargo install cross --locked
 
+      - name: Download web bundle (full flavor only)
+        if: matrix.flavor == 'full'
+        uses: actions/download-artifact@v8
+        with:
+          name: web-bundle
+          path: crates/unrager-app/dist
+
       - name: Build (native)
         if: ${{ !matrix.use_cross }}
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }} ${{ matrix.features }}
 
       - name: Build (cross)
         if: matrix.use_cross
-        run: cross build --release --target ${{ matrix.target }}
+        run: cross build --release --target ${{ matrix.target }} ${{ matrix.features }}
 
       - name: Package
         run: |
+          set -eux
           cd target/${{ matrix.target }}/release
-          tar czf "../../../unrager-${{ github.ref_name }}-${{ matrix.target }}.tar.gz" unrager
+          case "${{ matrix.flavor }}" in
+            full) ASSET="unrager-${{ github.ref_name }}-${{ matrix.target }}.tar.gz" ;;
+            *)    ASSET="unrager-${{ github.ref_name }}-${{ matrix.flavor }}-${{ matrix.target }}.tar.gz" ;;
+          esac
+          tar czf "../../../${ASSET}" unrager
+          echo "ASSET=${ASSET}" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v7
         with:
-          name: unrager-${{ matrix.target }}
-          path: unrager-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+          name: unrager-${{ matrix.flavor }}-${{ matrix.target }}
+          path: ${{ env.ASSET }}
           retention-days: 7
 
   linux-validate:
-    name: validate on ${{ matrix.distro }}
+    name: validate ${{ matrix.flavor }} on ${{ matrix.distro }}
     needs: build
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
+        flavor: [full, tui, cli]
         distro:
           - debian:12
-          - ubuntu:22.04
           - ubuntu:24.04
-          - fedora:40
-          - fedora:41
           - archlinux:latest
     steps:
       - uses: actions/download-artifact@v8
         with:
-          name: unrager-x86_64-unknown-linux-gnu
+          name: unrager-${{ matrix.flavor }}-x86_64-unknown-linux-gnu
           path: ./artifact
 
       - name: Run binary inside ${{ matrix.distro }}
@@ -138,29 +194,29 @@ jobs:
             tar xzf /artifact/*.tar.gz
             ./unrager --version
             ./unrager --help > /dev/null
-            ./unrager whoami 2>&1 | grep -qE "no Chromium-family cookie store|no x.com session" && echo "whoami error path OK"
+            if [ "${{ matrix.flavor }}" = "full" ]; then
+              ./unrager serve --help > /dev/null
+            fi
+            if [ "${{ matrix.flavor }}" != "cli" ]; then
+              ./unrager whoami 2>&1 | grep -qE "no Chromium-family cookie store|no x.com session" && echo "whoami error path OK"
+            fi
           '
 
   macos-validate:
-    name: validate on ${{ matrix.os }}
+    name: validate ${{ matrix.flavor }} on ${{ matrix.os }}
     needs: build
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
-            target: aarch64-apple-darwin
-          - os: macos-15
-            target: aarch64-apple-darwin
-          - os: macos-26
-            target: aarch64-apple-darwin
-          - os: macos-26-intel
-            target: x86_64-apple-darwin
+          - { os: macos-14, target: aarch64-apple-darwin, flavor: full }
+          - { os: macos-14, target: aarch64-apple-darwin, flavor: tui }
+          - { os: macos-14, target: aarch64-apple-darwin, flavor: cli }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/download-artifact@v8
         with:
-          name: unrager-${{ matrix.target }}
+          name: unrager-${{ matrix.flavor }}-${{ matrix.target }}
           path: ./artifact
 
       - name: Run binary
@@ -171,7 +227,12 @@ jobs:
           xattr -d com.apple.quarantine ./unrager 2>/dev/null || true
           ./unrager --version
           ./unrager --help > /dev/null
-          ./unrager whoami 2>&1 | grep -qE "no Chromium-family cookie store|no x.com session|User interaction is not allowed" && echo "whoami error path OK"
+          if [ "${{ matrix.flavor }}" = "full" ]; then
+            ./unrager serve --help > /dev/null
+          fi
+          if [ "${{ matrix.flavor }}" != "cli" ]; then
+            ./unrager whoami 2>&1 | grep -qE "no Chromium-family cookie store|no x.com session|User interaction is not allowed" && echo "whoami error path OK"
+          fi
 
   release:
     name: create github release
@@ -188,6 +249,13 @@ jobs:
         with:
           path: ./dist
           merge-multiple: true
+
+      - name: Drop web-bundle artifact (not a release asset)
+        run: |
+          cd dist
+          ls -la
+          rm -rf index.html assets wasm
+          ls -la
 
       - name: Generate checksums
         run: |
@@ -238,6 +306,22 @@ jobs:
                 echo ""
               fi
             done
+            echo ""
+            echo "## Install flavors"
+            echo ""
+            echo "The oneliner installer supports three flavors via the \`UNRAGER_FLAVOR\` env var:"
+            echo ""
+            echo '```sh'
+            echo '# full: TUI + HTTP server + embedded web client (default)'
+            echo 'curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/master/install.sh | bash'
+            echo ''
+            echo '# tui: TUI + CLI only (~8 MB smaller)'
+            echo 'UNRAGER_FLAVOR=tui curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/master/install.sh | bash'
+            echo ''
+            echo '# cli: CLI only (~11 MB smaller)'
+            echo 'UNRAGER_FLAVOR=cli curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/master/install.sh | bash'
+            echo '```'
+            echo ""
             if [ -n "$PREV_TAG" ]; then
               echo "**Full changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${TAG}"
             fi

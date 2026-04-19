@@ -1,0 +1,43 @@
+[package]
+name = "unrager-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Dioxus client for unrager — web, iOS, Android from one codebase."
+
+[dependencies]
+unrager-model = { path = "../unrager-model", version = "0.14.0" }
+dioxus = { version = "0.7", features = ["router"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+urlencoding = "2"
+futures = "0.3"
+async-stream = "0.3"
+regex = "1"
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock", "wasmbind"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+gloo-net = { version = "0.6", features = ["eventsource", "http"] }
+gloo-storage = "0.3"
+gloo-utils = "0.2"
+gloo-timers = { version = "0.3", features = ["futures"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "Window", "Document", "Storage", "Location", "Navigator", "Clipboard",
+    "HtmlInputElement", "HtmlElement", "Element", "File", "FileList", "Blob",
+    "FormData", "Request", "RequestInit", "RequestMode", "Response",
+    "IntersectionObserver", "IntersectionObserverInit", "IntersectionObserverEntry",
+    "ServiceWorkerContainer", "ServiceWorker",
+    "ScrollIntoViewOptions", "ScrollBehavior", "ScrollLogicalPosition",
+    "Url", "NodeList", "Node"
+] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "multipart"] }
+eventsource-stream = "0.2"
+tokio = { version = "1", features = ["rt", "macros"] }

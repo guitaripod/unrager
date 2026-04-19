@@ -3,9 +3,15 @@ set -euo pipefail
 
 REPO="guitaripod/unrager"
 INSTALL_DIR="${UNRAGER_INSTALL_DIR:-$HOME/.local/bin}"
+FLAVOR="${UNRAGER_FLAVOR:-full}"
 
 err() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
 note() { printf '==> %s\n' "$*"; }
+
+case "$FLAVOR" in
+    full|tui|cli) ;;
+    *) err "UNRAGER_FLAVOR must be 'full', 'tui', or 'cli' (got: $FLAVOR)" ;;
+esac
 
 data_dirs() {
     if [ "$(uname -s)" = "Darwin" ]; then
@@ -86,6 +92,7 @@ need_cmd uname
 
 TARGET=$(detect_target)
 note "detected target: $TARGET"
+note "flavor: $FLAVOR"
 
 RELEASE_JSON=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest")
 TAG=$(printf '%s\n' "$RELEASE_JSON" \
@@ -95,15 +102,24 @@ TAG=$(printf '%s\n' "$RELEASE_JSON" \
 [ -n "$TAG" ] || err "could not determine latest release tag"
 note "latest release: $TAG"
 
-ASSET="unrager-${TAG}-${TARGET}.tar.gz"
+# asset naming: full flavor is unsuffixed for backward compat; tui/cli carry a flavor suffix
+if [ "$FLAVOR" = "full" ]; then
+    ASSET="unrager-${TAG}-${TARGET}.tar.gz"
+else
+    ASSET="unrager-${TAG}-${FLAVOR}-${TARGET}.tar.gz"
+fi
 URL_BASE="https://github.com/$REPO/releases/download/$TAG"
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 note "downloading $ASSET"
-curl -fsSL -o "$TMP/$ASSET" "$URL_BASE/$ASSET" \
-    || err "failed to download $URL_BASE/$ASSET"
+if ! curl -fsSL -o "$TMP/$ASSET" "$URL_BASE/$ASSET"; then
+    if [ "$FLAVOR" != "full" ]; then
+        err "failed to download $URL_BASE/$ASSET — the '$FLAVOR' flavor may not exist for this release. try UNRAGER_FLAVOR=full or pick a newer release."
+    fi
+    err "failed to download $URL_BASE/$ASSET"
+fi
 
 note "downloading SHA256SUMS"
 curl -fsSL -o "$TMP/SHA256SUMS" "$URL_BASE/SHA256SUMS" \
@@ -124,7 +140,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
     xattr -d com.apple.quarantine "$INSTALL_DIR/unrager" 2>/dev/null || true
 fi
 
-note "installed $("$INSTALL_DIR/unrager" --version)"
+note "installed $("$INSTALL_DIR/unrager" --version) · flavor: $FLAVOR"
 
 case ":$PATH:" in
     *":$INSTALL_DIR:"*)
@@ -144,13 +160,52 @@ EOF
         ;;
 esac
 
-cat <<EOF
+case "$FLAVOR" in
+    full)
+        cat <<EOF
+
+Next steps:
+  unrager                  launch the TUI
+  unrager serve            start the HTTP server + web client on :7777
+  unrager --help           see all subcommands
+  ollama pull gemma4       enable the local-LLM rage filter (optional)
+
+Want a leaner install? re-run with:
+  UNRAGER_FLAVOR=tui  curl ... | bash      # TUI + CLI only (~8 MB smaller)
+  UNRAGER_FLAVOR=cli  curl ... | bash      # CLI only (~11 MB smaller)
+
+EOF
+        ;;
+    tui)
+        cat <<EOF
 
 Next steps:
   unrager                  launch the TUI
   unrager --help           see all subcommands
   ollama pull gemma4       enable the local-LLM rage filter (optional)
 
+Want the web/mobile server too? re-run with:
+  UNRAGER_FLAVOR=full curl ... | bash
+
+EOF
+        ;;
+    cli)
+        cat <<EOF
+
+Next steps:
+  unrager --help           see available subcommands
+  unrager home --json      pipe a timeline to jq
+  unrager auth login       set up OAuth for the write path
+
+Want the TUI too? re-run with:
+  UNRAGER_FLAVOR=tui  curl ... | bash
+  UNRAGER_FLAVOR=full curl ... | bash      (includes web/mobile server)
+
+EOF
+        ;;
+esac
+
+cat <<EOF
 Uninstall:
   curl -fsSL https://raw.githubusercontent.com/guitaripod/unrager/master/install.sh | bash -s -- --uninstall
 

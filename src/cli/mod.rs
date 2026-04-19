@@ -1,16 +1,21 @@
 pub mod auth;
 pub mod bookmarks;
 pub mod common;
+#[cfg(feature = "tui")]
 pub mod doctor;
 pub mod home;
 pub mod mentions;
+#[cfg(feature = "tui")]
 pub mod notifs;
 pub mod read;
 pub mod reply;
 pub mod search;
+#[cfg(feature = "server")]
+pub mod serve;
 pub mod thread;
 pub mod tweet;
 pub mod update;
+#[cfg(feature = "tui")]
 pub mod user;
 pub mod whoami;
 
@@ -60,6 +65,7 @@ pub enum Command {
     #[command(about = "Home timeline (For You or Following)")]
     Home(home::Args),
 
+    #[cfg(feature = "tui")]
     #[command(about = "A user's recent tweets")]
     User(user::Args),
 
@@ -69,6 +75,7 @@ pub enum Command {
     #[command(about = "Tweets that mention you")]
     Mentions(mentions::Args),
 
+    #[cfg(feature = "tui")]
     #[command(about = "Your recent notifications")]
     Notifs(notifs::Args),
 
@@ -84,9 +91,14 @@ pub enum Command {
     #[command(about = "Manage OAuth 2.0 tokens for the write path")]
     Auth(auth::Args),
 
+    #[cfg(feature = "tui")]
     #[command(about = "Check cookies, Ollama, and gemma4 setup")]
     Doctor(doctor::Args),
 
     #[command(about = "Update unrager to the latest release")]
     Update(update::Args),
+
+    #[cfg(feature = "server")]
+    #[command(about = "Run the HTTP server exposing the web/mobile client API")]
+    Serve(serve::Args),
 }

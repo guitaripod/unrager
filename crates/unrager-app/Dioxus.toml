@@ -1,0 +1,18 @@
+[application]
+name = "unrager"
+
+[web.app]
+title = "unrager"
+base_path = ""
+
+[web.watcher]
+reload_html = true
+watch_path = ["src", "assets"]
+
+[bundle]
+identifier = "com.guitaripod.unrager"
+copyright = "Copyright (c) 2026 guitaripod"
+category = "SocialNetworking"
+short_description = "Calm X client with local LLM filter"
+long_description = "Read X/Twitter calmly. Local Ollama rage filter. Web, iOS, and Android from one Rust codebase."
+icon = []

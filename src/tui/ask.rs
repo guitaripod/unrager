@@ -70,10 +70,16 @@ pub enum AskMessage {
     Assistant(AskAssistantMsg),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ThreadContext {
-    pub root: Tweet,
+    pub ancestors: Vec<Tweet>,
     pub siblings: Vec<Tweet>,
+}
+
+impl ThreadContext {
+    pub fn is_empty(&self) -> bool {
+        self.ancestors.is_empty() && self.siblings.is_empty()
+    }
 }
 
 #[derive(Debug)]
@@ -82,6 +88,7 @@ pub struct AskView {
     pub replies: Vec<Tweet>,
     pub replies_loading: bool,
     pub thread: Option<ThreadContext>,
+    pub thread_loading: bool,
     pub messages: Vec<AskMessage>,
     pub editor: VimEditor,
     pub streaming: bool,
@@ -97,6 +104,7 @@ impl AskView {
             replies,
             replies_loading,
             thread: None,
+            thread_loading: false,
             messages: Vec::new(),
             editor: VimEditor::normal(),
             streaming: false,
@@ -109,6 +117,15 @@ impl AskView {
     pub fn with_thread(mut self, thread: ThreadContext) -> Self {
         self.thread = Some(thread);
         self
+    }
+
+    pub fn with_thread_loading(mut self) -> Self {
+        self.thread_loading = true;
+        self
+    }
+
+    pub fn ancestor_count(&self) -> usize {
+        self.thread.as_ref().map(|t| t.ancestors.len()).unwrap_or(0)
     }
 
     pub fn tweet_id(&self) -> &str {
@@ -270,14 +287,25 @@ fn build_messages(
             Role::User => {
                 let content = if first_user {
                     let mut buf = String::new();
-                    if let Some(ctx) = thread {
-                        let root_handle = &ctx.root.author.handle;
-                        let root_text = &ctx.root.text;
-                        buf.push_str(&format!(
-                            "Thread root — @{root_handle} posted:\n{root_text}\n"
-                        ));
+                    let ctx_with_ancestors = thread.filter(|ctx| !ctx.ancestors.is_empty());
+                    if let Some(ctx) = ctx_with_ancestors {
+                        buf.push_str("Full thread (root first, indented by depth):\n");
+                        for (i, anc) in ctx.ancestors.iter().enumerate() {
+                            let indent = "  ".repeat(i);
+                            let snippet: String = anc.text.chars().take(600).collect();
+                            let snippet = snippet.replace('\n', " ");
+                            let label = if i == 0 { "root" } else { "reply" };
+                            buf.push_str(&format!(
+                                "{indent}[{label}] @{}: {snippet}\n",
+                                anc.author.handle
+                            ));
+                        }
+                        let indent = "  ".repeat(ctx.ancestors.len());
+                        buf.push_str(&format!("{indent}[reply] @{handle}: {tweet_text}\n"));
                         if !ctx.siblings.is_empty() {
-                            buf.push_str("\nOther replies in the thread (context):\n");
+                            buf.push_str(
+                                "\nOther replies at the same level as the asked reply (context):\n",
+                            );
                             for s in ctx.siblings.iter().take(MAX_REPLIES_IN_CONTEXT) {
                                 let snippet: String = s.text.chars().take(400).collect();
                                 let snippet = snippet.replace('\n', " ");
@@ -285,13 +313,13 @@ fn build_messages(
                             }
                         }
                         buf.push_str(&format!(
-                            "\nThe user is asking specifically about this reply:\n@{handle} replied:\n{tweet_text}\n"
+                            "\nThe user is asking specifically about the last reply (@{handle}).\n"
                         ));
                     } else {
                         buf.push_str(&format!("@{handle} posted:\n{tweet_text}\n"));
                     }
                     if !replies.is_empty() {
-                        buf.push_str("\nReplies to the post:\n");
+                        buf.push_str("\nReplies to the asked post:\n");
                         for reply in replies.iter().take(MAX_REPLIES_IN_CONTEXT) {
                             let snippet: String = reply.text.chars().take(400).collect();
                             let snippet = snippet.replace('\n', " ");

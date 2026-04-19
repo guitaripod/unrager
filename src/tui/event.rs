@@ -122,9 +122,11 @@ pub enum Event {
         tweet_id: String,
         error: Option<String>,
     },
-    AskRepliesLoaded {
+    AskThreadLoaded {
         tweet_id: String,
         replies: Vec<crate::model::Tweet>,
+        ancestors: Vec<crate::model::Tweet>,
+        siblings: Vec<crate::model::Tweet>,
     },
     BriefSampleReady {
         handle: String,

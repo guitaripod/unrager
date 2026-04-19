@@ -673,8 +673,13 @@ impl App {
             Event::AskStreamFinished { tweet_id, error } => {
                 self.handle_ask_stream_finished(tweet_id, error);
             }
-            Event::AskRepliesLoaded { tweet_id, replies } => {
-                self.handle_ask_replies_loaded(tweet_id, replies);
+            Event::AskThreadLoaded {
+                tweet_id,
+                replies,
+                ancestors,
+                siblings,
+            } => {
+                self.handle_ask_thread_loaded(tweet_id, replies, ancestors, siblings);
             }
             Event::BriefSampleReady {
                 handle,

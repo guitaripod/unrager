@@ -259,11 +259,14 @@ impl App {
         ask::preload(ollama);
 
         let in_detail = self.active == super::app::ActivePane::Detail;
-        let thread_context: Option<ask::ThreadContext> = if in_detail {
+        let asked_parent_id = tweet.in_reply_to_tweet_id.clone();
+        let needs_ancestors = asked_parent_id.is_some();
+
+        let preseed_thread: Option<ask::ThreadContext> = if in_detail && needs_ancestors {
             self.top_detail().and_then(|d| {
                 if d.tweet.rest_id == tweet.rest_id {
                     None
-                } else {
+                } else if asked_parent_id.as_deref() == Some(d.tweet.rest_id.as_str()) {
                     let siblings: Vec<Tweet> = d
                         .replies
                         .iter()
@@ -271,68 +274,119 @@ impl App {
                         .cloned()
                         .collect();
                     Some(ask::ThreadContext {
-                        root: d.tweet.clone(),
+                        ancestors: vec![d.tweet.clone()],
                         siblings,
                     })
+                } else {
+                    None
                 }
             })
         } else {
             None
         };
 
-        let replies_in_detail = if in_detail && thread_context.is_none() {
+        let replies_in_detail = if in_detail && !needs_ancestors {
             self.top_detail()
                 .filter(|d| d.tweet.rest_id == tweet.rest_id)
                 .map(|d| d.replies.clone())
         } else {
             None
         };
-        let should_fetch =
-            thread_context.is_none() && replies_in_detail.is_none() && tweet.reply_count > 0;
-        let replies = replies_in_detail.unwrap_or_default();
+        let replies = replies_in_detail.clone().unwrap_or_default();
+        let needs_replies_fetch = replies_in_detail.is_none() && tweet.reply_count > 0;
+        let needs_fetch = needs_ancestors || needs_replies_fetch;
+
         tracing::info!(
             tweet_id = %tweet.rest_id,
             replies = replies.len(),
-            siblings = thread_context.as_ref().map(|c| c.siblings.len()).unwrap_or(0),
-            has_thread = thread_context.is_some(),
-            will_fetch = should_fetch,
+            preseed_ancestors = preseed_thread.as_ref().map(|c| c.ancestors.len()).unwrap_or(0),
+            has_parent = needs_ancestors,
+            will_fetch = needs_fetch,
             "ask view opened"
         );
-        let mut view = AskView::new(tweet.clone(), replies, should_fetch);
-        if let Some(ctx) = thread_context {
+        let mut view = AskView::new(tweet.clone(), replies, needs_replies_fetch);
+        if let Some(ctx) = preseed_thread {
             view = view.with_thread(ctx);
+        }
+        if needs_ancestors {
+            view = view.with_thread_loading();
         }
         self.focus_stack.push(FocusEntry::Ask(view));
         self.active = super::app::ActivePane::Detail;
         self.set_status("ask: digit = preset, type for custom, Enter to send");
-        if should_fetch {
+        if needs_fetch {
             let tweet_id = tweet.rest_id.clone();
+            let parent_id = asked_parent_id.clone();
             let client = self.client.clone();
             let tx = self.tx.clone();
             tokio::spawn(async move {
                 match focus::fetch_thread(&client, &tweet_id).await {
                     Ok(page) => {
-                        let focal_id = tweet_id.clone();
+                        let by_id: std::collections::HashMap<String, Tweet> = page
+                            .tweets
+                            .iter()
+                            .cloned()
+                            .map(|t| (t.rest_id.clone(), t))
+                            .collect();
                         let replies: Vec<Tweet> = page
                             .tweets
-                            .into_iter()
+                            .iter()
                             .filter(|t| {
-                                t.rest_id != focal_id
-                                    && t.in_reply_to_tweet_id.as_deref() == Some(&focal_id)
+                                t.rest_id != tweet_id
+                                    && t.in_reply_to_tweet_id.as_deref() == Some(&tweet_id)
                             })
+                            .cloned()
                             .collect();
+                        let mut ancestors: Vec<Tweet> = Vec::new();
+                        let mut cur = parent_id.clone();
+                        let mut guard = 0usize;
+                        while let Some(id) = cur {
+                            if guard > 32 {
+                                break;
+                            }
+                            guard += 1;
+                            match by_id.get(&id) {
+                                Some(t) => {
+                                    cur = t.in_reply_to_tweet_id.clone();
+                                    ancestors.push(t.clone());
+                                }
+                                None => break,
+                            }
+                        }
+                        ancestors.reverse();
+                        let siblings: Vec<Tweet> = if let Some(pid) = parent_id.as_ref() {
+                            page.tweets
+                                .iter()
+                                .filter(|t| {
+                                    t.rest_id != tweet_id
+                                        && t.in_reply_to_tweet_id.as_deref() == Some(pid.as_str())
+                                })
+                                .cloned()
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
                         tracing::info!(
                             tweet_id = %tweet_id,
-                            count = replies.len(),
-                            "ask replies loaded"
+                            replies = replies.len(),
+                            ancestors = ancestors.len(),
+                            siblings = siblings.len(),
+                            "ask thread loaded"
                         );
-                        let _ = tx.send(Event::AskRepliesLoaded { tweet_id, replies });
+                        let _ = tx.send(Event::AskThreadLoaded {
+                            tweet_id,
+                            replies,
+                            ancestors,
+                            siblings,
+                        });
                     }
                     Err(e) => {
-                        tracing::warn!(tweet_id = %tweet_id, "ask reply fetch failed: {e}");
-                        let _ = tx.send(Event::AskRepliesLoaded {
+                        tracing::warn!(tweet_id = %tweet_id, "ask thread fetch failed: {e}");
+                        let _ = tx.send(Event::AskThreadLoaded {
                             tweet_id,
                             replies: Vec::new(),
+                            ancestors: Vec::new(),
+                            siblings: Vec::new(),
                         });
                     }
                 }
@@ -340,12 +394,29 @@ impl App {
         }
     }
 
-    pub(super) fn handle_ask_replies_loaded(&mut self, tweet_id: String, replies: Vec<Tweet>) {
+    pub(super) fn handle_ask_thread_loaded(
+        &mut self,
+        tweet_id: String,
+        replies: Vec<Tweet>,
+        ancestors: Vec<Tweet>,
+        siblings: Vec<Tweet>,
+    ) {
         if let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut()
             && view.tweet_id() == tweet_id
         {
-            view.replies = replies;
-            view.replies_loading = false;
+            if view.replies_loading {
+                view.replies = replies;
+                view.replies_loading = false;
+            } else if view.replies.is_empty() && !replies.is_empty() {
+                view.replies = replies;
+            }
+            if !ancestors.is_empty() || !siblings.is_empty() {
+                view.thread = Some(ask::ThreadContext {
+                    ancestors,
+                    siblings,
+                });
+            }
+            view.thread_loading = false;
         }
     }
 

@@ -1087,6 +1087,14 @@ fn draw_ask(
             title.push('s');
         }
     }
+    if view.thread_loading {
+        title.push_str(" · loading thread…");
+    } else {
+        let ancestors = view.ancestor_count();
+        if ancestors > 0 {
+            title.push_str(&format!(" · thread of {}", ancestors + 1));
+        }
+    }
     if view.replies_loading {
         title.push_str(" · loading replies…");
     } else {

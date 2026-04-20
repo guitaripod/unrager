@@ -3507,9 +3507,9 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  o              open tweet in browser (auto-likes when write-rate-limited)"),
         Line::from("  O              open author profile in browser"),
         Line::from("  m              open all attachments in native viewer"),
-        Line::from("  S              open screenshot composer (theme picker, then save to PNG)"),
-        Line::from("  C              open screenshot composer (default action: copy to clipboard)"),
-        Line::from("                   · 1-5 pick preset, t tune custom colors, s save, y copy"),
+        Line::from("  S              open Postcard composer (theme picker, save to PNG)"),
+        Line::from("  C              open Postcard composer (default action: copy to clipboard)"),
+        Line::from("                   · 1-7 pick preset, t tune custom colors, s save, y copy"),
         Line::from("  p              open profile of selected tweet's author"),
         Line::from("  P              open own profile in browser"),
         Line::from("  T              translate tweet to English (toggle)"),
@@ -3802,7 +3802,8 @@ fn draw_leader_overlay(frame: &mut Frame, area: Rect, app: &App) {
 fn draw_compose_overlay(frame: &mut Frame, area: Rect, app: &App) {
     use crate::tui::app_screenshot::{Destination, ThemeSlot};
     use crate::tui::screenshot::{
-        PRESET_CITRON, PRESET_DUSK, PRESET_NOIR, PRESET_PAPER, ShotTheme,
+        PRESET_ARCADE, PRESET_BLUEPRINT, PRESET_CUTOUT, PRESET_GLASS, PRESET_MOSS,
+        PRESET_SYNTHWAVE, ShotTheme,
     };
 
     let Some(compose) = app.compose.as_ref() else {
@@ -3818,10 +3819,12 @@ fn draw_compose_overlay(frame: &mut Frame, area: Rect, app: &App) {
 
     let row_theme = |slot: ThemeSlot| -> ShotTheme {
         match slot {
-            ThemeSlot::Paper => PRESET_PAPER,
-            ThemeSlot::Noir => PRESET_NOIR,
-            ThemeSlot::Dusk => PRESET_DUSK,
-            ThemeSlot::Citron => PRESET_CITRON,
+            ThemeSlot::Glass => PRESET_GLASS,
+            ThemeSlot::Synthwave => PRESET_SYNTHWAVE,
+            ThemeSlot::Cutout => PRESET_CUTOUT,
+            ThemeSlot::Moss => PRESET_MOSS,
+            ThemeSlot::Blueprint => PRESET_BLUEPRINT,
+            ThemeSlot::Arcade => PRESET_ARCADE,
             ThemeSlot::Match => tui_snapshot,
             ThemeSlot::Custom => compose.custom.unwrap_or(tui_snapshot),
         }
@@ -3914,7 +3917,7 @@ fn draw_compose_overlay(frame: &mut Frame, area: Rect, app: &App) {
         }
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled(" 1-5", key_style),
+            Span::styled(" 1-7", key_style),
             Span::raw(" preset  "),
             Span::styled("t", key_style),
             Span::raw(" tune  "),

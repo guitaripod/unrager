@@ -14,9 +14,11 @@ use ab_glyph::{Font, FontRef, Glyph, PxScale, ScaleFont, point};
 use image::{Rgba, RgbaImage, imageops};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::style::{Color, Modifier};
 use ratatui::text::Line;
-use ratatui::widgets::{Paragraph, Widget, Wrap};
+use ratatui::text::Span;
+use ratatui::widgets::{Paragraph, Widget};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -62,8 +64,11 @@ const MEDIA_MAX_W_PX: u32 = 900 * SCALE_I;
 
 /// Columns of text per line. Shorter lines feel editorial; a tweet body
 /// at this width is closer to newspaper-column readability than
-/// terminal-width sprawl.
-const CONTENT_COLS: u16 = 56;
+/// terminal-width sprawl. Shared with the compose glue so the wrap width
+/// fed to `tweet_lines` stays in sync with the rasterization grid —
+/// otherwise a pre-wrapped body line wider than the grid gets re-wrapped
+/// by ratatui's `Paragraph` and loses its leading indent on continuation.
+pub const CONTENT_COLS: u16 = 56;
 
 pub struct Capture {
     pub image: RgbaImage,
@@ -79,55 +84,106 @@ pub struct RenderArgs<'a> {
 
 /// Minimal palette for rendering a screenshot. Decoupled from the TUI's full
 /// `Theme` so screenshot look can be switched without touching the live
-/// terminal palette. Four presets + a "match the TUI" converter + a
-/// `from_colors(bg, accent)` custom builder cover the space.
+/// terminal palette. Six distinctive presets (each a real aesthetic, not a
+/// color shuffle) + a "match the TUI" converter + a `from_colors(bg, accent)`
+/// custom builder.
+///
+/// `bg_end` is an optional second background color; when `Some`, the canvas
+/// paints a vertical linear gradient from `bg` (top) to `bg_end` (bottom).
+/// Unlocks the synthwave / liquid-glass / sunset looks that a solid fill
+/// can't reach.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShotTheme {
     pub name: &'static str,
     pub bg: [u8; 3],
+    pub bg_end: Option<[u8; 3]>,
     pub text: [u8; 3],
     pub text_muted: [u8; 3],
     pub accent: [u8; 3],
     pub is_dark: bool,
 }
 
-pub const PRESET_PAPER: ShotTheme = ShotTheme {
-    name: "paper",
-    bg: [0xfd, 0xf6, 0xe3],
-    text: [0x33, 0x33, 0x33],
-    text_muted: [0x88, 0x7a, 0x5f],
-    accent: [0x1d, 0x9b, 0xf0],
+/// Frosted ice-blue glass — deeper vertical gradient for real
+/// glassmorphism depth, cool palette, sky accent.
+pub const PRESET_GLASS: ShotTheme = ShotTheme {
+    name: "glass",
+    bg: [0xeb, 0xf3, 0xfa],
+    bg_end: Some([0xb8, 0xce, 0xe8]),
+    text: [0x14, 0x22, 0x36],
+    text_muted: [0x5c, 0x72, 0x8a],
+    accent: [0x2e, 0x8b, 0xff],
     is_dark: false,
 };
 
-pub const PRESET_NOIR: ShotTheme = ShotTheme {
-    name: "noir",
-    bg: [0x11, 0x14, 0x18],
-    text: [0xe8, 0xe8, 0xe8],
-    text_muted: [0x6b, 0x73, 0x80],
-    accent: [0x5b, 0xb9, 0xff],
+/// 80s neo-synthwave — near-black night top fading into magenta-horizon
+/// bottom, hot pink body, electric cyan accent. VHS / arcade cabinet.
+pub const PRESET_SYNTHWAVE: ShotTheme = ShotTheme {
+    name: "synthwave",
+    bg: [0x0a, 0x04, 0x1c],
+    bg_end: Some([0x5a, 0x1a, 0x66]),
+    text: [0xff, 0x84, 0xd6],
+    text_muted: [0xa0, 0x7a, 0xc8],
+    accent: [0x05, 0xd9, 0xe8],
     is_dark: true,
 };
 
-pub const PRESET_DUSK: ShotTheme = ShotTheme {
-    name: "dusk",
-    bg: [0x1a, 0x16, 0x25],
-    text: [0xe6, 0xe2, 0xf5],
-    text_muted: [0x8e, 0x83, 0xa8],
-    accent: [0xc4, 0xa7, 0xe7],
-    is_dark: true,
-};
-
-pub const PRESET_CITRON: ShotTheme = ShotTheme {
-    name: "citron",
-    bg: [0xff, 0xfb, 0xe6],
-    text: [0x2c, 0x25, 0x16],
-    text_muted: [0x8a, 0x7b, 0x4a],
-    accent: [0xd9, 0x9e, 0x0b],
+/// Hand-cut kraft paper — warm tan gradient, chocolate text, collage-red
+/// accent. Zine / scrapbook feel.
+pub const PRESET_CUTOUT: ShotTheme = ShotTheme {
+    name: "cutout",
+    bg: [0xf3, 0xe4, 0xca],
+    bg_end: Some([0xe6, 0xd0, 0xaa]),
+    text: [0x2b, 0x1d, 0x11],
+    text_muted: [0x8c, 0x6a, 0x3f],
+    accent: [0xd8, 0x41, 0x4d],
     is_dark: false,
 };
 
-pub const PRESETS: [ShotTheme; 4] = [PRESET_PAPER, PRESET_NOIR, PRESET_DUSK, PRESET_CITRON];
+/// Forest-floor moss — deep greens with bone text and sage accent.
+/// Botanical / field-guide feel.
+pub const PRESET_MOSS: ShotTheme = ShotTheme {
+    name: "moss",
+    bg: [0x1e, 0x2a, 0x20],
+    bg_end: Some([0x2c, 0x3a, 0x2e]),
+    text: [0xe8, 0xea, 0xe0],
+    text_muted: [0x8b, 0xa0, 0x8e],
+    accent: [0xa3, 0xc2, 0x93],
+    is_dark: true,
+};
+
+/// Engineering blueprint — saturated cobalt flat fill, chalk-white
+/// drafting text, electric cyan rule-marking accent. Drawing-table feel
+/// without the noisy gradient that weakens the technical vibe.
+pub const PRESET_BLUEPRINT: ShotTheme = ShotTheme {
+    name: "blueprint",
+    bg: [0x07, 0x2b, 0x5c],
+    bg_end: None,
+    text: [0xf0, 0xf6, 0xff],
+    text_muted: [0x7a, 0xa4, 0xd0],
+    accent: [0x3f, 0xd1, 0xff],
+    is_dark: true,
+};
+
+/// Arcade CRT — pure black with neon magenta accent and phosphor-green
+/// body. Maximum contrast, retro-neon energy.
+pub const PRESET_ARCADE: ShotTheme = ShotTheme {
+    name: "arcade",
+    bg: [0x0a, 0x0a, 0x0a],
+    bg_end: None,
+    text: [0x39, 0xff, 0x14],
+    text_muted: [0x3d, 0x8e, 0x3a],
+    accent: [0xff, 0x00, 0xaa],
+    is_dark: true,
+};
+
+pub const PRESETS: [ShotTheme; 6] = [
+    PRESET_GLASS,
+    PRESET_SYNTHWAVE,
+    PRESET_CUTOUT,
+    PRESET_MOSS,
+    PRESET_BLUEPRINT,
+    PRESET_ARCADE,
+];
 
 impl ShotTheme {
     /// Snapshot of the TUI theme's palette so screenshots can "match" the
@@ -136,6 +192,7 @@ impl ShotTheme {
         Self {
             name: "match",
             bg: tui_bg(t),
+            bg_end: None,
             text: rgb_from_tui(t.text, [0x20, 0x20, 0x20]),
             text_muted: rgb_from_tui(t.text_muted, [0x80, 0x80, 0x80]),
             accent: rgb_from_tui(t.accent, [0x1d, 0x9b, 0xf0]),
@@ -156,6 +213,7 @@ impl ShotTheme {
         Self {
             name: "custom",
             bg,
+            bg_end: None,
             text,
             text_muted,
             accent,
@@ -296,11 +354,14 @@ pub fn render(args: RenderArgs<'_>) -> Capture {
     let content_px = CONTENT_COLS as u32 * grid.cell_w;
     let shot = args.shot_theme;
 
-    let est_rows = estimate_rows(&args.lines, CONTENT_COLS);
-    let buf_rect = Rect::new(0, 0, CONTENT_COLS, est_rows);
+    // Span-aware wrap *before* rasterizing so every continuation row keeps
+    // its indent. Lets us drop `Paragraph::wrap` (which strips continuation
+    // indent) and render lines one-to-one onto buffer rows.
+    let wrapped = wrap_lines_preserve_indent(args.lines.clone(), CONTENT_COLS as usize);
+    let rows = wrapped.len() as u16;
+    let buf_rect = Rect::new(0, 0, CONTENT_COLS, rows.max(1));
     let mut buf = Buffer::empty(buf_rect);
-    let para = Paragraph::new(args.lines.clone()).wrap(Wrap { trim: false });
-    para.render(buf_rect, &mut buf);
+    Paragraph::new(wrapped).render(buf_rect, &mut buf);
     let used_rows = last_nonblank_row(&buf).saturating_add(1);
 
     let text_h = used_rows as u32 * grid.line_h;
@@ -325,6 +386,9 @@ pub fn render(args: RenderArgs<'_>) -> Capture {
 
     let bg = rgba_from(shot.bg);
     let mut canvas = RgbaImage::from_pixel(canvas_w, canvas_h, bg);
+    if let Some(end) = shot.bg_end {
+        paint_vertical_gradient(&mut canvas, shot.bg, end);
+    }
 
     let accent = rgba_from(shot.accent);
     fill_rect(
@@ -366,6 +430,26 @@ fn rgba_from(rgb: [u8; 3]) -> Rgba<u8> {
     Rgba([rgb[0], rgb[1], rgb[2], 255])
 }
 
+/// Fill the whole canvas with a vertical linear gradient from `top` at y=0
+/// to `bottom` at y=max. Uses simple per-pixel lerp — fine at our output
+/// sizes and avoids pulling in a blending crate.
+fn paint_vertical_gradient(canvas: &mut RgbaImage, top: [u8; 3], bottom: [u8; 3]) {
+    let h = canvas.height();
+    if h == 0 {
+        return;
+    }
+    for y in 0..h {
+        let t = y as f32 / (h - 1).max(1) as f32;
+        let r = (top[0] as f32 * (1.0 - t) + bottom[0] as f32 * t).round() as u8;
+        let g = (top[1] as f32 * (1.0 - t) + bottom[1] as f32 * t).round() as u8;
+        let b = (top[2] as f32 * (1.0 - t) + bottom[2] as f32 * t).round() as u8;
+        let row = Rgba([r, g, b, 255]);
+        for x in 0..canvas.width() {
+            canvas.put_pixel(x, y, row);
+        }
+    }
+}
+
 impl Capture {
     pub fn to_png(&self) -> Result<Vec<u8>, String> {
         use image::ImageEncoder;
@@ -405,18 +489,99 @@ impl Capture {
     }
 }
 
-fn estimate_rows(lines: &[Line<'_>], cols: u16) -> u16 {
-    let w = cols as usize;
-    let mut rows = 0usize;
+/// Wrap any lines that exceed `max_w` cells, breaking at word boundaries
+/// and prepending a 2-space indent to every continuation row so the visual
+/// structure of the original (indented body, header metrics) survives the
+/// wrap. Lines already ≤ `max_w` pass through untouched. Span styles are
+/// preserved per-character so colors don't bleed across breaks.
+fn wrap_lines_preserve_indent(lines: Vec<Line<'static>>, max_w: usize) -> Vec<Line<'static>> {
+    let mut out = Vec::with_capacity(lines.len());
     for line in lines {
-        let line_w: usize = line
-            .spans
-            .iter()
-            .map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref()))
-            .sum();
-        rows += line_w.div_ceil(w.max(1)).max(1);
+        out.extend(wrap_one_line(line, max_w));
     }
-    rows.min(u16::MAX as usize) as u16
+    out
+}
+
+fn wrap_one_line(line: Line<'static>, max_w: usize) -> Vec<Line<'static>> {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+    let total_w: usize = line
+        .spans
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+        .sum();
+    if total_w <= max_w {
+        return vec![line];
+    }
+
+    let chars: Vec<(char, Style)> = line
+        .spans
+        .iter()
+        .flat_map(|s| {
+            let style = s.style;
+            s.content.chars().map(move |c| (c, style))
+        })
+        .collect();
+
+    let indent = "  ";
+    let indent_w = 2;
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let mut i = 0;
+    let mut first = true;
+
+    while i < chars.len() {
+        let avail = if first {
+            max_w
+        } else {
+            max_w.saturating_sub(indent_w)
+        };
+
+        let mut end = i;
+        let mut width = 0usize;
+        let mut last_space: Option<usize> = None;
+        while end < chars.len() {
+            let cw = UnicodeWidthChar::width(chars[end].0).unwrap_or(0);
+            if width + cw > avail {
+                break;
+            }
+            if chars[end].0 == ' ' {
+                last_space = Some(end);
+            }
+            width += cw;
+            end += 1;
+        }
+
+        let break_at = if end == chars.len() {
+            end
+        } else if let Some(ls) = last_space.filter(|ls| *ls > i) {
+            ls
+        } else {
+            end
+        };
+
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        if !first {
+            spans.push(Span::raw(indent));
+        }
+        let mut j = i;
+        while j < break_at {
+            let style = chars[j].1;
+            let run_start = j;
+            while j < break_at && chars[j].1 == style {
+                j += 1;
+            }
+            let run: String = chars[run_start..j].iter().map(|(c, _)| *c).collect();
+            spans.push(Span::styled(run, style));
+        }
+        out.push(Line::from(spans));
+
+        i = break_at;
+        while i < chars.len() && chars[i].0 == ' ' {
+            i += 1;
+        }
+        first = false;
+    }
+    out
 }
 
 fn last_nonblank_row(buf: &Buffer) -> u16 {
@@ -669,7 +834,7 @@ mod tests {
             tweet_id: "123".into(),
             lines: plain_lines(),
             media_images: Vec::new(),
-            shot_theme: &PRESET_PAPER,
+            shot_theme: &PRESET_GLASS,
         });
         assert!(cap.image.width() > 100);
         assert!(cap.image.height() > 40);
@@ -682,7 +847,7 @@ mod tests {
             tweet_id: "t".into(),
             lines: plain_lines(),
             media_images: Vec::new(),
-            shot_theme: &PRESET_NOIR,
+            shot_theme: &PRESET_SYNTHWAVE,
         });
         let png = cap.to_png().unwrap();
         assert!(png.len() > 100);
@@ -695,7 +860,7 @@ mod tests {
             tweet_id: "42".into(),
             lines: plain_lines(),
             media_images: Vec::new(),
-            shot_theme: &PRESET_PAPER,
+            shot_theme: &PRESET_GLASS,
         });
         let tmp = tempfile::tempdir().unwrap();
         let path = cap.save(tmp.path()).unwrap();
@@ -760,10 +925,10 @@ mod tests {
 
     #[test]
     fn synthesize_tui_overrides_accent() {
-        let shot = PRESET_DUSK;
+        let shot = PRESET_SYNTHWAVE;
         let theme = shot.synthesize_tui();
-        assert_eq!(theme.accent, Color::Rgb(0xc4, 0xa7, 0xe7));
-        assert_eq!(theme.verified, Color::Rgb(0xc4, 0xa7, 0xe7));
+        assert_eq!(theme.accent, Color::Rgb(0x05, 0xd9, 0xe8));
+        assert_eq!(theme.verified, Color::Rgb(0x05, 0xd9, 0xe8));
     }
 
     #[test]
@@ -780,5 +945,102 @@ mod tests {
         let scaled = scale_media(&[img], 400);
         assert_eq!(scaled[0].width(), 100);
         assert_eq!(scaled[0].height(), 50);
+    }
+
+    /// Validation harness: render a representative tweet under every preset
+    /// and the custom-from-colors builder, dumping PNGs to $UNRAGER_SHOT_OUT
+    /// when set. Used during theme design to inspect each render visually.
+    /// No assertions beyond dimensions; the assertion is the image file.
+    #[test]
+    fn preview_all_themes() {
+        let Some(out_dir) = std::env::var_os("UNRAGER_SHOT_OUT") else {
+            return;
+        };
+        let out_dir = std::path::PathBuf::from(out_dir);
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        let accent_blue = Style::default().fg(Color::Rgb(0x1d, 0x9b, 0xf0));
+        let muted = Style::default().fg(Color::Rgb(0x80, 0x80, 0x80));
+        let text = Style::default().fg(Color::Rgb(0x20, 0x20, 0x20));
+        let bold = Style::default().add_modifier(ratatui::style::Modifier::BOLD);
+
+        let sample_lines = vec![
+            Line::from(vec![
+                Span::styled("● ", Style::default().fg(Color::Rgb(0x00, 0xba, 0x7c))),
+                Span::styled(
+                    "@emanueledpt",
+                    accent_blue.add_modifier(ratatui::style::Modifier::BOLD),
+                ),
+                Span::styled(" ✓", accent_blue),
+                Span::styled("  ·  4h  ", muted),
+                Span::styled("↳ 11   ♡ 48   ◎ 1.2K", muted),
+            ]),
+            Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    "DP Code reached its first 200 stars on GitHub!",
+                    text.patch(bold),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    "And also just broke 780 installs across all",
+                    text.patch(bold),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled("platforms!", text.patch(bold)),
+            ]),
+            Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled("Thank you guys for the support!", text.patch(bold)),
+            ]),
+        ];
+
+        let custom_mint = ShotTheme::from_colors([0xe7, 0xf5, 0xee], [0xe8, 0x5f, 0x5c]);
+
+        let variants: Vec<(&str, ShotTheme)> = vec![
+            ("01-glass", PRESET_GLASS),
+            ("02-synthwave", PRESET_SYNTHWAVE),
+            ("03-cutout", PRESET_CUTOUT),
+            ("04-moss", PRESET_MOSS),
+            ("05-blueprint", PRESET_BLUEPRINT),
+            ("06-arcade", PRESET_ARCADE),
+            ("07-custom-mint", custom_mint),
+        ];
+
+        for (name, shot) in variants {
+            let synthesized = shot.synthesize_tui();
+            let mut recolored = sample_lines.clone();
+            for line in &mut recolored {
+                for span in &mut line.spans {
+                    if span.style.fg == Some(Color::Rgb(0x20, 0x20, 0x20)) {
+                        span.style.fg = Some(Color::Rgb(shot.text[0], shot.text[1], shot.text[2]));
+                    } else if span.style.fg == Some(Color::Rgb(0x80, 0x80, 0x80)) {
+                        span.style.fg = Some(Color::Rgb(
+                            shot.text_muted[0],
+                            shot.text_muted[1],
+                            shot.text_muted[2],
+                        ));
+                    } else if span.style.fg == Some(Color::Rgb(0x1d, 0x9b, 0xf0)) {
+                        span.style.fg =
+                            Some(Color::Rgb(shot.accent[0], shot.accent[1], shot.accent[2]));
+                    }
+                }
+            }
+            let cap = render(RenderArgs {
+                tweet_id: name.to_string(),
+                lines: recolored,
+                media_images: Vec::new(),
+                shot_theme: &shot,
+            });
+            let path = out_dir.join(format!("{name}.png"));
+            let bytes = cap.to_png().unwrap();
+            std::fs::write(&path, &bytes).unwrap();
+            eprintln!("wrote {}", path.display());
+            let _ = synthesized;
+        }
     }
 }

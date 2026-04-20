@@ -387,11 +387,13 @@ impl App {
 
         match (key.code, key.modifiers) {
             (KeyCode::Esc, _) | (KeyCode::Char('q'), KeyModifiers::NONE) => self.compose_cancel(),
-            (KeyCode::Char('1'), _) => self.compose_select(ThemeSlot::Paper),
-            (KeyCode::Char('2'), _) => self.compose_select(ThemeSlot::Noir),
-            (KeyCode::Char('3'), _) => self.compose_select(ThemeSlot::Dusk),
-            (KeyCode::Char('4'), _) => self.compose_select(ThemeSlot::Citron),
-            (KeyCode::Char('5'), _) => self.compose_select(ThemeSlot::Match),
+            (KeyCode::Char('1'), _) => self.compose_select(ThemeSlot::Glass),
+            (KeyCode::Char('2'), _) => self.compose_select(ThemeSlot::Synthwave),
+            (KeyCode::Char('3'), _) => self.compose_select(ThemeSlot::Cutout),
+            (KeyCode::Char('4'), _) => self.compose_select(ThemeSlot::Moss),
+            (KeyCode::Char('5'), _) => self.compose_select(ThemeSlot::Blueprint),
+            (KeyCode::Char('6'), _) => self.compose_select(ThemeSlot::Arcade),
+            (KeyCode::Char('7'), _) => self.compose_select(ThemeSlot::Match),
             (KeyCode::Char('t'), _) => self.compose_begin_tune(),
             (KeyCode::Char('s'), _) => self.compose_confirm(Destination::Disk),
             (KeyCode::Char('y'), _) => self.compose_confirm(Destination::Clipboard),

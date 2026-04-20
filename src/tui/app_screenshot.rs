@@ -9,17 +9,19 @@ use crate::config;
 use crate::tui::event::Event;
 use crate::tui::external::{self, OpenTarget};
 use crate::tui::screenshot::{
-    self, Capture, PRESET_CITRON, PRESET_DUSK, PRESET_NOIR, PRESET_PAPER, RenderArgs, ShotTheme,
+    self, Capture, PRESET_ARCADE, PRESET_BLUEPRINT, PRESET_CUTOUT, PRESET_GLASS, PRESET_MOSS,
+    PRESET_SYNTHWAVE, RenderArgs, ShotTheme,
 };
 use crate::tui::ui::{self, RenderContext, RenderOpts};
 use image::RgbaImage;
 use ratatui::text::Line;
 use std::path::PathBuf;
 
-/// Columns the screenshot renders at. Kept in sync with the internal
-/// constant in `screenshot.rs` — passing it here makes the wrap width for
-/// `tweet_lines` match the grid we'll rasterize into.
-const SHOT_COLS: usize = 66;
+/// Columns the screenshot renders at. Shares the same constant the renderer
+/// uses for its buffer width so `tweet_lines`'s body wrap produces lines
+/// that fit exactly, not lines that get re-wrapped (and lose indent) at
+/// rasterize time.
+const SHOT_COLS: usize = screenshot::CONTENT_COLS as usize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Destination {
@@ -32,10 +34,12 @@ pub enum Destination {
 /// presets. Kept `Copy` so cycling/selection is frictionless.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThemeSlot {
-    Paper,
-    Noir,
-    Dusk,
-    Citron,
+    Glass,
+    Synthwave,
+    Cutout,
+    Moss,
+    Blueprint,
+    Arcade,
     Match,
     Custom,
 }
@@ -43,10 +47,12 @@ pub enum ThemeSlot {
 impl ThemeSlot {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Paper => "paper",
-            Self::Noir => "noir",
-            Self::Dusk => "dusk",
-            Self::Citron => "citron",
+            Self::Glass => "glass",
+            Self::Synthwave => "synthwave",
+            Self::Cutout => "cutout",
+            Self::Moss => "moss",
+            Self::Blueprint => "blueprint",
+            Self::Arcade => "arcade",
             Self::Match => "match tui",
             Self::Custom => "custom",
         }
@@ -54,20 +60,24 @@ impl ThemeSlot {
 
     pub fn digit(self) -> Option<char> {
         match self {
-            Self::Paper => Some('1'),
-            Self::Noir => Some('2'),
-            Self::Dusk => Some('3'),
-            Self::Citron => Some('4'),
-            Self::Match => Some('5'),
+            Self::Glass => Some('1'),
+            Self::Synthwave => Some('2'),
+            Self::Cutout => Some('3'),
+            Self::Moss => Some('4'),
+            Self::Blueprint => Some('5'),
+            Self::Arcade => Some('6'),
+            Self::Match => Some('7'),
             Self::Custom => None,
         }
     }
 
-    pub const ORDER: [ThemeSlot; 6] = [
-        Self::Paper,
-        Self::Noir,
-        Self::Dusk,
-        Self::Citron,
+    pub const ORDER: [ThemeSlot; 8] = [
+        Self::Glass,
+        Self::Synthwave,
+        Self::Cutout,
+        Self::Moss,
+        Self::Blueprint,
+        Self::Arcade,
         Self::Match,
         Self::Custom,
     ];
@@ -90,10 +100,12 @@ pub struct ComposeState {
 impl ComposeState {
     pub fn resolved_theme(&self, tui: &crate::tui::theme::Theme) -> ShotTheme {
         match self.selected {
-            ThemeSlot::Paper => PRESET_PAPER,
-            ThemeSlot::Noir => PRESET_NOIR,
-            ThemeSlot::Dusk => PRESET_DUSK,
-            ThemeSlot::Citron => PRESET_CITRON,
+            ThemeSlot::Glass => PRESET_GLASS,
+            ThemeSlot::Synthwave => PRESET_SYNTHWAVE,
+            ThemeSlot::Cutout => PRESET_CUTOUT,
+            ThemeSlot::Moss => PRESET_MOSS,
+            ThemeSlot::Blueprint => PRESET_BLUEPRINT,
+            ThemeSlot::Arcade => PRESET_ARCADE,
             ThemeSlot::Match => ShotTheme::from_tui(tui),
             ThemeSlot::Custom => self.custom.unwrap_or_else(|| ShotTheme::from_tui(tui)),
         }

@@ -22,13 +22,11 @@ impl ReplySort {
 fn sorted_replies(replies: &[Tweet], sort: ReplySort) -> Vec<Tweet> {
     let mut v = replies.to_vec();
     match sort {
-        ReplySort::Top => v.sort_by(|a, b| {
-            let ea = a.like_count + a.reply_count + a.retweet_count + a.quote_count;
-            let eb = b.like_count + b.reply_count + b.retweet_count + b.quote_count;
-            eb.cmp(&ea)
+        ReplySort::Top => v.sort_by_key(|t| {
+            std::cmp::Reverse(t.like_count + t.reply_count + t.retweet_count + t.quote_count)
         }),
-        ReplySort::Recent => v.sort_by(|a, b| b.created_at.cmp(&a.created_at)),
-        ReplySort::Oldest => v.sort_by(|a, b| a.created_at.cmp(&b.created_at)),
+        ReplySort::Recent => v.sort_by_key(|t| std::cmp::Reverse(t.created_at)),
+        ReplySort::Oldest => v.sort_by_key(|t| t.created_at),
     }
     v
 }

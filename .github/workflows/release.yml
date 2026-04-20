@@ -40,6 +40,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libdbus-1-dev pkg-config
 
+      # Stub the web bundle so rust-embed can compile. The real bundle is
+      # built by the `web-bundle` job and consumed by the `build` matrix.
+      - name: Stub web bundle
+        run: |
+          mkdir -p crates/unrager-app/dist
+          echo "<!doctype html><title>stub</title>" > crates/unrager-app/dist/index.html
+
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace --all-targets

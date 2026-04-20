@@ -50,6 +50,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libdbus-1-dev pkg-config
 
+      # Stub the web bundle so rust-embed has a folder to compile against on
+      # the default flavor. The real bundle is produced by the web-bundle job
+      # and packaged at release time; for compile-only checks, an empty
+      # placeholder is sufficient.
+      - name: Stub web bundle (default flavor only)
+        if: matrix.flavor.name == 'default'
+        run: |
+          mkdir -p crates/unrager-app/dist
+          echo "<!doctype html><title>stub</title>" > crates/unrager-app/dist/index.html
+
       # fmt + test only need to run once per OS; run on the default flavor
       - name: cargo fmt --check
         if: matrix.flavor.name == 'default'

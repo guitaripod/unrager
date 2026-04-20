@@ -22,6 +22,7 @@ keywords = ["twitter", "x", "cli", "llm", "filter"]
 categories = ["command-line-utilities"]
 include = [
     "src/**/*",
+    "assets/NotoSansMono-*.ttf",
     "Cargo.toml",
     "README.md",
     "LICENSE",
@@ -38,6 +39,8 @@ tui = [
     "dep:sys-locale",
     "dep:image",
     "dep:unicode-width",
+    "dep:ab_glyph",
+    "dep:arboard",
 ]
 # HTTP server + embedded web/mobile client. Pulls in axum and the WASM bundle.
 # Implies `tui` because the server reuses filter/seen/fetch helpers that live there.
@@ -95,6 +98,8 @@ termbg = { version = "0.5", optional = true }
 sys-locale = { version = "0.3.2", optional = true }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"], optional = true }
 unicode-width = { version = "0.2", optional = true }
+ab_glyph = { version = "0.2", optional = true }
+arboard = { version = "3", default-features = false, features = ["image-data", "wayland-data-control"], optional = true }
 
 # --- Server + embedded web bundle (optional, default) ---
 axum = { version = "0.8", features = ["multipart", "macros"], optional = true }

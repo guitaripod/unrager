@@ -16,6 +16,7 @@ pub mod external;
 pub mod filter;
 pub mod focus;
 pub mod media;
+pub mod screenshot;
 pub mod seen;
 pub mod session;
 pub mod sound;

@@ -31,20 +31,39 @@ static FONT_REG: LazyLock<FontRef<'static>> =
 static FONT_BOLD: LazyLock<FontRef<'static>> =
     LazyLock::new(|| FontRef::try_from_slice(FONT_BOLD_DATA).expect("noto sans mono bold"));
 
-const FONT_PX: f32 = 17.0;
-const PADDING_X: u32 = 22;
-const PAD_TOP: u32 = 10;
-const PAD_BOTTOM: u32 = 10;
-const WATERMARK_GAP: u32 = 6;
-const ACCENT_BAR_W: u32 = 4;
-const ACCENT_BAR_GAP: u32 = 12;
-const MEDIA_GAP_ABOVE: u32 = 8;
-const MEDIA_GAP_BELOW: u32 = 4;
-const MEDIA_MAX_W_PX: u32 = 900;
+/// Linear scale multiplier applied to every pixel dimension (font, padding,
+/// cell width, media width cap). Bumping this produces a natively-higher-
+/// resolution PNG — sharper than upscaling after the fact because glyph
+/// rasterization happens at the target density. 2 gives ~1400px-wide
+/// output — retina-sharp and share-ready without being absurd.
+const SCALE_I: u32 = 2;
+const SCALE_F: f32 = 2.0;
 
-/// Columns of text we render. Matches a comfortable reading width that
-/// mirrors what the TUI gives the focal pane in a 80-col split.
-const CONTENT_COLS: u16 = 66;
+/// Base font size in CSS-like "pt" units (before SCALE). 22pt is deliberate
+/// editorial-feel body size — prominent and readable as a standalone image,
+/// not tiny-terminal-text squeezed into a PNG.
+const FONT_PX: f32 = 22.0 * SCALE_F;
+/// Slightly smaller watermark so the "unrager" signature stays lowkey
+/// relative to the tweet body.
+const WATERMARK_PX: f32 = 15.0 * SCALE_F;
+/// Extra pixels of leading added on top of the font's natural line height —
+/// small amount of air between body lines for magazine-y rhythm.
+const LINE_LEADING: u32 = 4 * SCALE_I;
+
+const PADDING_X: u32 = 32 * SCALE_I;
+const PAD_TOP: u32 = 24 * SCALE_I;
+const PAD_BOTTOM: u32 = 22 * SCALE_I;
+const WATERMARK_GAP: u32 = 12 * SCALE_I;
+const ACCENT_BAR_W: u32 = 5 * SCALE_I;
+const ACCENT_BAR_GAP: u32 = 18 * SCALE_I;
+const MEDIA_GAP_ABOVE: u32 = 14 * SCALE_I;
+const MEDIA_GAP_BELOW: u32 = 8 * SCALE_I;
+const MEDIA_MAX_W_PX: u32 = 900 * SCALE_I;
+
+/// Columns of text per line. Shorter lines feel editorial; a tweet body
+/// at this width is closer to newspaper-column readability than
+/// terminal-width sprawl.
+const CONTENT_COLS: u16 = 56;
 
 pub struct Capture {
     pub image: RgbaImage,
@@ -263,7 +282,7 @@ impl Grid {
         let ascent = scaled.ascent();
         let descent = scaled.descent();
         let line_gap = scaled.line_gap();
-        let line_h = (ascent - descent + line_gap).ceil().max(1.0) as u32;
+        let line_h = (ascent - descent + line_gap).ceil().max(1.0) as u32 + LINE_LEADING;
         Self {
             cell_w,
             line_h,
@@ -297,9 +316,12 @@ pub fn render(args: RenderArgs<'_>) -> Capture {
                 .sum::<u32>()
     };
 
-    let wm_visible_h = grid.ascent.ceil() as u32;
+    let wm_h = FONT_REG
+        .as_scaled(PxScale::from(WATERMARK_PX))
+        .ascent()
+        .ceil() as u32;
     let canvas_w = ACCENT_BAR_W + ACCENT_BAR_GAP + content_px + PADDING_X * 2;
-    let canvas_h = PAD_TOP + text_h + media_h + WATERMARK_GAP + wm_visible_h + PAD_BOTTOM;
+    let canvas_h = PAD_TOP + text_h + media_h + WATERMARK_GAP + wm_h + PAD_BOTTOM;
 
     let bg = rgba_from(shot.bg);
     let mut canvas = RgbaImage::from_pixel(canvas_w, canvas_h, bg);
@@ -332,7 +354,7 @@ pub fn render(args: RenderArgs<'_>) -> Capture {
         media_y += m.height() + MEDIA_GAP_BELOW;
     }
 
-    draw_watermark(&mut canvas, &grid, shot);
+    draw_watermark(&mut canvas, shot);
 
     Capture {
         image: canvas,
@@ -461,26 +483,7 @@ fn draw_str(
         let id = scaled.glyph_id(ch);
         let glyph: Glyph =
             id.with_scale_and_position(PxScale::from(FONT_PX), point(pen_x, baseline));
-        if let Some(outlined) = font.outline_glyph(glyph) {
-            let bounds = outlined.px_bounds();
-            outlined.draw(|gx, gy, cov| {
-                if cov <= 0.0 {
-                    return;
-                }
-                let px = (bounds.min.x as i32) + gx as i32;
-                let py = (bounds.min.y as i32) + gy as i32;
-                if px < 0 || py < 0 {
-                    return;
-                }
-                let (px, py) = (px as u32, py as u32);
-                if px >= canvas.width() || py >= canvas.height() {
-                    return;
-                }
-                let existing = *canvas.get_pixel(px, py);
-                let blended = blend(existing, color, cov.clamp(0.0, 1.0));
-                canvas.put_pixel(px, py, blended);
-            });
-        }
+        rasterize_glyph(canvas, font, glyph, color);
         let advance = scaled.h_advance(id);
         // Monospace: clamp every glyph to exactly one cell of width to keep
         // the grid straight even when a symbol's own advance is fractionally
@@ -489,6 +492,52 @@ fn draw_str(
         let cells = (advance / cell_advance).round().max(1.0);
         pen_x += cells * cell_advance;
     }
+}
+
+/// Draw a free-floating text run at an explicit pixel size. No grid snap —
+/// used for the watermark, which sits outside the character grid.
+fn draw_str_at(
+    canvas: &mut RgbaImage,
+    font: &FontRef<'static>,
+    text: &str,
+    pos: (u32, u32),
+    size: f32,
+    color: Rgba<u8>,
+) {
+    let (x, y) = pos;
+    let scaled = font.as_scaled(PxScale::from(size));
+    let mut pen_x = x as f32;
+    let baseline = y as f32 + scaled.ascent();
+    for ch in text.chars() {
+        let id = scaled.glyph_id(ch);
+        let glyph: Glyph = id.with_scale_and_position(PxScale::from(size), point(pen_x, baseline));
+        rasterize_glyph(canvas, font, glyph, color);
+        pen_x += scaled.h_advance(id);
+    }
+}
+
+fn rasterize_glyph(canvas: &mut RgbaImage, font: &FontRef<'static>, glyph: Glyph, color: Rgba<u8>) {
+    let Some(outlined) = font.outline_glyph(glyph) else {
+        return;
+    };
+    let bounds = outlined.px_bounds();
+    outlined.draw(|gx, gy, cov| {
+        if cov <= 0.0 {
+            return;
+        }
+        let px = (bounds.min.x as i32) + gx as i32;
+        let py = (bounds.min.y as i32) + gy as i32;
+        if px < 0 || py < 0 {
+            return;
+        }
+        let (px, py) = (px as u32, py as u32);
+        if px >= canvas.width() || py >= canvas.height() {
+            return;
+        }
+        let existing = *canvas.get_pixel(px, py);
+        let blended = blend(existing, color, cov.clamp(0.0, 1.0));
+        canvas.put_pixel(px, py, blended);
+    });
 }
 
 fn blend(dst: Rgba<u8>, src: Rgba<u8>, alpha: f32) -> Rgba<u8> {
@@ -529,9 +578,9 @@ fn scale_media(images: &[RgbaImage], target_w: u32) -> Vec<RgbaImage> {
         .collect()
 }
 
-fn draw_watermark(canvas: &mut RgbaImage, grid: &Grid, shot: &ShotTheme) {
+fn draw_watermark(canvas: &mut RgbaImage, shot: &ShotTheme) {
     let text = "unrager";
-    let scaled = FONT_REG.as_scaled(PxScale::from(FONT_PX));
+    let scaled = FONT_REG.as_scaled(PxScale::from(WATERMARK_PX));
     let approx_w: f32 = text
         .chars()
         .map(|c| scaled.h_advance(scaled.glyph_id(c)))
@@ -539,16 +588,16 @@ fn draw_watermark(canvas: &mut RgbaImage, grid: &Grid, shot: &ShotTheme) {
     let w = approx_w.ceil() as u32;
     let fg = {
         let mut c = rgba_from(shot.text_muted);
-        c[3] = 140;
+        c[3] = 130;
         c
     };
-    let wm_visible_h = grid.ascent.ceil() as u32;
+    let wm_h = scaled.ascent().ceil() as u32;
     let x = canvas.width().saturating_sub(PADDING_X).saturating_sub(w);
     let y = canvas
         .height()
         .saturating_sub(PAD_BOTTOM)
-        .saturating_sub(wm_visible_h);
-    draw_str(canvas, &FONT_REG, text, (x, y), grid, fg);
+        .saturating_sub(wm_h);
+    draw_str_at(canvas, &FONT_REG, text, (x, y), WATERMARK_PX, fg);
 }
 
 fn color_to_rgba_opt(c: Color) -> Option<Rgba<u8>> {

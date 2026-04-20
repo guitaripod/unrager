@@ -95,6 +95,7 @@ pub fn dummy_app() -> (App, mpsc::UnboundedReceiver<Event>, TempDir) {
         changelog: None,
         changelog_scroll: 0,
         changelog_loading: false,
+        compose: None,
     };
     (app, rx, tmp)
 }

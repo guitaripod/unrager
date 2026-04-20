@@ -45,6 +45,7 @@ pub enum InputMode {
     Help,
     Changelog,
     Leader,
+    ScreenshotCompose,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -182,6 +183,7 @@ pub struct App {
     pub changelog: Option<Vec<crate::update::ReleaseEntry>>,
     pub changelog_scroll: u16,
     pub changelog_loading: bool,
+    pub compose: Option<crate::tui::app_screenshot::ComposeState>,
 }
 
 pub const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -344,6 +346,7 @@ impl App {
             changelog: None,
             changelog_scroll: 0,
             changelog_loading: false,
+            compose: None,
         };
         app.apply_effective_theme();
         Ok(app)
@@ -731,6 +734,8 @@ impl App {
                 self.changelog = Some(releases);
                 self.changelog_loading = false;
             }
+            Event::ScreenshotSaved { result } => self.handle_screenshot_saved(result),
+            Event::ScreenshotCopied { result } => self.handle_screenshot_copied(result),
             Event::Quit => self.running = false,
             Event::FocusGained => {
                 self.terminal_focused = true;

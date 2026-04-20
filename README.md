@@ -160,6 +160,8 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 | `o` | Open tweet in browser (auto-likes if write-rate-limited, for the browser-reply fallback) |
 | `O` | Open tweet author's profile in browser |
 | `m` | Open all media (photos/GIFs/videos) in native viewer |
+| `S` | Screenshot composer, default action save to `~/.cache/unrager/screenshots/` |
+| `C` | Screenshot composer, default action copy to clipboard |
 | `y` | Yank fixupx URL to clipboard |
 | `Y` | Yank tweet JSON to clipboard |
 | `r` | Reply to selected tweet (auto-likes the target on submit) |
@@ -257,6 +259,7 @@ While `unrager serve` is running it owns the filter + seen caches; the TUI detec
 - **Color-hashed handles** — FNV-1a hash into a per-theme 20-color palette, consistent across every mention in every tweet body.
 - **Zebra striping** — alternating row backgrounds drawn from the active theme.
 - **Share** — `y` copies a [fixupx](https://fixupx.com) embed URL, `o` opens in browser, `m` downloads every attachment on the selected tweet (all photos, GIFs, and video MP4s). On macOS images go to QuickLook (`qlmanage -p`) — space/Esc closes and focus returns to the terminal — while videos open in QuickTime Player via an osascript wrapper that polls for the document close and reactivates the spawning terminal, so Cmd+W alone gets you back to unrager. Linux uses `xdg-open` for everything. Cache lives under `~/.cache/unrager/media/<tweet_id>/`.
+- **Screenshot composer** — `S` (or `C`) opens a theme picker for rasterizing the focal tweet to a PNG. Four presets (`paper`, `noir`, `dusk`, `citron`), a "match TUI" option, or tune a custom theme from two hex colors (bg + accent; text auto-picked from bg luminance). Commit with `s` (save to `~/.cache/unrager/screenshots/`) or `y` (copy PNG to system clipboard). Media images are composited beneath the text; videos are skipped. Watermark sits bottom-right in the muted color.
 - **Configurable browser** — `config.toml` supports `{}` URL placeholder for Chromium `--app={}` kiosk mode.
 - **Digital clock overlay** — optional floating clock with big block-character digits. Every element is toggleable via `[clock]` in `config.toml` (see below) — time, date, seconds, 12/24h, position, accent color, border. Set `enabled = false` to hide completely.
 - **Session persistence** — source, selection, toggles, split width, feed mode, reply sort all survive restarts.
@@ -321,6 +324,7 @@ Config paths are platform-native: Linux uses `~/.config/unrager/` + `~/.cache/un
 | `~/.cache/unrager/seen.db` | Read-tracking SQLite |
 | `~/.cache/unrager/filter.db` | Filter verdict cache |
 | `~/.cache/unrager/media/<tweet_id>/` | Downloaded attachments for `m` (external viewer) |
+| `~/.cache/unrager/screenshots/` | PNG screenshots written by `S` |
 | `~/.cache/unrager/mordor-user-<hash>.opus` | Sliced Mordor loop (generated from `[sound] source`) |
 
 ### Theme

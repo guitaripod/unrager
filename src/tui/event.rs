@@ -167,6 +167,12 @@ pub enum Event {
     ChangelogLoaded {
         releases: Vec<crate::update::ReleaseEntry>,
     },
+    ScreenshotSaved {
+        result: std::result::Result<std::path::PathBuf, String>,
+    },
+    ScreenshotCopied {
+        result: std::result::Result<(), String>,
+    },
 }
 
 pub type EventTx = mpsc::UnboundedSender<Event>;

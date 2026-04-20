@@ -42,6 +42,10 @@ impl App {
             self.handle_key_reply(key);
             return;
         }
+        if matches!(self.mode, InputMode::ScreenshotCompose) {
+            self.handle_key_compose(key);
+            return;
+        }
         if matches!(self.mode, InputMode::Help | InputMode::Changelog) {
             let scroll = if self.mode == InputMode::Help {
                 &mut self.help_scroll
@@ -144,6 +148,8 @@ impl App {
             (KeyCode::Char('o'), KeyModifiers::NONE) => self.open_tweet_in_browser(),
             (KeyCode::Char('O'), _) => self.open_author_in_browser(),
             (KeyCode::Char('m'), KeyModifiers::NONE) => self.open_media_external(),
+            (KeyCode::Char('S'), _) => self.screenshot_save(),
+            (KeyCode::Char('C'), _) => self.screenshot_copy(),
             (KeyCode::Char('q'), KeyModifiers::NONE) => self.back_out(true),
             (KeyCode::Esc, _) => self.back_out(false),
             (KeyCode::Char(']'), _) => self.history_forward(),
@@ -349,6 +355,55 @@ impl App {
                 }
             }
             EditorResult::Consumed => {}
+        }
+    }
+
+    fn handle_key_compose(&mut self, key: KeyEvent) {
+        use crate::tui::app_screenshot::{Destination, ThemeSlot};
+
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.running = false;
+            return;
+        }
+
+        let in_tune = self
+            .compose
+            .as_ref()
+            .is_some_and(|c| c.tune_buffer.is_some());
+        if in_tune {
+            match (key.code, key.modifiers) {
+                (KeyCode::Esc, _) => self.compose_tune_cancel(),
+                (KeyCode::Enter, _) => self.compose_tune_submit(),
+                (KeyCode::Backspace, _) => self.compose_tune_input(|s| {
+                    s.pop();
+                }),
+                (KeyCode::Char(ch), m) if !m.contains(KeyModifiers::CONTROL) => {
+                    self.compose_tune_input(move |s| s.push(ch));
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        match (key.code, key.modifiers) {
+            (KeyCode::Esc, _) | (KeyCode::Char('q'), KeyModifiers::NONE) => self.compose_cancel(),
+            (KeyCode::Char('1'), _) => self.compose_select(ThemeSlot::Paper),
+            (KeyCode::Char('2'), _) => self.compose_select(ThemeSlot::Noir),
+            (KeyCode::Char('3'), _) => self.compose_select(ThemeSlot::Dusk),
+            (KeyCode::Char('4'), _) => self.compose_select(ThemeSlot::Citron),
+            (KeyCode::Char('5'), _) => self.compose_select(ThemeSlot::Match),
+            (KeyCode::Char('t'), _) => self.compose_begin_tune(),
+            (KeyCode::Char('s'), _) => self.compose_confirm(Destination::Disk),
+            (KeyCode::Char('y'), _) => self.compose_confirm(Destination::Clipboard),
+            (KeyCode::Enter, _) => {
+                let dest = self
+                    .compose
+                    .as_ref()
+                    .map(|c| c.destination)
+                    .unwrap_or(Destination::Disk);
+                self.compose_confirm(dest);
+            }
+            _ => {}
         }
     }
 

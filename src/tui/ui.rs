@@ -307,6 +307,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.mode == InputMode::Leader {
         draw_leader_overlay(frame, frame.area(), app);
     }
+    if app.mode == InputMode::ScreenshotCompose {
+        draw_compose_overlay(frame, frame.area(), app);
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1859,7 +1862,7 @@ const GLYPH_ARTICLE: &str = "❏";
 const GLYPH_LINK: &str = "🔗";
 const GLYPH_POLL: &str = "▥";
 
-fn tweet_lines(
+pub(super) fn tweet_lines(
     t: &Tweet,
     ctx: &RenderContext,
     seen: bool,
@@ -3504,6 +3507,9 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  o              open tweet in browser (auto-likes when write-rate-limited)"),
         Line::from("  O              open author profile in browser"),
         Line::from("  m              open all attachments in native viewer"),
+        Line::from("  S              open screenshot composer (theme picker, then save to PNG)"),
+        Line::from("  C              open screenshot composer (default action: copy to clipboard)"),
+        Line::from("                   · 1-5 pick preset, t tune custom colors, s save, y copy"),
         Line::from("  p              open profile of selected tweet's author"),
         Line::from("  P              open own profile in browser"),
         Line::from("  T              translate tweet to English (toggle)"),
@@ -3791,6 +3797,156 @@ fn draw_leader_overlay(frame: &mut Frame, area: Rect, app: &App) {
             .title(" <space> "),
     );
     frame.render_widget(popup_widget, popup);
+}
+
+fn draw_compose_overlay(frame: &mut Frame, area: Rect, app: &App) {
+    use crate::tui::app_screenshot::{Destination, ThemeSlot};
+    use crate::tui::screenshot::{
+        PRESET_CITRON, PRESET_DUSK, PRESET_NOIR, PRESET_PAPER, ShotTheme,
+    };
+
+    let Some(compose) = app.compose.as_ref() else {
+        return;
+    };
+
+    let t = th();
+    let dim = Style::default().fg(t.text_muted);
+    let key_style = Style::default().fg(t.accent).add_modifier(Modifier::BOLD);
+    let heading = Style::default().fg(t.heading).add_modifier(Modifier::BOLD);
+
+    let tui_snapshot = ShotTheme::from_tui(&t);
+
+    let row_theme = |slot: ThemeSlot| -> ShotTheme {
+        match slot {
+            ThemeSlot::Paper => PRESET_PAPER,
+            ThemeSlot::Noir => PRESET_NOIR,
+            ThemeSlot::Dusk => PRESET_DUSK,
+            ThemeSlot::Citron => PRESET_CITRON,
+            ThemeSlot::Match => tui_snapshot,
+            ThemeSlot::Custom => compose.custom.unwrap_or(tui_snapshot),
+        }
+    };
+
+    let rgb_span = |rgb: [u8; 3]| -> Span<'static> {
+        Span::styled(
+            "██ ",
+            Style::default().fg(ratatui::style::Color::Rgb(rgb[0], rgb[1], rgb[2])),
+        )
+    };
+    let hex = |rgb: [u8; 3]| format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    let dest_label = match compose.destination {
+        Destination::Disk => "save",
+        Destination::Clipboard => "clipboard",
+    };
+    lines.push(Line::from(Span::styled(
+        "screenshot · theme picker",
+        heading,
+    )));
+    lines.push(Line::from(vec![Span::styled(
+        format!("destination: {dest_label} (override with s / y)"),
+        dim,
+    )]));
+    lines.push(Line::from(""));
+
+    if let Some(buf) = compose.tune_buffer.as_ref() {
+        lines.push(Line::from(Span::styled(
+            "tune: enter two hex colors (bg, accent)",
+            Style::default().fg(t.text).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled("  e.g.  #fdf6e3 #1d9bf0", dim)));
+        lines.push(Line::from(""));
+        let mut spans = vec![Span::styled("  > ", dim)];
+        spans.push(Span::styled(buf.clone(), Style::default().fg(t.text)));
+        spans.push(Span::styled(
+            "█",
+            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+        ));
+        lines.push(Line::from(spans));
+        if let Some(err) = compose.tune_error.as_ref() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                format!("  ✗ {err}"),
+                Style::default().fg(t.error),
+            )));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(" Enter", key_style),
+            Span::raw("  apply    "),
+            Span::styled("Esc", key_style),
+            Span::raw("  cancel"),
+        ]));
+    } else {
+        for slot in ThemeSlot::ORDER {
+            let selected = compose.selected == slot;
+            let marker = if selected { "►" } else { " " };
+            let shot = row_theme(slot);
+            let label_style = if selected {
+                Style::default().fg(t.text).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(t.text)
+            };
+            let digit_span = match slot.digit() {
+                Some(d) => Span::styled(d.to_string(), key_style),
+                None => Span::styled("t", key_style),
+            };
+            let hex_line = match slot {
+                ThemeSlot::Custom => match compose.custom {
+                    Some(c) => format!("{} / {}", hex(c.bg), hex(c.accent)),
+                    None => "press  t  to set two colors".to_string(),
+                },
+                _ => format!("{} / {}", hex(shot.bg), hex(shot.accent)),
+            };
+            lines.push(Line::from(vec![
+                Span::styled(marker, Style::default().fg(t.accent)),
+                Span::raw(" "),
+                digit_span,
+                Span::raw("  "),
+                rgb_span(shot.bg),
+                rgb_span(shot.accent),
+                Span::styled(format!("{:<10}", slot.label()), label_style),
+                Span::raw("  "),
+                Span::styled(hex_line, dim),
+            ]));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(" 1-5", key_style),
+            Span::raw(" preset  "),
+            Span::styled("t", key_style),
+            Span::raw(" tune  "),
+            Span::styled("s", key_style),
+            Span::raw(" save  "),
+            Span::styled("y", key_style),
+            Span::raw(" clipboard  "),
+            Span::styled("Enter", key_style),
+            Span::raw(" commit  "),
+            Span::styled("Esc", key_style),
+            Span::raw(" cancel"),
+        ]));
+    }
+
+    let w: u16 = 64;
+    let h: u16 = (lines.len() as u16 + 2).min(area.height);
+    let x = (area.width.saturating_sub(w)) / 2;
+    let y = (area.height.saturating_sub(h)) / 2;
+    let popup = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
+    frame.render_widget(Clear, popup);
+    let widget = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(t.accent))
+            .title(" screenshot "),
+    );
+    frame.render_widget(widget, popup);
 }
 
 #[cfg(test)]

@@ -3,6 +3,7 @@ mod app_fetch;
 mod app_keys;
 mod app_llm;
 mod app_nav;
+mod app_screenshot;
 pub mod ask;
 pub mod background;
 pub mod brief;

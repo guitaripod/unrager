@@ -52,9 +52,12 @@ jobs:
       - run: cargo test --workspace --all-targets
 
   web-bundle:
+    # ubuntu-latest (24.04), not 22.04, because the cargo-binstall-installed
+    # `dx` binary is linked against GLIBC 2.39 which only exists on 24.04+.
+    # The downstream binary builds still use 22.04 for broader compat.
     name: build web bundle (WASM)
     needs: check
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
 

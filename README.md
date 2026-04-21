@@ -43,6 +43,8 @@ unrager
 ollama pull gemma4
 ```
 
+Want to poke around without setting up X cookies? Run `unrager demo` — it launches the TUI against a bundled offline feed of 15 tweets designed to exercise the filter. No cookies, no network, just a terminal (and optionally Ollama to see the filter drop roughly five of them).
+
 Uninstall:
 
 ```sh

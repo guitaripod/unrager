@@ -450,6 +450,9 @@ pub async fn fetch_notifications(
     client: &GqlClient,
     cursor: Option<&str>,
 ) -> Result<notification::NotificationPage> {
+    if crate::tui::demo::is_demo_mode() {
+        return Ok(notification::NotificationPage::default());
+    }
     let response = fetch_notifications_raw(client, cursor).await?;
     notification::parse_notifications_timeline(&response)
 }

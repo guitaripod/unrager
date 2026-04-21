@@ -10,6 +10,7 @@ pub mod brief;
 pub mod clock;
 pub mod command;
 pub mod compose;
+pub mod demo;
 pub mod editor;
 pub mod engage;
 pub mod event;

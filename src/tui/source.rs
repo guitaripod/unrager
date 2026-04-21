@@ -217,6 +217,12 @@ pub async fn fetch_page(
     kind: &SourceKind,
     cursor: Option<String>,
 ) -> Result<TimelinePage> {
+    if crate::tui::demo::is_demo_mode() {
+        return Ok(match cursor {
+            None => crate::tui::demo::page(),
+            Some(_) => TimelinePage::default(),
+        });
+    }
     match kind {
         SourceKind::Home { following } => fetch_home(client, *following, cursor).await,
         SourceKind::User { handle } => fetch_user(client, handle, cursor).await,
@@ -353,6 +359,9 @@ async fn fetch_bookmarks(
 }
 
 pub async fn fetch_self_handle(client: &GqlClient) -> Result<String> {
+    if crate::tui::demo::is_demo_mode() {
+        return Ok(crate::tui::demo::DEMO_HANDLE.into());
+    }
     let response = client
         .get(
             Operation::Viewer,

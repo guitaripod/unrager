@@ -2,6 +2,8 @@ pub mod auth;
 pub mod bookmarks;
 pub mod common;
 #[cfg(feature = "tui")]
+pub mod demo;
+#[cfg(feature = "tui")]
 pub mod doctor;
 pub mod home;
 pub mod mentions;
@@ -90,6 +92,12 @@ pub enum Command {
 
     #[command(about = "Manage OAuth 2.0 tokens for the write path")]
     Auth(auth::Args),
+
+    #[cfg(feature = "tui")]
+    #[command(
+        about = "Launch the TUI against a bundled offline feed (no X cookies needed, just a terminal and optionally Ollama)"
+    )]
+    Demo(demo::Args),
 
     #[cfg(feature = "tui")]
     #[command(about = "Check cookies, Ollama, and gemma4 setup")]

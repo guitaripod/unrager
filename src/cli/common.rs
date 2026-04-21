@@ -9,6 +9,16 @@ use crate::parse::timeline::{self, TimelinePage};
 use crate::parse::viewer;
 
 pub async fn build_gql_client() -> Result<GqlClient> {
+    if std::env::var_os("UNRAGER_DEMO").is_some() {
+        let session = crate::auth::XSession {
+            auth_token: "demo".into(),
+            ct0: "demo".into(),
+            twid: "demo".into(),
+        };
+        let cache_path = config::cache_dir()?.join("query-ids.json");
+        let store = QueryIdStore::with_fallbacks_and_cache(&cache_path);
+        return GqlClient::new(session, store, cache_path);
+    }
     let session = chromium::load_session().await?;
     let config_dir = config::config_dir()?;
     let app_config = config::AppConfig::load(&config_dir);

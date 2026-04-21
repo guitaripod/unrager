@@ -181,7 +181,8 @@ EOF
         cat <<EOF
 
 Next steps:
-  unrager                  launch the TUI
+  unrager                  launch the TUI against your X feed
+  unrager demo             launch the TUI against a bundled offline feed
   unrager doctor           check cookies, Ollama, and filter setup
   ollama pull gemma4       enable the local-LLM rage filter (optional)
   unrager --help           all subcommands

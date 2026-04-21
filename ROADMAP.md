@@ -2,7 +2,7 @@
 
 Pre-launch and post-launch polish. Each item is a self-contained task an agent can pick up, work through, and ship independently.
 
-**Convention:** one task per commit (or tight PR). Run the CI gate (`cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings && cargo test`) before pushing. Don't bundle unrelated items. When finishing a task, strike it here in the same PR.
+**Convention:** one task per commit (or tight PR). Run the CI gate (`cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings && cargo test`) before pushing. Don't bundle unrelated items. When finishing a task, move it to the Completed section at the bottom with a one-line summary and the commit sha.
 
 ---
 
@@ -25,77 +25,23 @@ These determine whether a new user's first 60 seconds end in "wow" or "uninstall
 **How:** `rustup default stable && rustup update && cargo install unrager` in a clean `$CARGO_HOME`. Time it. If LTO SIGILLs on stable despite CLAUDE.md's note, add the workaround to `[profile.release]` or document the env var in README.
 **Done when:** clean install succeeds on stable, timing recorded here, and any new requirement is in README.
 
-### [x] Audit `unrager doctor` output for the three broken-state personas
-**Goal:** `doctor` should be the single command that fixes every "unrager isn't working" DM.
-**How:** run `unrager doctor` in three deliberately broken states — (a) no browser cookies found, (b) Ollama not installed or port unreachable, (c) stale query IDs (simulate by editing `~/.cache/unrager/query-ids.json`). For each: is the diagnosis correct? Is the fix one copy-pasteable command? If not, improve the relevant check in `src/cli/doctor.rs`.
-**Done when:** all three states produce a diagnosis + fix that a non-Rust user can follow.
-**Shipped:** all three personas produce clear diagnoses with copy-pasteable fixes; added a dedicated branch for an invalid `UNRAGER_COOKIES_PATH` override so the user knows to unset/retarget rather than chasing a "no cookie store found" false lead.
-
-### [x] Ollama-missing graceful degradation pass
-**Goal:** users without Ollama should get a working TUI with a clear, actionable hint — not silence.
-**How:** stop Ollama (`systemctl --user stop ollama` or equivalent), run the TUI. Confirm the `filter off · doctor` hint shows. Press `A` (ask), `T` (translate), `B` (brief) — each should fail with a one-line user-visible message pointing at `doctor`, not hang or no-op. Grep `src/tui/app_llm.rs` for silent `return` branches.
-**Done when:** every LLM-gated key produces visible feedback when Ollama is down.
-**Shipped:** `translate_async` now surfaces failures via a new `TweetTranslateFailed` event (was silently hanging `translation_inflight`); ask/brief error statuses route through a shared `ollama_error_hint` that appends `run \`unrager doctor\`` on connection-style errors. The pre-flight "config missing" message was retitled from `(no ollama config)` to `· run \`unrager doctor\``.
-
 ---
 
 ## P1 — Reputation and trust
-
-### [x] Rework the cookie/auth framing in README
-**Goal:** "we read your browser cookies" must land as "clever" not "malware."
-**How:** add a short "How auth works" subsection near the top (before Quick start, or immediately after). Cover: what cookies are read (only `auth_token` and `ct0` from the X domain), what stays local (everything), that the code path is `src/auth/` and open-source, and the OAuth alternative for writes. One paragraph, not a wall.
-**Done when:** README has a trust-inducing auth section above the fold.
-**Shipped:** two-paragraph "How auth works" section placed directly above Quick start — reading vs writing split cleanly so users understand the cookie path isn't used for writes.
-
-### [x] Explicit Windows support statement in README
-**Goal:** no ambiguity.
-**How:** one line in the install section. Either "Windows: use WSL2" or "Windows: unsupported, PRs welcome." Match current reality — the cookie-extraction path in `src/auth/` likely dictates which.
-**Done when:** a Windows user reading README knows in 10 seconds whether to bother.
-**Shipped:** WSL2 is the documented path; native Windows is called out as not-implemented because Chromium on Windows uses DPAPI and `src/auth/chromium.rs` has no DPAPI backend. PRs explicitly welcomed.
-
-### [x] Changelog / GitHub release notes for 0.15.0
-**Goal:** people check "when was this last touched, and does the author care?" before installing.
-**How:** either a `CHANGELOG.md` seeded with the last few versions from `git log`, or rich release notes on the existing GitHub release for 0.15.0 (and a habit of doing it going forward — maybe add a step to CLAUDE.md's release checklist).
-**Done when:** the 0.15.0 GitHub release has a human-written summary, and there's a pattern for future releases.
-**Shipped:** `CHANGELOG.md` seeded with the last seven releases (0.13.0 → 0.15.0), plus an `[Unreleased]` section that captures this roadmap pass. CLAUDE.md's release steps now require rolling `[Unreleased]` into the new version entry as step 1, and pasting the section into the GitHub release body after the workflow completes.
 
 ### [ ] Site link check in a real paste context
 **Goal:** OG card renders on Twitter, Discord, and Slack previews; install snippet copy works; demo plays.
 **How:** paste the site URL into each platform's compose box, confirm the preview. Copy the install snippet from the site in a real browser, paste into a shell, confirm it's what you expect (no smart quotes, no zero-width chars). Open the carousel on mobile Safari and Firefox.
 **Done when:** all three platform previews look right; install-copy yields a clean bash-executable string.
 
-### [x] Harden the bug-report issue template
-**Goal:** every new issue arrives with `doctor` output and a log tail, so triage takes minutes not hours.
-**How:** edit `.github/ISSUE_TEMPLATE/bug_report.md` to require (a) `unrager --version`, (b) `unrager doctor` output, (c) last 50 lines of `~/.cache/unrager/unrager.log.$(date +%Y-%m-%d)`, (d) reproduction steps. Use placeholders so users know what to paste where.
-**Done when:** the template visibly pre-fills these sections on a new issue form.
-**Shipped:** template rewritten with mandatory `$ unrager --version`, `$ unrager doctor`, and `$ tail -n 50 ~/.cache/unrager/unrager.log.$(date +%Y-%m-%d)` code blocks (placeholder text inside each), plus structured Reproduction / Environment fields.
-
 ---
 
 ## P2 — Durability
-
-### [x] Query ID rotation early-warning
-**Goal:** when X rotates query IDs and the scraper fails, we know before users do.
-**How:** add a daily or weekly GitHub Actions cron that runs a minimal auth-less scraper check. If fallback IDs stop matching the live ones, open an issue automatically. See `src/gql/` for the scraper module.
-**Done when:** a workflow exists, has run successfully once, and has a documented failure mode (what happens when it opens an issue).
-**Shipped:** `examples/check_query_ids.rs` diffs scraped live IDs against the `FALLBACK_QUERY_IDS` table and exits 1 on drift (or 2 when `main.*.js` can't be parsed). `.github/workflows/query-ids-watch.yml` runs it Mondays 06:00 UTC and either opens a tracking issue labelled `query-ids` or comments on the existing open one. Running the checker locally right now already flags 6 rotated + 4 missing ops — the fallbacks are stale and need bumping before the next release.
 
 ### [ ] Telemetry-free usage signal
 **Goal:** know whether the site install-script is being run, without shipping telemetry.
 **How:** the install script is served from `unrager.com` — the access log on whatever host serves it is the signal. Document in an internal note (or as a comment in the site repo) where to check that, and what a healthy rate looks like after launch so drops are visible.
 **Done when:** there's a one-liner (log grep, or dashboard link) that answers "did 10 or 10,000 people try to install it today."
-
-### [x] `unrager --help` readthrough
-**Goal:** `--help` should sell the CLI the way the README sells the TUI.
-**How:** run `unrager --help` and each subcommand's `--help`. Check every description reads like a complete sentence, the examples are current, and nothing references removed flags. Clap attribute docs live across `src/main.rs` and `src/cli/*.rs`.
-**Done when:** every help screen is proofread and each example actually works.
-**Shipped:** `home`, `user`, `search`, `mentions`, `bookmarks`, `thread`, `notifs` had `-n`, `--json`, `--max-pages`, and `--product` flags with no help text — each now has a complete-sentence description. Top-level and subcommand docs read cleanly; no removed-flag references.
-
-### [x] Panic audit on common user paths
-**Goal:** no `.unwrap()` on user-reachable paths.
-**How:** `grep -rn 'unwrap()' src/` and for each hit in non-test code, ask "can a malformed X response, missing file, or failed fetch reach this?" Replace with `?` propagation + a `tracing::error!` where recoverable, or a graceful user-visible error. Don't touch `test_util.rs` or `#[cfg(test)]` blocks.
-**Done when:** the remaining `.unwrap()` calls are either in tests or have a justifying comment.
-**Shipped:** grepped every `.unwrap()` and `.expect()` in non-test code. Findings: (1) `src/main.rs` env-filter unwraps are on hardcoded, guaranteed-valid strings; (2) `src/tui/theme.rs:465` is behind a prior `is_ok()` guard; (3) `src/tui/compose.rs:50` is behind a `contains()` guard; (4) axum `Response::builder().body(...).unwrap()` in `src/server/embed.rs` and `src/server/routes/media.rs` are standard idiom with static bodies; (5) `src/tui/external.rs` had two raw unwraps on `paths.into_iter().next()` — rewritten to `.expect("download_and_open groups contain at least one path")` to document the non-local invariant. Everything else is in `#[cfg(test)]` or on regex/font statics. No user-reachable panic remains.
 
 ---
 
@@ -115,4 +61,12 @@ These determine whether a new user's first 60 seconds end in "wow" or "uninstall
 
 ## Completed
 
-_(Move tasks here with a `- [x]` and a one-line summary when shipped.)_
+- [x] **Ollama-missing graceful degradation pass** — `a17d03c` — translate now surfaces failures via a `TweetTranslateFailed` event; ask/brief errors route through a shared `ollama_error_hint` that adds `run unrager doctor` on connection failures.
+- [x] **Audit `unrager doctor` output for the three broken-state personas** — `3ed6b47` — added a dedicated branch for an invalid `UNRAGER_COOKIES_PATH` override; all three personas now produce copy-pasteable fixes.
+- [x] **Rework cookie/auth framing in README** — `3121125` — two-paragraph "How auth works" section above Quick start, reading vs writing split cleanly.
+- [x] **Explicit Windows support statement in README** — `3121125` — WSL2 is the documented path; native Windows called out as not-implemented (no DPAPI backend).
+- [x] **Changelog / GitHub release notes for 0.15.0** — `c18d35b` — `CHANGELOG.md` seeded with 0.13.0 → 0.15.0 plus `[Unreleased]`; CLAUDE.md release steps updated to roll it.
+- [x] **Harden the bug-report issue template** — `bbbd055` — three mandatory code blocks with the exact shell commands (`--version`, `doctor`, log tail) pre-filled.
+- [x] **`unrager --help` readthrough** — `d74819e` — filled in `-n`, `--json`, `--max-pages`, `--product` help text across 7 subcommands.
+- [x] **Panic audit on common user paths** — `f0800b7` — audited every non-test `unwrap`/`expect`; documented the non-local invariant on `external.rs` viewer spawns with `.expect(...)`; no user-reachable panic remains.
+- [x] **Query ID rotation early-warning** — `23cd9fd` — `examples/check_query_ids.rs` + `.github/workflows/query-ids-watch.yml` cron that opens or refreshes a tracking issue on drift.

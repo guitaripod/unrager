@@ -3,6 +3,8 @@ assets/*.gif filter=lfs diff=lfs merge=lfs -text
 demos/out/*.png filter=lfs diff=lfs merge=lfs -text
 demos/out/*.gif filter=lfs diff=lfs merge=lfs -text
 demos/out/*.mp4 filter=lfs diff=lfs merge=lfs -text
+site/public/*.png filter=lfs diff=lfs merge=lfs -text
+site/public/*.gif filter=lfs diff=lfs merge=lfs -text
 
 install.sh linguist-detectable=false
 justfile linguist-detectable=false

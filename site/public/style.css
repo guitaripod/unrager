@@ -209,20 +209,25 @@ kbd {
 
 .slides {
   position: relative;
+  display: grid;
+  grid-template-areas: "stack";
+  width: 100%;
   aspect-ratio: 1920 / 1180;
   border-radius: 10px;
   overflow: hidden;
   border: 1px solid var(--border);
   background: var(--bg-2);
+  isolation: isolate;
   box-shadow:
     0 0 0 1px rgba(255, 255, 255, 0.02),
     0 20px 60px -20px rgba(0, 0, 0, 0.6);
 }
 
 .slide {
-  position: absolute;
-  inset: 0;
+  grid-area: stack;
   margin: 0;
+  min-width: 0;
+  min-height: 0;
   opacity: 0;
   transition: opacity 420ms ease;
   pointer-events: none;

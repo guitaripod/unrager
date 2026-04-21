@@ -322,7 +322,21 @@ kbd {
   }
 }
 
+@media (max-width: 480px) {
+  .cmd {
+    font-size: .78rem;
+    padding: .6rem .8rem;
+    gap: .6rem;
+  }
+}
+
+@media (max-width: 360px) {
+  .cmd {
+    font-size: .72rem;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .cursor { animation: none; }
+  .wordmark::after { animation: none; }
   .btn:hover { transform: none; }
 }

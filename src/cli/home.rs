@@ -10,13 +10,21 @@ pub struct Args {
     #[arg(long, help = "Fetch the Following feed instead of For You")]
     pub following: bool,
 
-    #[arg(short = 'n', default_value_t = 20)]
+    #[arg(
+        short = 'n',
+        default_value_t = 20,
+        help = "Target tweet count after filtering"
+    )]
     pub count: u32,
 
-    #[arg(long)]
+    #[arg(long, help = "Emit parsed tweets as JSON (one object per line)")]
     pub json: bool,
 
-    #[arg(long, default_value_t = 1)]
+    #[arg(
+        long,
+        default_value_t = 1,
+        help = "Maximum pages to fetch (~20 tweets each)"
+    )]
     pub max_pages: u32,
 }
 

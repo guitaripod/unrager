@@ -11,7 +11,10 @@ pub struct Args {
     #[arg(help = "Tweet ID or URL")]
     pub target: String,
 
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Emit the focal tweet and replies as JSON (one object per line)"
+    )]
     pub json: bool,
 
     #[arg(long, default_value_t = 1, help = "How many pages of replies to fetch")]

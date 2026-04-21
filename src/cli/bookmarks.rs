@@ -13,13 +13,13 @@ pub struct Args {
     )]
     pub query: String,
 
-    #[arg(short = 'n', default_value_t = 20)]
+    #[arg(short = 'n', default_value_t = 20, help = "Target result count")]
     pub count: u32,
 
-    #[arg(long)]
+    #[arg(long, help = "Emit parsed tweets as JSON (one object per line)")]
     pub json: bool,
 
-    #[arg(long, default_value_t = 1)]
+    #[arg(long, default_value_t = 1, help = "Maximum pages to fetch")]
     pub max_pages: u32,
 }
 

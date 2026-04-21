@@ -4,7 +4,7 @@ use clap::Args as ClapArgs;
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
-    #[arg(short = 'n', default_value_t = 20)]
+    #[arg(short = 'n', default_value_t = 20, help = "Target mention count")]
     pub count: u32,
 
     #[arg(
@@ -13,10 +13,10 @@ pub struct Args {
     )]
     pub user: Option<String>,
 
-    #[arg(long)]
+    #[arg(long, help = "Emit parsed tweets as JSON (one object per line)")]
     pub json: bool,
 
-    #[arg(long, default_value_t = 1)]
+    #[arg(long, default_value_t = 1, help = "Maximum pages to fetch")]
     pub max_pages: u32,
 }
 

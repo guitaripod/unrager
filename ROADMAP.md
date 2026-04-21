@@ -84,10 +84,11 @@ These determine whether a new user's first 60 seconds end in "wow" or "uninstall
 **How:** the install script is served from `unrager.com` — the access log on whatever host serves it is the signal. Document in an internal note (or as a comment in the site repo) where to check that, and what a healthy rate looks like after launch so drops are visible.
 **Done when:** there's a one-liner (log grep, or dashboard link) that answers "did 10 or 10,000 people try to install it today."
 
-### [ ] `unrager --help` readthrough
+### [x] `unrager --help` readthrough
 **Goal:** `--help` should sell the CLI the way the README sells the TUI.
 **How:** run `unrager --help` and each subcommand's `--help`. Check every description reads like a complete sentence, the examples are current, and nothing references removed flags. Clap attribute docs live across `src/main.rs` and `src/cli/*.rs`.
 **Done when:** every help screen is proofread and each example actually works.
+**Shipped:** `home`, `user`, `search`, `mentions`, `bookmarks`, `thread`, `notifs` had `-n`, `--json`, `--max-pages`, and `--product` flags with no help text — each now has a complete-sentence description. Top-level and subcommand docs read cleanly; no removed-flag references.
 
 ### [ ] Panic audit on common user paths
 **Goal:** no `.unwrap()` on user-reachable paths.

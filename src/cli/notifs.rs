@@ -5,7 +5,7 @@ use clap::Args as ClapArgs;
 
 #[derive(Debug, ClapArgs)]
 pub struct Args {
-    #[arg(long)]
+    #[arg(long, help = "Emit parsed notifications as JSON (one object per line)")]
     pub json: bool,
 
     #[arg(long, help = "Dump the raw API response JSON")]

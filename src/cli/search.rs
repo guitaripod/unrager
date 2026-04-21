@@ -28,16 +28,16 @@ pub struct Args {
     #[arg(help = "Search query (same syntax as the web client: from:, since:, lang:, etc.)")]
     pub query: String,
 
-    #[arg(short = 'n', default_value_t = 20)]
+    #[arg(short = 'n', default_value_t = 20, help = "Target result count")]
     pub count: u32,
 
-    #[arg(long, value_enum, default_value_t = Product::Latest)]
+    #[arg(long, value_enum, default_value_t = Product::Latest, help = "Which search tab to query")]
     pub product: Product,
 
-    #[arg(long)]
+    #[arg(long, help = "Emit parsed tweets as JSON (one object per line)")]
     pub json: bool,
 
-    #[arg(long, default_value_t = 1)]
+    #[arg(long, default_value_t = 1, help = "Maximum pages to fetch")]
     pub max_pages: u32,
 }
 

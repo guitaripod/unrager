@@ -7,6 +7,7 @@
 
   :root {
     --bg: #0f1419;
+    --bg-2: #16181c;
     --text: #e7e9ea;
     --muted: #71767b;
     --muted-2: #8b93a1;
@@ -14,8 +15,7 @@
     --accent-dim: rgba(29, 155, 240, 0.14);
     --border: #2f3336;
     --border-soft: #21262d;
-    --mono: "JetBrainsMono Nerd Font", "Fira Code", "JetBrains Mono", "Liberation Mono",
-            ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --mono: ui-monospace, SFMono-Regular, "Liberation Mono", Menlo, Consolas, monospace;
   }
 
   html, body {
@@ -23,7 +23,8 @@
     height: 630px;
     font-family: var(--mono);
     background:
-      radial-gradient(900px 380px at 52% -120px, rgba(29, 155, 240, 0.10), transparent 70%),
+      radial-gradient(900px 420px at 20% -160px, rgba(29, 155, 240, 0.14), transparent 70%),
+      radial-gradient(700px 340px at 105% 115%, rgba(29, 155, 240, 0.08), transparent 70%),
       var(--bg);
     color: var(--text);
     -webkit-font-smoothing: antialiased;
@@ -33,159 +34,263 @@
   .frame {
     width: 1200px;
     height: 630px;
-    padding: 58px 72px;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
+    padding: 54px 62px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 54px;
+    align-items: center;
     position: relative;
   }
 
   .frame::after {
     content: "";
     position: absolute;
-    inset: 24px;
+    inset: 22px;
     border: 1px solid var(--border-soft);
     border-radius: 14px;
     pointer-events: none;
   }
 
+  .left {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    position: relative;
+    z-index: 1;
+  }
+
   .top {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 12px;
     color: var(--muted);
-    font-size: 18px;
-    letter-spacing: .04em;
+    font-size: 16px;
+    letter-spacing: .05em;
   }
-
-  .top-left { display: flex; align-items: center; gap: 14px; }
 
   .dot {
-    width: 10px; height: 10px; border-radius: 50%;
-    background: var(--accent); box-shadow: 0 0 16px rgba(29, 155, 240, 0.55);
-  }
-
-  .badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 16px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: rgba(22, 24, 28, 0.7);
-    font-size: 16px;
-    color: var(--muted-2);
-  }
-
-  .badge .minus {
-    color: var(--accent);
-    font-weight: 700;
-    font-size: 18px;
-  }
-
-  .badge .label { letter-spacing: .06em; }
-
-  .body {
-    display: flex;
-    flex-direction: column;
-    gap: 18px;
-    margin-top: 20px;
-  }
-
-  .cursor {
-    color: var(--accent);
-    font-size: 22px;
-    line-height: 1;
-    margin-bottom: 2px;
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--accent); box-shadow: 0 0 14px rgba(29, 155, 240, 0.6);
   }
 
   .wordmark {
-    font-size: 148px;
-    line-height: 1;
+    font-size: 120px;
+    line-height: .95;
     letter-spacing: -0.02em;
     font-weight: 700;
     color: var(--text);
+    margin: 2px 0 4px;
   }
 
   .tagline {
-    font-size: 30px;
-    line-height: 1.4;
+    font-size: 24px;
+    line-height: 1.35;
     color: var(--muted-2);
-    max-width: 38ch;
   }
+  .tagline .nobr { white-space: nowrap; }
 
   .tagline .hi { color: var(--text); }
 
   .install {
     display: inline-flex;
     align-items: center;
-    gap: 14px;
-    padding: 16px 22px;
+    gap: 12px;
+    padding: 13px 18px;
     border: 1px solid var(--border);
     border-radius: 10px;
-    background: #16181c;
-    font-size: 22px;
+    background: var(--bg-2);
+    font-size: 20px;
     color: var(--text);
     align-self: flex-start;
-    max-width: 100%;
-    overflow: hidden;
-    margin-top: 6px;
+    margin-top: 8px;
   }
-
   .install .p { color: var(--accent); }
-  .install .m { color: var(--muted); }
 
-  .foot {
-    display: flex;
-    justify-content: space-between;
+  .chip {
+    display: inline-flex;
     align-items: center;
-    color: var(--muted);
-    font-size: 18px;
-  }
-
-  .foot .url { color: var(--text); }
-  .foot .chip {
+    gap: 10px;
     padding: 6px 12px;
     border: 1px solid var(--accent);
     background: var(--accent-dim);
     color: var(--accent);
     border-radius: 6px;
-    font-size: 16px;
+    font-size: 15px;
     letter-spacing: .04em;
+    align-self: flex-start;
+    margin-top: 4px;
+  }
+
+  /* ───────── right column: terminal mock ───────── */
+
+  .term {
+    position: relative;
+    z-index: 1;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--bg-2);
+    box-shadow:
+      0 30px 80px -40px rgba(0, 0, 0, 0.85),
+      0 0 0 1px rgba(29, 155, 240, 0.08);
+    overflow: hidden;
+  }
+
+  .term-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 13px 18px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(0, 0, 0, 0.22);
+    color: var(--muted);
+    font-size: 14px;
+  }
+  .term-bar .title { display: flex; align-items: center; gap: 10px; letter-spacing: .04em; }
+  .term-bar .title .pip { color: var(--accent); font-size: 10px; }
+  .term-bar .title .sep { color: var(--border); }
+  .term-bar .title .here { color: var(--text); }
+
+  .term-bar .filtered {
+    color: var(--muted-2);
+    border: 1px solid var(--border);
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    letter-spacing: .06em;
+  }
+  .term-bar .filtered .n { color: var(--accent); font-weight: 700; }
+
+  .term-body {
+    padding: 18px 22px 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .tw { display: grid; grid-template-columns: 20px 1fr; gap: 12px; }
+  .tw .mark { color: var(--accent); font-size: 14px; line-height: 1.6; }
+  .tw .h {
+    display: flex; gap: 10px; align-items: baseline;
+    color: var(--muted);
+    font-size: 14px;
+  }
+  .tw .h .handle { color: var(--text); font-weight: 600; font-size: 15px; }
+  .tw .body {
+    color: var(--text);
+    margin-top: 3px;
+    font-size: 16px;
+    line-height: 1.45;
+  }
+  .tw .eng { color: var(--muted); font-size: 13px; margin-top: 7px; letter-spacing: .03em; }
+
+  .hidden-row {
+    display: flex; align-items: center; gap: 12px;
+    color: var(--muted);
+    font-size: 13px;
+    padding-left: 32px;
+    letter-spacing: .03em;
+  }
+  .hidden-row .x {
+    color: var(--accent);
+    opacity: .7;
+  }
+  .hidden-row .rule {
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(to right, var(--border) 0, var(--border) 60%, transparent 100%);
+  }
+
+  .term-status {
+    padding: 11px 22px;
+    margin-top: 6px;
+    border-top: 1px solid var(--border);
+    background: rgba(0, 0, 0, 0.2);
+    color: var(--muted);
+    font-size: 13px;
+    display: flex; gap: 18px; flex-wrap: wrap;
+    letter-spacing: .03em;
+  }
+  .term-status kbd {
+    font: inherit;
+    color: var(--text);
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 6px;
+    margin-right: 5px;
   }
 </style>
 </head>
 <body>
   <div class="frame">
-    <div class="top">
-      <div class="top-left">
+    <div class="left">
+      <div class="top">
         <span class="dot"></span>
-        <span>unrager · v0.14.1</span>
+        <span>a calm Twitter/X client</span>
       </div>
-      <div class="badge">
-        <span class="minus">−12</span>
-        <span class="label">rage-bait filtered</span>
-      </div>
-    </div>
 
-    <div class="body">
-      <div class="cursor">▋</div>
-      <div class="wordmark">unrager</div>
+      <h1 class="wordmark">unrager</h1>
+
       <div class="tagline">
-        <span class="hi">A calm Twitter/X client for the terminal.</span><br>
-        Local LLM drops rage-bait before it reaches your eyes.
+        <span class="hi">Local LLM drops <span class="nobr">rage-bait</span></span><br>
+        before it reaches your eyes.
       </div>
+
       <div class="install">
         <span class="p">$</span>
-        <span>curl -fsSL</span>
-        <span class="m">unrager.com/install.sh</span>
-        <span>| bash</span>
+        <span>cargo install unrager</span>
       </div>
+
+      <span class="chip">github.com/guitaripod/unrager</span>
     </div>
 
-    <div class="foot">
-      <span class="url">unrager.com</span>
-      <span class="chip">github.com/guitaripod/unrager</span>
+    <div class="term">
+      <div class="term-bar">
+        <div class="title">
+          <span class="pip">●</span>
+          <span class="here">home</span>
+          <span class="sep">·</span>
+          <span>split</span>
+          <span class="sep">·</span>
+          <span>search</span>
+          <span class="sep">·</span>
+          <span>notifs</span>
+        </div>
+        <div class="filtered"><span class="n">−12</span> FILTERED</div>
+      </div>
+
+      <div class="term-body">
+        <div class="tw">
+          <div class="mark">●</div>
+          <div>
+            <div class="h"><span class="handle">@ada_rs</span><span>· 2h</span></div>
+            <div class="body">tokio::spawn is fine. just never await it inside a mutex guard.</div>
+            <div class="eng">♡ 1,214   ↻ 88   ✉ 21</div>
+          </div>
+        </div>
+
+        <div class="hidden-row">
+          <span class="x">×</span>
+          <span>hidden · outrage bait</span>
+          <span class="rule"></span>
+        </div>
+
+        <div class="tw">
+          <div class="mark">●</div>
+          <div>
+            <div class="h"><span class="handle">@small_ship</span><span>· 4h</span></div>
+            <div class="body">half-cup of cold-brew and a clean git diff. quiet saturday.</div>
+            <div class="eng">♡ 86    ↻ 4</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="term-status">
+        <span><kbd>j</kbd><kbd>k</kbd>move</span>
+        <span><kbd>↵</kbd>thread</span>
+        <span><kbd>A</kbd>ask</span>
+        <span><kbd>T</kbd>translate</span>
+      </div>
     </div>
   </div>
 </body>

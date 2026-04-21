@@ -32,6 +32,16 @@ jobs:
           python3 -m playwright install --with-deps chromium
           python3 site/og/render.py
 
+      - name: Cache-bust static asset URLs with git sha
+        working-directory: site/public
+        run: |
+          SHA="${GITHUB_SHA::8}"
+          sed -i "s|href=\"/style\.css\"|href=\"/style.css?v=$SHA\"|" index.html
+          for img in detail ask compose search notifications profile help; do
+            sed -i "s|src=\"/$img\.png\"|src=\"/$img.png?v=$SHA\"|" index.html
+          done
+          grep -oE '(href|src)="/[^"]+"' index.html | head -20
+
       - name: Deploy to Cloudflare Pages
         working-directory: site
         run: |

@@ -20,8 +20,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-14]
         flavor:
-          - { name: "default",            features: "" }
-          - { name: "tui only",           features: "--no-default-features --features tui" }
+          - { name: "tui (default)",      features: "" }
+          - { name: "full",               features: "--features server" }
           - { name: "cli only",           features: "--no-default-features" }
     runs-on: ${{ matrix.os }}
     steps:
@@ -51,25 +51,25 @@ jobs:
           sudo apt-get install -y libdbus-1-dev pkg-config
 
       # Stub the web bundle so rust-embed has a folder to compile against on
-      # the default flavor. The real bundle is produced by the web-bundle job
+      # the full flavor. The real bundle is produced by the web-bundle job
       # and packaged at release time; for compile-only checks, an empty
       # placeholder is sufficient.
-      - name: Stub web bundle (default flavor only)
-        if: matrix.flavor.name == 'default'
+      - name: Stub web bundle (full flavor only)
+        if: matrix.flavor.name == 'full'
         run: |
           mkdir -p crates/unrager-app/dist
           echo "<!doctype html><title>stub</title>" > crates/unrager-app/dist/index.html
 
-      # fmt + test only need to run once per OS; run on the default flavor
+      # fmt + test only need to run once per OS; run on the default (tui) flavor
       - name: cargo fmt --check
-        if: matrix.flavor.name == 'default'
+        if: matrix.flavor.name == 'tui (default)'
         run: cargo fmt --all -- --check
 
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets ${{ matrix.flavor.features }} -- -D warnings
 
       - name: cargo test
-        if: matrix.flavor.name == 'default'
+        if: matrix.flavor.name == 'tui (default)'
         run: cargo test --workspace --all-targets
 
       # Smoke the binary — verifies the CLI dispatch still compiles and
@@ -84,9 +84,9 @@ jobs:
       - name: unrager --help
         run: cargo run --release ${{ matrix.flavor.features }} -- --help > /dev/null
 
-      - name: unrager serve --help (default flavor only)
-        if: matrix.flavor.name == 'default'
-        run: cargo run --release -- serve --help > /dev/null
+      - name: unrager serve --help (full flavor only)
+        if: matrix.flavor.name == 'full'
+        run: cargo run --release --features server -- serve --help > /dev/null
 
   # Client-only lint against the browser target. Catches wasm-specific
   # regressions in the Dioxus app that native builds miss (e.g., a call
@@ -173,7 +173,7 @@ jobs:
         run: python3 -m json.tool crates/unrager-app/dist/manifest.webmanifest > /dev/null
 
       - name: Build binary with bundle embedded (full flavor)
-        run: cargo build --release
+        run: cargo build --release --features server
 
       - name: Smoke-test embedded bundle
         run: |

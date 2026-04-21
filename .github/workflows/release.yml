@@ -103,20 +103,20 @@ jobs:
       matrix:
         include:
           # Linux x86_64
-          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, use_cross: false, flavor: full, features: "" }
-          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, use_cross: false, flavor: tui,  features: "--no-default-features --features tui" }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, use_cross: false, flavor: full, features: "--features server" }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, use_cross: false, flavor: tui,  features: "" }
           - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, use_cross: false, flavor: cli,  features: "--no-default-features" }
           # Linux aarch64 (cross)
-          - { os: ubuntu-22.04, target: aarch64-unknown-linux-gnu, use_cross: true,  flavor: full, features: "" }
-          - { os: ubuntu-22.04, target: aarch64-unknown-linux-gnu, use_cross: true,  flavor: tui,  features: "--no-default-features --features tui" }
+          - { os: ubuntu-22.04, target: aarch64-unknown-linux-gnu, use_cross: true,  flavor: full, features: "--features server" }
+          - { os: ubuntu-22.04, target: aarch64-unknown-linux-gnu, use_cross: true,  flavor: tui,  features: "" }
           - { os: ubuntu-22.04, target: aarch64-unknown-linux-gnu, use_cross: true,  flavor: cli,  features: "--no-default-features" }
           # macOS arm64
-          - { os: macos-14,     target: aarch64-apple-darwin,      use_cross: false, flavor: full, features: "" }
-          - { os: macos-14,     target: aarch64-apple-darwin,      use_cross: false, flavor: tui,  features: "--no-default-features --features tui" }
+          - { os: macos-14,     target: aarch64-apple-darwin,      use_cross: false, flavor: full, features: "--features server" }
+          - { os: macos-14,     target: aarch64-apple-darwin,      use_cross: false, flavor: tui,  features: "" }
           - { os: macos-14,     target: aarch64-apple-darwin,      use_cross: false, flavor: cli,  features: "--no-default-features" }
           # macOS x86_64
-          - { os: macos-14,     target: x86_64-apple-darwin,       use_cross: false, flavor: full, features: "" }
-          - { os: macos-14,     target: x86_64-apple-darwin,       use_cross: false, flavor: tui,  features: "--no-default-features --features tui" }
+          - { os: macos-14,     target: x86_64-apple-darwin,       use_cross: false, flavor: full, features: "--features server" }
+          - { os: macos-14,     target: x86_64-apple-darwin,       use_cross: false, flavor: tui,  features: "" }
           - { os: macos-14,     target: x86_64-apple-darwin,       use_cross: false, flavor: cli,  features: "--no-default-features" }
     runs-on: ${{ matrix.os }}
     steps:

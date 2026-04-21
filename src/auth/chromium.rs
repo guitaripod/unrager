@@ -238,9 +238,10 @@ pub fn probe() -> Result<Vec<ProbeResult>> {
 
 fn candidate_paths() -> Result<Vec<Candidate>> {
     if let Some(override_path) = std::env::var_os(COOKIES_PATH_ENV) {
+        let path = PathBuf::from(override_path);
         return Ok(vec![Candidate {
-            browser: &BROWSERS[0],
-            path: PathBuf::from(override_path),
+            browser: infer_browser_from_path(&path),
+            path,
         }]);
     }
 
@@ -266,6 +267,22 @@ fn candidate_paths() -> Result<Vec<Candidate>> {
         }
     }
     Ok(out)
+}
+
+/// Best-effort match of an override path against any known browser's install roots.
+/// Both linux and macos roots are scanned so the override works regardless of host OS.
+/// Falls back to the first entry only when nothing matches — the caller's display layer
+/// relies on this returning *some* browser so labels stay stable.
+fn infer_browser_from_path(path: &Path) -> &'static Browser {
+    let path_str = path.to_string_lossy();
+    for browser in BROWSERS {
+        for root in browser.linux_roots.iter().chain(browser.macos_roots.iter()) {
+            if path_str.contains(root) {
+                return browser;
+            }
+        }
+    }
+    &BROWSERS[0]
 }
 
 fn browser_roots(browser: &Browser) -> &'static [&'static str] {
@@ -425,4 +442,56 @@ fn is_printable(bytes: &[u8]) -> bool {
     bytes
         .iter()
         .all(|b| *b == b'\t' || *b == b'\n' || *b == b'\r' || (*b >= 0x20 && *b < 0x7f))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn infer_browser_labels_macos_chrome_override() {
+        let path =
+            PathBuf::from("/Users/alice/Library/Application Support/Google/Chrome/Default/Cookies");
+        assert_eq!(infer_browser_from_path(&path).label, "Chrome");
+    }
+
+    #[test]
+    fn infer_browser_labels_linux_chrome_override() {
+        let path = PathBuf::from("/home/alice/.config/google-chrome/Default/Cookies");
+        assert_eq!(infer_browser_from_path(&path).label, "Chrome");
+    }
+
+    #[test]
+    fn infer_browser_labels_brave_override() {
+        let path = PathBuf::from(
+            "/Users/alice/Library/Application Support/BraveSoftware/Brave-Browser/Default/Cookies",
+        );
+        assert_eq!(infer_browser_from_path(&path).label, "Brave");
+    }
+
+    #[test]
+    fn infer_browser_labels_edge_override() {
+        let path = PathBuf::from(
+            "/Users/alice/Library/Application Support/Microsoft Edge/Default/Cookies",
+        );
+        assert_eq!(infer_browser_from_path(&path).label, "Microsoft Edge");
+    }
+
+    #[test]
+    fn infer_browser_labels_chromium_override() {
+        let path = PathBuf::from("/home/alice/.config/chromium/Default/Cookies");
+        assert_eq!(infer_browser_from_path(&path).label, "Chromium");
+    }
+
+    #[test]
+    fn infer_browser_vivaldi_still_works() {
+        let path = PathBuf::from("/home/alice/.config/vivaldi/Default/Cookies");
+        assert_eq!(infer_browser_from_path(&path).label, "Vivaldi");
+    }
+
+    #[test]
+    fn infer_browser_falls_back_on_unknown_path() {
+        let path = PathBuf::from("/tmp/totally-random.db");
+        assert_eq!(infer_browser_from_path(&path).label, BROWSERS[0].label);
+    }
 }

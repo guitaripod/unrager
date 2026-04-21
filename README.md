@@ -32,7 +32,7 @@ unrager tweet "..."   # post via official API
 ## Quick start
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/guitaripod/unrager/master/install.sh | bash
+curl -fsSL https://unrager.com/install.sh | bash
 unrager
 
 # optional: enable the rage filter
@@ -42,7 +42,7 @@ ollama pull gemma4
 Uninstall:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/guitaripod/unrager/master/install.sh | bash -s -- --uninstall
+curl -fsSL https://unrager.com/install.sh | bash -s -- --uninstall
 ```
 
 Works on macOS (Apple Silicon + Intel) and Linux (x86_64 + aarch64). Builds from source via `cargo install --path .` on any platform with Rust 1.85+.
@@ -181,14 +181,14 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 ### Oneliner (prebuilt binary)
 
 ```sh
-# Everything: TUI + HTTP server + embedded web client (default)
-curl -fsSL https://raw.githubusercontent.com/guitaripod/unrager/master/install.sh | bash
+# TUI + CLI (default) — the primary product
+curl -fsSL https://unrager.com/install.sh | bash
 
-# TUI + CLI only (no server, no web bundle) — ~8 MB smaller
-UNRAGER_FLAVOR=tui curl -fsSL https://raw.githubusercontent.com/guitaripod/unrager/master/install.sh | bash
+# TUI + HTTP server + embedded web client — for serving over Tailscale
+UNRAGER_FLAVOR=full curl -fsSL https://unrager.com/install.sh | bash
 
-# CLI only (no TUI, no server) — ~11 MB smaller
-UNRAGER_FLAVOR=cli curl -fsSL https://raw.githubusercontent.com/guitaripod/unrager/master/install.sh | bash
+# CLI only (no TUI) — scripts, pipelines, CI
+UNRAGER_FLAVOR=cli curl -fsSL https://unrager.com/install.sh | bash
 ```
 
 Re-run the installer with a different `UNRAGER_FLAVOR` to switch — it replaces the binary in place. The installer also supports `UNRAGER_INSTALL_DIR` (default `~/.local/bin`) and `--uninstall`.
@@ -196,11 +196,11 @@ Re-run the installer with a different `UNRAGER_FLAVOR` to switch — it replaces
 ### From source
 
 ```sh
-# Everything (default)
+# TUI + CLI (default)
 cargo install unrager
 
-# TUI + CLI only
-cargo install unrager --no-default-features --features tui
+# TUI + HTTP server + embedded web client
+cargo install unrager --features server
 
 # CLI only
 cargo install unrager --no-default-features

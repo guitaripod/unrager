@@ -30,7 +30,7 @@ include = [
 ]
 
 [features]
-default = ["tui", "server"]
+default = ["tui"]
 # Classic terminal UI (ratatui). Disable for a CLI-only install.
 tui = [
     "dep:ratatui",

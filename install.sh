@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO="guitaripod/unrager"
 INSTALL_DIR="${UNRAGER_INSTALL_DIR:-$HOME/.local/bin}"
-FLAVOR="${UNRAGER_FLAVOR:-full}"
+FLAVOR="${UNRAGER_FLAVOR:-tui}"
 
 err() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
 note() { printf '==> %s\n' "$*"; }

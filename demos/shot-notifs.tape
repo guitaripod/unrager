@@ -1,7 +1,7 @@
 Output demos/shots/_notifs.gif
 
 Set Shell "bash"
-Set FontSize 36
+Set FontSize 27
 Set Width 1920
 Set Height 1180
 Set Padding 20

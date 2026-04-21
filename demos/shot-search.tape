@@ -1,7 +1,7 @@
 Output demos/shots/_search.gif
 
 Set Shell "bash"
-Set FontSize 36
+Set FontSize 27
 Set Width 1920
 Set Height 1180
 Set Padding 20
@@ -15,9 +15,11 @@ Enter
 Sleep 7s
 Show
 Sleep 1s
-Type ":search rust programming"
+Type ":search 東京"
 Enter
 Sleep 6s
+Type "T"
+Sleep 4s
 Screenshot demos/shots/search.png
 Type "q"
 Sleep 200ms

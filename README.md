@@ -12,10 +12,10 @@
 </p>
 
 <p align="center">
-  <img src="assets/feed.png" alt="unrager home feed with rage filter active" width="800">
+  <img src="assets/hero.gif" alt="unrager home feed with rage filter active, scrolling and opening a thread" width="800">
 </p>
 
-Your home feed, minus the 12 tweets the LLM quietly ate. The `−12` in the status bar is all that remains of them.
+Your home feed, minus the tweets the LLM quietly ate. The `−N` in the status bar is all that remains of them.
 
 ## What is this
 

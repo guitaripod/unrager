@@ -8,3 +8,6 @@
 
 /*.png
   Cache-Control: public, max-age=86400
+
+/*.gif
+  Cache-Control: public, max-age=86400

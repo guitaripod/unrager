@@ -1,9 +1,7 @@
-# Hero — tour of a filtered feed.
-# Shows `−N` in the status bar (filter working), scroll through clean
-# content, open a thread detail, close, idle on the home feed. Because
-# the filter physically removes tweets rather than hiding them, a
-# toggle-off/toggle-on animation wouldn't re-reveal what was dropped —
-# so the hook here is the persistent `−N` count plus live navigation.
+# Hero — tour covering the product's real hooks:
+#   1. Filtered home feed (local LLM already working, `−N` in status).
+#   2. Reading a thread in the split detail pane.
+#   3. Asking gemma about the focal post (streaming reply, Vim-mode input).
 Output demos/out/hero.gif
 
 Set Shell "bash"
@@ -14,44 +12,50 @@ Set Padding 20
 Set Margin 0
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 30ms
-Set PlaybackSpeed 1.3
+Set PlaybackSpeed 1.2
 
 Hide
 Type "UNRAGER_DISABLE_KITTY=1 ./target/release/unrager"
 Enter
-Sleep 7s
+Sleep 8s
 Show
 
-# Hold on filtered feed (−N visible)
-Sleep 2s
+# Home feed with filter on (`−N` visible in top-right status)
+Sleep 1800ms
 
-# Scroll down through the feed
+# Scroll through a few tweets
 Type "j"
-Sleep 250ms
+Sleep 200ms
 Type "j"
-Sleep 250ms
+Sleep 200ms
 Type "j"
-Sleep 250ms
+Sleep 200ms
 Type "j"
-Sleep 250ms
-Type "j"
-Sleep 500ms
+Sleep 400ms
 
-# Open a tweet's thread
+# Open the thread detail for the selected tweet
 Enter
 Sleep 3s
 
-# Browse the replies
+# Show replies
 Type "j"
 Sleep 300ms
 Type "j"
-Sleep 300ms
-Type "j"
-Sleep 700ms
+Sleep 500ms
 
-# Pop back to the home feed
-Escape
+# Ask gemma to explain this post
+Type "A"
 Sleep 1500ms
+
+# Trigger the `1 Explain` preset — streams gemma's reply inline
+Type "1"
+Sleep 9s
+
+# Close ask pane + detail pane
+Escape
+Sleep 600ms
+Escape
+Sleep 900ms
 
 Type "q"
 Sleep 200ms

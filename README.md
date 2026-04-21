@@ -12,14 +12,18 @@
 </p>
 
 <p align="center">
-  <img src="assets/hero.gif" alt="unrager home feed with rage filter active, scrolling and opening a thread" width="800">
+  <img src="assets/hero.gif" alt="unrager home feed with rage filter active, scrolling into a thread, then asking gemma to explain the focal post" width="800">
 </p>
 
-Your home feed, minus the tweets the LLM quietly ate. The `−N` in the status bar is all that remains of them.
+Your home feed, minus the tweets the LLM quietly ate. The `−N` in the status bar is all that remains of them. Everything LLM-shaped — filter, translate, explain, summarize — runs on your machine via Ollama. Nothing leaves your box.
 
 ## What is this
 
 `unrager` is a Rust TUI for reading Twitter/X without the engagement-optimized rage. It connects through the same GraphQL endpoints the web client uses (no API key, no cost), and pipes every incoming tweet through a local [Ollama](https://ollama.com) model that classifies it against your personal rubric. Tweets that match are physically removed from the feed before rendering — they never existed.
+
+Everything intelligent runs locally: the **rage filter** classifies each tweet, **translate** (`T`) turns foreign-language posts into English, **ask** (`A`) lets gemma explain / counter / summarize a post, and **brief** (`B`) writes a short profile analysis from someone's recent timeline. One Ollama process, one gemma model, four features. No cloud round-trips, no provider keys, no token bills, no data leaving your machine.
+
+Every text input (reply, ask, command palette) is a **Vim-mode editor** — Insert/Normal modes, `hjkl`, `w`/`b`, `dd`/`dw`, counts, `^`/`$`. If that's your muscle memory, composing here feels native.
 
 It also has a CLI for one-shot reads and an OAuth 2.0 write path for posting.
 
@@ -77,9 +81,17 @@ Toggle with `<space> r`. The status bar shows `−N` when the filter is actively
 
 `Enter` opens a tweet into a split detail pane. The focal tweet and all its replies form one scrollable list. Push deeper into any reply with `Enter`, pop back with `Esc`. Press `s` to cycle reply sort order — newest, likes, replies, retweets, views — it persists across sessions. `X` expands inline thread replies without leaving the current view.
 
-Submitting a reply with `r` auto-likes the tweet you're replying to (unless it's already liked) — reciprocal-like etiquette without the manual step. If X is write-rate-limiting you and you fall back to the browser via `o` to compose there, the TUI still fires the auto-like on your behalf.
-
 The left pane stays live. `Tab` swaps focus between panes, `,`/`.` adjusts the split width.
+
+## Composing (Vim-mode everywhere)
+
+<p align="center">
+  <img src="assets/compose.png" alt="reply composer open over the home feed, with the vim insert-mode indicator and a 24/280 character counter at the bottom" width="800">
+</p>
+
+Every text input in the TUI — reply (`r`), direct compose, ask-gemma input (`A`), command palette (`:`) — is a miniature Vim editor. Insert/Normal modes, `hjkl` motion, `w`/`b` word jumps, `dd`/`dw`, counts, `^`/`$`, everything a two-minute muscle-memory habit expects. The status line at the bottom of each pane shows `INSERT` or `NORMAL` and the live character counter (`24/280`).
+
+Submitting a reply with `r` auto-likes the tweet you're replying to (unless it's already liked) — reciprocal-like etiquette without the manual step. If X is write-rate-limiting you and you fall back to the browser via `o` to compose there, the TUI still fires the auto-like on your behalf.
 
 ## Search and translation
 
@@ -88,6 +100,12 @@ The left pane stays live. `Tab` swaps focus between panes, `,`/`.` adjusts the s
 </p>
 
 `:search nvidia` pulls live results in every language. Press `T` on any tweet to translate it to English via the same local Ollama instance. Press `T` again to revert. Translations are ephemeral — in memory only.
+
+## Ask gemma about a post
+
+<p align="center">
+  <img src="assets/ask.png" alt="ask pane open next to the home feed, gemma streaming an inline explanation of the selected post, with preset chips Explain / Replies / Counter / ELI5 / Entities at the bottom" width="800">
+</p>
 
 Press `A` on any tweet to open an ask pane powered by your local Ollama gemma model (the same one used for the rage filter and translation). The post is pinned to the top, a chip row exposes preset prompts (`1` Explain · `2` Replies · `3` Counter · `4` ELI5 · `5` Entities) that fire with a single keystroke when the input is empty, and the reply streams inline token-by-token. Gemma4's vision is used automatically — up to four photos on the post are base64-attached to the first turn. When you open the pane from the detail view, the loaded replies are pulled into context, so `2 Replies` actually summarizes the thread; and when you `A` a reply inside a thread, the thread's root post and the other replies are included as context so gemma sees the conversation, not just the isolated reply. The pane title shows what's in scope (`ask · @handle · 2 imgs · 14 replies · ready`). Conversations live only in memory. Thinking is enabled for the chat path since replies benefit from reasoning; filter and translate keep thinking off for speed.
 

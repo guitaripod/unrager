@@ -25,10 +25,11 @@ These determine whether a new user's first 60 seconds end in "wow" or "uninstall
 **How:** `rustup default stable && rustup update && cargo install unrager` in a clean `$CARGO_HOME`. Time it. If LTO SIGILLs on stable despite CLAUDE.md's note, add the workaround to `[profile.release]` or document the env var in README.
 **Done when:** clean install succeeds on stable, timing recorded here, and any new requirement is in README.
 
-### [ ] Audit `unrager doctor` output for the three broken-state personas
+### [x] Audit `unrager doctor` output for the three broken-state personas
 **Goal:** `doctor` should be the single command that fixes every "unrager isn't working" DM.
 **How:** run `unrager doctor` in three deliberately broken states — (a) no browser cookies found, (b) Ollama not installed or port unreachable, (c) stale query IDs (simulate by editing `~/.cache/unrager/query-ids.json`). For each: is the diagnosis correct? Is the fix one copy-pasteable command? If not, improve the relevant check in `src/cli/doctor.rs`.
 **Done when:** all three states produce a diagnosis + fix that a non-Rust user can follow.
+**Shipped:** all three personas produce clear diagnoses with copy-pasteable fixes; added a dedicated branch for an invalid `UNRAGER_COOKIES_PATH` override so the user knows to unset/retarget rather than chasing a "no cookie store found" false lead.
 
 ### [x] Ollama-missing graceful degradation pass
 **Goal:** users without Ollama should get a working TUI with a clear, actionable hint — not silence.

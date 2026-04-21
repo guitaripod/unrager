@@ -67,6 +67,16 @@ fn print_cookies(report: &mut Report) {
             println!("                {} ({})", r.browser, r.path.display());
         }
         report.errors += 1;
+    } else if let Some(override_path) = std::env::var_os("UNRAGER_COOKIES_PATH") {
+        let p = std::path::PathBuf::from(override_path);
+        println!(
+            "✗ cookies     UNRAGER_COOKIES_PATH={} does not exist",
+            p.display()
+        );
+        println!(
+            "              → unset the env var to auto-detect, or point it at a real Cookies file"
+        );
+        report.errors += 1;
     } else {
         println!("✗ cookies     no Chromium-family browser cookie store found");
         println!("              → install Vivaldi / Chrome / Brave / Edge, then log into x.com");

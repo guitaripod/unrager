@@ -3,8 +3,7 @@ name: deploy site
 on:
   push:
     paths:
-      - 'site/public/**'
-      - 'site/og/**'
+      - 'site/**'
       - '.github/workflows/deploy-site.yml'
   workflow_dispatch:
 
@@ -36,6 +35,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: >-
-            pages deploy site/public
+            pages deploy public
             --project-name=unrager
             --branch=${{ github.ref == 'refs/heads/master' && 'main' || github.ref_name }}
+            --cwd site

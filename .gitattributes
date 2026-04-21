@@ -4,3 +4,6 @@ demos/out/*.gif filter=lfs diff=lfs merge=lfs -text
 demos/out/*.mp4 filter=lfs diff=lfs merge=lfs -text
 
 install.sh linguist-detectable=false
+crates/unrager-app/assets/*.css linguist-detectable=false
+crates/unrager-app/static/*.js linguist-detectable=false
+demos/*.tape linguist-detectable=false

@@ -632,6 +632,9 @@ impl App {
             } => {
                 self.handle_tweet_translated(rest_id, translated);
             }
+            Event::TweetTranslateFailed { rest_id, err } => {
+                self.handle_tweet_translate_failed(rest_id, err);
+            }
             Event::SelfHandleResolved { handle } => {
                 self.self_handle = Some(handle.clone());
                 self.switch_source(SourceKind::User { handle });

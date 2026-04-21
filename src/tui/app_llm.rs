@@ -11,6 +11,25 @@ use crate::tui::focus::{self, FocusEntry};
 use crate::tui::source::SourceKind;
 use std::path::Path;
 
+/// Formats a human-facing status line for an Ollama-backed feature failure.
+/// When the error looks like a connection problem, appends a pointer at
+/// `unrager doctor` so users know where to look; other errors (parse, HTTP)
+/// are surfaced verbatim.
+pub(super) fn ollama_error_hint(feature: &str, err: &str) -> String {
+    let looks_unreachable = err.contains("ollama unreachable")
+        || err.contains("connection")
+        || err.contains("Connection")
+        || err.contains("connect")
+        || err.contains("refused")
+        || err.contains("timed out")
+        || err.contains("timeout");
+    if looks_unreachable {
+        format!("{feature} failed · ollama down · run `unrager doctor`")
+    } else {
+        format!("{feature} failed · {err}")
+    }
+}
+
 pub(crate) fn init_filter_stack(
     config_dir: &Path,
     cache_dir: &Path,
@@ -229,7 +248,7 @@ impl App {
         }
 
         let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone()) else {
-            self.set_status("translation unavailable (no ollama config)");
+            self.set_status("translate unavailable · run `unrager doctor`");
             return;
         };
 
@@ -244,6 +263,12 @@ impl App {
         self.set_status("translated");
     }
 
+    pub(super) fn handle_tweet_translate_failed(&mut self, rest_id: String, err: String) {
+        self.translation_inflight.remove(&rest_id);
+        tracing::warn!(rest_id = %rest_id, "translate failed: {err}");
+        self.set_status(ollama_error_hint("translate", &err));
+    }
+
     pub(super) fn open_ask_for_selected(&mut self) {
         let tweet = match self.selected_tweet() {
             Some(t) => t.clone(),
@@ -253,7 +278,7 @@ impl App {
             }
         };
         let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone()) else {
-            self.set_status("ask unavailable (no ollama config)");
+            self.set_status("ask unavailable · run `unrager doctor`");
             return;
         };
         ask::preload(ollama);
@@ -422,7 +447,7 @@ impl App {
 
     pub(super) fn ask_submit_input(&mut self) {
         let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone()) else {
-            self.set_status("ask unavailable (no ollama config)");
+            self.set_status("ask unavailable · run `unrager doctor`");
             return;
         };
         let Some(FocusEntry::Ask(view)) = self.focus_stack.last_mut() else {
@@ -482,7 +507,7 @@ impl App {
         {
             if let Some(err) = &error {
                 tracing::warn!(tweet_id = %tweet_id, "ask stream error: {err}");
-                self.set_status(format!("ask error: {err}"));
+                self.set_status(ollama_error_hint("ask", err));
             } else {
                 self.set_status("ask done");
             }
@@ -494,7 +519,7 @@ impl App {
 
     pub(super) fn open_brief_for_target(&mut self) {
         let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone()) else {
-            self.set_status("profile unavailable (no ollama config)");
+            self.set_status("profile unavailable · run `unrager doctor`");
             return;
         };
         if self.block_if_read_limited() {
@@ -638,12 +663,50 @@ impl App {
         }
         if let Some(err) = error {
             tracing::warn!(handle = %handle, "profile error: {err}");
-            self.set_status(format!("profile aborted: {err}"));
+            self.set_status(ollama_error_hint("profile aborted", &err));
         } else {
             self.set_status("profile complete");
         }
         if let Some(snap) = done_text {
             self.brief_cache.insert(handle, snap);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hint_connection_error_mentions_doctor() {
+        let msg = ollama_error_hint("translate", "ollama unreachable: dns error");
+        assert!(msg.contains("run `unrager doctor`"));
+        assert!(msg.contains("ollama down"));
+    }
+
+    #[test]
+    fn hint_timeout_mentions_doctor() {
+        let msg = ollama_error_hint("ask", "request failed: operation timed out");
+        assert!(msg.contains("run `unrager doctor`"));
+    }
+
+    #[test]
+    fn hint_connection_refused_mentions_doctor() {
+        let msg = ollama_error_hint("ask", "request failed: Connection refused (os error 111)");
+        assert!(msg.contains("run `unrager doctor`"));
+    }
+
+    #[test]
+    fn hint_non_connection_error_surfaces_verbatim() {
+        let msg = ollama_error_hint("translate", "malformed response: expected value at line 1");
+        assert!(!msg.contains("run `unrager doctor`"));
+        assert!(msg.contains("malformed response"));
+    }
+
+    #[test]
+    fn hint_http_status_surfaces_verbatim() {
+        let msg = ollama_error_hint("ask", "http 500: internal server error");
+        assert!(!msg.contains("run `unrager doctor`"));
+        assert!(msg.contains("http 500"));
     }
 }

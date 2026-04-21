@@ -552,14 +552,27 @@ pub fn translate_async(rest_id: String, text: String, ollama: OllamaConfig, tx: 
                     }
                     Err(e) => {
                         warn!("translate parse failed for {rest_id}: {e}");
+                        let _ = tx.send(Event::TweetTranslateFailed {
+                            rest_id,
+                            err: format!("malformed response: {e}"),
+                        });
                     }
                 }
             }
             Ok(resp) => {
-                warn!("translate http status {} for {rest_id}", resp.status());
+                let status = resp.status();
+                warn!("translate http status {status} for {rest_id}");
+                let _ = tx.send(Event::TweetTranslateFailed {
+                    rest_id,
+                    err: format!("http {}", status.as_u16()),
+                });
             }
             Err(e) => {
                 warn!("translate http error for {rest_id}: {e}");
+                let _ = tx.send(Event::TweetTranslateFailed {
+                    rest_id,
+                    err: format!("ollama unreachable: {e}"),
+                });
             }
         }
     });

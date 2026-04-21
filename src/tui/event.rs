@@ -77,6 +77,10 @@ pub enum Event {
         rest_id: String,
         translated: String,
     },
+    TweetTranslateFailed {
+        rest_id: String,
+        err: String,
+    },
     OpenTweetResolved {
         request_id: RequestId,
         result: Result<crate::model::Tweet>,

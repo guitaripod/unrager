@@ -30,10 +30,11 @@ These determine whether a new user's first 60 seconds end in "wow" or "uninstall
 **How:** run `unrager doctor` in three deliberately broken states — (a) no browser cookies found, (b) Ollama not installed or port unreachable, (c) stale query IDs (simulate by editing `~/.cache/unrager/query-ids.json`). For each: is the diagnosis correct? Is the fix one copy-pasteable command? If not, improve the relevant check in `src/cli/doctor.rs`.
 **Done when:** all three states produce a diagnosis + fix that a non-Rust user can follow.
 
-### [ ] Ollama-missing graceful degradation pass
+### [x] Ollama-missing graceful degradation pass
 **Goal:** users without Ollama should get a working TUI with a clear, actionable hint — not silence.
 **How:** stop Ollama (`systemctl --user stop ollama` or equivalent), run the TUI. Confirm the `filter off · doctor` hint shows. Press `A` (ask), `T` (translate), `B` (brief) — each should fail with a one-line user-visible message pointing at `doctor`, not hang or no-op. Grep `src/tui/app_llm.rs` for silent `return` branches.
 **Done when:** every LLM-gated key produces visible feedback when Ollama is down.
+**Shipped:** `translate_async` now surfaces failures via a new `TweetTranslateFailed` event (was silently hanging `translation_inflight`); ask/brief error statuses route through a shared `ollama_error_hint` that appends `run \`unrager doctor\`` on connection-style errors. The pre-flight "config missing" message was retitled from `(no ollama config)` to `· run \`unrager doctor\``.
 
 ---
 

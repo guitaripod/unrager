@@ -64,10 +64,11 @@ These determine whether a new user's first 60 seconds end in "wow" or "uninstall
 **How:** paste the site URL into each platform's compose box, confirm the preview. Copy the install snippet from the site in a real browser, paste into a shell, confirm it's what you expect (no smart quotes, no zero-width chars). Open the carousel on mobile Safari and Firefox.
 **Done when:** all three platform previews look right; install-copy yields a clean bash-executable string.
 
-### [ ] Harden the bug-report issue template
+### [x] Harden the bug-report issue template
 **Goal:** every new issue arrives with `doctor` output and a log tail, so triage takes minutes not hours.
 **How:** edit `.github/ISSUE_TEMPLATE/bug_report.md` to require (a) `unrager --version`, (b) `unrager doctor` output, (c) last 50 lines of `~/.cache/unrager/unrager.log.$(date +%Y-%m-%d)`, (d) reproduction steps. Use placeholders so users know what to paste where.
 **Done when:** the template visibly pre-fills these sections on a new issue form.
+**Shipped:** template rewritten with mandatory `$ unrager --version`, `$ unrager doctor`, and `$ tail -n 50 ~/.cache/unrager/unrager.log.$(date +%Y-%m-%d)` code blocks (placeholder text inside each), plus structured Reproduction / Environment fields.
 
 ---
 

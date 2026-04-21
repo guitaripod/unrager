@@ -404,6 +404,16 @@ border = true              # only applies to the corner overlays
 
 Posting uses the official X API v2 (not cookie auth), so your account is never at risk.
 
+The fast path:
+
+```sh
+unrager auth setup
+```
+
+Interactive wizard — prints the X developer-portal URL, waits for you to register a Native App, prompts for the Client ID, writes it to `~/.config/unrager/config.toml`, then runs `auth login` at the end. One command, one paste.
+
+The manual path, if you'd rather do it by hand:
+
 1. Create a developer account at [developer.x.com](https://developer.x.com)
 2. Register a Native App (PKCE, no client secret)
 3. Set callback URL to `http://127.0.0.1:8765/callback`

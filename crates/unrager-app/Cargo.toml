@@ -9,7 +9,7 @@ description = "Dioxus client for unrager — web, iOS, Android from one codebase
 publish = false
 
 [dependencies]
-unrager-model = { path = "../unrager-model", version = "0.14.2" }
+unrager-model = { path = "../unrager-model", version = "0.15.0" }
 dioxus = { version = "0.7", features = ["router"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

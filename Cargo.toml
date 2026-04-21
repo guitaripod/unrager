@@ -3,7 +3,7 @@ members = [".", "crates/unrager-model", "crates/unrager-app"]
 resolver = "2"
 
 [workspace.package]
-version = "0.14.2"
+version = "0.15.0"
 edition = "2024"
 rust-version = "1.85"
 license = "GPL-3.0-only"
@@ -57,7 +57,7 @@ server = [
 ]
 
 [dependencies]
-unrager-model = { path = "crates/unrager-model", version = "0.14.2" }
+unrager-model = { path = "crates/unrager-model", version = "0.15.0" }
 clap = { version = "4", features = ["derive", "wrap_help"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "net", "signal", "sync", "time"] }
 futures = "0.3"

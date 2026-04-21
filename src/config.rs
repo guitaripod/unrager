@@ -16,6 +16,17 @@ pub struct AppConfig {
     pub theme: crate::tui::theme::ThemeConfig,
     #[serde(default)]
     pub sound: SoundConfig,
+    #[serde(default)]
+    pub oauth: OAuthConfig,
+}
+
+/// OAuth client identity used only by the write path (`unrager auth login`,
+/// `tweet`, `reply`). Unset means the user must provide one via
+/// `UNRAGER_X_CLIENT_ID` or `config.toml`; the binary no longer embeds a
+/// default, so the app identity is always the user's own.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct OAuthConfig {
+    pub client_id: Option<String>,
 }
 
 /// Mordor-mode audio configuration. Only `source` is required. When a

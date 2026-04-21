@@ -203,8 +203,11 @@ kbd {
 /* ─── screenshot carousel ──────────────────── */
 
 .shot {
-  margin: calc(var(--rhythm) * 1.2) 0 0;
+  margin: calc(var(--rhythm) * 1.2) auto 0;
   position: relative;
+  width: min(1200px, calc(100vw - 2rem));
+  margin-left: calc(50% - min(600px, calc(50vw - 1rem)));
+  margin-right: calc(50% - min(600px, calc(50vw - 1rem)));
 }
 
 .slides {

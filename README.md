@@ -67,7 +67,7 @@ model = "gemma4:latest"
 host = "http://localhost:11434"
 ```
 
-Toggle with `<space> r`. The status bar shows `−N` when the filter is actively hiding tweets, or `filter⌀` (dim) when Ollama isn't reachable or no `gemma4` model is installed — `unrager doctor` explains why.
+Toggle with `<space> r`. The status bar shows `−N` when the filter is actively hiding tweets, or `filter off · doctor` when Ollama isn't reachable or no `gemma4` model is installed — the hint points at `unrager doctor`, which explains why.
 
 ## Reading threads
 

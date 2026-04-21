@@ -409,7 +409,10 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
         ));
     } else if app.filter_classifier.is_none() {
         spans.push(Span::raw("  "));
-        spans.push(Span::styled("filter⌀", Style::default().fg(t.text_muted)));
+        spans.push(Span::styled(
+            "filter off · doctor",
+            Style::default().fg(t.text_muted),
+        ));
     }
     if matches!(app.feed_mode, crate::tui::app::FeedMode::Originals)
         && matches!(app.source.kind, Some(SourceKind::Home { .. }))
@@ -3573,8 +3576,8 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
             Span::raw("N tweets hidden by rage filter"),
         ]),
         Line::from(vec![
-            Span::styled("  filter⌀ ", Style::default().fg(t.text_muted)),
-            Span::raw("filter off (run `unrager doctor` to diagnose)"),
+            Span::styled("  filter off · doctor ", Style::default().fg(t.text_muted)),
+            Span::raw("filter disabled — run `unrager doctor` to set up Ollama"),
         ]),
         Line::from(vec![
             Span::styled("  ◇  ", Style::default().fg(t.accent)),

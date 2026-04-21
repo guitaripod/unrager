@@ -393,15 +393,6 @@ jobs:
             exit 0
           fi
           cargo publish -p unrager-model
-          echo "waiting for crates.io to index unrager-model $V"
-          for i in $(seq 1 60); do
-            sleep 10
-            if curl -sfL -o /dev/null "https://crates.io/api/v1/crates/unrager-model/$V" >/dev/null 2>&1; then
-              echo "indexed after ${i}0s"
-              exit 0
-            fi
-          done
-          echo "indexing timeout"; exit 1
 
       - name: Publish unrager (skip if already uploaded)
         run: |

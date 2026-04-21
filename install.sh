@@ -167,12 +167,13 @@ case "$FLAVOR" in
 Next steps:
   unrager                  launch the TUI
   unrager serve            start the HTTP server + web client on :7777
-  unrager --help           see all subcommands
+  unrager doctor           check cookies, Ollama, and filter setup
   ollama pull gemma4       enable the local-LLM rage filter (optional)
+  unrager --help           all subcommands
 
 Want a leaner install? re-run with:
-  UNRAGER_FLAVOR=tui  curl ... | bash      # TUI + CLI only (~8 MB smaller)
-  UNRAGER_FLAVOR=cli  curl ... | bash      # CLI only (~11 MB smaller)
+  UNRAGER_FLAVOR=tui  curl -fsSL unrager.com/install.sh | bash   # default (~5 MB smaller)
+  UNRAGER_FLAVOR=cli  curl -fsSL unrager.com/install.sh | bash   # CLI only (~11 MB smaller)
 
 EOF
         ;;
@@ -181,11 +182,12 @@ EOF
 
 Next steps:
   unrager                  launch the TUI
-  unrager --help           see all subcommands
+  unrager doctor           check cookies, Ollama, and filter setup
   ollama pull gemma4       enable the local-LLM rage filter (optional)
+  unrager --help           all subcommands
 
 Want the web/mobile server too? re-run with:
-  UNRAGER_FLAVOR=full curl ... | bash
+  UNRAGER_FLAVOR=full curl -fsSL unrager.com/install.sh | bash
 
 EOF
         ;;
@@ -193,13 +195,14 @@ EOF
         cat <<EOF
 
 Next steps:
-  unrager --help           see available subcommands
+  unrager doctor           check cookies and setup
+  unrager --help           all subcommands
   unrager home --json      pipe a timeline to jq
   unrager auth login       set up OAuth for the write path
 
 Want the TUI too? re-run with:
-  UNRAGER_FLAVOR=tui  curl ... | bash
-  UNRAGER_FLAVOR=full curl ... | bash      (includes web/mobile server)
+  UNRAGER_FLAVOR=tui  curl -fsSL unrager.com/install.sh | bash
+  UNRAGER_FLAVOR=full curl -fsSL unrager.com/install.sh | bash   # includes web/mobile server
 
 EOF
         ;;
@@ -207,6 +210,6 @@ esac
 
 cat <<EOF
 Uninstall:
-  curl -fsSL https://raw.githubusercontent.com/guitaripod/unrager/master/install.sh | bash -s -- --uninstall
+  curl -fsSL https://unrager.com/install.sh | bash -s -- --uninstall
 
 EOF

@@ -28,9 +28,11 @@ Always run the CI gate after making changes, without waiting to be asked. Then `
 3. Commit: `chore: bump version to X.Y.Z`
 4. Tag (no `v` prefix): `git tag X.Y.Z`
 5. Push both: `git push origin master --tags`
-6. The `release` workflow runs CI checks then creates the GitHub release automatically — **never create releases manually with `gh release create`**
+6. The `release` workflow runs CI checks, creates the GitHub release, then publishes `unrager-model` + `unrager` to crates.io — **never create releases manually with `gh release create` or `cargo publish`**
 
 Do NOT force-push tags that already have a release. If post-release fixes are needed, they go into the next version.
+
+The crates.io step reads `CARGO_REGISTRY_TOKEN` from repo secrets. Each publish is guarded by a crates.io existence check, so re-running the workflow (e.g. after a transient failure) won't double-publish — it skips versions that are already uploaded.
 
 ## Architecture
 

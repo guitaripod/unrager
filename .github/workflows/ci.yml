@@ -185,3 +185,49 @@ jobs:
           test "$SIZE" -gt 16000000
           ./target/release/unrager --version
           ./target/release/unrager serve --help > /dev/null
+
+  publish-dry-run:
+    name: crates.io publish dry-run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-dryrun-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-dryrun-
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Stub web bundle
+        run: |
+          mkdir -p crates/unrager-app/dist
+          echo "<!doctype html><title>stub</title>" > crates/unrager-app/dist/index.html
+
+      - name: Dry-run publish unrager-model
+        run: cargo publish --dry-run -p unrager-model
+
+      - name: Dry-run publish unrager
+        run: |
+          set -eux
+          V=$(cargo metadata --format-version=1 --no-deps \
+              | jq -r '.packages[] | select(.name=="unrager-model") | .version')
+          if curl -sfLI "https://crates.io/api/v1/crates/unrager-model/$V" >/dev/null 2>&1; then
+            echo "unrager-model $V present on crates.io — running full dry-run"
+            cargo publish --dry-run -p unrager
+          else
+            echo "unrager-model $V not yet on crates.io — validating package list only"
+            cargo package --list -p unrager > /dev/null
+          fi

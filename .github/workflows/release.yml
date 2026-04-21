@@ -345,3 +345,67 @@ jobs:
             --title "${{ github.ref_name }}" \
             --notes-file RELEASE_NOTES.md \
             dist/*.tar.gz dist/SHA256SUMS
+
+  publish-crates:
+    name: publish to crates.io
+    needs: [check, web-bundle, release]
+    runs-on: ubuntu-latest
+    if: github.repository == 'guitaripod/unrager'
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-publish-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install libdbus
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Download web bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: web-bundle
+          path: crates/unrager-app/dist
+
+      - name: Publish unrager-model (skip if already uploaded)
+        run: |
+          set -eux
+          V=$(cargo metadata --format-version=1 --no-deps \
+              | jq -r '.packages[] | select(.name=="unrager-model") | .version')
+          if curl -sfLI "https://crates.io/api/v1/crates/unrager-model/$V" >/dev/null 2>&1; then
+            echo "unrager-model $V already on crates.io, skipping"
+            exit 0
+          fi
+          cargo publish -p unrager-model
+          echo "waiting for crates.io to index unrager-model $V"
+          for i in $(seq 1 30); do
+            sleep 10
+            if curl -sfLI "https://crates.io/api/v1/crates/unrager-model/$V" >/dev/null 2>&1; then
+              echo "indexed after ${i}0s"
+              exit 0
+            fi
+          done
+          echo "indexing timeout"; exit 1
+
+      - name: Publish unrager (skip if already uploaded)
+        run: |
+          set -eux
+          V=$(cargo metadata --format-version=1 --no-deps \
+              | jq -r '.packages[] | select(.name=="unrager") | .version')
+          if curl -sfLI "https://crates.io/api/v1/crates/unrager/$V" >/dev/null 2>&1; then
+            echo "unrager $V already on crates.io, skipping"
+            exit 0
+          fi
+          cargo publish -p unrager

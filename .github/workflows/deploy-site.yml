@@ -34,8 +34,8 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: site
           command: >-
             pages deploy public
             --project-name=unrager
             --branch=${{ github.ref == 'refs/heads/master' && 'main' || github.ref_name }}
-            --cwd site

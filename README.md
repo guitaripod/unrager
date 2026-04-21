@@ -35,6 +35,12 @@ unrager home -n 20    # one-shot CLI
 unrager tweet "..."   # post via official API
 ```
 
+## How auth works
+
+Reading uses your existing browser login. On startup, unrager reads two cookies — `auth_token` and `ct0` — from whichever Chromium-family browser you're logged into x.com with, decrypts them in memory using your OS credential store (macOS Keychain, Linux Secret Service), and hands them to X's GraphQL endpoints the same way the web client does. Nothing is written to disk, nothing is logged, nothing leaves your machine. The whole path is under [`src/auth/`](src/auth/) — ~300 lines, open-source, cargo-auditable.
+
+Writing is the other story: `unrager tweet` / `reply` go through the official X API v2 with **your own** OAuth 2.0 PKCE client. unrager never sees your password, your read cookies aren't used for writes, and posts are attributed to your developer client (not a shared one). No writes until you run `unrager auth login`.
+
 ## Quick start
 
 ```sh
@@ -53,7 +59,7 @@ Uninstall:
 curl -fsSL https://unrager.com/install.sh | bash -s -- --uninstall
 ```
 
-Works on macOS (Apple Silicon + Intel) and Linux (x86_64 + aarch64). Builds from source via `cargo install --path .` on any platform with Rust 1.85+.
+Works on macOS (Apple Silicon + Intel) and Linux (x86_64 + aarch64). On Windows, use WSL2 with a Linux browser — the native Windows build path isn't wired up (Chromium cookie decryption on Windows uses DPAPI, which unrager doesn't implement; PRs welcome). Builds from source via `cargo install --path .` on any Unix platform with Rust 1.85+.
 
 The TUI reads cookies from your logged-in browser automatically (Vivaldi, Chrome, Brave, Edge, Opera, Arc). The filter enables itself when Ollama is reachable and disables silently when it isn't.
 

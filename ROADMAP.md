@@ -41,15 +41,17 @@ These determine whether a new user's first 60 seconds end in "wow" or "uninstall
 
 ## P1 — Reputation and trust
 
-### [ ] Rework the cookie/auth framing in README
+### [x] Rework the cookie/auth framing in README
 **Goal:** "we read your browser cookies" must land as "clever" not "malware."
 **How:** add a short "How auth works" subsection near the top (before Quick start, or immediately after). Cover: what cookies are read (only `auth_token` and `ct0` from the X domain), what stays local (everything), that the code path is `src/auth/` and open-source, and the OAuth alternative for writes. One paragraph, not a wall.
 **Done when:** README has a trust-inducing auth section above the fold.
+**Shipped:** two-paragraph "How auth works" section placed directly above Quick start — reading vs writing split cleanly so users understand the cookie path isn't used for writes.
 
-### [ ] Explicit Windows support statement in README
+### [x] Explicit Windows support statement in README
 **Goal:** no ambiguity.
 **How:** one line in the install section. Either "Windows: use WSL2" or "Windows: unsupported, PRs welcome." Match current reality — the cookie-extraction path in `src/auth/` likely dictates which.
 **Done when:** a Windows user reading README knows in 10 seconds whether to bother.
+**Shipped:** WSL2 is the documented path; native Windows is called out as not-implemented because Chromium on Windows uses DPAPI and `src/auth/chromium.rs` has no DPAPI backend. PRs explicitly welcomed.
 
 ### [ ] Changelog / GitHub release notes for 0.15.0
 **Goal:** people check "when was this last touched, and does the author care?" before installing.

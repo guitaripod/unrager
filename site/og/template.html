@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0f1419;
+    --text: #e7e9ea;
+    --muted: #71767b;
+    --muted-2: #8b93a1;
+    --accent: #1d9bf0;
+    --accent-dim: rgba(29, 155, 240, 0.14);
+    --border: #2f3336;
+    --border-soft: #21262d;
+    --mono: "JetBrainsMono Nerd Font", "Fira Code", "JetBrains Mono", "Liberation Mono",
+            ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  html, body {
+    width: 1200px;
+    height: 630px;
+    font-family: var(--mono);
+    background:
+      radial-gradient(900px 380px at 52% -120px, rgba(29, 155, 240, 0.10), transparent 70%),
+      var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+
+  .frame {
+    width: 1200px;
+    height: 630px;
+    padding: 58px 72px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    position: relative;
+  }
+
+  .frame::after {
+    content: "";
+    position: absolute;
+    inset: 24px;
+    border: 1px solid var(--border-soft);
+    border-radius: 14px;
+    pointer-events: none;
+  }
+
+  .top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: var(--muted);
+    font-size: 18px;
+    letter-spacing: .04em;
+  }
+
+  .top-left { display: flex; align-items: center; gap: 14px; }
+
+  .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--accent); box-shadow: 0 0 16px rgba(29, 155, 240, 0.55);
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: rgba(22, 24, 28, 0.7);
+    font-size: 16px;
+    color: var(--muted-2);
+  }
+
+  .badge .minus {
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 18px;
+  }
+
+  .badge .label { letter-spacing: .06em; }
+
+  .body {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    margin-top: 20px;
+  }
+
+  .cursor {
+    color: var(--accent);
+    font-size: 22px;
+    line-height: 1;
+    margin-bottom: 2px;
+  }
+
+  .wordmark {
+    font-size: 148px;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    font-weight: 700;
+    color: var(--text);
+  }
+
+  .tagline {
+    font-size: 30px;
+    line-height: 1.4;
+    color: var(--muted-2);
+    max-width: 38ch;
+  }
+
+  .tagline .hi { color: var(--text); }
+
+  .install {
+    display: inline-flex;
+    align-items: center;
+    gap: 14px;
+    padding: 16px 22px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: #16181c;
+    font-size: 22px;
+    color: var(--text);
+    align-self: flex-start;
+    max-width: 100%;
+    overflow: hidden;
+    margin-top: 6px;
+  }
+
+  .install .p { color: var(--accent); }
+  .install .m { color: var(--muted); }
+
+  .foot {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    color: var(--muted);
+    font-size: 18px;
+  }
+
+  .foot .url { color: var(--text); }
+  .foot .chip {
+    padding: 6px 12px;
+    border: 1px solid var(--accent);
+    background: var(--accent-dim);
+    color: var(--accent);
+    border-radius: 6px;
+    font-size: 16px;
+    letter-spacing: .04em;
+  }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <div class="top">
+      <div class="top-left">
+        <span class="dot"></span>
+        <span>unrager · v0.14.1</span>
+      </div>
+      <div class="badge">
+        <span class="minus">−12</span>
+        <span class="label">rage-bait filtered</span>
+      </div>
+    </div>
+
+    <div class="body">
+      <div class="cursor">▋</div>
+      <div class="wordmark">unrager</div>
+      <div class="tagline">
+        <span class="hi">A calm Twitter/X client for the terminal.</span><br>
+        Local LLM drops rage-bait before it reaches your eyes.
+      </div>
+      <div class="install">
+        <span class="p">$</span>
+        <span>cargo install unrager</span>
+        <span class="m">&nbsp;&nbsp;#&nbsp;or curl&nbsp;|&nbsp;bash</span>
+      </div>
+    </div>
+
+    <div class="foot">
+      <span class="url">unrager.com</span>
+      <span class="chip">github.com/guitaripod/unrager</span>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,42 @@
+name: deploy site
+
+on:
+  push:
+    paths:
+      - 'site/**'
+      - '.github/workflows/deploy-site.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-site-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: cloudflare pages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+
+      - name: Regenerate og.png from template
+        run: |
+          python3 -m pip install --quiet playwright
+          python3 -m playwright install --with-deps chromium
+          python3 site/og/render.py
+
+      - name: Deploy to Cloudflare Pages
+        working-directory: site
+        run: |
+          npx --yes wrangler@latest pages deploy public \
+            --project-name=unrager \
+            --branch="${BRANCH}"
+        env:
+          BRANCH: ${{ github.ref == 'refs/heads/master' && 'main' || github.ref_name }}

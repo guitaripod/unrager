@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>unrager — a calm Twitter/X client for the terminal</title>
+  <meta name="description" content="A calm Twitter/X client for the terminal. A local LLM drops rage-bait before it reaches your eyes.">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0f1419">
+
+  <meta property="og:title" content="unrager">
+  <meta property="og:description" content="A calm Twitter/X client for the terminal. A local LLM drops rage-bait before it reaches your eyes.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://unrager.com/">
+  <meta property="og:image" content="https://unrager.com/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="unrager">
+  <meta name="twitter:description" content="A calm Twitter/X client for the terminal. A local LLM drops rage-bait before it reaches your eyes.">
+  <meta name="twitter:image" content="https://unrager.com/og.png">
+
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2212%22%20fill%3D%22%230f1419%22%2F%3E%3Ctext%20x%3D%2232%22%20y%3D%2244%22%20font-size%3D%2240%22%20text-anchor%3D%22middle%22%20fill%3D%22%231D9BF0%22%20font-family%3D%22ui-monospace%2Cmonospace%22%20font-weight%3D%22700%22%3Eu%3C%2Ftext%3E%3C%2Fsvg%3E">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="wrap">
+
+    <header class="hero">
+      <div class="cursor" aria-hidden="true">▋</div>
+      <h1 class="wordmark">unrager</h1>
+      <p class="tagline">
+        A calm Twitter/X client for the terminal.<br>
+        A local LLM drops rage-bait before it reaches your eyes.
+      </p>
+
+      <div class="install" aria-label="install">
+        <span class="rule">─── install ───────────────────────────────</span>
+        <pre class="cmd"><code><span class="prompt">$</span> curl -fsSL <span class="url">unrager.com/install.sh</span> | bash</code><button class="copy" type="button" aria-label="copy install command" data-copy="curl -fsSL https://unrager.com/install.sh | bash"><span class="copy-glyph">⧉</span></button></pre>
+        <p class="sub">macOS · Linux · or <code>cargo install unrager</code></p>
+      </div>
+
+      <nav class="actions">
+        <a class="btn primary" href="https://github.com/guitaripod/unrager">github<span aria-hidden="true"> →</span></a>
+        <a class="btn" href="https://github.com/guitaripod/unrager#readme">readme</a>
+        <a class="btn" href="https://github.com/guitaripod/unrager/releases">releases</a>
+      </nav>
+    </header>
+
+    <figure class="shot">
+      <img src="/feed.png" alt="unrager home feed with the rage filter active, showing a −12 count of removed tweets in the status bar" width="1920" height="1180" loading="lazy" decoding="async">
+      <figcaption>Home feed with the rage filter on. <code>−12</code> in the status bar is all that remains of twelve tweets the LLM dropped.</figcaption>
+    </figure>
+
+    <section class="features" aria-labelledby="features-heading">
+      <h2 id="features-heading" class="rule">─── what it does ───────────────────────</h2>
+      <dl>
+        <div class="feat">
+          <dt>rage filter</dt>
+          <dd>Every tweet classified by a local Ollama model against your rubric. Matches are physically removed — not collapsed, not grayed, gone. Verdicts cache to SQLite; edit the rubric and the cache invalidates.</dd>
+        </div>
+        <div class="feat">
+          <dt>terminal-native</dt>
+          <dd>ratatui + crossterm. Inline photos, video posters, GIF frames via the kitty graphics protocol on Ghostty, Kitty, WezTerm. Falls back to glyphs elsewhere.</dd>
+        </div>
+        <div class="feat">
+          <dt>free reads</dt>
+          <dd>Browser cookies → X's own GraphQL endpoints, the same path the web client uses. No API key, no cost, no rate tier.</dd>
+        </div>
+        <div class="feat">
+          <dt>write via OAuth</dt>
+          <dd>Tweet &amp; reply through the official X API v2 with your own registered client. Auto-likes on reply. Your identity, your rate limits.</dd>
+        </div>
+        <div class="feat">
+          <dt>ask &amp; translate</dt>
+          <dd>Inline gemma chat pinned to any post with thread context auto-attached. Press <kbd>T</kbd> on any tweet to translate it. Same local model; nothing leaves your machine.</dd>
+        </div>
+        <div class="feat">
+          <dt>serve anywhere</dt>
+          <dd>Optional HTTP server + embedded Dioxus web client. Pair with Tailscale and you have the same feed on iOS, Android, and the browser — one binary, one codebase.</dd>
+        </div>
+      </dl>
+    </section>
+
+    <section class="quote">
+      <blockquote>
+        <p>Your home feed, minus the 12 tweets the LLM quietly ate.</p>
+      </blockquote>
+    </section>
+
+    <footer class="foot">
+      <div class="foot-line">
+        <a href="https://github.com/guitaripod/unrager">github.com/guitaripod/unrager</a>
+        <span class="dot" aria-hidden="true">·</span>
+        <span class="muted">GPL-3.0</span>
+        <span class="dot" aria-hidden="true">·</span>
+        <span class="muted">not affiliated with X Corp</span>
+      </div>
+    </footer>
+
+  </main>
+
+  <script>
+    document.querySelectorAll('.copy').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(btn.dataset.copy);
+          const g = btn.querySelector('.copy-glyph');
+          const prev = g.textContent;
+          g.textContent = '✓';
+          btn.classList.add('ok');
+          setTimeout(() => { g.textContent = prev; btn.classList.remove('ok'); }, 1200);
+        } catch (_) { /* noop */ }
+      });
+    });
+  </script>
+</body>
+</html>

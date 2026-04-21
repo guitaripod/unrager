@@ -296,14 +296,18 @@ jobs:
           while IFS= read -r line; do
             msg="${line#* }"
 
-            if echo "$msg" | grep -qE '^(chore|docs)'; then
+            if echo "$msg" | grep -qE '^(chore|docs|Merge )'; then
               continue
             fi
 
             prefix=$(echo "$msg" | sed -n 's/^\([a-z]*\).*/\1/p')
             body=$(echo "$msg" | sed 's/^[a-z]*\(([^)]*)\)\{0,1\}: *//')
 
-            header="${SECTIONS[$prefix]:-Other}"
+            if [ -n "$prefix" ]; then
+              header="${SECTIONS[$prefix]:-Other}"
+            else
+              header="Other"
+            fi
             BUCKETS["$header"]+="- ${body}"$'\n'
           done < <(git log --oneline --no-decorate "$RANGE")
 
@@ -322,14 +326,14 @@ jobs:
             echo "The oneliner installer supports three flavors via the \`UNRAGER_FLAVOR\` env var:"
             echo ""
             echo '```sh'
-            echo '# full: TUI + HTTP server + embedded web client (default)'
-            echo 'curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/master/install.sh | bash'
+            echo '# tui: TUI + CLI (default)'
+            echo 'curl -fsSL https://unrager.com/install.sh | bash'
             echo ''
-            echo '# tui: TUI + CLI only (~8 MB smaller)'
-            echo 'UNRAGER_FLAVOR=tui curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/master/install.sh | bash'
+            echo '# full: TUI + HTTP server + embedded web client'
+            echo 'UNRAGER_FLAVOR=full curl -fsSL https://unrager.com/install.sh | bash'
             echo ''
-            echo '# cli: CLI only (~11 MB smaller)'
-            echo 'UNRAGER_FLAVOR=cli curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/master/install.sh | bash'
+            echo '# cli: CLI only'
+            echo 'UNRAGER_FLAVOR=cli curl -fsSL https://unrager.com/install.sh | bash'
             echo '```'
             echo ""
             if [ -n "$PREV_TAG" ]; then

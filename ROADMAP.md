@@ -53,10 +53,11 @@ These determine whether a new user's first 60 seconds end in "wow" or "uninstall
 **Done when:** a Windows user reading README knows in 10 seconds whether to bother.
 **Shipped:** WSL2 is the documented path; native Windows is called out as not-implemented because Chromium on Windows uses DPAPI and `src/auth/chromium.rs` has no DPAPI backend. PRs explicitly welcomed.
 
-### [ ] Changelog / GitHub release notes for 0.15.0
+### [x] Changelog / GitHub release notes for 0.15.0
 **Goal:** people check "when was this last touched, and does the author care?" before installing.
 **How:** either a `CHANGELOG.md` seeded with the last few versions from `git log`, or rich release notes on the existing GitHub release for 0.15.0 (and a habit of doing it going forward — maybe add a step to CLAUDE.md's release checklist).
 **Done when:** the 0.15.0 GitHub release has a human-written summary, and there's a pattern for future releases.
+**Shipped:** `CHANGELOG.md` seeded with the last seven releases (0.13.0 → 0.15.0), plus an `[Unreleased]` section that captures this roadmap pass. CLAUDE.md's release steps now require rolling `[Unreleased]` into the new version entry as step 1, and pasting the section into the GitHub release body after the workflow completes.
 
 ### [ ] Site link check in a real paste context
 **Goal:** OG card renders on Twitter, Discord, and Slack previews; install snippet copy works; demo plays.

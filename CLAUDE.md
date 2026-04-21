@@ -23,12 +23,14 @@ Always run the CI gate after making changes, without waiting to be asked. Then `
 
 ## Releasing a new version
 
-1. Bump `version` in `Cargo.toml`
-2. `cargo check` to update `Cargo.lock`
-3. Commit: `chore: bump version to X.Y.Z`
-4. Tag (no `v` prefix): `git tag X.Y.Z`
-5. Push both: `git push origin master --tags`
-6. The `release` workflow runs CI checks, creates the GitHub release, then publishes `unrager-model` + `unrager` to crates.io — **never create releases manually with `gh release create` or `cargo publish`**
+1. Roll the `## [Unreleased]` section in `CHANGELOG.md` into a new `## [X.Y.Z] — YYYY-MM-DD` entry, add a fresh empty `[Unreleased]`, and update the link refs at the bottom of the file
+2. Bump `version` in `Cargo.toml`
+3. `cargo check` to update `Cargo.lock`
+4. Commit: `chore: bump version to X.Y.Z` (include the CHANGELOG edit in the same commit)
+5. Tag (no `v` prefix): `git tag X.Y.Z`
+6. Push both: `git push origin master --tags`
+7. The `release` workflow runs CI checks, creates the GitHub release, then publishes `unrager-model` + `unrager` to crates.io — **never create releases manually with `gh release create` or `cargo publish`**
+8. After the workflow completes, edit the GitHub release body and paste the CHANGELOG section verbatim so the release page matches the file
 
 Do NOT force-push tags that already have a release. If post-release fixes are needed, they go into the next version.
 

@@ -388,15 +388,15 @@ jobs:
           set -eux
           V=$(cargo metadata --format-version=1 --no-deps \
               | jq -r '.packages[] | select(.name=="unrager-model") | .version')
-          if curl -sfLI "https://crates.io/api/v1/crates/unrager-model/$V" >/dev/null 2>&1; then
+          if curl -sfL -o /dev/null "https://crates.io/api/v1/crates/unrager-model/$V" >/dev/null 2>&1; then
             echo "unrager-model $V already on crates.io, skipping"
             exit 0
           fi
           cargo publish -p unrager-model
           echo "waiting for crates.io to index unrager-model $V"
-          for i in $(seq 1 30); do
+          for i in $(seq 1 60); do
             sleep 10
-            if curl -sfLI "https://crates.io/api/v1/crates/unrager-model/$V" >/dev/null 2>&1; then
+            if curl -sfL -o /dev/null "https://crates.io/api/v1/crates/unrager-model/$V" >/dev/null 2>&1; then
               echo "indexed after ${i}0s"
               exit 0
             fi
@@ -408,7 +408,7 @@ jobs:
           set -eux
           V=$(cargo metadata --format-version=1 --no-deps \
               | jq -r '.packages[] | select(.name=="unrager") | .version')
-          if curl -sfLI "https://crates.io/api/v1/crates/unrager/$V" >/dev/null 2>&1; then
+          if curl -sfL -o /dev/null "https://crates.io/api/v1/crates/unrager/$V" >/dev/null 2>&1; then
             echo "unrager $V already on crates.io, skipping"
             exit 0
           fi

@@ -200,18 +200,18 @@ kbd {
 
 .btn.primary:hover { background: rgba(29, 155, 240, 0.18); }
 
-/* ─── screenshot ───────────────────────────── */
+/* ─── screenshot carousel ──────────────────── */
 
 .shot {
-  margin: calc(var(--rhythm) * 1.2) 0;
-  text-align: center;
+  margin: calc(var(--rhythm) * 1.2) 0 0;
+  position: relative;
 }
 
-.shot img {
-  display: block;
-  width: 100%;
-  height: auto;
+.slides {
+  position: relative;
+  aspect-ratio: 1920 / 1180;
   border-radius: 10px;
+  overflow: hidden;
   border: 1px solid var(--border);
   background: var(--bg-2);
   box-shadow:
@@ -219,10 +219,118 @@ kbd {
     0 20px 60px -20px rgba(0, 0, 0, 0.6);
 }
 
-.shot figcaption {
-  margin-top: .75rem;
+.slide {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  transition: opacity 420ms ease;
+  pointer-events: none;
+}
+
+.slide.is-active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.slide img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top;
+}
+
+.slide-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2.4rem;
+  height: 2.4rem;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: rgba(15, 20, 25, 0.72);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  opacity: 0;
+  transition: opacity 160ms ease, border-color 160ms, background 160ms, transform 160ms;
+  z-index: 2;
+}
+
+.slide-nav.prev { left: .6rem; }
+.slide-nav.next { right: .6rem; }
+
+.shot:hover .slide-nav,
+.shot:focus-within .slide-nav {
+  opacity: 1;
+}
+
+.slide-nav:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(29, 155, 240, 0.14);
+}
+
+.slide-nav:active { transform: translateY(-50%) scale(0.94); }
+
+.slide-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: rgba(29, 155, 240, 0.08);
+  z-index: 2;
+  pointer-events: none;
+}
+
+.slide-progress-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width linear;
+  will-change: width;
+}
+
+.slide-caption {
+  margin-top: .9rem;
   color: var(--muted-2);
   font-size: .85rem;
+  text-align: center;
+  min-height: 1.3em;
+}
+
+.slide-dots {
+  margin-top: .7rem;
+  display: flex;
+  justify-content: center;
+  gap: .4rem;
+}
+
+.slide-dots button {
+  width: .45rem;
+  height: .45rem;
+  border-radius: 50%;
+  border: 0;
+  background: var(--border);
+  padding: 0;
+  cursor: pointer;
+  transition: background 150ms ease, transform 150ms ease;
+}
+
+.slide-dots button:hover { background: var(--muted); }
+
+.slide-dots button[aria-selected="true"] {
+  background: var(--accent);
+  transform: scale(1.25);
+}
+
+.shot.is-paused .slide-progress-fill {
+  background: var(--muted);
 }
 
 .shot figcaption code {

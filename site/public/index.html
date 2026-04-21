@@ -44,9 +44,55 @@
       </nav>
     </header>
 
-    <figure class="shot">
-      <img src="/hero.gif" alt="unrager home feed, rage filter active: scrolling through tweets, opening a thread, with −N count persistently visible in the status bar" width="1920" height="1180" loading="lazy" decoding="async">
-      <figcaption>Home feed with the rage filter on. <code>−N</code> in the status bar is all that remains of the tweets the LLM dropped before they reached the screen.</figcaption>
+    <figure class="shot" aria-roledescription="carousel" aria-label="tour of unrager's screens">
+      <div class="slides" role="group" aria-live="polite">
+        <figure class="slide is-active" data-caption="home feed — filter dropped rage-bait, ‑N shown top-right">
+          <img src="/feed.png" alt="home feed with rage filter active, −N shown in the status bar" width="1920" height="1180" fetchpriority="high">
+        </figure>
+        <figure class="slide" data-caption="thread · split-pane detail, replies sorted by likes">
+          <img src="/detail.png" alt="split-pane showing a tweet with replies" width="1920" height="1180" loading="lazy">
+        </figure>
+        <figure class="slide" data-caption="ask gemma — local LLM streams an Explain reply inline">
+          <img src="/ask.png" alt="ask pane with gemma streaming an inline explanation" width="1920" height="1180" loading="lazy">
+        </figure>
+        <figure class="slide" data-caption="reply composer — every input is a Vim editor">
+          <img src="/compose.png" alt="reply composer with Vim INSERT mode and char counter" width="1920" height="1180" loading="lazy">
+        </figure>
+        <figure class="slide" data-caption="search · live multilingual results, T to translate">
+          <img src="/search.png" alt="multilingual search results with translation indicator" width="1920" height="1180" loading="lazy">
+        </figure>
+        <figure class="slide" data-caption="notifications · likes, replies, retweets in one pane">
+          <img src="/notifications.png" alt="notifications pane with mixed notification types" width="1920" height="1180" loading="lazy">
+        </figure>
+        <figure class="slide" data-caption="profile · own timeline with full metrics">
+          <img src="/profile.png" alt="user profile with tweets and metrics" width="1920" height="1180" loading="lazy">
+        </figure>
+        <figure class="slide" data-caption="help overlay · every keybinding and glyph meaning">
+          <img src="/help.png" alt="scrollable help overlay with key bindings and iconography" width="1920" height="1180" loading="lazy">
+        </figure>
+      </div>
+
+      <button type="button" class="slide-nav prev" aria-label="previous screen">
+        <span aria-hidden="true">‹</span>
+      </button>
+      <button type="button" class="slide-nav next" aria-label="next screen">
+        <span aria-hidden="true">›</span>
+      </button>
+
+      <div class="slide-progress" aria-hidden="true"><div class="slide-progress-fill"></div></div>
+
+      <figcaption class="slide-caption" aria-live="polite">home feed — filter dropped rage-bait, ‑N shown top-right</figcaption>
+
+      <div class="slide-dots" role="tablist" aria-label="jump to screen">
+        <button role="tab" type="button" aria-selected="true" aria-label="home feed"></button>
+        <button role="tab" type="button" aria-selected="false" aria-label="thread detail"></button>
+        <button role="tab" type="button" aria-selected="false" aria-label="ask gemma"></button>
+        <button role="tab" type="button" aria-selected="false" aria-label="reply composer"></button>
+        <button role="tab" type="button" aria-selected="false" aria-label="search"></button>
+        <button role="tab" type="button" aria-selected="false" aria-label="notifications"></button>
+        <button role="tab" type="button" aria-selected="false" aria-label="profile"></button>
+        <button role="tab" type="button" aria-selected="false" aria-label="help overlay"></button>
+      </div>
     </figure>
 
     <section class="features" aria-labelledby="features-heading">
@@ -114,6 +160,86 @@
         } catch (_) { /* noop */ }
       });
     });
+
+    (() => {
+      const shot = document.querySelector('.shot');
+      if (!shot) return;
+      const slides = Array.from(shot.querySelectorAll('.slide'));
+      const dots = Array.from(shot.querySelectorAll('.slide-dots button'));
+      const caption = shot.querySelector('.slide-caption');
+      const progress = shot.querySelector('.slide-progress-fill');
+      const prevBtn = shot.querySelector('.slide-nav.prev');
+      const nextBtn = shot.querySelector('.slide-nav.next');
+      const DWELL = 5200;
+      let idx = 0;
+      let timer = null;
+      let startedAt = 0;
+      let remaining = DWELL;
+      let paused = false;
+
+      const show = (i, { restart = true } = {}) => {
+        idx = (i + slides.length) % slides.length;
+        slides.forEach((s, j) => s.classList.toggle('is-active', j === idx));
+        dots.forEach((d, j) => d.setAttribute('aria-selected', j === idx ? 'true' : 'false'));
+        if (caption) caption.textContent = slides[idx].dataset.caption || '';
+        if (restart) scheduleNext(DWELL);
+      };
+
+      const scheduleNext = (ms) => {
+        clearTimeout(timer);
+        remaining = ms;
+        startedAt = performance.now();
+        progress.style.transition = 'none';
+        progress.style.width = '0%';
+        // Force reflow so the transition re-triggers on the next frame.
+        void progress.offsetWidth;
+        progress.style.transition = `width ${ms}ms linear`;
+        progress.style.width = '100%';
+        timer = setTimeout(() => show(idx + 1), ms);
+      };
+
+      const pause = () => {
+        if (paused) return;
+        paused = true;
+        shot.classList.add('is-paused');
+        clearTimeout(timer);
+        const elapsed = performance.now() - startedAt;
+        remaining = Math.max(800, DWELL - elapsed);
+        const styles = getComputedStyle(progress);
+        progress.style.transition = 'none';
+        progress.style.width = styles.width;
+      };
+
+      const resume = () => {
+        if (!paused) return;
+        paused = false;
+        shot.classList.remove('is-paused');
+        scheduleNext(remaining);
+      };
+
+      prevBtn.addEventListener('click', () => show(idx - 1));
+      nextBtn.addEventListener('click', () => show(idx + 1));
+      dots.forEach((d, j) => d.addEventListener('click', () => show(j)));
+
+      shot.addEventListener('mouseenter', pause);
+      shot.addEventListener('mouseleave', resume);
+      shot.addEventListener('focusin', pause);
+      shot.addEventListener('focusout', resume);
+
+      document.addEventListener('keydown', (e) => {
+        if (e.target.matches('input, textarea')) return;
+        if (e.key === 'ArrowLeft') { show(idx - 1); e.preventDefault(); }
+        if (e.key === 'ArrowRight') { show(idx + 1); e.preventDefault(); }
+      });
+
+      // Respect reduced-motion: freeze on first slide, disable autoplay.
+      const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (reduce) {
+        progress.style.display = 'none';
+      } else {
+        show(0);
+      }
+    })();
   </script>
 </body>
 </html>

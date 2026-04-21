@@ -14,7 +14,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::time::timeout;
 
-pub const CLIENT_ID: &str = "LS1paXFQbTFyNUxmZnVua2lFVTY6MTpjaQ";
+const CLIENT_ID_ENV: &str = "UNRAGER_X_CLIENT_ID";
 const REDIRECT_URI: &str = "http://127.0.0.1:8765/callback";
 const CALLBACK_PORT: u16 = 8765;
 const AUTHORIZE_URL: &str = "https://x.com/i/oauth2/authorize";
@@ -35,6 +35,29 @@ impl Tokens {
     pub fn is_expired(&self) -> bool {
         Utc::now() + REFRESH_MARGIN >= self.expires_at
     }
+}
+
+/// Resolve the OAuth client ID from env var → config.toml, failing with a
+/// clear message when neither is set. The binary no longer embeds a default
+/// so the app identity is always the user's own registered client.
+pub fn client_id() -> Result<String> {
+    if let Ok(v) = std::env::var(CLIENT_ID_ENV)
+        && !v.trim().is_empty()
+    {
+        return Ok(v);
+    }
+    if let Ok(cfg_dir) = config::config_dir()
+        && let Some(v) = config::AppConfig::load(&cfg_dir).oauth.client_id
+        && !v.trim().is_empty()
+    {
+        return Ok(v);
+    }
+    Err(Error::Config(format!(
+        "OAuth client id not configured. Set {CLIENT_ID_ENV}=<your_client_id>, \
+         or add\n\n    [oauth]\n    client_id = \"<your_client_id>\"\n\nto config.toml. \
+         Register a native app at https://developer.x.com with callback \
+         http://127.0.0.1:8765/callback to obtain one."
+    )))
 }
 
 pub async fn load_or_authorize() -> Result<Tokens> {
@@ -114,6 +137,7 @@ fn save(path: &std::path::Path, tokens: &Tokens) -> Result<()> {
 }
 
 async fn run_pkce_flow() -> Result<Tokens> {
+    let client_id = client_id()?;
     let verifier = random_verifier();
     let challenge = code_challenge(&verifier);
     let state: String = rand::rng()
@@ -126,7 +150,7 @@ async fn run_pkce_flow() -> Result<Tokens> {
         "{AUTHORIZE_URL}?response_type=code&client_id={client}\
          &redirect_uri={redirect}&scope={scope}&state={state}\
          &code_challenge={challenge}&code_challenge_method=S256",
-        client = urlencoding::encode(CLIENT_ID),
+        client = urlencoding::encode(&client_id),
         redirect = urlencoding::encode(REDIRECT_URI),
         scope = urlencoding::encode(SCOPES),
     );
@@ -144,7 +168,7 @@ async fn run_pkce_flow() -> Result<Tokens> {
 
     let code = wait_for_callback(&state).await?;
     tracing::debug!("received oauth code, exchanging for tokens");
-    exchange_code(&code, &verifier).await
+    exchange_code(&code, &verifier, &client_id).await
 }
 
 fn random_verifier() -> String {
@@ -254,13 +278,13 @@ fn handle_callback_line(line: &str, expected_state: &str) -> Result<String> {
     Ok(code)
 }
 
-async fn exchange_code(code: &str, verifier: &str) -> Result<Tokens> {
+async fn exchange_code(code: &str, verifier: &str, client_id: &str) -> Result<Tokens> {
     let http = reqwest::Client::new();
     let params = [
         ("grant_type", "authorization_code"),
         ("code", code),
         ("redirect_uri", REDIRECT_URI),
-        ("client_id", CLIENT_ID),
+        ("client_id", client_id),
         ("code_verifier", verifier),
     ];
     let res = http.post(TOKEN_URL).form(&params).send().await?;
@@ -268,11 +292,12 @@ async fn exchange_code(code: &str, verifier: &str) -> Result<Tokens> {
 }
 
 async fn refresh_tokens(refresh_token: &str) -> Result<Tokens> {
+    let client_id = client_id()?;
     let http = reqwest::Client::new();
     let params = [
         ("grant_type", "refresh_token"),
         ("refresh_token", refresh_token),
-        ("client_id", CLIENT_ID),
+        ("client_id", client_id.as_str()),
     ];
     let res = http.post(TOKEN_URL).form(&params).send().await?;
     parse_token_response(res).await
@@ -353,6 +378,26 @@ mod tests {
         assert!(!v.contains('='));
         assert!(!v.contains('+'));
         assert!(!v.contains('/'));
+    }
+
+    #[test]
+    fn client_id_reads_env_var() {
+        // SAFETY: tests run single-threaded enough for this (no other test touches this var)
+        unsafe { std::env::set_var(CLIENT_ID_ENV, "env_client_42") };
+        let got = client_id().expect("env should satisfy client_id lookup");
+        assert_eq!(got, "env_client_42");
+        unsafe { std::env::remove_var(CLIENT_ID_ENV) };
+    }
+
+    #[test]
+    fn client_id_rejects_empty_env() {
+        unsafe { std::env::set_var(CLIENT_ID_ENV, "   ") };
+        let err = client_id().expect_err("whitespace-only env must not count as configured");
+        assert!(
+            matches!(err, Error::Config(ref msg) if msg.contains(CLIENT_ID_ENV)),
+            "expected a Config error that mentions the env var name, got {err:?}"
+        );
+        unsafe { std::env::remove_var(CLIENT_ID_ENV) };
     }
 
     #[test]

@@ -407,12 +407,21 @@ Posting uses the official X API v2 (not cookie auth), so your account is never a
 1. Create a developer account at [developer.x.com](https://developer.x.com)
 2. Register a Native App (PKCE, no client secret)
 3. Set callback URL to `http://127.0.0.1:8765/callback`
-4. **Replace the Client ID** in `src/auth/oauth.rs` (`CLIENT_ID`) with your own, then rebuild
+4. **Configure your Client ID** — either export it:
+   ```sh
+   export UNRAGER_X_CLIENT_ID=<your_client_id>
+   ```
+   or add it to `~/.config/unrager/config.toml`:
+   ```toml
+   [oauth]
+   client_id = "<your_client_id>"
+   ```
+   The env var wins when both are set. There is no embedded default — `auth login`, `tweet`, and `reply` fail with an explanatory error if neither is configured.
 5. Load pay-per-use credits at [console.x.com](https://console.x.com)
 6. `unrager auth login` — opens browser for the OAuth flow
 7. `unrager tweet "hello from unrager"`
 
-> **Why your own Client ID?** The embedded ID is the author's personal credential. X enforces per-client rate limits and may flag traffic from many unrelated users sharing a single client. Read and TUI are unaffected — only `tweet` and `reply` go through OAuth.
+> **Why your own Client ID?** X enforces per-client rate limits and may flag traffic from many unrelated users sharing a single client. Read and TUI are unaffected — only `tweet` and `reply` go through OAuth.
 
 </details>
 
@@ -430,7 +439,7 @@ Media:   CDN fetch         ->  downscale 400px                    ->  kitty grap
 
 1. **Browser cookies** — read at runtime, decrypted in memory using the OS credential store (macOS Keychain, Linux Secret Service), never written to disk or logged
 2. **OAuth tokens** — `~/.config/unrager/tokens.json` mode `0600`, atomic writes
-3. **Client ID** — embedded `const`, safe per PKCE design (no client secret)
+3. **Client ID** — supplied by the user via `UNRAGER_X_CLIENT_ID` env var or `[oauth] client_id` in `config.toml`. No embedded default, so the app identity used against X is always your own.
 4. **Filter** — runs entirely locally, tweet text never leaves your machine
 
 </details>

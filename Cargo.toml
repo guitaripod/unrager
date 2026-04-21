@@ -23,6 +23,7 @@ categories = ["command-line-utilities"]
 include = [
     "src/**/*",
     "assets/NotoSansMono-*.ttf",
+    "assets/for-you-bg.png",
     "Cargo.toml",
     "README.md",
     "LICENSE",

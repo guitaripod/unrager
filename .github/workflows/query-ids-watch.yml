@@ -1,0 +1,108 @@
+name: query-ids-watch
+
+# Runs the `check_query_ids` example every Monday and compares the live
+# query IDs on x.com against the hardcoded FALLBACK_QUERY_IDS table. If
+# any known operation has rotated, a tracking issue is opened (or the
+# existing open one refreshed) so the fallbacks can be bumped before
+# users start seeing 404s.
+#
+# Failure modes:
+#   - Scraper exits 2 → main.js regex needs updating; issue opened.
+#   - Scraper exits 1 → fallbacks are stale; issue opened with a diff.
+#   - Exit 0 → no-op; nothing opened, nothing edited.
+
+on:
+  schedule:
+    # Mondays 06:00 UTC — lines up with typical X deploy cadence
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    name: scrape + diff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-query-ids-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-query-ids-
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Build checker
+        run: cargo build --release --example check_query_ids
+
+      - name: Run checker
+        id: check
+        run: |
+          set +e
+          ./target/release/examples/check_query_ids > diff.txt 2>&1
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          cat diff.txt
+          # Export the diff for the issue body step. Limit to 8KB so we
+          # don't blow past GH's issue-body size cap.
+          {
+            echo "diff<<EOF_DIFF"
+            head -c 8192 diff.txt
+            echo
+            echo "EOF_DIFF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open or refresh tracking issue
+        if: steps.check.outputs.exit_code != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXIT_CODE: ${{ steps.check.outputs.exit_code }}
+          DIFF: ${{ steps.check.outputs.diff }}
+        run: |
+          set -eux
+          TITLE="query IDs drifted from fallbacks"
+          BODY=$(cat <<EOF
+          The weekly \`query-ids-watch\` workflow detected a drift between the
+          live query IDs on x.com and the hardcoded \`FALLBACK_QUERY_IDS\`
+          table in \`src/gql/query_ids.rs\`.
+
+          Exit code: **$EXIT_CODE** (\`1\` = rotated/missing ops, \`2\` = scraper broken)
+
+          \`\`\`
+          $DIFF
+          \`\`\`
+
+          **Next steps**
+          1. Re-run locally: \`cargo run --release --example check_query_ids\`
+          2. Patch both \`FALLBACK_QUERY_IDS\` (in \`src/gql/query_ids.rs\`) and
+             \`FALLBACKS\` (in \`examples/check_query_ids.rs\`) with the live values.
+          3. Ship a patch release — see \`CLAUDE.md\` for the release steps.
+
+          _Posted by $GITHUB_WORKFLOW run $GITHUB_RUN_ID on $(date -u +%Y-%m-%dT%H:%MZ)._
+          EOF
+          )
+          # Ensure the label exists so --label below doesn't fail on a fresh repo.
+          gh label create query-ids --color d93f0b --description "fallback query IDs drifted from live" || true
+          EXISTING=$(gh issue list --label query-ids --state open --json number --jq '.[0].number' || true)
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create \
+              --title "$TITLE" \
+              --label query-ids \
+              --body "$BODY"
+          fi

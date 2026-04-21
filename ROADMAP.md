@@ -74,10 +74,11 @@ These determine whether a new user's first 60 seconds end in "wow" or "uninstall
 
 ## P2 — Durability
 
-### [ ] Query ID rotation early-warning
+### [x] Query ID rotation early-warning
 **Goal:** when X rotates query IDs and the scraper fails, we know before users do.
 **How:** add a daily or weekly GitHub Actions cron that runs a minimal auth-less scraper check. If fallback IDs stop matching the live ones, open an issue automatically. See `src/gql/` for the scraper module.
 **Done when:** a workflow exists, has run successfully once, and has a documented failure mode (what happens when it opens an issue).
+**Shipped:** `examples/check_query_ids.rs` diffs scraped live IDs against the `FALLBACK_QUERY_IDS` table and exits 1 on drift (or 2 when `main.*.js` can't be parsed). `.github/workflows/query-ids-watch.yml` runs it Mondays 06:00 UTC and either opens a tracking issue labelled `query-ids` or comments on the existing open one. Running the checker locally right now already flags 6 rotated + 4 missing ops — the fallbacks are stale and need bumping before the next release.
 
 ### [ ] Telemetry-free usage signal
 **Goal:** know whether the site install-script is being run, without shipping telemetry.

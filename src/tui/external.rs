@@ -202,7 +202,12 @@ async fn spawn_image_viewer(paths: Vec<PathBuf>) -> Result<(), String> {
     let to_open: Vec<PathBuf> = if multi_file {
         paths
     } else {
-        vec![paths.into_iter().next().unwrap()]
+        vec![
+            paths
+                .into_iter()
+                .next()
+                .expect("download_and_open groups contain at least one path"),
+        ]
     };
     let prefix_args = prefix_args.to_vec();
     tracing::info!(
@@ -277,7 +282,12 @@ async fn spawn_video_viewer(paths: Vec<PathBuf>) -> Result<(), String> {
     let to_open: Vec<PathBuf> = if multi_file {
         paths
     } else {
-        vec![paths.into_iter().next().unwrap()]
+        vec![
+            paths
+                .into_iter()
+                .next()
+                .expect("download_and_open groups contain at least one path"),
+        ]
     };
     let prefix_args = prefix_args.to_vec();
     tracing::info!(

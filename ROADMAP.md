@@ -90,10 +90,11 @@ These determine whether a new user's first 60 seconds end in "wow" or "uninstall
 **Done when:** every help screen is proofread and each example actually works.
 **Shipped:** `home`, `user`, `search`, `mentions`, `bookmarks`, `thread`, `notifs` had `-n`, `--json`, `--max-pages`, and `--product` flags with no help text — each now has a complete-sentence description. Top-level and subcommand docs read cleanly; no removed-flag references.
 
-### [ ] Panic audit on common user paths
+### [x] Panic audit on common user paths
 **Goal:** no `.unwrap()` on user-reachable paths.
 **How:** `grep -rn 'unwrap()' src/` and for each hit in non-test code, ask "can a malformed X response, missing file, or failed fetch reach this?" Replace with `?` propagation + a `tracing::error!` where recoverable, or a graceful user-visible error. Don't touch `test_util.rs` or `#[cfg(test)]` blocks.
 **Done when:** the remaining `.unwrap()` calls are either in tests or have a justifying comment.
+**Shipped:** grepped every `.unwrap()` and `.expect()` in non-test code. Findings: (1) `src/main.rs` env-filter unwraps are on hardcoded, guaranteed-valid strings; (2) `src/tui/theme.rs:465` is behind a prior `is_ok()` guard; (3) `src/tui/compose.rs:50` is behind a `contains()` guard; (4) axum `Response::builder().body(...).unwrap()` in `src/server/embed.rs` and `src/server/routes/media.rs` are standard idiom with static bodies; (5) `src/tui/external.rs` had two raw unwraps on `paths.into_iter().next()` — rewritten to `.expect("download_and_open groups contain at least one path")` to document the non-local invariant. Everything else is in `#[cfg(test)]` or on regex/font statics. No user-reachable panic remains.
 
 ---
 

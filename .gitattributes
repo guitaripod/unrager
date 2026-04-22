@@ -10,4 +10,6 @@ install.sh linguist-detectable=false
 justfile linguist-detectable=false
 crates/unrager-app/assets/*.css linguist-detectable=false
 crates/unrager-app/static/*.js linguist-detectable=false
+crates/unrager-app/static/*.svg linguist-detectable=false
 demos/*.tape linguist-detectable=false
+site/** linguist-detectable=false

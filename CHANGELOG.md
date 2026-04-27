@@ -6,6 +6,9 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+## [0.15.1] — 2026-04-27
+
+- **Query IDs.** Refreshed `FALLBACK_QUERY_IDS` for eight rotated operations (`TweetResultByRestId`, `TweetDetail`, `HomeTimeline`, `HomeLatestTimeline`, `UserTweets`, `UserTweetsAndReplies`, `SearchTimeline`, `CreateTweet`) detected by the weekly `query-ids-watch` workflow ([#6](https://github.com/guitaripod/unrager/issues/6)).
 - **Ollama-missing graceful degradation.** Translation (`T`) now surfaces a visible error instead of hanging silently when Ollama is unreachable; ask (`A`) and brief (`B`) error messages now include a `run \`unrager doctor\`` hint when the failure looks like a connection problem.
 - **README.** New "How auth works" section (trust-inducing summary of what cookies are read and what stays local). Explicit Windows support statement (use WSL2 — Windows-native DPAPI cookie decryption isn't implemented).
 - **CHANGELOG.** Seeded with the most recent seven releases so the "when was this last touched" check has a clean answer.
@@ -50,7 +53,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.15.0...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.15.1...HEAD
+[0.15.1]: https://github.com/guitaripod/unrager/releases/tag/0.15.1
 [0.15.0]: https://github.com/guitaripod/unrager/releases/tag/0.15.0
 [0.14.2]: https://github.com/guitaripod/unrager/releases/tag/0.14.2
 [0.14.1]: https://github.com/guitaripod/unrager/releases/tag/0.14.1

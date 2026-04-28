@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **`o` auto-likes.** Opening a tweet in the browser now likes it on the way out (unless already liked or X is write-rate-limiting). Previously the auto-like only fired in the rate-limited browser-reply fallback path, which had inverted logic and never actually triggered when wanted.
+
 ## [0.15.1] — 2026-04-27
 
 - **Query IDs.** Refreshed `FALLBACK_QUERY_IDS` for eight rotated operations (`TweetResultByRestId`, `TweetDetail`, `HomeTimeline`, `HomeLatestTimeline`, `UserTweets`, `UserTweetsAndReplies`, `SearchTimeline`, `CreateTweet`) detected by the weekly `query-ids-watch` workflow ([#6](https://github.com/guitaripod/unrager/issues/6)).

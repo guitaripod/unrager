@@ -101,7 +101,7 @@ The left pane stays live. `Tab` swaps focus between panes, `,`/`.` adjusts the s
 
 Every text input in the TUI — reply (`r`), direct compose, ask-gemma input (`A`), command palette (`:`) — is a miniature Vim editor. Insert/Normal modes, `hjkl` motion, `w`/`b` word jumps, `dd`/`dw`, counts, `^`/`$`, everything a two-minute muscle-memory habit expects. The status line at the bottom of each pane shows `INSERT` or `NORMAL` and the live character counter (`24/280`).
 
-Submitting a reply with `r` auto-likes the tweet you're replying to (unless it's already liked) — reciprocal-like etiquette without the manual step. If X is write-rate-limiting you and you fall back to the browser via `o` to compose there, the TUI still fires the auto-like on your behalf.
+Submitting a reply with `r` auto-likes the tweet you're replying to (unless it's already liked) — reciprocal-like etiquette without the manual step. Opening a tweet in the browser with `o` does the same: anything worth a closer look gets a like on the way out, unless it's already liked or X is write-rate-limiting you.
 
 ## Search and translation
 
@@ -185,7 +185,7 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 | `p` | Open selected author's profile (falls back to own) |
 | `P` | Open own profile in browser |
 | `n` | Open notifications as a detail pane |
-| `o` | Open tweet in browser (auto-likes if write-rate-limited, for the browser-reply fallback) |
+| `o` | Open tweet in browser (auto-likes the tweet) |
 | `O` | Open tweet author's profile in browser |
 | `m` | Open all media (photos/GIFs/videos) in native viewer |
 | `S` | Screenshot composer, default action save to `~/.cache/unrager/screenshots/` |

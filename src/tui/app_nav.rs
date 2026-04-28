@@ -393,9 +393,8 @@ impl App {
             };
             (tweet.url.clone(), tweet.rest_id.clone(), tweet.favorited)
         };
-        let write_limited = self.write_rate_limit_remaining().is_some();
         self.open_url(&url);
-        if write_limited && !already_liked {
+        if !already_liked && self.write_rate_limit_remaining().is_none() {
             self.engage_by_id(EngageAction::Like, rest_id, false);
         }
     }

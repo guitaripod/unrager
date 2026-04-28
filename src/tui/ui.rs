@@ -3507,7 +3507,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  y              yank fixupx URL to clipboard"),
         Line::from("  Y              yank selected tweet JSON"),
         Line::from("  n              open notifications as detail pane"),
-        Line::from("  o              open tweet in browser (auto-likes when write-rate-limited)"),
+        Line::from("  o              open tweet in browser (auto-likes)"),
         Line::from("  O              open author profile in browser"),
         Line::from("  m              open all attachments in native viewer"),
         Line::from("  S              open Postcard composer (theme picker, save to PNG)"),

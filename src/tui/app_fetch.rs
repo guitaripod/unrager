@@ -135,8 +135,13 @@ impl App {
                 }
                 let filter_active =
                     matches!(self.filter_mode, FilterMode::On) && self.filter_classifier.is_some();
+                let cold_start_home = !silent
+                    && self.source.tweets.is_empty()
+                    && matches!(kind, SourceKind::Home { .. });
                 let held: Vec<Tweet> = if !filter_active {
                     Vec::new()
+                } else if cold_start_home {
+                    std::mem::take(&mut page.tweets)
                 } else if matches!(kind, SourceKind::Home { following: true }) {
                     let mut uncached = Vec::new();
                     let mut cached = Vec::with_capacity(page.tweets.len());

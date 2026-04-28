@@ -1434,6 +1434,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cold_start_holds_cached_tweets_until_newest_classifies() {
+        let (mut app, _rx, _tmp) = dummy_app();
+        let cache_tmp = NamedTempFile::new().unwrap();
+        let mut cache = FilterCache::open(cache_tmp.path(), "h".into()).unwrap();
+        cache.put("cached_keep", FilterDecision::Keep);
+        app.filter_cache = Some(cache);
+        let cfg = crate::tui::filter::FilterConfig {
+            drop_topics: vec![],
+            extra_guidance: String::new(),
+            ollama: crate::tui::filter::OllamaConfig {
+                model: "test".into(),
+                host: "http://127.0.0.1:1".into(),
+                timeout_seconds: 1,
+                keep_alive: "10s".into(),
+            },
+        };
+        app.filter_classifier = Some(crate::tui::filter::Classifier::new(&cfg));
+        app.filter_mode = crate::tui::filter::FilterMode::On;
+        app.source = crate::tui::source::Source::new(SourceKind::Home { following: true });
+
+        let mut newest = make_tweet("uncached_new", "fresh");
+        newest.created_at = Utc::now();
+        let mut older = make_tweet("cached_keep", "old already classified");
+        older.created_at = Utc::now() - chrono::Duration::hours(1);
+
+        let page = make_page(vec![newest, older]);
+        app.handle_timeline_loaded(SourceKind::Home { following: true }, Ok(page), false, false);
+
+        assert!(
+            app.source.tweets.is_empty(),
+            "cold start must hold cached tweets behind the unclassified front"
+        );
+        assert_eq!(app.pending_classification.len(), 2);
+
+        app.handle_tweet_classified("uncached_new".into(), FilterDecision::Keep);
+
+        assert_eq!(app.source.tweets.len(), 2);
+        assert_eq!(app.source.tweets[0].rest_id, "uncached_new");
+        assert_eq!(app.source.tweets[1].rest_id, "cached_keep");
+    }
+
+    #[tokio::test]
+    async fn warm_load_keeps_existing_split_behavior() {
+        let (mut app, _rx, _tmp) = dummy_app();
+        let cache_tmp = NamedTempFile::new().unwrap();
+        let mut cache = FilterCache::open(cache_tmp.path(), "h".into()).unwrap();
+        cache.put("cached_keep", FilterDecision::Keep);
+        app.filter_cache = Some(cache);
+        let cfg = crate::tui::filter::FilterConfig {
+            drop_topics: vec![],
+            extra_guidance: String::new(),
+            ollama: crate::tui::filter::OllamaConfig {
+                model: "test".into(),
+                host: "http://127.0.0.1:1".into(),
+                timeout_seconds: 1,
+                keep_alive: "10s".into(),
+            },
+        };
+        app.filter_classifier = Some(crate::tui::filter::Classifier::new(&cfg));
+        app.filter_mode = crate::tui::filter::FilterMode::On;
+        app.source = crate::tui::source::Source::new(SourceKind::Home { following: true });
+        app.source.tweets = vec![make_tweet("existing", "already there")];
+
+        let mut newest = make_tweet("uncached_new", "fresh");
+        newest.created_at = Utc::now();
+        let mut older = make_tweet("cached_keep", "old already classified");
+        older.created_at = Utc::now() - chrono::Duration::hours(1);
+
+        let page = make_page(vec![newest, older]);
+        app.handle_timeline_loaded(SourceKind::Home { following: true }, Ok(page), false, false);
+
+        assert!(
+            app.source.tweets.iter().any(|t| t.rest_id == "cached_keep"),
+            "non-cold-start must surface cached tweets immediately"
+        );
+        assert!(
+            app.pending_classification
+                .iter()
+                .any(|t| t.rest_id == "uncached_new")
+        );
+    }
+
+    #[tokio::test]
     async fn handle_timeline_loaded_clears_loading_flag() {
         let (mut app, _rx, _tmp) = dummy_app();
         app.source = Source::new(SourceKind::Home { following: true });

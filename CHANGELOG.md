@@ -6,7 +6,10 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+## [0.15.2] — 2026-04-28
+
 - **`o` auto-likes.** Opening a tweet in the browser now likes it on the way out (unless already liked or X is write-rate-limiting). Previously the auto-like only fired in the rate-limited browser-reply fallback path, which had inverted logic and never actually triggered when wanted.
+- **Cold-start feed no longer flashes stale.** On the very first Home fetch, the loading screen now stays up until the *newest* tweet has its filter verdict, then the whole sorted feed appears at once. Previously the older, already-classified tail rendered immediately while fresh tweets trickled in over 10–30 s — making it look like you'd reopened to last night's feed.
 
 ## [0.15.1] — 2026-04-27
 
@@ -55,7 +58,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.15.1...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.15.2...HEAD
+[0.15.2]: https://github.com/guitaripod/unrager/releases/tag/0.15.2
 [0.15.1]: https://github.com/guitaripod/unrager/releases/tag/0.15.1
 [0.15.0]: https://github.com/guitaripod/unrager/releases/tag/0.15.0
 [0.14.2]: https://github.com/guitaripod/unrager/releases/tag/0.14.2

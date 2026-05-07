@@ -10,7 +10,7 @@
 //! Four presets plus a custom "two-color" builder let users restyle the
 //! screenshot without touching their live TUI theme.
 
-use ab_glyph::{Font, FontRef, Glyph, PxScale, ScaleFont, point};
+use ab_glyph::{Font, FontRef, Glyph, GlyphId, PxScale, ScaleFont, point};
 use image::{Rgba, RgbaImage, imageops};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -27,11 +27,27 @@ use crate::tui::theme::Theme;
 
 const FONT_REG_DATA: &[u8] = include_bytes!("../../assets/NotoSansMono-Regular.ttf");
 const FONT_BOLD_DATA: &[u8] = include_bytes!("../../assets/NotoSansMono-Bold.ttf");
+/// Bundled fallback subsets for glyphs NotoSansMono lacks. Math covers the
+/// directional/mathematical icons (↳ ⟲ ↻ ✓ ♥ ♡ ◉ ▣ ▶ ● ◎); Symbols2 covers
+/// the rest of the TUI icon set (⮎ ✗); Runic covers the Runic block
+/// (U+16A0..U+16F8) so display names with Norse runes don't render as tofu.
+const FONT_FALLBACK_MATH_DATA: &[u8] = include_bytes!("../../assets/IconsFallback-Math.ttf");
+const FONT_FALLBACK_SYM_DATA: &[u8] = include_bytes!("../../assets/IconsFallback-Symbols.ttf");
+const FONT_FALLBACK_RUNIC_DATA: &[u8] = include_bytes!("../../assets/IconsFallback-Runic.ttf");
 
 static FONT_REG: LazyLock<FontRef<'static>> =
     LazyLock::new(|| FontRef::try_from_slice(FONT_REG_DATA).expect("noto sans mono regular"));
 static FONT_BOLD: LazyLock<FontRef<'static>> =
     LazyLock::new(|| FontRef::try_from_slice(FONT_BOLD_DATA).expect("noto sans mono bold"));
+static FONT_FALLBACK_MATH: LazyLock<FontRef<'static>> = LazyLock::new(|| {
+    FontRef::try_from_slice(FONT_FALLBACK_MATH_DATA).expect("icons fallback math")
+});
+static FONT_FALLBACK_SYM: LazyLock<FontRef<'static>> = LazyLock::new(|| {
+    FontRef::try_from_slice(FONT_FALLBACK_SYM_DATA).expect("icons fallback symbols")
+});
+static FONT_FALLBACK_RUNIC: LazyLock<FontRef<'static>> = LazyLock::new(|| {
+    FontRef::try_from_slice(FONT_FALLBACK_RUNIC_DATA).expect("icons fallback runic")
+});
 
 /// Linear scale multiplier applied to every pixel dimension (font, padding,
 /// cell width, media width cap). Bumping this produces a natively-higher-
@@ -633,22 +649,22 @@ fn paint_buffer(
 
 fn draw_str(
     canvas: &mut RgbaImage,
-    font: &FontRef<'static>,
+    font: &'static FontRef<'static>,
     text: &str,
     pos: (u32, u32),
     grid: &Grid,
     color: Rgba<u8>,
 ) {
     let (x, y) = pos;
-    let scaled = font.as_scaled(PxScale::from(FONT_PX));
     let mut pen_x = x as f32;
     let baseline = y as f32 + grid.ascent;
     let cell_advance = grid.cell_w as f32;
     for ch in text.chars() {
+        let chosen = pick_font(font, ch);
+        let scaled = chosen.as_scaled(PxScale::from(FONT_PX));
         let id = scaled.glyph_id(ch);
-        let glyph: Glyph =
-            id.with_scale_and_position(PxScale::from(FONT_PX), point(pen_x, baseline));
-        rasterize_glyph(canvas, font, glyph, color);
+        let glyph = id.with_scale_and_position(PxScale::from(FONT_PX), point(pen_x, baseline));
+        rasterize_glyph(canvas, chosen, glyph, color);
         let advance = scaled.h_advance(id);
         // Monospace: clamp every glyph to exactly one cell of width to keep
         // the grid straight even when a symbol's own advance is fractionally
@@ -663,22 +679,45 @@ fn draw_str(
 /// used for the watermark, which sits outside the character grid.
 fn draw_str_at(
     canvas: &mut RgbaImage,
-    font: &FontRef<'static>,
+    font: &'static FontRef<'static>,
     text: &str,
     pos: (u32, u32),
     size: f32,
     color: Rgba<u8>,
 ) {
     let (x, y) = pos;
-    let scaled = font.as_scaled(PxScale::from(size));
     let mut pen_x = x as f32;
-    let baseline = y as f32 + scaled.ascent();
+    let baseline = y as f32 + font.as_scaled(PxScale::from(size)).ascent();
     for ch in text.chars() {
+        let chosen = pick_font(font, ch);
+        let scaled = chosen.as_scaled(PxScale::from(size));
         let id = scaled.glyph_id(ch);
-        let glyph: Glyph = id.with_scale_and_position(PxScale::from(size), point(pen_x, baseline));
-        rasterize_glyph(canvas, font, glyph, color);
+        let glyph = id.with_scale_and_position(PxScale::from(size), point(pen_x, baseline));
+        rasterize_glyph(canvas, chosen, glyph, color);
         pen_x += scaled.h_advance(id);
     }
+}
+
+/// Resolve which font actually has a glyph for `ch`. Falls back through the
+/// bundled subsets when the primary monospace font would render `.notdef`
+/// (the tofu box). NotoSansMath covers the directional/math icons; Symbols2
+/// fills the icon gaps; Runic covers Norse runes that show up in display
+/// names. Each fallback font is monospace-clamped at the call site, so even
+/// proportional glyph advances stay on the cell grid.
+fn pick_font(primary: &'static FontRef<'static>, ch: char) -> &'static FontRef<'static> {
+    if primary.glyph_id(ch) != GlyphId(0) {
+        return primary;
+    }
+    for fallback in [
+        &FONT_FALLBACK_MATH,
+        &FONT_FALLBACK_SYM,
+        &FONT_FALLBACK_RUNIC,
+    ] {
+        if fallback.glyph_id(ch) != GlyphId(0) {
+            return fallback;
+        }
+    }
+    primary
 }
 
 fn rasterize_glyph(canvas: &mut RgbaImage, font: &FontRef<'static>, glyph: Glyph, color: Rgba<u8>) {

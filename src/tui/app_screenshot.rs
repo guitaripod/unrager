@@ -227,7 +227,15 @@ impl App {
         };
         let media_dir = cache_dir.join("media").join(&tweet.rest_id);
         let screenshots_dir = cache_dir.join("screenshots");
-        let targets = image_only(external::collect_open_targets(&tweet, &media_dir));
+        let all_targets = external::collect_open_targets(&tweet, &media_dir);
+        let targets = image_only(all_targets.clone());
+        tracing::info!(
+            tweet_id = %tweet.rest_id,
+            media_count = tweet.media.len(),
+            targets_total = all_targets.len(),
+            targets_image = targets.len(),
+            "screenshot: collected media targets"
+        );
         let tx = self.tx.clone();
         let tweet_id = tweet.rest_id.clone();
 
@@ -348,31 +356,35 @@ async fn load_image_targets(targets: Vec<OpenTarget>) -> Vec<RgbaImage> {
     let client = reqwest::Client::new();
     let mut out = Vec::with_capacity(targets.len());
     for t in &targets {
-        if !tokio::fs::try_exists(&t.path).await.unwrap_or(false) {
+        let cached = tokio::fs::try_exists(&t.path).await.unwrap_or(false);
+        if !cached {
+            tracing::info!(url = %t.url, path = %t.path.display(), "screenshot: fetching media");
             match client.get(&t.url).send().await {
                 Ok(resp) => match resp.error_for_status() {
                     Ok(resp) => match resp.bytes().await {
                         Ok(bytes) => {
                             if let Err(e) = tokio::fs::write(&t.path, &bytes).await {
-                                tracing::warn!(error = %e, "screenshot: media write failed");
+                                tracing::warn!(error = %e, path = %t.path.display(), "screenshot: media write failed");
                                 continue;
                             }
                         }
                         Err(e) => {
-                            tracing::warn!(error = %e, "screenshot: media body read failed");
+                            tracing::warn!(error = %e, url = %t.url, "screenshot: media body read failed");
                             continue;
                         }
                     },
                     Err(e) => {
-                        tracing::warn!(error = %e, "screenshot: media status error");
+                        tracing::warn!(error = %e, url = %t.url, "screenshot: media status error");
                         continue;
                     }
                 },
                 Err(e) => {
-                    tracing::warn!(error = %e, "screenshot: media fetch failed");
+                    tracing::warn!(error = %e, url = %t.url, "screenshot: media fetch failed");
                     continue;
                 }
             }
+        } else {
+            tracing::debug!(path = %t.path.display(), "screenshot: media cache hit");
         }
         let path = t.path.clone();
         let decoded = tokio::task::spawn_blocking(move || image::open(&path))
@@ -380,10 +392,26 @@ async fn load_image_targets(targets: Vec<OpenTarget>) -> Vec<RgbaImage> {
             .ok()
             .and_then(|r| r.ok())
             .map(|img| img.into_rgba8());
-        if let Some(img) = decoded {
-            out.push(img);
+        match decoded {
+            Some(img) => {
+                tracing::info!(
+                    path = %t.path.display(),
+                    width = img.width(),
+                    height = img.height(),
+                    "screenshot: decoded media"
+                );
+                out.push(img);
+            }
+            None => {
+                tracing::warn!(path = %t.path.display(), "screenshot: media decode failed");
+            }
         }
     }
+    tracing::info!(
+        loaded = out.len(),
+        requested = targets.len(),
+        "screenshot: media load complete"
+    );
     out
 }
 

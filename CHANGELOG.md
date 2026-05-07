@@ -6,6 +6,9 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **Postcard icons + Norse runes no longer render as tofu.** ✓ ↳ ⟲ ♥ ♡ ↻ ⮎ ✗ and Runic-block characters (U+16A0..U+16F8) were all rasterizing as `□` because the bundled NotoSansMono font doesn't include them. Added subsetted NotoSansMath, NotoSansSymbols2, and NotoSansRunic (~17 KB combined) as fallback fonts; the rasterizer now picks per-glyph from primary → math → symbols2 → runic.
+- **Postcard media path now logs.** Picture fetch/decode used to fail silently; the screenshot pipeline now emits `info` logs for target collection, fetch, decode, and totals so a missing image is visible in `unrager.log.YYYY-MM-DD`.
+
 ## [0.15.2] — 2026-04-28
 
 - **`o` auto-likes.** Opening a tweet in the browser now likes it on the way out (unless already liked or X is write-rate-limiting). Previously the auto-like only fired in the rate-limited browser-reply fallback path, which had inverted logic and never actually triggered when wanted.

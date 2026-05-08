@@ -6,7 +6,9 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
-- **Postcard thread mode (`T` in composer).** Capture an entire reply chain as one image — root tweet down to the focal — with a continuous accent bar running through every block and subtle hairline dividers between them. Toggling thread mode in the screenshot modal walks `in_reply_to_tweet_id` up to the root via the `TweetDetail` GraphQL endpoint (already loaded for thread context elsewhere); media images on every ancestor are downloaded and composited under their respective tweets. Watermark sits once at the bottom of the stack. Capped at 20 ancestors to bound runaway chains.
+## [0.16.0] — 2026-05-08
+
+- **Postcard thread mode (`T` in composer).** Capture an entire reply chain as one image — root tweet down to the focal — with a continuous accent bar running through every block and subtle hairline dividers between them. Toggling thread mode in the screenshot modal walks `in_reply_to_tweet_id` up to the root via the `TweetDetail` GraphQL endpoint (already loaded for thread context elsewhere); media images on every ancestor are downloaded and composited under their respective tweets. Each reply block strips the leading `@parent` mention chain and the `↳` icon since the visual stack already communicates the chain. Watermark sits once at the bottom. Capped at 20 ancestors to bound runaway chains.
 - **Postcard icons + Norse runes no longer render as tofu.** ✓ ↳ ⟲ ♥ ♡ ↻ ⮎ ✗ and Runic-block characters (U+16A0..U+16F8) were all rasterizing as `□` because the bundled NotoSansMono font doesn't include them. Added subsetted NotoSansMath, NotoSansSymbols2, and NotoSansRunic (~17 KB combined) as fallback fonts; the rasterizer now picks per-glyph from primary → math → symbols2 → runic.
 - **Postcard media path now logs.** Picture fetch/decode used to fail silently; the screenshot pipeline now emits `info` logs for target collection, fetch, decode, and totals so a missing image is visible in `unrager.log.YYYY-MM-DD`.
 
@@ -62,7 +64,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.15.2...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.16.0...HEAD
+[0.16.0]: https://github.com/guitaripod/unrager/releases/tag/0.16.0
 [0.15.2]: https://github.com/guitaripod/unrager/releases/tag/0.15.2
 [0.15.1]: https://github.com/guitaripod/unrager/releases/tag/0.15.1
 [0.15.0]: https://github.com/guitaripod/unrager/releases/tag/0.15.0

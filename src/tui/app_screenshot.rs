@@ -356,7 +356,7 @@ impl App {
         let saved_theme = crate::tui::theme::active().clone();
         crate::tui::theme::set_active(shot.synthesize_tui());
         for tweet in &chain {
-            let lines = self.build_focal_lines(tweet);
+            let lines = self.build_lines_for(tweet, true);
             let media_dir = cache_dir.join("media").join(&tweet.rest_id);
             let targets = collect_image_targets(tweet, &media_dir);
             per_tweet.push((lines, targets));
@@ -430,6 +430,17 @@ impl App {
     }
 
     fn build_focal_lines(&self, tweet: &crate::model::Tweet) -> Vec<Line<'static>> {
+        self.build_lines_for(tweet, false)
+    }
+
+    /// `in_reply_context = true` for thread-mode blocks — the visual chain
+    /// already communicates the reply relationship, so leading `@parent`
+    /// mentions and the `↳` reply icon become noise.
+    fn build_lines_for(
+        &self,
+        tweet: &crate::model::Tweet,
+        in_reply_context: bool,
+    ) -> Vec<Line<'static>> {
         let opts = RenderOpts {
             timestamps: self.timestamps,
             metrics: crate::tui::app::MetricsStyle::Visible,
@@ -450,7 +461,7 @@ impl App {
             liked_tweet_ids: &self.liked_tweet_ids,
             write_rate_limit: None,
         };
-        ui::tweet_lines(tweet, &ctx, false, false, SHOT_COLS, true)
+        ui::tweet_lines(tweet, &ctx, false, in_reply_context, SHOT_COLS, true)
     }
 }
 

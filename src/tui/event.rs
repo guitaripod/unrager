@@ -177,6 +177,11 @@ pub enum Event {
     ScreenshotCopied {
         result: std::result::Result<(), String>,
     },
+    ScreenshotThreadResolved {
+        result: std::result::Result<Vec<crate::model::Tweet>, String>,
+        shot: crate::tui::screenshot::ShotTheme,
+        destination: crate::tui::app_screenshot::Destination,
+    },
 }
 
 pub type EventTx = mpsc::UnboundedSender<Event>;

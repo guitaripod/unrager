@@ -3512,7 +3512,8 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  m              open all attachments in native viewer"),
         Line::from("  S              open Postcard composer (theme picker, save to PNG)"),
         Line::from("  C              open Postcard composer (default action: copy to clipboard)"),
-        Line::from("                   · 1-7 pick preset, t tune custom colors, s save, y copy"),
+        Line::from("                   · 1-7 pick preset, t tune custom colors, T thread chain"),
+        Line::from("                   · s save, y copy clipboard"),
         Line::from("  p              open profile of selected tweet's author"),
         Line::from("  P              open own profile in browser"),
         Line::from("  T              translate tweet to English (toggle)"),
@@ -3855,6 +3856,15 @@ fn draw_compose_overlay(frame: &mut Frame, area: Rect, app: &App) {
         format!("destination: {dest_label} (override with s / y)"),
         dim,
     )]));
+    let has_parent = compose.tweet.in_reply_to_tweet_id.is_some();
+    let thread_label = if !has_parent {
+        "thread:      n/a (focal tweet has no parent)".to_string()
+    } else if compose.include_thread {
+        "thread:      on  (T to capture single tweet)".to_string()
+    } else {
+        "thread:      off (T to include ancestor chain)".to_string()
+    };
+    lines.push(Line::from(Span::styled(thread_label, dim)));
     lines.push(Line::from(""));
 
     if let Some(buf) = compose.tune_buffer.as_ref() {
@@ -3924,6 +3934,8 @@ fn draw_compose_overlay(frame: &mut Frame, area: Rect, app: &App) {
             Span::raw(" preset  "),
             Span::styled("t", key_style),
             Span::raw(" tune  "),
+            Span::styled("T", key_style),
+            Span::raw(" thread  "),
             Span::styled("s", key_style),
             Span::raw(" save  "),
             Span::styled("y", key_style),

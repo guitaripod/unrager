@@ -78,6 +78,13 @@ const MEDIA_GAP_ABOVE: u32 = 14 * SCALE_I;
 const MEDIA_GAP_BELOW: u32 = 8 * SCALE_I;
 const MEDIA_MAX_W_PX: u32 = 900 * SCALE_I;
 
+/// Vertical gap between thread blocks (above each non-first block). The
+/// hairline divider sits at the visual midpoint of this gap so blocks read
+/// as discrete tweets while the accent bar continues unbroken.
+const BLOCK_GAP: u32 = 22 * SCALE_I;
+const DIVIDER_THICKNESS: u32 = SCALE_I;
+const DIVIDER_ALPHA: u8 = 90;
+
 /// Columns of text per line. Shorter lines feel editorial; a tweet body
 /// at this width is closer to newspaper-column readability than
 /// terminal-width sprawl. Shared with the compose glue so the wrap width
@@ -91,10 +98,18 @@ pub struct Capture {
     pub tweet_id: String,
 }
 
-pub struct RenderArgs<'a> {
-    pub tweet_id: String,
+/// One tweet's worth of rendered content. The renderer stacks blocks
+/// vertically with subtle hairline dividers between them so a reply chain
+/// reads as one continuous image with a single accent bar running through
+/// every block.
+pub struct TweetBlock {
     pub lines: Vec<Line<'static>>,
     pub media_images: Vec<RgbaImage>,
+}
+
+pub struct RenderArgs<'a> {
+    pub tweet_id: String,
+    pub blocks: Vec<TweetBlock>,
     pub shot_theme: &'a ShotTheme,
 }
 
@@ -369,28 +384,25 @@ pub fn render(args: RenderArgs<'_>) -> Capture {
     let grid = Grid::measure();
     let content_px = CONTENT_COLS as u32 * grid.cell_w;
     let shot = args.shot_theme;
-
-    // Span-aware wrap *before* rasterizing so every continuation row keeps
-    // its indent. Lets us drop `Paragraph::wrap` (which strips continuation
-    // indent) and render lines one-to-one onto buffer rows.
-    let wrapped = wrap_lines_preserve_indent(args.lines.clone(), CONTENT_COLS as usize);
-    let rows = wrapped.len() as u16;
-    let buf_rect = Rect::new(0, 0, CONTENT_COLS, rows.max(1));
-    let mut buf = Buffer::empty(buf_rect);
-    Paragraph::new(wrapped).render(buf_rect, &mut buf);
-    let used_rows = last_nonblank_row(&buf).saturating_add(1);
-
-    let text_h = used_rows as u32 * grid.line_h;
-
-    let scaled_media = scale_media(&args.media_images, content_px);
-    let media_h: u32 = if scaled_media.is_empty() {
-        0
+    let blocks = if args.blocks.is_empty() {
+        vec![TweetBlock {
+            lines: Vec::new(),
+            media_images: Vec::new(),
+        }]
     } else {
-        MEDIA_GAP_ABOVE
-            + scaled_media
-                .iter()
-                .map(|m| m.height() + MEDIA_GAP_BELOW)
-                .sum::<u32>()
+        args.blocks
+    };
+
+    let prepared: Vec<PreparedBlock> = blocks
+        .into_iter()
+        .map(|b| prepare_block(b, &grid, content_px))
+        .collect();
+
+    let total_block_h: u32 = prepared.iter().map(|b| b.height()).sum();
+    let total_gap_h: u32 = if prepared.len() > 1 {
+        BLOCK_GAP * (prepared.len() as u32 - 1)
+    } else {
+        0
     };
 
     let wm_h = FONT_REG
@@ -398,7 +410,7 @@ pub fn render(args: RenderArgs<'_>) -> Capture {
         .ascent()
         .ceil() as u32;
     let canvas_w = ACCENT_BAR_W + ACCENT_BAR_GAP + content_px + PADDING_X * 2;
-    let canvas_h = PAD_TOP + text_h + media_h + WATERMARK_GAP + wm_h + PAD_BOTTOM;
+    let canvas_h = PAD_TOP + total_block_h + total_gap_h + WATERMARK_GAP + wm_h + PAD_BOTTOM;
 
     let bg = rgba_from(shot.bg);
     let mut canvas = RgbaImage::from_pixel(canvas_w, canvas_h, bg);
@@ -412,26 +424,39 @@ pub fn render(args: RenderArgs<'_>) -> Capture {
         0,
         PAD_TOP,
         ACCENT_BAR_W,
-        text_h + media_h,
+        total_block_h + total_gap_h,
         accent,
     );
 
     let text_origin_x = ACCENT_BAR_W + ACCENT_BAR_GAP + PADDING_X;
-    let text_origin_y = PAD_TOP;
-    paint_buffer(
-        &mut canvas,
-        &buf,
-        used_rows,
-        (text_origin_x, text_origin_y),
-        &grid,
-        shot,
-        bg,
-    );
-
-    let mut media_y = text_origin_y + text_h + if media_h > 0 { MEDIA_GAP_ABOVE } else { 0 };
-    for m in &scaled_media {
-        imageops::overlay(&mut canvas, m, text_origin_x as i64, media_y as i64);
-        media_y += m.height() + MEDIA_GAP_BELOW;
+    let mut cursor_y = PAD_TOP;
+    let last_idx = prepared.len() - 1;
+    for (i, block) in prepared.iter().enumerate() {
+        paint_buffer(
+            &mut canvas,
+            &block.buf,
+            block.used_rows,
+            (text_origin_x, cursor_y),
+            &grid,
+            shot,
+            bg,
+        );
+        let mut media_y = cursor_y
+            + block.text_h
+            + if block.media_h > 0 {
+                MEDIA_GAP_ABOVE
+            } else {
+                0
+            };
+        for m in &block.scaled_media {
+            imageops::overlay(&mut canvas, m, text_origin_x as i64, media_y as i64);
+            media_y += m.height() + MEDIA_GAP_BELOW;
+        }
+        cursor_y += block.height();
+        if i != last_idx {
+            paint_block_divider(&mut canvas, shot, text_origin_x, content_px, cursor_y);
+            cursor_y += BLOCK_GAP;
+        }
     }
 
     draw_watermark(&mut canvas, shot);
@@ -439,6 +464,70 @@ pub fn render(args: RenderArgs<'_>) -> Capture {
     Capture {
         image: canvas,
         tweet_id: args.tweet_id,
+    }
+}
+
+struct PreparedBlock {
+    buf: Buffer,
+    used_rows: u16,
+    text_h: u32,
+    scaled_media: Vec<RgbaImage>,
+    media_h: u32,
+}
+
+impl PreparedBlock {
+    fn height(&self) -> u32 {
+        self.text_h + self.media_h
+    }
+}
+
+fn prepare_block(block: TweetBlock, grid: &Grid, content_px: u32) -> PreparedBlock {
+    let wrapped = wrap_lines_preserve_indent(block.lines, CONTENT_COLS as usize);
+    let rows = wrapped.len() as u16;
+    let buf_rect = Rect::new(0, 0, CONTENT_COLS, rows.max(1));
+    let mut buf = Buffer::empty(buf_rect);
+    Paragraph::new(wrapped).render(buf_rect, &mut buf);
+    let used_rows = last_nonblank_row(&buf).saturating_add(1);
+    let text_h = used_rows as u32 * grid.line_h;
+
+    let scaled_media = scale_media(&block.media_images, content_px);
+    let media_h: u32 = if scaled_media.is_empty() {
+        0
+    } else {
+        MEDIA_GAP_ABOVE
+            + scaled_media
+                .iter()
+                .map(|m| m.height() + MEDIA_GAP_BELOW)
+                .sum::<u32>()
+    };
+    PreparedBlock {
+        buf,
+        used_rows,
+        text_h,
+        scaled_media,
+        media_h,
+    }
+}
+
+/// Hairline rule centered in the BLOCK_GAP between two tweets. Sits at the
+/// `text_muted` color with low alpha so the chain reads as one image but
+/// the breaks between tweets are obvious. The accent bar to its left
+/// stays painted — the rule only spans the text column.
+fn paint_block_divider(canvas: &mut RgbaImage, shot: &ShotTheme, x: u32, w: u32, gap_y: u32) {
+    let mid = gap_y + BLOCK_GAP / 2;
+    let mut color = rgba_from(shot.text_muted);
+    color[3] = DIVIDER_ALPHA;
+    let alpha = color[3] as f32 / 255.0;
+    for dy in 0..DIVIDER_THICKNESS {
+        let y = mid + dy;
+        if y >= canvas.height() {
+            break;
+        }
+        for px in x..(x + w).min(canvas.width()) {
+            let existing = *canvas.get_pixel(px, y);
+            let blended = blend(existing, color, alpha);
+            canvas.put_pixel(px, y, blended);
+        }
     }
 }
 
@@ -867,12 +956,18 @@ mod tests {
         ]
     }
 
+    fn single_block(lines: Vec<Line<'static>>) -> Vec<TweetBlock> {
+        vec![TweetBlock {
+            lines,
+            media_images: Vec::new(),
+        }]
+    }
+
     #[test]
     fn render_smoke() {
         let cap = render(RenderArgs {
             tweet_id: "123".into(),
-            lines: plain_lines(),
-            media_images: Vec::new(),
+            blocks: single_block(plain_lines()),
             shot_theme: &PRESET_GLASS,
         });
         assert!(cap.image.width() > 100);
@@ -884,8 +979,7 @@ mod tests {
     fn render_png_roundtrip() {
         let cap = render(RenderArgs {
             tweet_id: "t".into(),
-            lines: plain_lines(),
-            media_images: Vec::new(),
+            blocks: single_block(plain_lines()),
             shot_theme: &PRESET_SYNTHWAVE,
         });
         let png = cap.to_png().unwrap();
@@ -897,8 +991,7 @@ mod tests {
     fn save_writes_file() {
         let cap = render(RenderArgs {
             tweet_id: "42".into(),
-            lines: plain_lines(),
-            media_images: Vec::new(),
+            blocks: single_block(plain_lines()),
             shot_theme: &PRESET_GLASS,
         });
         let tmp = tempfile::tempdir().unwrap();
@@ -912,6 +1005,28 @@ mod tests {
                 .starts_with("42-")
         );
         assert!(path.extension().unwrap() == "png");
+    }
+
+    #[test]
+    fn render_thread_grows_with_blocks() {
+        let single = render(RenderArgs {
+            tweet_id: "1".into(),
+            blocks: single_block(plain_lines()),
+            shot_theme: &PRESET_GLASS,
+        });
+        let three_blocks: Vec<TweetBlock> = (0..3)
+            .map(|_| TweetBlock {
+                lines: plain_lines(),
+                media_images: Vec::new(),
+            })
+            .collect();
+        let thread = render(RenderArgs {
+            tweet_id: "1".into(),
+            blocks: three_blocks,
+            shot_theme: &PRESET_GLASS,
+        });
+        assert!(thread.image.height() > single.image.height());
+        assert_eq!(thread.image.width(), single.image.width());
     }
 
     #[test]
@@ -1071,8 +1186,10 @@ mod tests {
             }
             let cap = render(RenderArgs {
                 tweet_id: name.to_string(),
-                lines: recolored,
-                media_images: Vec::new(),
+                blocks: vec![TweetBlock {
+                    lines: recolored,
+                    media_images: Vec::new(),
+                }],
                 shot_theme: &shot,
             });
             let path = out_dir.join(format!("{name}.png"));
@@ -1080,6 +1197,105 @@ mod tests {
             std::fs::write(&path, &bytes).unwrap();
             eprintln!("wrote {}", path.display());
             let _ = synthesized;
+        }
+    }
+
+    /// Thread-shot harness: a 3-tweet reply chain rendered under each
+    /// preset, dumped to `$UNRAGER_SHOT_OUT/thread-*.png` so the gap +
+    /// divider treatment can be eyeballed across themes.
+    #[test]
+    fn preview_thread_themes() {
+        let Some(out_dir) = std::env::var_os("UNRAGER_SHOT_OUT") else {
+            return;
+        };
+        let out_dir = std::path::PathBuf::from(out_dir);
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        let make_block = |handle: &str, when: &str, body: &str| {
+            let accent = Style::default().fg(Color::Rgb(0x1d, 0x9b, 0xf0));
+            let muted = Style::default().fg(Color::Rgb(0x80, 0x80, 0x80));
+            let text = Style::default().fg(Color::Rgb(0x20, 0x20, 0x20));
+            let bold = Style::default().add_modifier(Modifier::BOLD);
+            vec![
+                Line::from(vec![
+                    Span::styled("● ", Style::default().fg(Color::Rgb(0x00, 0xba, 0x7c))),
+                    Span::styled(format!("@{handle}"), accent.patch(bold)),
+                    Span::styled(" ✓", accent),
+                    Span::styled(format!("  ·  {when}"), muted),
+                ]),
+                Line::from(vec![
+                    Span::styled("  ", Style::default()),
+                    Span::styled(body.to_string(), text.patch(bold)),
+                ]),
+            ]
+        };
+
+        let blocks_for = |shot: &ShotTheme| -> Vec<TweetBlock> {
+            let raw_blocks = vec![
+                make_block(
+                    "ada",
+                    "8h",
+                    "If we treat algorithms as enchantment, the engine is just the spellbook.",
+                ),
+                make_block(
+                    "babbage",
+                    "7h",
+                    "Then I want to write the spell that compiles every other spell.",
+                ),
+                make_block(
+                    "ada",
+                    "5h",
+                    "That spell already exists. We're just learning how to read it.",
+                ),
+            ];
+            raw_blocks
+                .into_iter()
+                .map(|lines| {
+                    let mut recolored = lines;
+                    for line in &mut recolored {
+                        for span in &mut line.spans {
+                            if span.style.fg == Some(Color::Rgb(0x20, 0x20, 0x20)) {
+                                span.style.fg =
+                                    Some(Color::Rgb(shot.text[0], shot.text[1], shot.text[2]));
+                            } else if span.style.fg == Some(Color::Rgb(0x80, 0x80, 0x80)) {
+                                span.style.fg = Some(Color::Rgb(
+                                    shot.text_muted[0],
+                                    shot.text_muted[1],
+                                    shot.text_muted[2],
+                                ));
+                            } else if span.style.fg == Some(Color::Rgb(0x1d, 0x9b, 0xf0)) {
+                                span.style.fg = Some(Color::Rgb(
+                                    shot.accent[0],
+                                    shot.accent[1],
+                                    shot.accent[2],
+                                ));
+                            }
+                        }
+                    }
+                    TweetBlock {
+                        lines: recolored,
+                        media_images: Vec::new(),
+                    }
+                })
+                .collect()
+        };
+
+        for (name, shot) in [
+            ("thread-01-glass", PRESET_GLASS),
+            ("thread-02-synthwave", PRESET_SYNTHWAVE),
+            ("thread-03-cutout", PRESET_CUTOUT),
+            ("thread-04-moss", PRESET_MOSS),
+            ("thread-05-blueprint", PRESET_BLUEPRINT),
+            ("thread-06-arcade", PRESET_ARCADE),
+        ] {
+            let cap = render(RenderArgs {
+                tweet_id: name.to_string(),
+                blocks: blocks_for(&shot),
+                shot_theme: &shot,
+            });
+            let path = out_dir.join(format!("{name}.png"));
+            std::fs::write(&path, cap.to_png().unwrap()).unwrap();
+            eprintln!("wrote {}", path.display());
         }
     }
 }

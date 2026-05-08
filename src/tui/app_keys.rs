@@ -395,6 +395,7 @@ impl App {
             (KeyCode::Char('6'), _) => self.compose_select(ThemeSlot::Arcade),
             (KeyCode::Char('7'), _) => self.compose_select(ThemeSlot::Match),
             (KeyCode::Char('t'), _) => self.compose_begin_tune(),
+            (KeyCode::Char('T'), _) => self.compose_toggle_thread(),
             (KeyCode::Char('s'), _) => self.compose_confirm(Destination::Disk),
             (KeyCode::Char('y'), _) => self.compose_confirm(Destination::Clipboard),
             (KeyCode::Enter, _) => {

@@ -6,6 +6,7 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **Postcard thread mode (`T` in composer).** Capture an entire reply chain as one image — root tweet down to the focal — with a continuous accent bar running through every block and subtle hairline dividers between them. Toggling thread mode in the screenshot modal walks `in_reply_to_tweet_id` up to the root via the `TweetDetail` GraphQL endpoint (already loaded for thread context elsewhere); media images on every ancestor are downloaded and composited under their respective tweets. Watermark sits once at the bottom of the stack. Capped at 20 ancestors to bound runaway chains.
 - **Postcard icons + Norse runes no longer render as tofu.** ✓ ↳ ⟲ ♥ ♡ ↻ ⮎ ✗ and Runic-block characters (U+16A0..U+16F8) were all rasterizing as `□` because the bundled NotoSansMono font doesn't include them. Added subsetted NotoSansMath, NotoSansSymbols2, and NotoSansRunic (~17 KB combined) as fallback fonts; the rasterizer now picks per-glyph from primary → math → symbols2 → runic.
 - **Postcard media path now logs.** Picture fetch/decode used to fail silently; the screenshot pipeline now emits `info` logs for target collection, fetch, decode, and totals so a missing image is visible in `unrager.log.YYYY-MM-DD`.
 

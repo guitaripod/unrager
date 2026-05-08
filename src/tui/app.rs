@@ -741,6 +741,11 @@ impl App {
             }
             Event::ScreenshotSaved { result } => self.handle_screenshot_saved(result),
             Event::ScreenshotCopied { result } => self.handle_screenshot_copied(result),
+            Event::ScreenshotThreadResolved {
+                result,
+                shot,
+                destination,
+            } => self.handle_screenshot_thread_resolved(result, shot, destination),
             Event::Quit => self.running = false,
             Event::FocusGained => {
                 self.terminal_focused = true;

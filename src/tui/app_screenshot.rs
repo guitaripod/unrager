@@ -6,16 +6,20 @@
 
 use super::app::{App, DEFAULT_STATUS, InputMode};
 use crate::config;
+use crate::model::Tweet;
 use crate::tui::event::Event;
 use crate::tui::external::{self, OpenTarget};
+use crate::tui::focus;
 use crate::tui::screenshot::{
     self, Capture, PRESET_ARCADE, PRESET_BLUEPRINT, PRESET_CUTOUT, PRESET_GLASS, PRESET_MOSS,
-    PRESET_SYNTHWAVE, RenderArgs, ShotTheme,
+    PRESET_SYNTHWAVE, RenderArgs, ShotTheme, TweetBlock,
 };
 use crate::tui::ui::{self, RenderContext, RenderOpts};
 use image::RgbaImage;
 use ratatui::text::Line;
 use std::path::PathBuf;
+
+const MAX_THREAD_DEPTH: usize = 20;
 
 /// Columns the screenshot renders at. Shares the same constant the renderer
 /// uses for its buffer width so `tweet_lines`'s body wrap produces lines
@@ -95,6 +99,10 @@ pub struct ComposeState {
     pub tune_buffer: Option<String>,
     pub tune_error: Option<String>,
     pub last_status: Option<String>,
+    /// When true and the focal tweet is itself a reply, the screenshot
+    /// captures the entire ancestor chain — root tweet down to the focal —
+    /// stacked vertically as one image. Toggle with `T` in the modal.
+    pub include_thread: bool,
 }
 
 impl ComposeState {
@@ -135,8 +143,15 @@ impl App {
             tune_buffer: None,
             tune_error: None,
             last_status: None,
+            include_thread: false,
         });
         self.mode = InputMode::ScreenshotCompose;
+    }
+
+    pub(super) fn compose_toggle_thread(&mut self) {
+        if let Some(c) = self.compose.as_mut() {
+            c.include_thread = !c.include_thread;
+        }
     }
 
     pub(super) fn compose_select(&mut self, slot: ThemeSlot) {
@@ -213,62 +228,174 @@ impl App {
             let tui = crate::tui::theme::active();
             c.resolved_theme(&tui)
         };
-        let theme_name = shot.name.to_string();
+        let include_thread = c.include_thread && tweet.in_reply_to_tweet_id.is_some();
         self.compose = None;
         self.mode = InputMode::Normal;
 
-        let lines = self.build_focal_lines_with(&tweet, &shot);
-        let cache_dir = match config::cache_dir() {
-            Ok(p) => p,
-            Err(e) => {
-                self.error = Some(format!("cache dir: {e}"));
-                return;
+        if include_thread {
+            self.spawn_thread_screenshot_fetch(tweet, shot, destination);
+        } else {
+            self.commit_single_screenshot(tweet, shot, destination);
+        }
+    }
+
+    /// Fetch the focal tweet's full conversation, walk parents up to the
+    /// root, and dispatch a `ScreenshotThreadResolved` event back to the
+    /// main loop. The render itself happens on the main thread (under a
+    /// theme swap) once the chain is in hand.
+    fn spawn_thread_screenshot_fetch(
+        &mut self,
+        tweet: Tweet,
+        shot: ShotTheme,
+        destination: Destination,
+    ) {
+        let theme_name = shot.name;
+        let label = match destination {
+            Destination::Disk => format!("fetching thread for [{theme_name}] → disk…"),
+            Destination::Clipboard => format!("fetching thread for [{theme_name}] → clipboard…"),
+        };
+        self.set_status(label);
+        let client = self.client.clone();
+        let tx = self.tx.clone();
+        let focal_id = tweet.rest_id.clone();
+        tokio::spawn(async move {
+            let result = match focus::fetch_thread(&client, &focal_id).await {
+                Ok(page) => {
+                    let by_id: std::collections::HashMap<String, Tweet> = page
+                        .tweets
+                        .into_iter()
+                        .map(|t| (t.rest_id.clone(), t))
+                        .collect();
+                    Ok(walk_ancestor_chain(&tweet, &by_id))
+                }
+                Err(e) => Err(e.to_string()),
+            };
+            let _ = tx.send(Event::ScreenshotThreadResolved {
+                result,
+                shot,
+                destination,
+            });
+        });
+    }
+
+    pub(super) fn handle_screenshot_thread_resolved(
+        &mut self,
+        result: std::result::Result<Vec<Tweet>, String>,
+        shot: ShotTheme,
+        destination: Destination,
+    ) {
+        match result {
+            Ok(chain) if !chain.is_empty() => {
+                tracing::info!(
+                    focal_id = %chain.last().map(|t| t.rest_id.as_str()).unwrap_or(""),
+                    chain_len = chain.len(),
+                    "screenshot: thread chain resolved"
+                );
+                self.commit_thread_screenshot(chain, shot, destination);
             }
+            Ok(_) => {
+                self.set_status("thread fetch returned no tweets");
+            }
+            Err(e) => {
+                tracing::warn!("screenshot: thread fetch failed: {e}");
+                self.set_status(format!("thread fetch failed: {e}"));
+            }
+        }
+    }
+
+    fn commit_single_screenshot(
+        &mut self,
+        tweet: Tweet,
+        shot: ShotTheme,
+        destination: Destination,
+    ) {
+        let theme_name = shot.name.to_string();
+        let lines = self.build_focal_lines_with(&tweet, &shot);
+        let Some(cache_dir) = self.resolve_cache_dir() else {
+            return;
         };
         let media_dir = cache_dir.join("media").join(&tweet.rest_id);
         let screenshots_dir = cache_dir.join("screenshots");
-        let all_targets = external::collect_open_targets(&tweet, &media_dir);
-        let targets = image_only(all_targets.clone());
-        tracing::info!(
-            tweet_id = %tweet.rest_id,
-            media_count = tweet.media.len(),
-            targets_total = all_targets.len(),
-            targets_image = targets.len(),
-            "screenshot: collected media targets"
-        );
+        let targets = collect_image_targets(&tweet, &media_dir);
+
+        self.set_status(status_label("capturing", &theme_name, destination));
         let tx = self.tx.clone();
         let tweet_id = tweet.rest_id.clone();
-
-        let label = match destination {
-            Destination::Disk => format!("capturing [{theme_name}] → disk…"),
-            Destination::Clipboard => format!("capturing [{theme_name}] → clipboard…"),
-        };
-        self.set_status(label);
 
         tokio::spawn(async move {
             let images = load_image_targets(targets).await;
             let capture = screenshot::render(RenderArgs {
                 tweet_id,
-                lines,
-                media_images: images,
+                blocks: vec![TweetBlock {
+                    lines,
+                    media_images: images,
+                }],
                 shot_theme: &shot,
             });
-            match destination {
-                Destination::Disk => {
-                    let result =
-                        tokio::task::spawn_blocking(move || capture.save(&screenshots_dir))
-                            .await
-                            .unwrap_or_else(|e| Err(format!("join: {e}")));
-                    let _ = tx.send(Event::ScreenshotSaved { result });
-                }
-                Destination::Clipboard => {
-                    let result = tokio::task::spawn_blocking(move || run_clipboard(&capture))
-                        .await
-                        .unwrap_or_else(|e| Err(format!("join: {e}")));
-                    let _ = tx.send(Event::ScreenshotCopied { result });
-                }
-            }
+            dispatch_capture(capture, screenshots_dir, destination, tx).await;
         });
+    }
+
+    fn commit_thread_screenshot(
+        &mut self,
+        chain: Vec<Tweet>,
+        shot: ShotTheme,
+        destination: Destination,
+    ) {
+        let theme_name = shot.name.to_string();
+        let Some(cache_dir) = self.resolve_cache_dir() else {
+            return;
+        };
+        let screenshots_dir = cache_dir.join("screenshots");
+
+        let tweet_id = chain.last().map(|t| t.rest_id.clone()).unwrap_or_default();
+        let chain_len = chain.len();
+
+        let mut per_tweet: Vec<(Vec<Line<'static>>, Vec<OpenTarget>)> =
+            Vec::with_capacity(chain_len);
+        let saved_theme = crate::tui::theme::active().clone();
+        crate::tui::theme::set_active(shot.synthesize_tui());
+        for tweet in &chain {
+            let lines = self.build_focal_lines(tweet);
+            let media_dir = cache_dir.join("media").join(&tweet.rest_id);
+            let targets = collect_image_targets(tweet, &media_dir);
+            per_tweet.push((lines, targets));
+        }
+        crate::tui::theme::set_active(saved_theme);
+
+        self.set_status(format!(
+            "{} ({} tweets)",
+            status_label("capturing", &theme_name, destination),
+            chain_len
+        ));
+
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let mut blocks: Vec<TweetBlock> = Vec::with_capacity(per_tweet.len());
+            for (lines, targets) in per_tweet {
+                let images = load_image_targets(targets).await;
+                blocks.push(TweetBlock {
+                    lines,
+                    media_images: images,
+                });
+            }
+            let capture = screenshot::render(RenderArgs {
+                tweet_id,
+                blocks,
+                shot_theme: &shot,
+            });
+            dispatch_capture(capture, screenshots_dir, destination, tx).await;
+        });
+    }
+
+    fn resolve_cache_dir(&mut self) -> Option<PathBuf> {
+        match config::cache_dir() {
+            Ok(p) => Some(p),
+            Err(e) => {
+                self.error = Some(format!("cache dir: {e}"));
+                None
+            }
+        }
     }
 
     pub(super) fn handle_screenshot_saved(&mut self, result: std::result::Result<PathBuf, String>) {
@@ -340,6 +467,78 @@ fn image_only(targets: Vec<OpenTarget>) -> Vec<OpenTarget> {
             matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "gif" | "webp")
         })
         .collect()
+}
+
+fn collect_image_targets(tweet: &Tweet, media_dir: &std::path::Path) -> Vec<OpenTarget> {
+    let all = external::collect_open_targets(tweet, media_dir);
+    let images = image_only(all.clone());
+    tracing::info!(
+        tweet_id = %tweet.rest_id,
+        media_count = tweet.media.len(),
+        targets_total = all.len(),
+        targets_image = images.len(),
+        "screenshot: collected media targets"
+    );
+    images
+}
+
+fn status_label(verb: &str, theme_name: &str, destination: Destination) -> String {
+    match destination {
+        Destination::Disk => format!("{verb} [{theme_name}] → disk…"),
+        Destination::Clipboard => format!("{verb} [{theme_name}] → clipboard…"),
+    }
+}
+
+async fn dispatch_capture(
+    capture: Capture,
+    screenshots_dir: PathBuf,
+    destination: Destination,
+    tx: crate::tui::event::EventTx,
+) {
+    match destination {
+        Destination::Disk => {
+            let result = tokio::task::spawn_blocking(move || capture.save(&screenshots_dir))
+                .await
+                .unwrap_or_else(|e| Err(format!("join: {e}")));
+            let _ = tx.send(Event::ScreenshotSaved { result });
+        }
+        Destination::Clipboard => {
+            let result = tokio::task::spawn_blocking(move || run_clipboard(&capture))
+                .await
+                .unwrap_or_else(|e| Err(format!("join: {e}")));
+            let _ = tx.send(Event::ScreenshotCopied { result });
+        }
+    }
+}
+
+/// Walk `tweet.in_reply_to_tweet_id` up the chain in `by_id`, capping at
+/// `MAX_THREAD_DEPTH`. Returns the chain in **root → focal** order. The
+/// focal is always present even when no ancestor was resolved.
+fn walk_ancestor_chain(
+    focal: &Tweet,
+    by_id: &std::collections::HashMap<String, Tweet>,
+) -> Vec<Tweet> {
+    let mut chain = vec![focal.clone()];
+    let mut current = focal.in_reply_to_tweet_id.clone();
+    let mut visited: std::collections::HashSet<String> =
+        std::iter::once(focal.rest_id.clone()).collect();
+    while let Some(id) = current {
+        if !visited.insert(id.clone()) {
+            break;
+        }
+        if chain.len() >= MAX_THREAD_DEPTH {
+            break;
+        }
+        match by_id.get(&id) {
+            Some(parent) => {
+                current = parent.in_reply_to_tweet_id.clone();
+                chain.push(parent.clone());
+            }
+            None => break,
+        }
+    }
+    chain.reverse();
+    chain
 }
 
 async fn load_image_targets(targets: Vec<OpenTarget>) -> Vec<RgbaImage> {
@@ -417,4 +616,83 @@ async fn load_image_targets(targets: Vec<OpenTarget>) -> Vec<RgbaImage> {
 
 fn run_clipboard(capture: &Capture) -> std::result::Result<(), String> {
     capture.copy_to_clipboard()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::test_util::make_tweet;
+    use std::collections::HashMap;
+
+    fn with_parent(id: &str, parent: Option<&str>) -> Tweet {
+        let mut t = make_tweet(id, "body");
+        t.in_reply_to_tweet_id = parent.map(String::from);
+        t
+    }
+
+    #[test]
+    fn ancestor_chain_orders_root_to_focal() {
+        let root = with_parent("a", None);
+        let mid = with_parent("b", Some("a"));
+        let focal = with_parent("c", Some("b"));
+        let by_id: HashMap<String, Tweet> = [root.clone(), mid.clone()]
+            .into_iter()
+            .map(|t| (t.rest_id.clone(), t))
+            .collect();
+        let chain = walk_ancestor_chain(&focal, &by_id);
+        assert_eq!(
+            chain.iter().map(|t| t.rest_id.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b", "c"]
+        );
+    }
+
+    #[test]
+    fn ancestor_chain_returns_focal_only_when_no_ancestor() {
+        let focal = with_parent("solo", None);
+        let by_id: HashMap<String, Tweet> = HashMap::new();
+        let chain = walk_ancestor_chain(&focal, &by_id);
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].rest_id, "solo");
+    }
+
+    #[test]
+    fn ancestor_chain_stops_at_missing_parent() {
+        let focal = with_parent("c", Some("b"));
+        let by_id: HashMap<String, Tweet> = HashMap::new();
+        let chain = walk_ancestor_chain(&focal, &by_id);
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].rest_id, "c");
+    }
+
+    #[test]
+    fn ancestor_chain_breaks_on_cycle() {
+        let a = with_parent("a", Some("b"));
+        let b = with_parent("b", Some("a"));
+        let by_id: HashMap<String, Tweet> = [a.clone(), b.clone()]
+            .into_iter()
+            .map(|t| (t.rest_id.clone(), t))
+            .collect();
+        let chain = walk_ancestor_chain(&a, &by_id);
+        assert!(chain.len() <= 2);
+        assert_eq!(chain.last().unwrap().rest_id, "a");
+    }
+
+    #[test]
+    fn ancestor_chain_caps_depth() {
+        let mut by_id: HashMap<String, Tweet> = HashMap::new();
+        for i in 0..(MAX_THREAD_DEPTH + 5) {
+            let id = format!("t{i}");
+            let parent = if i == 0 {
+                None
+            } else {
+                Some(format!("t{}", i - 1))
+            };
+            by_id.insert(id.clone(), with_parent(&id, parent.as_deref()));
+        }
+        let focal_id = format!("t{}", MAX_THREAD_DEPTH + 4);
+        let focal = by_id[&focal_id].clone();
+        let chain = walk_ancestor_chain(&focal, &by_id);
+        assert!(chain.len() <= MAX_THREAD_DEPTH);
+        assert_eq!(chain.last().unwrap().rest_id, focal_id);
+    }
 }

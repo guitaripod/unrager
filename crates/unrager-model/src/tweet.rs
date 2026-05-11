@@ -23,6 +23,8 @@ pub struct Tweet {
     pub quote_count: u64,
     pub view_count: Option<u64>,
     #[serde(default)]
+    pub bookmark_count: u64,
+    #[serde(default)]
     pub favorited: bool,
     #[serde(default)]
     pub retweeted: bool,

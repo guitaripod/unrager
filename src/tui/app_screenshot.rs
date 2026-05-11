@@ -460,6 +460,7 @@ impl App {
             translations: &self.translations,
             liked_tweet_ids: &self.liked_tweet_ids,
             write_rate_limit: None,
+            self_handle: None,
         };
         ui::tweet_lines(tweet, &ctx, false, in_reply_context, SHOT_COLS, true)
     }

@@ -194,6 +194,7 @@ pub struct RenderContext<'a> {
     pub translations: &'a HashMap<String, String>,
     pub liked_tweet_ids: &'a HashSet<String>,
     pub write_rate_limit: Option<std::time::Duration>,
+    pub self_handle: Option<&'a str>,
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
@@ -247,6 +248,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         translations: &app.translations,
         liked_tweet_ids: &app.liked_tweet_ids,
         write_rate_limit: app.client.write_rate_limit_remaining(),
+        self_handle: app.self_handle.as_deref(),
     };
 
     if app.is_split() {
@@ -1675,7 +1677,14 @@ fn draw_tweet_detail(
     let wrap_width = (thread_area.width as usize).saturating_sub(4);
 
     let selected = detail.selected();
-    let focal_lines = tweet_lines(&detail.tweet, ctx, false, false, wrap_width, true);
+    let mut focal_lines = tweet_lines(&detail.tweet, ctx, false, false, wrap_width, true);
+    let is_own_tweet = ctx
+        .self_handle
+        .is_some_and(|h| h.eq_ignore_ascii_case(&detail.tweet.author.handle));
+    if is_own_tweet {
+        focal_lines.push(Line::from(""));
+        focal_lines.extend(analytics_lines(&detail.tweet));
+    }
     let mut items: Vec<PaneItem> = Vec::with_capacity(1 + detail.replies.len());
     items.push(PaneItem::new(focal_lines));
 
@@ -1856,6 +1865,8 @@ const GLYPH_REPLIES: &str = "↳";
 const GLYPH_RETWEETS: &str = "⟲";
 const GLYPH_LIKES: &str = "♥";
 const GLYPH_VIEWS: &str = "◉";
+const GLYPH_QUOTES: &str = "❝";
+const GLYPH_BOOKMARKS: &str = "🔖";
 const GLYPH_IS_REPLY: &str = "⮎";
 const GLYPH_PHOTO: &str = "▣";
 const GLYPH_VIDEO: &str = "▶";
@@ -3286,6 +3297,106 @@ fn engagement_only_spans(t: &Tweet) -> Vec<Span<'static>> {
         GLYPH_LIKES.to_string(),
         engaged_style(th().liked),
     )]
+}
+
+fn analytics_lines(t: &Tweet) -> Vec<Line<'static>> {
+    let theme_guard = th();
+    let label_style = Style::default()
+        .fg(theme_guard.text_muted)
+        .add_modifier(Modifier::BOLD);
+    let value_style = Style::default()
+        .fg(theme_guard.text)
+        .add_modifier(Modifier::BOLD);
+    let dim = Style::default().fg(theme_guard.text_muted);
+
+    let total_engagements = t
+        .like_count
+        .saturating_add(t.retweet_count)
+        .saturating_add(t.reply_count)
+        .saturating_add(t.quote_count)
+        .saturating_add(t.bookmark_count);
+
+    let mut rows: Vec<Line<'static>> = Vec::new();
+
+    rows.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled("◆ post analytics", label_style),
+    ]));
+
+    let mut stats_row: Vec<Span<'static>> = vec![Span::raw("    ")];
+    let push_stat = |glyph: &str, count: u64, color: Color, parts: &mut Vec<Span<'static>>| {
+        if parts.len() > 1 {
+            parts.push(Span::styled("   ", dim));
+        }
+        parts.push(Span::styled(
+            format!("{glyph} "),
+            Style::default().fg(color),
+        ));
+        parts.push(Span::styled(short_count(count), value_style));
+    };
+
+    if let Some(v) = t.view_count {
+        push_stat(GLYPH_VIEWS, v, theme_guard.text_muted, &mut stats_row);
+    }
+    push_stat(GLYPH_LIKES, t.like_count, theme_guard.like, &mut stats_row);
+    push_stat(
+        GLYPH_RETWEETS,
+        t.retweet_count,
+        theme_guard.retweet,
+        &mut stats_row,
+    );
+    push_stat(
+        GLYPH_REPLIES,
+        t.reply_count,
+        theme_guard.reply_notif,
+        &mut stats_row,
+    );
+    push_stat(
+        GLYPH_QUOTES,
+        t.quote_count,
+        theme_guard.quote,
+        &mut stats_row,
+    );
+    push_stat(
+        GLYPH_BOOKMARKS,
+        t.bookmark_count,
+        theme_guard.text_muted,
+        &mut stats_row,
+    );
+    rows.push(Line::from(stats_row));
+
+    if let Some(v) = t.view_count
+        && v > 0
+    {
+        let rate = (total_engagements as f64 / v as f64) * 100.0;
+        let formatted = if rate >= 10.0 {
+            format!("{rate:.1}%")
+        } else {
+            format!("{rate:.2}%")
+        };
+        rows.push(Line::from(vec![
+            Span::raw("    "),
+            Span::styled("engagement rate  ", dim),
+            Span::styled(formatted, value_style),
+            Span::styled(
+                format!(
+                    "  ({} / {} views)",
+                    short_count(total_engagements),
+                    short_count(v)
+                ),
+                dim,
+            ),
+        ]));
+    } else if total_engagements > 0 {
+        rows.push(Line::from(vec![
+            Span::raw("    "),
+            Span::styled("total engagements  ", dim),
+            Span::styled(short_count(total_engagements), value_style),
+        ]));
+    }
+
+    rows.push(Line::from(""));
+    rows
 }
 
 fn highlight_text(text: &str) -> Vec<Span<'static>> {

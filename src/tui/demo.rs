@@ -48,6 +48,7 @@ fn tweet(
         like_count: likes,
         quote_count: 0,
         view_count: Some(likes * 40 + replies * 60),
+        bookmark_count: 0,
         favorited: false,
         retweeted: false,
         bookmarked: false,

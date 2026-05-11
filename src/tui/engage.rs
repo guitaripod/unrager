@@ -102,6 +102,7 @@ mod tests {
             like_count,
             quote_count: 0,
             view_count: None,
+            bookmark_count: 0,
             favorited,
             retweeted: false,
             bookmarked: false,

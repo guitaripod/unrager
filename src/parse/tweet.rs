@@ -73,6 +73,7 @@ fn parse_tweet_node(node: &Value) -> Result<Tweet> {
     let retweet_count = u64_field(legacy, "retweet_count");
     let like_count = u64_field(legacy, "favorite_count");
     let quote_count = u64_field(legacy, "quote_count");
+    let bookmark_count = u64_field(legacy, "bookmark_count");
 
     let view_count = node
         .pointer("/views/count")
@@ -121,6 +122,7 @@ fn parse_tweet_node(node: &Value) -> Result<Tweet> {
         like_count,
         quote_count,
         view_count,
+        bookmark_count,
         favorited,
         retweeted,
         bookmarked,

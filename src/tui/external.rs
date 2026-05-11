@@ -334,6 +334,7 @@ mod tests {
             like_count: 0,
             quote_count: 0,
             view_count: None,
+            bookmark_count: 0,
             favorited: false,
             retweeted: false,
             bookmarked: false,

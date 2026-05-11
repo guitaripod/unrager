@@ -387,14 +387,23 @@ impl App {
     }
 
     pub(super) fn open_tweet_in_browser(&mut self) {
-        let (url, rest_id, already_liked) = {
+        let (url, rest_id, already_liked, is_own) = {
             let Some(tweet) = self.selected_tweet() else {
                 return;
             };
-            (tweet.url.clone(), tweet.rest_id.clone(), tweet.favorited)
+            let is_own = self
+                .self_handle
+                .as_ref()
+                .is_some_and(|h| h.eq_ignore_ascii_case(&tweet.author.handle));
+            (
+                tweet.url.clone(),
+                tweet.rest_id.clone(),
+                tweet.favorited,
+                is_own,
+            )
         };
         self.open_url(&url);
-        if !already_liked && self.write_rate_limit_remaining().is_none() {
+        if !is_own && !already_liked && self.write_rate_limit_remaining().is_none() {
             self.engage_by_id(EngageAction::Like, rest_id, false);
         }
     }

@@ -3223,7 +3223,7 @@ pub fn update_background(app: &mut App, terminal_width: u16, terminal_height: u1
     }
 }
 
-pub fn emit_media_placements(app: &App, terminal_width: u16) {
+pub fn emit_media_placements(app: &mut App, terminal_width: u16) {
     if !app.media.is_kitty() {
         return;
     }
@@ -3245,76 +3245,109 @@ pub fn emit_media_placements(app: &App, terminal_width: u16) {
         (terminal_width as usize, None)
     };
 
+    let mut to_place: Vec<(u32, u32, u32)> = Vec::new();
+
     if let Some(profile) = app.source.profile_user.as_ref()
         && let Some(url) = profile.avatar_url.as_deref()
         && let Some(MediaEntry::ReadyKitty { id, .. }) = app.media.get(url)
     {
-        media::emit_kitty_placement(*id, AVATAR_COLS, AVATAR_ROWS);
+        to_place.push((*id, AVATAR_COLS, AVATAR_ROWS));
     }
 
     let feed_avatars_on = app.feed_avatars && app.media.is_kitty();
+    let avatar_cols = feed_avatar_cols(cell);
 
     for tweet in app.source.tweets.iter() {
-        if feed_avatars_on {
-            emit_avatar_placement(&app.media, &tweet.author);
+        if feed_avatars_on && let Some(id) = ready_avatar_id(&app.media, &tweet.author) {
+            to_place.push((id, avatar_cols, FEED_AVATAR_ROWS));
         }
-        emit_placement_for_tweet(&app.media, cell, tweet, source_wrap, max_rows);
+        collect_placements_for_tweet(
+            &app.media,
+            cell,
+            tweet,
+            source_wrap,
+            max_rows,
+            &mut to_place,
+        );
         if let Some(thread) = app.inline_threads.get(&tweet.rest_id) {
             for (depth, reply) in &thread.replies {
-                if feed_avatars_on {
-                    emit_avatar_placement(&app.media, &reply.author);
+                if feed_avatars_on && let Some(id) = ready_avatar_id(&app.media, &reply.author) {
+                    to_place.push((id, avatar_cols, FEED_AVATAR_ROWS));
                 }
                 let child_wrap = source_wrap.saturating_sub(4 + depth * 2);
-                emit_placement_for_tweet(&app.media, cell, reply, child_wrap, max_rows);
+                collect_placements_for_tweet(
+                    &app.media,
+                    cell,
+                    reply,
+                    child_wrap,
+                    max_rows,
+                    &mut to_place,
+                );
             }
         }
     }
 
     if let Some(FocusEntry::Tweet(detail)) = app.focus_stack.last() {
         let wrap = detail_wrap.unwrap_or(source_wrap);
-        if feed_avatars_on {
-            emit_avatar_placement(&app.media, &detail.tweet.author);
+        if feed_avatars_on && let Some(id) = ready_avatar_id(&app.media, &detail.tweet.author) {
+            to_place.push((id, avatar_cols, FEED_AVATAR_ROWS));
         }
-        emit_placement_for_tweet(&app.media, cell, &detail.tweet, wrap, max_rows);
+        collect_placements_for_tweet(
+            &app.media,
+            cell,
+            &detail.tweet,
+            wrap,
+            max_rows,
+            &mut to_place,
+        );
         for reply in &detail.replies {
-            if feed_avatars_on {
-                emit_avatar_placement(&app.media, &reply.author);
+            if feed_avatars_on && let Some(id) = ready_avatar_id(&app.media, &reply.author) {
+                to_place.push((id, avatar_cols, FEED_AVATAR_ROWS));
             }
-            emit_placement_for_tweet(&app.media, cell, reply, wrap, max_rows);
+            collect_placements_for_tweet(&app.media, cell, reply, wrap, max_rows, &mut to_place);
             if let Some(thread) = app.inline_threads.get(&reply.rest_id) {
                 for (depth, child) in &thread.replies {
-                    if feed_avatars_on {
-                        emit_avatar_placement(&app.media, &child.author);
+                    if feed_avatars_on && let Some(id) = ready_avatar_id(&app.media, &child.author)
+                    {
+                        to_place.push((id, avatar_cols, FEED_AVATAR_ROWS));
                     }
                     let child_wrap = wrap.saturating_sub(4 + depth * 2);
-                    emit_placement_for_tweet(&app.media, cell, child, child_wrap, max_rows);
+                    collect_placements_for_tweet(
+                        &app.media,
+                        cell,
+                        child,
+                        child_wrap,
+                        max_rows,
+                        &mut to_place,
+                    );
                 }
             }
         }
     }
+
+    for (id, cols, rows) in to_place {
+        app.media.place(id, cols, rows);
+    }
 }
 
-fn emit_avatar_placement(registry: &MediaRegistry, author: &crate::model::User) {
-    let Some(url) = author.avatar_url.as_deref() else {
-        return;
-    };
+fn ready_avatar_id(registry: &MediaRegistry, author: &crate::model::User) -> Option<u32> {
+    let url = author.avatar_url.as_deref()?;
     if url.is_empty() {
-        return;
+        return None;
     }
-    if let Some(MediaEntry::ReadyKitty { id, .. }) = registry.get(url) {
-        let cell = registry
-            .cell_size()
-            .unwrap_or(media::CellSize { w: 1, h: 2 });
-        media::emit_kitty_placement(*id, feed_avatar_cols(cell), FEED_AVATAR_ROWS);
+    match registry.get(url) {
+        Some(MediaEntry::ReadyKitty { id, .. }) => Some(*id),
+        _ => None,
     }
 }
 
-fn emit_placement_for_tweet(
+fn collect_placements_for_tweet(
     registry: &MediaRegistry,
     cell: media::CellSize,
     tweet: &Tweet,
     wrap_width: usize,
     max_rows: usize,
+    out: &mut Vec<(u32, u32, u32)>,
 ) {
     let max_cols = image_max_cols(wrap_width);
     for media_item in tweet.media.iter().take(4) {
@@ -3326,7 +3359,7 @@ fn emit_placement_for_tweet(
                     let (nc, nr) = media::kitty_image_cells(cell, *w, *h, max_cols as u32);
                     let (c, r) = media::fit_cells_to_pane(nc, nr, max_cols as u32, max_rows as u32);
                     if c > 0 && r > 0 {
-                        media::emit_kitty_placement(*id, c, r);
+                        out.push((*id, c, r));
                     }
                 }
             }
@@ -3338,7 +3371,7 @@ fn emit_placement_for_tweet(
                     let (nc, nr) = media::kitty_image_cells(cell, *w, *h, inner_cols);
                     let (c, r) = media::fit_cells_to_pane(nc, nr, inner_cols, max_rows as u32);
                     if c > 0 && r > 0 {
-                        media::emit_kitty_placement(*id, c, r);
+                        out.push((*id, c, r));
                     }
                 }
             }
@@ -3347,7 +3380,7 @@ fn emit_placement_for_tweet(
     }
     if let Some(qt) = &tweet.quoted_tweet {
         let qt_wrap = wrap_width.saturating_sub(4);
-        emit_placement_for_tweet(registry, cell, qt, qt_wrap, max_rows);
+        collect_placements_for_tweet(registry, cell, qt, qt_wrap, max_rows, out);
     }
 }
 

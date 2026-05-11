@@ -446,6 +446,7 @@ pub async fn fetch_thread_recursive(
         tweets: all_tweets.into_values().collect(),
         next_cursor: None,
         top_cursor: None,
+        profile_user: None,
     })
 }
 

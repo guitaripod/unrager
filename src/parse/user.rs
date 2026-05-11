@@ -35,6 +35,12 @@ pub fn parse_user_result(node: &Value) -> Option<User> {
         .and_then(Value::as_u64)
         .unwrap_or(0);
 
+    let avatar_url = node
+        .pointer("/avatar/image_url")
+        .or_else(|| node.pointer("/legacy/profile_image_url_https"))
+        .and_then(Value::as_str)
+        .map(|s| s.replace("_normal.", "_400x400."));
+
     Some(User {
         rest_id,
         handle,
@@ -42,5 +48,6 @@ pub fn parse_user_result(node: &Value) -> Option<User> {
         verified,
         followers,
         following,
+        avatar_url,
     })
 }

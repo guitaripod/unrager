@@ -9,6 +9,8 @@ pub struct User {
     pub verified: bool,
     pub followers: u64,
     pub following: u64,
+    #[serde(default)]
+    pub avatar_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

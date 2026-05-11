@@ -28,6 +28,7 @@ pub struct TimelinePage {
     pub tweets: Vec<Tweet>,
     pub next_cursor: Option<String>,
     pub top_cursor: Option<String>,
+    pub profile_user: Option<crate::model::User>,
 }
 
 pub fn walk(instructions: &[Value]) -> TimelinePage {

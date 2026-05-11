@@ -25,6 +25,7 @@ fn user(handle: &str, name: &str, verified: bool, followers: u64) -> User {
         verified,
         followers,
         following: followers / 20,
+        avatar_url: None,
     }
 }
 
@@ -216,5 +217,6 @@ pub fn page() -> TimelinePage {
         tweets,
         next_cursor: None,
         top_cursor: None,
+        profile_user: None,
     }
 }

@@ -93,6 +93,7 @@ pub struct Source {
     pub silent_refreshing: bool,
     pub exhausted: bool,
     pub state: PaneState,
+    pub profile_user: Option<crate::model::User>,
 }
 
 impl Source {
@@ -269,8 +270,11 @@ pub async fn fetch_user(
     handle: &str,
     cursor: Option<String>,
 ) -> Result<TimelinePage> {
-    let user_id = resolve_user_id(client, handle).await?;
-    fetch_user_tweets_by_id(client, &user_id, cursor).await
+    let profile = resolve_user_profile(client, handle).await?;
+    let user_id = profile.rest_id.clone();
+    let mut page = fetch_user_tweets_by_id(client, &user_id, cursor).await?;
+    page.profile_user = Some(profile);
+    Ok(page)
 }
 
 pub async fn fetch_user_tweets_by_id(
@@ -297,6 +301,12 @@ pub async fn fetch_user_tweets_by_id(
 }
 
 pub async fn resolve_user_id(client: &GqlClient, handle: &str) -> Result<String> {
+    resolve_user_profile(client, handle)
+        .await
+        .map(|u| u.rest_id)
+}
+
+pub async fn resolve_user_profile(client: &GqlClient, handle: &str) -> Result<crate::model::User> {
     let response = client
         .get(
             Operation::UserByScreenName,
@@ -313,10 +323,8 @@ pub async fn resolve_user_id(client: &GqlClient, handle: &str) -> Result<String>
             "@{handle} is unavailable (suspended, deactivated, or protected)"
         )));
     }
-    user.get("rest_id")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| Error::GraphqlShape(format!("@{handle} has no rest_id")))
+    crate::parse::user::parse_user_result(user)
+        .ok_or_else(|| Error::GraphqlShape(format!("@{handle} missing required user fields")))
 }
 
 async fn fetch_search(

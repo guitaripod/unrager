@@ -116,6 +116,12 @@ impl App {
         }
         match result {
             Ok(mut page) => {
+                if let Some(user) = page.profile_user.take()
+                    && matches!(kind, SourceKind::User { .. })
+                {
+                    self.queue_avatar(&user);
+                    self.source.profile_user = Some(user);
+                }
                 let total_incoming = page.tweets.len();
                 let hidden = filter_incoming_page(
                     &mut page,
@@ -625,6 +631,12 @@ impl App {
         }
         for t in tweets {
             self.media.ensure_tweet_media(t, &self.tx);
+        }
+    }
+
+    pub(super) fn queue_avatar(&mut self, user: &crate::model::User) {
+        if let Some(url) = user.avatar_url.as_deref() {
+            self.media.ensure_url(url, &self.tx);
         }
     }
 

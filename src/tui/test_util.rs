@@ -110,6 +110,7 @@ pub fn make_tweet(id: &str, text: &str) -> Tweet {
             verified: false,
             followers: 0,
             following: 0,
+            avatar_url: None,
         },
         created_at: Utc::now(),
         text: text.to_string(),
@@ -135,5 +136,6 @@ pub fn make_page(tweets: Vec<Tweet>) -> TimelinePage {
         tweets,
         next_cursor: None,
         top_cursor: None,
+        profile_user: None,
     }
 }

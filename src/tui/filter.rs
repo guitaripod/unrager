@@ -594,6 +594,7 @@ mod tests {
                 verified: false,
                 followers: 0,
                 following: 0,
+                avatar_url: None,
             },
             created_at: Utc::now(),
             text: text.into(),

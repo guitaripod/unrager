@@ -530,16 +530,21 @@ fn draw_source_list(
     let wrap_width = (area.width as usize).saturating_sub(4);
     let selected = source.selected();
 
-    let items: Vec<PaneItem> = source
-        .tweets
-        .iter()
-        .map(|t| {
-            let is_seen = ctx.seen.is_seen(&t.rest_id);
-            let is_expanded = ctx.expanded.contains(&t.rest_id);
-            let lines = tweet_lines(t, ctx, is_seen, false, wrap_width, is_expanded);
-            PaneItem::new(lines)
-        })
-        .collect();
+    let mut items: Vec<PaneItem> = Vec::with_capacity(source.tweets.len() + 1);
+    let header_offset = if let Some(profile) = source.profile_user.as_ref() {
+        items.push(PaneItem::new(profile_header_lines(
+            profile, ctx, wrap_width,
+        )));
+        1
+    } else {
+        0
+    };
+    items.extend(source.tweets.iter().map(|t| {
+        let is_seen = ctx.seen.is_seen(&t.rest_id);
+        let is_expanded = ctx.expanded.contains(&t.rest_id);
+        let lines = tweet_lines(t, ctx, is_seen, false, wrap_width, is_expanded);
+        PaneItem::new(lines)
+    }));
 
     render_scrollable(
         frame,
@@ -547,9 +552,87 @@ fn draw_source_list(
         &title,
         items,
         &mut source.state,
-        Some(selected),
+        Some(selected + header_offset),
         active,
     );
+}
+
+fn profile_header_lines(
+    user: &crate::model::User,
+    ctx: &RenderContext,
+    wrap_width: usize,
+) -> Vec<Line<'static>> {
+    let theme_guard = th();
+    let muted = Style::default().fg(theme_guard.text_muted);
+    let name_style = Style::default()
+        .fg(theme_guard.text)
+        .add_modifier(Modifier::BOLD);
+    let handle_style = Style::default()
+        .fg(theme::handle_color(&user.handle))
+        .add_modifier(Modifier::BOLD);
+
+    const AVATAR_GAP: &str = "  ";
+
+    let avatar_ready = user
+        .avatar_url
+        .as_deref()
+        .and_then(|url| match ctx.media_reg.get(url) {
+            Some(MediaEntry::ReadyKitty { id, .. }) => Some(*id),
+            _ => None,
+        });
+    let avatar_loading = user.avatar_url.is_some() && avatar_ready.is_none();
+
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(AVATAR_ROWS as usize + 2);
+
+    let mut name_line: Vec<Span<'static>> = Vec::new();
+    name_line.push(Span::raw("  "));
+    if !user.name.is_empty() {
+        name_line.push(Span::styled(user.name.clone(), name_style));
+        name_line.push(Span::styled("  ·  ", muted));
+    }
+    name_line.push(Span::styled(format!("@{}", user.handle), handle_style));
+    if user.verified {
+        name_line.push(Span::styled(
+            " ✓",
+            Style::default().fg(theme_guard.verified),
+        ));
+    }
+
+    let follow_line = Line::from(vec![
+        Span::raw("  "),
+        Span::styled(short_count(user.followers), name_style),
+        Span::styled(" followers", muted),
+        Span::styled("    ", muted),
+        Span::styled(short_count(user.following), name_style),
+        Span::styled(" following", muted),
+    ]);
+
+    if let Some(id) = avatar_ready {
+        for row in 0..AVATAR_ROWS as usize {
+            let mut spans: Vec<Span<'static>> = vec![Span::raw("  ")];
+            spans.push(media::placeholder_row_for(id, row, AVATAR_COLS as usize));
+            spans.push(Span::raw(AVATAR_GAP));
+            match row {
+                0 => spans.extend(name_line.iter().skip(1).cloned()),
+                1 => spans.extend(follow_line.spans.iter().skip(1).cloned()),
+                _ => {}
+            }
+            let _ = wrap_width;
+            lines.push(Line::from(spans));
+        }
+    } else {
+        lines.push(Line::from(name_line));
+        lines.push(follow_line);
+        if avatar_loading {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled("loading avatar…", muted),
+            ]));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines
 }
 
 fn notification_lines(
@@ -1867,6 +1950,9 @@ const GLYPH_LIKES: &str = "♥";
 const GLYPH_VIEWS: &str = "◉";
 const GLYPH_QUOTES: &str = "❝";
 const GLYPH_BOOKMARKS: &str = "🔖";
+
+const AVATAR_ROWS: u32 = 4;
+const AVATAR_COLS: u32 = 8;
 const GLYPH_IS_REPLY: &str = "⮎";
 const GLYPH_PHOTO: &str = "▣";
 const GLYPH_VIDEO: &str = "▶";
@@ -3037,6 +3123,13 @@ pub fn emit_media_placements(app: &App, terminal_width: u16) {
     } else {
         (terminal_width as usize, None)
     };
+
+    if let Some(profile) = app.source.profile_user.as_ref()
+        && let Some(url) = profile.avatar_url.as_deref()
+        && let Some(MediaEntry::ReadyKitty { id, .. }) = app.media.get(url)
+    {
+        media::emit_kitty_placement(*id, AVATAR_COLS, AVATAR_ROWS);
+    }
 
     for tweet in app.source.tweets.iter() {
         emit_placement_for_tweet(&app.media, cell, tweet, source_wrap, max_rows);

@@ -328,6 +328,53 @@ impl MediaRegistry {
         }
     }
 
+    pub fn ensure_url(&mut self, url: &str, tx: &EventTx) {
+        if !self.supported() || url.is_empty() {
+            return;
+        }
+        if self.entries.contains_key(url) {
+            return;
+        }
+        let is_kitty = self.is_kitty();
+        self.insert_entry(url.to_string(), MediaEntry::Loading);
+        let url = url.to_string();
+        let sem = self.semaphore.clone();
+        let tx = tx.clone();
+        if is_kitty {
+            let id = self.next_id;
+            self.next_id += 1;
+            tokio::spawn(async move {
+                let _permit = sem.acquire_owned().await.ok();
+                match fetch_and_transmit_kitty(id, &url).await {
+                    Ok((w, h)) => {
+                        let _ = tx.send(Event::MediaLoadedKitty { url, id, w, h });
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Event::MediaFailed {
+                            url,
+                            err: e.to_string(),
+                        });
+                    }
+                }
+            });
+        } else {
+            tokio::spawn(async move {
+                let _permit = sem.acquire_owned().await.ok();
+                match fetch_and_decode(&url).await {
+                    Ok((pixels, w, h)) => {
+                        let _ = tx.send(Event::MediaLoadedPixels { url, pixels, w, h });
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Event::MediaFailed {
+                            url,
+                            err: e.to_string(),
+                        });
+                    }
+                }
+            });
+        }
+    }
+
     pub fn mark_ready_kitty(&mut self, url: &str, id: u32, w: u32, h: u32) {
         self.entries
             .insert(url.to_string(), MediaEntry::ReadyKitty { id, w, h });

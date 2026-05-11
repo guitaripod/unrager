@@ -179,6 +179,14 @@ pub struct MediaRegistry {
     semaphore: Arc<Semaphore>,
     insertion_order: VecDeque<String>,
     avatar_cache_dir: Option<PathBuf>,
+    /// Last `(cols, rows)` we emitted as a kitty placement for each
+    /// image id. Used to dedupe — re-emitting an identical placement on
+    /// every frame floods the terminal's graphics queue on some
+    /// backends (notably ghostty/linux), where placeholders can paint
+    /// before the matching placement is processed and the image briefly
+    /// inherits a stale grid. Cache misses force the placement; cache
+    /// hits skip stdout entirely.
+    placement_cache: HashMap<u32, (u32, u32)>,
 }
 
 impl Default for MediaRegistry {
@@ -223,7 +231,23 @@ impl MediaRegistry {
             semaphore: Arc::new(Semaphore::new(4)),
             insertion_order: VecDeque::new(),
             avatar_cache_dir,
+            placement_cache: HashMap::new(),
         }
+    }
+
+    /// Idempotent placement emit — writes the kitty graphics placement
+    /// to stdout only when the requested `(cols, rows)` differs from
+    /// the last successful emit for `id`. Cuts per-frame command volume
+    /// by ~Nx where N is the number of visible images, which keeps the
+    /// terminal's graphics queue from backing up. Must be called every
+    /// frame for ids that need a placement so cache invalidation on
+    /// size changes still produces the new emit.
+    pub fn place(&mut self, id: u32, cols: u32, rows: u32) {
+        if self.placement_cache.get(&id).copied() == Some((cols, rows)) {
+            return;
+        }
+        emit_kitty_placement(id, cols, rows);
+        self.placement_cache.insert(id, (cols, rows));
     }
 
     pub fn avatar_cache_path(&self, url: &str) -> Option<PathBuf> {
@@ -259,6 +283,7 @@ impl MediaRegistry {
                 break;
             };
             if let Some(MediaEntry::ReadyKitty { id, .. }) = self.entries.remove(&old) {
+                self.placement_cache.remove(&id);
                 delete_image(id);
             }
         }

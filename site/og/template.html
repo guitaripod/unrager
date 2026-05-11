@@ -167,8 +167,23 @@
     gap: 14px;
   }
 
-  .tw { display: grid; grid-template-columns: 20px 1fr; gap: 12px; }
-  .tw .mark { color: var(--accent); font-size: 14px; line-height: 1.6; }
+  .tw { display: grid; grid-template-columns: 36px 1fr; gap: 14px; align-items: start; }
+  .tw .av {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 700;
+    color: #0f1419;
+    letter-spacing: .02em;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04);
+    margin-top: 2px;
+  }
+  .tw .av.a1 { background: linear-gradient(135deg, #f91880, #ff6f3c); }
+  .tw .av.a2 { background: linear-gradient(135deg, #00ba7c, #1d9bf0); }
   .tw .h {
     display: flex; gap: 10px; align-items: baseline;
     color: var(--muted);
@@ -187,7 +202,7 @@
     display: flex; align-items: center; gap: 12px;
     color: var(--muted);
     font-size: 13px;
-    padding-left: 32px;
+    padding-left: 50px;
     letter-spacing: .03em;
   }
   .hidden-row .x {
@@ -261,7 +276,7 @@
 
       <div class="term-body">
         <div class="tw">
-          <div class="mark">●</div>
+          <div class="av a1">ar</div>
           <div>
             <div class="h"><span class="handle">@ada_rs</span><span>· 2h</span></div>
             <div class="body">tokio::spawn is fine. just never await it inside a mutex guard.</div>
@@ -276,7 +291,7 @@
         </div>
 
         <div class="tw">
-          <div class="mark">●</div>
+          <div class="av a2">sh</div>
           <div>
             <div class="h"><span class="handle">@small_ship</span><span>· 4h</span></div>
             <div class="body">half-cup of cold-brew and a clean git diff. quiet saturday.</div>

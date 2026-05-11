@@ -61,8 +61,8 @@
         <figure class="slide" data-caption="notifications · likes, replies, retweets in one pane">
           <img src="/notifications.png" alt="notifications pane with mixed notification types" width="1920" height="1180" loading="lazy">
         </figure>
-        <figure class="slide" data-caption="profile · own timeline with full metrics">
-          <img src="/profile.png" alt="user profile with tweets and metrics" width="1920" height="1180" loading="lazy">
+        <figure class="slide" data-caption="profile · avatar header, follower counts, full metrics on your own posts">
+          <img src="/profile.png" alt="user profile with avatar header, tweets, and metrics" width="1920" height="1180" loading="lazy">
         </figure>
         <figure class="slide" data-caption="help overlay · every keybinding and glyph meaning">
           <img src="/help.png" alt="scrollable help overlay with key bindings and iconography" width="1920" height="1180" loading="lazy">
@@ -101,6 +101,10 @@
         <div class="feat">
           <dt>terminal-native</dt>
           <dd>ratatui + crossterm. Inline photos, video posters, GIF frames via the kitty graphics protocol on Ghostty, Kitty, WezTerm. Falls back to glyphs elsewhere.</dd>
+        </div>
+        <div class="feat">
+          <dt>author avatars</dt>
+          <dd>Every feed row carries a square kitty-graphics chip of the poster; profile headers pin a larger one beside name, handle, and follower counts. Postcard screenshots (<kbd>S</kbd>/<kbd>C</kbd>) composite the chip in too. Disk-cached at <code>~/.cache/unrager/avatars/</code> with LRU pruning — X rotates the URL on every photo change, so the cache self-invalidates. Toggle feed chips with <kbd>&lt;space&gt; a</kbd>.</dd>
         </div>
         <div class="feat">
           <dt>free reads</dt>

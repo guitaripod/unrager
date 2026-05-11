@@ -88,6 +88,7 @@ When debugging a silent failure — a fetch that seems stuck, missing data, a TU
 - `~/.cache/unrager/filter.db` — filter verdict cache (auto-pruned to 30 days)
 - `~/.cache/unrager/query-ids.json` — scraped GraphQL query ID cache
 - `~/.cache/unrager/media/<tweet_id>/` — downloaded attachments for external viewer (`m` key); one subdir per tweet so Linux image viewers can arrow through siblings
+- `~/.cache/unrager/avatars/<sha256(url)>.bin` — author-avatar disk cache; LRU-pruned to 50 MB on startup; URL-keyed so X's per-upload URL rotation self-invalidates
 
 ## Keeping README in sync
 

@@ -101,7 +101,7 @@ The left pane stays live. `Tab` swaps focus between panes, `,`/`.` adjusts the s
 
 Every text input in the TUI — reply (`r`), direct compose, ask-gemma input (`A`), command palette (`:`) — is a miniature Vim editor. Insert/Normal modes, `hjkl` motion, `w`/`b` word jumps, `dd`/`dw`, counts, `^`/`$`, everything a two-minute muscle-memory habit expects. The status line at the bottom of each pane shows `INSERT` or `NORMAL` and the live character counter (`24/280`).
 
-Submitting a reply with `r` auto-likes the tweet you're replying to (unless it's already liked) — reciprocal-like etiquette without the manual step. Opening a tweet in the browser with `o` does the same: anything worth a closer look gets a like on the way out, unless it's already liked or X is write-rate-limiting you.
+Submitting a reply with `r` auto-likes the tweet you're replying to (unless it's already liked) — reciprocal-like etiquette without the manual step. Opening a tweet in the browser with `o` does the same: anything worth a closer look gets a like on the way out, unless it's already liked, it's your own tweet, or X is write-rate-limiting you.
 
 ## Search and translation
 
@@ -141,7 +141,7 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
   <img src="assets/profile.png" alt="own profile showing tweets with full metrics and expanded bodies" width="800">
 </p>
 
-`p` opens the profile of whoever your cursor is on — the selected tweet's author, the notification actor, or your own profile if nothing's selected. Your own profile renders with full metrics forced visible. `:user <handle>` opens anyone's timeline. Press `R` to toggle between their tweets and replies. `<space> o` switches between all tweets and originals only (hides replies, quotes, retweets).
+`p` opens the profile of whoever your cursor is on — the selected tweet's author, the notification actor, or your own profile if nothing's selected. The header pins a kitty-graphics avatar, display name, handle, and follower / following counts; on non-kitty terminals (or while the image is downloading) it falls back to a text-only header. Your own profile renders with full metrics forced visible — including an analytics block on the focal tweet (views, likes, retweets, replies, quotes, bookmarks, engagement rate). `:user <handle>` opens anyone's timeline. Press `R` to toggle between their tweets and replies. `<space> o` switches between all tweets and originals only (hides replies, quotes, retweets).
 
 ## Help overlay
 
@@ -186,7 +186,7 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 | `p` | Open selected author's profile (falls back to own) |
 | `P` | Open own profile in browser |
 | `n` | Open notifications as a detail pane |
-| `o` | Open tweet in browser (auto-likes the tweet) |
+| `o` | Open tweet in browser (auto-likes, except on your own tweets) |
 | `O` | Open tweet author's profile in browser |
 | `m` | Open all media (photos/GIFs/videos) in native viewer |
 | `S` | Screenshot composer, default action save to `~/.cache/unrager/screenshots/` |
@@ -280,6 +280,7 @@ While `unrager serve` is running it owns the filter + seen caches; the TUI detec
 ## More
 
 - **Inline media** — photos, video posters, and GIF first-frames render inside the terminal via the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) on Ghostty, Kitty, and WezTerm. Multiple images side-by-side. Toggle with `I`. Falls back to `▣`/`▶`/`↻` glyphs elsewhere.
+- **Author avatars** — every feed row, detail focal, reply, and inline thread carries a square kitty-graphics chip of the poster's avatar; profile headers pin a larger one beside the name. Avatars cache at `~/.cache/unrager/avatars/` (LRU-pruned to 50 MB, self-invalidating since X rotates the URL on every photo change). Postcard screenshots composite the chip in too. Toggle feed chips with `<space> a`; disabling skips downloads and suppresses screenshot avatars. Kitty-only — halfblock and disabled terminals fall back to the no-gutter layout.
 - **Inline cards** — YouTube links, X Articles, generic link previews (any brand), and polls render as bordered preview cards with cover image, title, description, and metadata. `m` opens the source URL in your browser.
 - **Originals mode** — `V` on home feeds hides replies, quotes, and retweets. `◇` appears in the status bar. Persists across sessions.
 - **Notifications view** — press `n` or `:notifs` to browse notifications in a dedicated feed. Enter opens the target tweet or navigates to the actor's profile. Ambient whisper continues in the status bar independently.
@@ -354,6 +355,7 @@ Config paths are platform-native: Linux uses `~/.config/unrager/` + `~/.cache/un
 | `~/.cache/unrager/filter.db` | Filter verdict cache |
 | `~/.cache/unrager/media/<tweet_id>/` | Downloaded attachments for `m` (external viewer) |
 | `~/.cache/unrager/screenshots/` | PNG screenshots written by `S` |
+| `~/.cache/unrager/avatars/<sha256>.bin` | Author-avatar disk cache (LRU-pruned to 50 MB) |
 | `~/.cache/unrager/mordor-user-<hash>.opus` | Sliced Mordor loop (generated from `[sound] source`) |
 
 ### Theme

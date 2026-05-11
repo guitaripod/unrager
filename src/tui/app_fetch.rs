@@ -626,6 +626,11 @@ impl App {
             self.media.ensure_tweet_card_thumbnails(t, &self.tx);
             self.youtube.ensure_tweet(t, &self.tx);
         }
+        if self.feed_avatars && self.media.is_kitty() {
+            for t in tweets {
+                self.queue_avatar(&t.author);
+            }
+        }
         if !self.media_auto_expand {
             return;
         }

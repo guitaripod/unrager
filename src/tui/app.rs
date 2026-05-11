@@ -151,6 +151,12 @@ pub struct App {
     pub(super) last_mordor_active: bool,
     pub youtube: YoutubeRegistry,
     pub media_auto_expand: bool,
+    /// When true, every tweet row in feeds reserves a gutter for a
+    /// square author-avatar chip. Toggled via leader `a`. Persisted in
+    /// session. Honored at render time only when the terminal is in
+    /// kitty mode — halfblock/disabled terminals fall back to the
+    /// no-gutter layout.
+    pub feed_avatars: bool,
     pub feed_mode: FeedMode,
     pub self_handle: Option<String>,
     pub filter_mode: FilterMode,
@@ -236,6 +242,7 @@ impl App {
             .as_ref()
             .and_then(|s| s.feed_mode)
             .unwrap_or(FeedMode::All);
+        let loaded_feed_avatars = loaded.as_ref().and_then(|s| s.feed_avatars).unwrap_or(true);
         let loaded_reply_sort = loaded
             .as_ref()
             .and_then(|s| s.reply_sort)
@@ -316,6 +323,7 @@ impl App {
             last_mordor_active: false,
             youtube: YoutubeRegistry::new(),
             media_auto_expand: false,
+            feed_avatars: loaded_feed_avatars,
             feed_mode: loaded_feed_mode,
             reply_sort: loaded_reply_sort,
             self_handle: None,
@@ -440,6 +448,7 @@ impl App {
             display_names: Some(self.display_names),
             timestamps: Some(self.timestamps),
             feed_mode: Some(self.feed_mode),
+            feed_avatars: Some(self.feed_avatars),
             reply_sort: Some(self.reply_sort),
             whisper_cursor: if self.whisper.watermark_ts > 0 {
                 Some(self.whisper.watermark_ts.to_string())

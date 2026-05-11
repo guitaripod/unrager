@@ -448,6 +448,7 @@ impl App {
             media_enabled: false,
             media_auto_expand: false,
             media_max_rows: 0,
+            feed_avatars: false,
         };
         let ctx = RenderContext {
             opts,

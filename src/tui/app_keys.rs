@@ -489,6 +489,21 @@ impl App {
                     self.set_status("media auto-expand off");
                 }
             }
+            (KeyCode::Char('a'), _) => {
+                self.feed_avatars = !self.feed_avatars;
+                if self.feed_avatars {
+                    let tweets = self.source.tweets.clone();
+                    self.queue_source_media(&tweets);
+                    if !self.media.is_kitty() {
+                        self.set_status("feed avatars on (needs kitty terminal)");
+                    } else {
+                        self.set_status("feed avatars on");
+                    }
+                } else {
+                    self.set_status("feed avatars off");
+                }
+                self.save_session();
+            }
             (KeyCode::Char('r'), _) => self.toggle_filter(),
             _ => {}
         }

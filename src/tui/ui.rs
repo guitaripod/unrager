@@ -181,6 +181,13 @@ pub struct RenderOpts {
     pub media_enabled: bool,
     pub media_auto_expand: bool,
     pub media_max_rows: usize,
+    /// When true, reserve a gutter on every tweet row for a square
+    /// author-avatar chip and drop the redundant unread-dot column —
+    /// the avatar is the read/unread indicator and the bold-on-unread
+    /// body weight is the read/unread signal. Suppresses the gutter
+    /// when false (toggle off, non-kitty terminal). Independent of
+    /// `media_enabled` because the avatar is identity, not content.
+    pub feed_avatars: bool,
 }
 
 pub struct RenderContext<'a> {
@@ -230,6 +237,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         media_enabled: app.media.supported(),
         media_auto_expand: app.media_auto_expand,
         media_max_rows: (pane_h.saturating_sub(4) / 2).clamp(6, 24),
+        feed_avatars: app.feed_avatars && app.media.is_kitty(),
     };
     let filter_ctx = FilterRenderCtx {
         mode: filter_mode,
@@ -1953,6 +1961,30 @@ const GLYPH_BOOKMARKS: &str = "🔖";
 
 const AVATAR_ROWS: u32 = 4;
 const AVATAR_COLS: u32 = 8;
+/// Inline feed-avatar chip: 2 rows tall, width computed at runtime so
+/// `cols * cell_w ≈ rows * cell_h` — i.e. the on-screen pixels stay
+/// square no matter the terminal's cell aspect. Twitter avatars are
+/// 1:1, so any non-square cell footprint would stretch them. The 2-row
+/// height fits inside the 2-row minimum tweet card (header + first
+/// body line), so the chip never bleeds into the next row. Body lines
+/// 0 and 1 prefix with `placeholder_row_for(id, row, …)`; line 2+ uses
+/// plain spaces. A 1-cell gap separates the chip from the rest of the
+/// card. The gutter width is reserved on every row of every tweet so
+/// layout stays uniform whether the avatar is loaded, missing, or the
+/// author has none.
+const FEED_AVATAR_ROWS: u32 = 2;
+const FEED_AVATAR_FALLBACK_COLS: u32 = 4;
+
+fn feed_avatar_cols(cell: media::CellSize) -> u32 {
+    if cell.w == 0 {
+        return FEED_AVATAR_FALLBACK_COLS;
+    }
+    ((FEED_AVATAR_ROWS as u64 * cell.h as u64).div_ceil(cell.w as u64) as u32).clamp(2, 8)
+}
+
+fn feed_avatar_gutter_cols(cell: media::CellSize) -> u32 {
+    feed_avatar_cols(cell) + 1
+}
 const GLYPH_IS_REPLY: &str = "⮎";
 const GLYPH_PHOTO: &str = "▣";
 const GLYPH_VIDEO: &str = "▶";
@@ -1971,6 +2003,16 @@ pub(super) fn tweet_lines(
     expanded: bool,
 ) -> Vec<Line<'static>> {
     let opts = ctx.opts;
+    let avatars_on = opts.feed_avatars;
+    let avatar_cell = ctx
+        .media_reg
+        .cell_size()
+        .unwrap_or(media::CellSize { w: 1, h: 2 });
+    let wrap_width = if avatars_on {
+        wrap_width.saturating_sub(feed_avatar_gutter_cols(avatar_cell) as usize)
+    } else {
+        wrap_width
+    };
     let translated_text = ctx.translations.get(&t.rest_id);
     let photo_count = t
         .media
@@ -1990,13 +2032,20 @@ pub(super) fn tweet_lines(
     let effective_expanded = expanded || opts.media_auto_expand;
 
     let theme_guard = th();
-    let dot = if seen {
-        Span::raw("  ")
+    // The unread-dot column is redundant when the avatar gutter is on:
+    // the avatar chip is the read/unread indicator and the body's
+    // bold-on-unread weight already conveys read state. Skip the dot
+    // span entirely so the header sits flush against the chip+gap.
+    let mut header: Vec<Span<'static>> = if avatars_on {
+        Vec::new()
+    } else if seen {
+        vec![Span::raw("  ")]
     } else {
-        Span::styled("● ", Style::default().fg(theme_guard.unread_dot))
+        vec![Span::styled(
+            "● ",
+            Style::default().fg(theme_guard.unread_dot),
+        )]
     };
-
-    let mut header: Vec<Span<'static>> = vec![dot];
     if t.in_reply_to_tweet_id.is_some() && !in_reply_context {
         header.push(Span::styled(
             format!("{GLYPH_IS_REPLY} "),
@@ -2068,8 +2117,19 @@ pub(super) fn tweet_lines(
         &t.text
     };
 
-    let indent: Span<'static> = Span::raw("  ");
-    let text_width = wrap_width.saturating_sub(2).max(1);
+    // When the avatar gutter is on, the leading 2-cell body indent
+    // would push body text one column past the @handle. Drop it so
+    // body and header both start flush against the avatar+gap.
+    let indent: Span<'static> = if avatars_on {
+        Span::raw("")
+    } else {
+        Span::raw("  ")
+    };
+    let text_width = if avatars_on {
+        wrap_width.max(1)
+    } else {
+        wrap_width.saturating_sub(2).max(1)
+    };
 
     let mut wrapped: Vec<String> = Vec::new();
     for text_line in body_text.lines() {
@@ -2306,7 +2366,50 @@ pub(super) fn tweet_lines(
         }
     }
 
+    if avatars_on {
+        apply_feed_avatar_gutter(&mut lines, &t.author, ctx, avatar_cell);
+    }
+
     lines
+}
+
+/// Pin a square avatar chip on the header line and the first body line
+/// and reserve a fixed gutter on every subsequent line so the rest of
+/// the card visually hangs under the chip. Falls back to plain-space
+/// gutter cells when the avatar isn't loaded as `ReadyKitty`, keeping
+/// layout uniform across "ready", "loading", and "no avatar" tweets.
+fn apply_feed_avatar_gutter(
+    lines: &mut Vec<Line<'static>>,
+    author: &crate::model::User,
+    ctx: &RenderContext,
+    cell: media::CellSize,
+) {
+    if lines.is_empty() {
+        return;
+    }
+    let kitty_id = author.avatar_url.as_deref().and_then(|url| {
+        if url.is_empty() {
+            return None;
+        }
+        match ctx.media_reg.get(url) {
+            Some(MediaEntry::ReadyKitty { id, .. }) => Some(*id),
+            _ => None,
+        }
+    });
+
+    let cols = feed_avatar_cols(cell) as usize;
+    let rows = FEED_AVATAR_ROWS as usize;
+    let blank_gutter = Span::raw(" ".repeat(cols + 1));
+
+    for (i, line) in lines.iter_mut().enumerate() {
+        let prefix: Vec<Span<'static>> = match (i < rows, kitty_id) {
+            (true, Some(id)) => vec![media::placeholder_row_for(id, i, cols), Span::raw(" ")],
+            _ => vec![blank_gutter.clone()],
+        };
+        let mut spans = prefix;
+        spans.append(&mut line.spans);
+        line.spans = spans;
+    }
 }
 
 fn image_max_cols(wrap_width: usize) -> usize {
@@ -3131,10 +3234,18 @@ pub fn emit_media_placements(app: &App, terminal_width: u16) {
         media::emit_kitty_placement(*id, AVATAR_COLS, AVATAR_ROWS);
     }
 
+    let feed_avatars_on = app.feed_avatars && app.media.is_kitty();
+
     for tweet in app.source.tweets.iter() {
+        if feed_avatars_on {
+            emit_avatar_placement(&app.media, &tweet.author);
+        }
         emit_placement_for_tweet(&app.media, cell, tweet, source_wrap, max_rows);
         if let Some(thread) = app.inline_threads.get(&tweet.rest_id) {
             for (depth, reply) in &thread.replies {
+                if feed_avatars_on {
+                    emit_avatar_placement(&app.media, &reply.author);
+                }
                 let child_wrap = source_wrap.saturating_sub(4 + depth * 2);
                 emit_placement_for_tweet(&app.media, cell, reply, child_wrap, max_rows);
             }
@@ -3143,16 +3254,40 @@ pub fn emit_media_placements(app: &App, terminal_width: u16) {
 
     if let Some(FocusEntry::Tweet(detail)) = app.focus_stack.last() {
         let wrap = detail_wrap.unwrap_or(source_wrap);
+        if feed_avatars_on {
+            emit_avatar_placement(&app.media, &detail.tweet.author);
+        }
         emit_placement_for_tweet(&app.media, cell, &detail.tweet, wrap, max_rows);
         for reply in &detail.replies {
+            if feed_avatars_on {
+                emit_avatar_placement(&app.media, &reply.author);
+            }
             emit_placement_for_tweet(&app.media, cell, reply, wrap, max_rows);
             if let Some(thread) = app.inline_threads.get(&reply.rest_id) {
                 for (depth, child) in &thread.replies {
+                    if feed_avatars_on {
+                        emit_avatar_placement(&app.media, &child.author);
+                    }
                     let child_wrap = wrap.saturating_sub(4 + depth * 2);
                     emit_placement_for_tweet(&app.media, cell, child, child_wrap, max_rows);
                 }
             }
         }
+    }
+}
+
+fn emit_avatar_placement(registry: &MediaRegistry, author: &crate::model::User) {
+    let Some(url) = author.avatar_url.as_deref() else {
+        return;
+    };
+    if url.is_empty() {
+        return;
+    }
+    if let Some(MediaEntry::ReadyKitty { id, .. }) = registry.get(url) {
+        let cell = registry
+            .cell_size()
+            .unwrap_or(media::CellSize { w: 1, h: 2 });
+        media::emit_kitty_placement(*id, feed_avatar_cols(cell), FEED_AVATAR_ROWS);
     }
 }
 
@@ -3687,6 +3822,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  <space> d      toggle relative / absolute timestamps"),
         Line::from("  <space> t      cycle x-dark / x-light theme"),
         Line::from("  <space> i      toggle media auto-expand"),
+        Line::from("  <space> a      toggle author-avatar chips in feeds"),
         Line::from("  <space> r      toggle rage filter"),
         Line::from(""),
         Line::from(Span::styled("SOURCES", heading)),

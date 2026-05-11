@@ -17,6 +17,8 @@ pub struct SessionState {
     #[serde(default)]
     pub feed_mode: Option<FeedMode>,
     #[serde(default)]
+    pub feed_avatars: Option<bool>,
+    #[serde(default)]
     pub reply_sort: Option<ReplySortOrder>,
     #[serde(default)]
     pub whisper_cursor: Option<String>,
@@ -54,6 +56,7 @@ mod tests {
             display_names: Some(DisplayNameStyle::Hidden),
             timestamps: Some(TimestampStyle::Absolute),
             feed_mode: Some(FeedMode::Originals),
+            feed_avatars: Some(true),
             reply_sort: Some(ReplySortOrder::Likes),
             whisper_cursor: Some("cursor-abc".into()),
             theme: Some("x-dark".into()),
@@ -81,6 +84,7 @@ mod tests {
             display_names: None,
             timestamps: None,
             feed_mode: None,
+            feed_avatars: None,
             reply_sort: None,
             whisper_cursor: None,
             theme: None,

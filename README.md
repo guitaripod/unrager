@@ -173,6 +173,7 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 | `<space> d` | Toggle relative / absolute timestamps |
 | `<space> t` | Cycle x-dark / x-light theme |
 | `<space> i` | Toggle media auto-expand |
+| `<space> a` | Toggle author-avatar chips in feeds (kitty terminals only) |
 | `<space> r` | Toggle rage filter |
 | `R` | Toggle tweets / replies on user profile |
 | `T` | Translate selected tweet to English (toggle) |

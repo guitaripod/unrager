@@ -6,10 +6,15 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use std::collections::{HashMap, VecDeque};
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
 const MAX_MEDIA_ENTRIES: usize = 128;
+/// LRU cap for the on-disk avatar cache. Avatars are 5–50 KB so 50 MB
+/// covers roughly 1k–10k cached identities. Pruned once at startup; the
+/// cap is large enough that intra-session churn stays a no-op.
+const AVATAR_CACHE_CAP_BYTES: u64 = 50 * 1024 * 1024;
 
 const PLACEHOLDER: char = '\u{10EEEE}';
 
@@ -173,6 +178,7 @@ pub struct MediaRegistry {
     next_id: u32,
     semaphore: Arc<Semaphore>,
     insertion_order: VecDeque<String>,
+    avatar_cache_dir: Option<PathBuf>,
 }
 
 impl Default for MediaRegistry {
@@ -194,13 +200,36 @@ impl MediaRegistry {
             MediaMode::Halfblocks
         };
         tracing::info!(?mode, "media mode selected");
+        let avatar_cache_dir = match crate::config::cache_dir() {
+            Ok(base) => {
+                let dir = base.join("avatars");
+                if let Err(e) = std::fs::create_dir_all(&dir) {
+                    tracing::warn!(error = %e, dir = %dir.display(), "avatar cache dir create failed; falling back to in-memory only");
+                    None
+                } else {
+                    prune_avatar_cache(&dir, AVATAR_CACHE_CAP_BYTES);
+                    Some(dir)
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "avatar cache disabled: cache_dir unresolvable");
+                None
+            }
+        };
         Self {
             entries: HashMap::new(),
             mode,
             next_id: 1,
             semaphore: Arc::new(Semaphore::new(4)),
             insertion_order: VecDeque::new(),
+            avatar_cache_dir,
         }
+    }
+
+    pub fn avatar_cache_path(&self, url: &str) -> Option<PathBuf> {
+        self.avatar_cache_dir
+            .as_ref()
+            .map(|dir| dir.join(format!("{}.bin", hex_sha256(url))))
     }
 
     pub fn supported(&self) -> bool {
@@ -328,6 +357,60 @@ impl MediaRegistry {
         }
     }
 
+    /// Cache-aware variant of `ensure_url` for author avatars. Reads
+    /// bytes from `~/.cache/unrager/avatars/<sha256(url)>.bin` when
+    /// present and falls through to network only on miss. Twitter
+    /// rotates the URL's image-hash segment whenever the user changes
+    /// their picture, so URL-keyed caching is self-invalidating: a new
+    /// avatar arrives as a new cache entry, never a stale read.
+    pub fn ensure_avatar_url(&mut self, url: &str, tx: &EventTx) {
+        if !self.supported() || url.is_empty() {
+            return;
+        }
+        if self.entries.contains_key(url) {
+            return;
+        }
+        let is_kitty = self.is_kitty();
+        let cache_path = self.avatar_cache_path(url);
+        self.insert_entry(url.to_string(), MediaEntry::Loading);
+        let url = url.to_string();
+        let sem = self.semaphore.clone();
+        let tx = tx.clone();
+        if is_kitty {
+            let id = self.next_id;
+            self.next_id += 1;
+            tokio::spawn(async move {
+                let _permit = sem.acquire_owned().await.ok();
+                match fetch_and_transmit_kitty_with_cache(id, &url, cache_path.as_deref()).await {
+                    Ok((w, h)) => {
+                        let _ = tx.send(Event::MediaLoadedKitty { url, id, w, h });
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Event::MediaFailed {
+                            url,
+                            err: e.to_string(),
+                        });
+                    }
+                }
+            });
+        } else {
+            tokio::spawn(async move {
+                let _permit = sem.acquire_owned().await.ok();
+                match fetch_and_decode_with_cache(&url, cache_path.as_deref()).await {
+                    Ok((pixels, w, h)) => {
+                        let _ = tx.send(Event::MediaLoadedPixels { url, pixels, w, h });
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Event::MediaFailed {
+                            url,
+                            err: e.to_string(),
+                        });
+                    }
+                }
+            });
+        }
+    }
+
     pub fn ensure_url(&mut self, url: &str, tx: &EventTx) {
         if !self.supported() || url.is_empty() {
             return;
@@ -436,6 +519,104 @@ fn detect_kitty_support() -> bool {
 }
 
 const SRC_MAX_DIM: u32 = 800;
+
+/// Read bytes from `cache_path` if present; otherwise GET them and write
+/// the response atomically (tmp + rename) before returning. Cache write
+/// failures are swallowed — the fetched bytes are still returned so this
+/// session works correctly even on a full disk.
+async fn load_or_fetch_bytes(
+    url: &str,
+    cache_path: Option<&Path>,
+) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(path) = cache_path {
+        match tokio::fs::read(path).await {
+            Ok(bytes) if !bytes.is_empty() => {
+                tracing::debug!(path = %path.display(), bytes = bytes.len(), "avatar cache hit");
+                return Ok(bytes);
+            }
+            Ok(_) => {
+                tracing::debug!(path = %path.display(), "avatar cache empty file, refetching");
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                tracing::warn!(error = %e, path = %path.display(), "avatar cache read failed; refetching");
+            }
+        }
+    }
+    let bytes = reqwest::Client::new()
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .bytes()
+        .await?
+        .to_vec();
+    if let Some(path) = cache_path {
+        if let Err(e) = write_cache_atomic(path, &bytes).await {
+            tracing::warn!(error = %e, path = %path.display(), "avatar cache write failed");
+        }
+    }
+    Ok(bytes)
+}
+
+async fn write_cache_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let tmp = path.with_extension("bin.tmp");
+    tokio::fs::write(&tmp, bytes).await?;
+    tokio::fs::rename(&tmp, path).await
+}
+
+async fn fetch_and_transmit_kitty_with_cache(
+    id: u32,
+    url: &str,
+    cache_path: Option<&Path>,
+) -> Result<(u32, u32), Box<dyn std::error::Error + Send + Sync>> {
+    let bytes = load_or_fetch_bytes(url, cache_path).await?;
+    let (raw, w, h) =
+        tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, u32, u32), image::ImageError> {
+            let img = image::load_from_memory(&bytes)?;
+            let img = downscale(img, SRC_MAX_DIM);
+            let rgba = img.to_rgba8();
+            let (w, h) = rgba.dimensions();
+            Ok((rgba.into_raw(), w, h))
+        })
+        .await
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+            if let Some(path) = cache_path {
+                let _ = std::fs::remove_file(path);
+            }
+            Box::new(e)
+        })?;
+    tokio::task::spawn_blocking(move || transmit_image(id, &raw, w, h)).await?;
+    Ok((w, h))
+}
+
+async fn fetch_and_decode_with_cache(
+    url: &str,
+    cache_path: Option<&Path>,
+) -> Result<(Arc<Vec<u8>>, u32, u32), Box<dyn std::error::Error + Send + Sync>> {
+    let bytes = load_or_fetch_bytes(url, cache_path).await?;
+    let (raw, w, h) =
+        tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, u32, u32), image::ImageError> {
+            let img = image::load_from_memory(&bytes)?;
+            let img = downscale(img, 512);
+            let rgba = img.to_rgba8();
+            let (w, h) = rgba.dimensions();
+            Ok((rgba.into_raw(), w, h))
+        })
+        .await
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+            if let Some(path) = cache_path {
+                let _ = std::fs::remove_file(path);
+            }
+            Box::new(e)
+        })?;
+    Ok((Arc::new(raw), w, h))
+}
 
 async fn fetch_and_transmit_kitty(
     id: u32,
@@ -725,6 +906,60 @@ pub fn render_sextants(
         out.push(Line::from(spans));
     }
     out
+}
+
+fn hex_sha256(s: &str) -> String {
+    use sha2::{Digest, Sha256};
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let digest = Sha256::digest(s.as_bytes());
+    let mut out = String::with_capacity(digest.len() * 2);
+    for b in digest.iter() {
+        out.push(HEX[(*b >> 4) as usize] as char);
+        out.push(HEX[(*b & 0x0f) as usize] as char);
+    }
+    out
+}
+
+/// Best-effort LRU prune of the on-disk avatar cache. Walks every file
+/// in `dir`, sorts by mtime ascending, and deletes from the oldest end
+/// until the remaining total fits under `cap_bytes`. Errors are logged
+/// and swallowed — startup must not block on a broken cache directory.
+fn prune_avatar_cache(dir: &Path, cap_bytes: u64) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(it) => it,
+        Err(e) => {
+            tracing::warn!(error = %e, dir = %dir.display(), "avatar cache scan failed");
+            return;
+        }
+    };
+    let mut items: Vec<(PathBuf, u64, std::time::SystemTime)> = Vec::new();
+    let mut total: u64 = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        let size = meta.len();
+        let mtime = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        total += size;
+        items.push((path, size, mtime));
+    }
+    if total <= cap_bytes {
+        return;
+    }
+    items.sort_by_key(|(_, _, m)| *m);
+    let mut to_drop = total.saturating_sub(cap_bytes);
+    for (path, size, _) in items {
+        if to_drop == 0 {
+            break;
+        }
+        if let Err(e) = std::fs::remove_file(&path) {
+            tracing::warn!(error = %e, path = %path.display(), "avatar cache prune remove failed");
+            continue;
+        }
+        to_drop = to_drop.saturating_sub(size);
+    }
 }
 
 pub fn media_badge_loading() -> Line<'static> {

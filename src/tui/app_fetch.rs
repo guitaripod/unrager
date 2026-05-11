@@ -641,7 +641,7 @@ impl App {
 
     pub(super) fn queue_avatar(&mut self, user: &crate::model::User) {
         if let Some(url) = user.avatar_url.as_deref() {
-            self.media.ensure_url(url, &self.tx);
+            self.media.ensure_avatar_url(url, &self.tx);
         }
     }
 

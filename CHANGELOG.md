@@ -6,6 +6,10 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **`o` no longer likes your own tweets.** Opening your own post in the browser used to auto-like it on the way out — same path the 0.15.2 change wired up. Now `o` checks the author against your resolved `self_handle` and skips the like for own tweets while keeping the auto-like for everyone else's.
+- **Detail-view analytics block for your own tweets.** When the focal tweet in the detail pane is yours, an extra panel below the body breaks out views / likes / retweets / replies / quotes / bookmarks plus an engagement-rate line `(likes+RTs+replies+quotes+bookmarks) / views`. Includes `bookmark_count`, which X exposes on every tweet but unrager was previously ignoring. The deeper "post analytics" page (impressions, profile visits, link clicks, new follows) is not yet wired — that endpoint lives in a chunk-loaded JS bundle and needs a separate scraper pass.
+- **Avatar on profile pages.** Navigating to a user with `p` now resolves the full profile via `UserByScreenName` (already called for the rest_id) and pins a small kitty-graphics avatar plus name / handle / followers / following at the top of the source pane. Falls back to a text-only header on non-kitty terminals or while the image is downloading. Captured via a new `User.avatar_url` and `Source.profile_user`.
+
 ## [0.16.0] — 2026-05-08
 
 - **Postcard thread mode (`T` in composer).** Capture an entire reply chain as one image — root tweet down to the focal — with a continuous accent bar running through every block and subtle hairline dividers between them. Toggling thread mode in the screenshot modal walks `in_reply_to_tweet_id` up to the root via the `TweetDetail` GraphQL endpoint (already loaded for thread context elsewhere); media images on every ancestor are downloaded and composited under their respective tweets. Each reply block strips the leading `@parent` mention chain and the `↳` icon since the visual stack already communicates the chain. Watermark sits once at the bottom. Capped at 20 ancestors to bound runaway chains.

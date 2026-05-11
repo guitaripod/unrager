@@ -105,6 +105,30 @@ pub struct Capture {
 pub struct TweetBlock {
     pub lines: Vec<Line<'static>>,
     pub media_images: Vec<RgbaImage>,
+    /// Author's avatar, decoded to RGBA. When `Some`, the renderer
+    /// composites it into the avatar-gutter slot at the block's
+    /// top-left — the screenshot's analogue of the live TUI's kitty
+    /// avatar chip. When `None`, the gutter stays blank.
+    pub author_avatar: Option<RgbaImage>,
+}
+
+/// Cells reserved at the top-left of every block for the author-avatar
+/// chip. Mirrors the live-TUI feed-avatar layout — 2 rows tall, width
+/// computed from the screenshot grid's cell aspect so the avatar
+/// renders square. Twitter avatars are 1:1, so any non-square footprint
+/// would stretch the image at composite time. Must agree with the
+/// gutter width reserved by `tweet_lines` (via
+/// `cell_size_override = grid_cell_size()` on the screenshot
+/// `RenderContext`) — otherwise the overlay overshoots or undershoots
+/// the reserved slot.
+const BLOCK_AVATAR_ROWS: u32 = 2;
+
+fn block_avatar_cols(grid: &Grid) -> u32 {
+    if grid.cell_w == 0 {
+        return 4;
+    }
+    ((BLOCK_AVATAR_ROWS as u64 * grid.line_h as u64).div_ceil(grid.cell_w as u64) as u32)
+        .clamp(2, 8)
 }
 
 pub struct RenderArgs<'a> {
@@ -364,6 +388,19 @@ struct Grid {
     ascent: f32,
 }
 
+/// Cell pixel dimensions of the screenshot grid — exposed so the
+/// `tweet_lines` call that builds the screenshot's `Line`s can size its
+/// avatar gutter to match the eventual rasterized grid. Returning a
+/// `media::CellSize` (not a private `Grid`) keeps the screenshot module's
+/// internals encapsulated.
+pub fn grid_cell_size() -> crate::tui::media::CellSize {
+    let g = Grid::measure();
+    crate::tui::media::CellSize {
+        w: g.cell_w,
+        h: g.line_h,
+    }
+}
+
 impl Grid {
     fn measure() -> Self {
         let scaled = FONT_REG.as_scaled(PxScale::from(FONT_PX));
@@ -388,6 +425,7 @@ pub fn render(args: RenderArgs<'_>) -> Capture {
         vec![TweetBlock {
             lines: Vec::new(),
             media_images: Vec::new(),
+            author_avatar: None,
         }]
     } else {
         args.blocks
@@ -441,6 +479,9 @@ pub fn render(args: RenderArgs<'_>) -> Capture {
             shot,
             bg,
         );
+        if let Some(avatar) = block.avatar.as_ref() {
+            imageops::overlay(&mut canvas, avatar, text_origin_x as i64, cursor_y as i64);
+        }
         let mut media_y = cursor_y
             + block.text_h
             + if block.media_h > 0 {
@@ -473,6 +514,10 @@ struct PreparedBlock {
     text_h: u32,
     scaled_media: Vec<RgbaImage>,
     media_h: u32,
+    /// Avatar scaled to exactly `block_avatar_cols × BLOCK_AVATAR_ROWS`
+    /// cells (in pixels). The renderer overlays it at the block's
+    /// top-left, after `paint_buffer` has drawn the gutter spaces.
+    avatar: Option<RgbaImage>,
 }
 
 impl PreparedBlock {
@@ -488,6 +533,17 @@ fn prepare_block(block: TweetBlock, grid: &Grid, content_px: u32) -> PreparedBlo
     let mut buf = Buffer::empty(buf_rect);
     Paragraph::new(wrapped).render(buf_rect, &mut buf);
     let used_rows = last_nonblank_row(&buf).saturating_add(1);
+    let avatar = block.author_avatar.map(|img| {
+        let cols = block_avatar_cols(grid);
+        let target_w = (cols * grid.cell_w).max(1);
+        let target_h = (BLOCK_AVATAR_ROWS * grid.line_h).max(1);
+        image::imageops::resize(
+            &img,
+            target_w,
+            target_h,
+            image::imageops::FilterType::Lanczos3,
+        )
+    });
     let text_h = used_rows as u32 * grid.line_h;
 
     let scaled_media = scale_media(&block.media_images, content_px);
@@ -506,6 +562,7 @@ fn prepare_block(block: TweetBlock, grid: &Grid, content_px: u32) -> PreparedBlo
         text_h,
         scaled_media,
         media_h,
+        avatar,
     }
 }
 
@@ -960,6 +1017,7 @@ mod tests {
         vec![TweetBlock {
             lines,
             media_images: Vec::new(),
+            author_avatar: None,
         }]
     }
 
@@ -1018,6 +1076,7 @@ mod tests {
             .map(|_| TweetBlock {
                 lines: plain_lines(),
                 media_images: Vec::new(),
+                author_avatar: None,
             })
             .collect();
         let thread = render(RenderArgs {
@@ -1189,6 +1248,7 @@ mod tests {
                 blocks: vec![TweetBlock {
                     lines: recolored,
                     media_images: Vec::new(),
+                    author_avatar: None,
                 }],
                 shot_theme: &shot,
             });
@@ -1275,6 +1335,7 @@ mod tests {
                     TweetBlock {
                         lines: recolored,
                         media_images: Vec::new(),
+                        author_avatar: None,
                     }
                 })
                 .collect()

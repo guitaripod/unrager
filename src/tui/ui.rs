@@ -188,6 +188,12 @@ pub struct RenderOpts {
     /// when false (toggle off, non-kitty terminal). Independent of
     /// `media_enabled` because the avatar is identity, not content.
     pub feed_avatars: bool,
+    /// When true, lines emit kitty Unicode placeholders for avatar
+    /// slots so the live TUI can paint images via
+    /// `emit_kitty_placement`. When false, the avatar gutter is
+    /// reserved as plain spaces — used by the screenshot rasterizer,
+    /// which composites avatar pixels separately.
+    pub avatars_inline_kitty: bool,
 }
 
 pub struct RenderContext<'a> {
@@ -202,6 +208,12 @@ pub struct RenderContext<'a> {
     pub liked_tweet_ids: &'a HashSet<String>,
     pub write_rate_limit: Option<std::time::Duration>,
     pub self_handle: Option<&'a str>,
+    /// Overrides the cell pixel size used for sizing the feed-avatar
+    /// gutter. Set by the screenshot path to its own grid aspect so the
+    /// reserved gutter exactly matches the composited image width.
+    /// Live-TUI rendering leaves this `None` and uses
+    /// `media_reg.cell_size()`.
+    pub cell_size_override: Option<media::CellSize>,
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
@@ -238,6 +250,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         media_auto_expand: app.media_auto_expand,
         media_max_rows: (pane_h.saturating_sub(4) / 2).clamp(6, 24),
         feed_avatars: app.feed_avatars && app.media.is_kitty(),
+        avatars_inline_kitty: true,
     };
     let filter_ctx = FilterRenderCtx {
         mode: filter_mode,
@@ -257,6 +270,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         liked_tweet_ids: &app.liked_tweet_ids,
         write_rate_limit: app.client.write_rate_limit_remaining(),
         self_handle: app.self_handle.as_deref(),
+        cell_size_override: None,
     };
 
     if app.is_split() {
@@ -2005,8 +2019,8 @@ pub(super) fn tweet_lines(
     let opts = ctx.opts;
     let avatars_on = opts.feed_avatars;
     let avatar_cell = ctx
-        .media_reg
-        .cell_size()
+        .cell_size_override
+        .or_else(|| ctx.media_reg.cell_size())
         .unwrap_or(media::CellSize { w: 1, h: 2 });
     let wrap_width = if avatars_on {
         wrap_width.saturating_sub(feed_avatar_gutter_cols(avatar_cell) as usize)
@@ -2387,15 +2401,19 @@ fn apply_feed_avatar_gutter(
     if lines.is_empty() {
         return;
     }
-    let kitty_id = author.avatar_url.as_deref().and_then(|url| {
-        if url.is_empty() {
-            return None;
-        }
-        match ctx.media_reg.get(url) {
-            Some(MediaEntry::ReadyKitty { id, .. }) => Some(*id),
-            _ => None,
-        }
-    });
+    let kitty_id = if ctx.opts.avatars_inline_kitty {
+        author.avatar_url.as_deref().and_then(|url| {
+            if url.is_empty() {
+                return None;
+            }
+            match ctx.media_reg.get(url) {
+                Some(MediaEntry::ReadyKitty { id, .. }) => Some(*id),
+                _ => None,
+            }
+        })
+    } else {
+        None
+    };
 
     let cols = feed_avatar_cols(cell) as usize;
     let rows = FEED_AVATAR_ROWS as usize;

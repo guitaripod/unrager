@@ -21,6 +21,16 @@ use std::path::PathBuf;
 
 const MAX_THREAD_DEPTH: usize = 20;
 
+/// Inputs collected per tweet on the main thread before the async compose
+/// task starts: rendered lines, media-image targets to load, the avatar
+/// URL to fetch, and where its bytes are cached on disk.
+type ThreadBlockInputs = (
+    Vec<Line<'static>>,
+    Vec<OpenTarget>,
+    Option<String>,
+    Option<PathBuf>,
+);
+
 /// Columns the screenshot renders at. Shares the same constant the renderer
 /// uses for its buffer width so `tweet_lines`'s body wrap produces lines
 /// that fit exactly, not lines that get re-wrapped (and lose indent) at
@@ -317,6 +327,13 @@ impl App {
         let media_dir = cache_dir.join("media").join(&tweet.rest_id);
         let screenshots_dir = cache_dir.join("screenshots");
         let targets = collect_image_targets(&tweet, &media_dir);
+        let avatar_url = self
+            .feed_avatars
+            .then(|| tweet.author.avatar_url.clone())
+            .flatten();
+        let avatar_cache_path = avatar_url
+            .as_deref()
+            .and_then(|url| self.media.avatar_cache_path(url));
 
         self.set_status(status_label("capturing", &theme_name, destination));
         let tx = self.tx.clone();
@@ -324,11 +341,16 @@ impl App {
 
         tokio::spawn(async move {
             let images = load_image_targets(targets).await;
+            let author_avatar = match avatar_url {
+                Some(url) => load_avatar_image(&url, avatar_cache_path.as_deref()).await,
+                None => None,
+            };
             let capture = screenshot::render(RenderArgs {
                 tweet_id,
                 blocks: vec![TweetBlock {
                     lines,
                     media_images: images,
+                    author_avatar,
                 }],
                 shot_theme: &shot,
             });
@@ -351,15 +373,21 @@ impl App {
         let tweet_id = chain.last().map(|t| t.rest_id.clone()).unwrap_or_default();
         let chain_len = chain.len();
 
-        let mut per_tweet: Vec<(Vec<Line<'static>>, Vec<OpenTarget>)> =
-            Vec::with_capacity(chain_len);
+        let mut per_tweet: Vec<ThreadBlockInputs> = Vec::with_capacity(chain_len);
         let saved_theme = crate::tui::theme::active().clone();
         crate::tui::theme::set_active(shot.synthesize_tui());
         for tweet in &chain {
             let lines = self.build_lines_for(tweet, true);
             let media_dir = cache_dir.join("media").join(&tweet.rest_id);
             let targets = collect_image_targets(tweet, &media_dir);
-            per_tweet.push((lines, targets));
+            let avatar_url = self
+                .feed_avatars
+                .then(|| tweet.author.avatar_url.clone())
+                .flatten();
+            let avatar_cache_path = avatar_url
+                .as_deref()
+                .and_then(|url| self.media.avatar_cache_path(url));
+            per_tweet.push((lines, targets, avatar_url, avatar_cache_path));
         }
         crate::tui::theme::set_active(saved_theme);
 
@@ -372,11 +400,16 @@ impl App {
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let mut blocks: Vec<TweetBlock> = Vec::with_capacity(per_tweet.len());
-            for (lines, targets) in per_tweet {
+            for (lines, targets, avatar_url, avatar_cache_path) in per_tweet {
                 let images = load_image_targets(targets).await;
+                let author_avatar = match avatar_url {
+                    Some(url) => load_avatar_image(&url, avatar_cache_path.as_deref()).await,
+                    None => None,
+                };
                 blocks.push(TweetBlock {
                     lines,
                     media_images: images,
+                    author_avatar,
                 });
             }
             let capture = screenshot::render(RenderArgs {
@@ -448,7 +481,8 @@ impl App {
             media_enabled: false,
             media_auto_expand: false,
             media_max_rows: 0,
-            feed_avatars: false,
+            feed_avatars: self.feed_avatars && tweet.author.avatar_url.is_some(),
+            avatars_inline_kitty: false,
         };
         let ctx = RenderContext {
             opts,
@@ -462,6 +496,7 @@ impl App {
             liked_tweet_ids: &self.liked_tweet_ids,
             write_rate_limit: None,
             self_handle: None,
+            cell_size_override: Some(screenshot::grid_cell_size()),
         };
         ui::tweet_lines(tweet, &ctx, false, in_reply_context, SHOT_COLS, true)
     }
@@ -629,6 +664,50 @@ async fn load_image_targets(targets: Vec<OpenTarget>) -> Vec<RgbaImage> {
 
 fn run_clipboard(capture: &Capture) -> std::result::Result<(), String> {
     capture.copy_to_clipboard()
+}
+
+/// Resolve an avatar URL to an `RgbaImage` for screenshot compositing.
+/// Prefers the on-disk cache that `MediaRegistry::ensure_avatar_url`
+/// populates so the live-TUI fetch is reused. Falls back to a one-shot
+/// HTTP GET on miss. Returns `None` on any failure; the renderer then
+/// just leaves the gutter blank.
+async fn load_avatar_image(url: &str, cache_path: Option<&std::path::Path>) -> Option<RgbaImage> {
+    if url.is_empty() {
+        return None;
+    }
+    let bytes = match cache_path {
+        Some(path) => match tokio::fs::read(path).await {
+            Ok(b) if !b.is_empty() => b,
+            _ => fetch_avatar_bytes(url, cache_path).await?,
+        },
+        None => fetch_avatar_bytes(url, None).await?,
+    };
+    let img = tokio::task::spawn_blocking(move || image::load_from_memory(&bytes))
+        .await
+        .ok()?
+        .ok()?;
+    Some(img.into_rgba8())
+}
+
+async fn fetch_avatar_bytes(url: &str, cache_path: Option<&std::path::Path>) -> Option<Vec<u8>> {
+    let resp = reqwest::Client::new()
+        .get(url)
+        .send()
+        .await
+        .ok()?
+        .error_for_status()
+        .ok()?;
+    let bytes = resp.bytes().await.ok()?.to_vec();
+    if let Some(path) = cache_path {
+        if let Some(parent) = path.parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
+        let tmp = path.with_extension("bin.tmp");
+        if tokio::fs::write(&tmp, &bytes).await.is_ok() {
+            let _ = tokio::fs::rename(&tmp, path).await;
+        }
+    }
+    Some(bytes)
 }
 
 #[cfg(test)]

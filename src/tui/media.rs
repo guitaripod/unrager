@@ -527,6 +527,38 @@ pub fn cleanup_all() {
     let _ = out.flush();
 }
 
+static SYNC_UPDATE_ENABLED: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| std::env::var("UNRAGER_DISABLE_SYNC_UPDATE").is_err());
+
+/// RAII guard around DECSET 2026 / DECRST 2026 (Begin/End Synchronized
+/// Update). Wrap the placement-emit + ratatui draw pair so the terminal
+/// sees one atomic frame instead of a placement followed by a
+/// placeholder grid with a paintable gap in between. On terminals that
+/// don't know the sequence (very rare in 2026) the SGR is silently
+/// ignored. Escape hatch: `UNRAGER_DISABLE_SYNC_UPDATE=1`.
+pub struct SyncUpdate(());
+
+impl SyncUpdate {
+    pub fn begin() -> Self {
+        if *SYNC_UPDATE_ENABLED {
+            let mut out = std::io::stdout().lock();
+            let _ = out.write_all(b"\x1b[?2026h");
+            let _ = out.flush();
+        }
+        SyncUpdate(())
+    }
+}
+
+impl Drop for SyncUpdate {
+    fn drop(&mut self) {
+        if *SYNC_UPDATE_ENABLED {
+            let mut out = std::io::stdout().lock();
+            let _ = out.write_all(b"\x1b[?2026l");
+            let _ = out.flush();
+        }
+    }
+}
+
 fn detect_kitty_support() -> bool {
     if std::env::var("UNRAGER_DISABLE_KITTY").is_ok() {
         return false;

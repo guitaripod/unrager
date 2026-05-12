@@ -9,7 +9,7 @@ use crate::tui::brief::BriefView;
 use crate::tui::event::{Event, EventTx};
 use crate::tui::filter::{Classifier, FilterCache, FilterConfig, FilterMode, FilterState};
 use crate::tui::focus::{FocusEntry, TweetDetail};
-use crate::tui::media::MediaRegistry;
+use crate::tui::media::{self, MediaRegistry};
 use crate::tui::seen::SeenStore;
 use crate::tui::session::{self, SessionState};
 use crate::tui::source::{Source, SourceKind};
@@ -579,8 +579,11 @@ impl App {
                     return Ok(());
                 }
                 let (tw, th) = terminal.size().map(|r| (r.width, r.height))?;
-                ui::emit_media_placements(self, tw);
-                terminal.draw(|frame| ui::draw(frame, self))?;
+                {
+                    let _su = media::SyncUpdate::begin();
+                    ui::emit_media_placements(self, tw);
+                    terminal.draw(|frame| ui::draw(frame, self))?;
+                }
                 ui::update_background(self, tw, th);
                 self.last_render_at = Some(Instant::now());
                 self.dirty = false;
@@ -597,8 +600,11 @@ impl App {
             Event::Resize(_, _) => {
                 let (tw, th) = terminal.size().map(|r| (r.width, r.height))?;
                 self.media.refresh_cell_size();
-                ui::emit_media_placements(self, tw);
-                terminal.draw(|frame| ui::draw(frame, self))?;
+                {
+                    let _su = media::SyncUpdate::begin();
+                    ui::emit_media_placements(self, tw);
+                    terminal.draw(|frame| ui::draw(frame, self))?;
+                }
                 ui::update_background(self, tw, th);
             }
             Event::TimelineLoaded {

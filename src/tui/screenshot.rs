@@ -35,9 +35,9 @@ const FONT_FALLBACK_MATH_DATA: &[u8] = include_bytes!("../../assets/IconsFallbac
 const FONT_FALLBACK_SYM_DATA: &[u8] = include_bytes!("../../assets/IconsFallback-Symbols.ttf");
 const FONT_FALLBACK_RUNIC_DATA: &[u8] = include_bytes!("../../assets/IconsFallback-Runic.ttf");
 
-static FONT_REG: LazyLock<FontRef<'static>> =
+pub(crate) static FONT_REG: LazyLock<FontRef<'static>> =
     LazyLock::new(|| FontRef::try_from_slice(FONT_REG_DATA).expect("noto sans mono regular"));
-static FONT_BOLD: LazyLock<FontRef<'static>> =
+pub(crate) static FONT_BOLD: LazyLock<FontRef<'static>> =
     LazyLock::new(|| FontRef::try_from_slice(FONT_BOLD_DATA).expect("noto sans mono bold"));
 static FONT_FALLBACK_MATH: LazyLock<FontRef<'static>> = LazyLock::new(|| {
     FontRef::try_from_slice(FONT_FALLBACK_MATH_DATA).expect("icons fallback math")
@@ -588,7 +588,7 @@ fn paint_block_divider(canvas: &mut RgbaImage, shot: &ShotTheme, x: u32, w: u32,
     }
 }
 
-fn rgba_from(rgb: [u8; 3]) -> Rgba<u8> {
+pub(crate) fn rgba_from(rgb: [u8; 3]) -> Rgba<u8> {
     Rgba([rgb[0], rgb[1], rgb[2], 255])
 }
 
@@ -850,7 +850,7 @@ fn draw_str_at(
 /// fills the icon gaps; Runic covers Norse runes that show up in display
 /// names. Each fallback font is monospace-clamped at the call site, so even
 /// proportional glyph advances stay on the cell grid.
-fn pick_font(primary: &'static FontRef<'static>, ch: char) -> &'static FontRef<'static> {
+pub(crate) fn pick_font(primary: &'static FontRef<'static>, ch: char) -> &'static FontRef<'static> {
     if primary.glyph_id(ch) != GlyphId(0) {
         return primary;
     }
@@ -866,7 +866,12 @@ fn pick_font(primary: &'static FontRef<'static>, ch: char) -> &'static FontRef<'
     primary
 }
 
-fn rasterize_glyph(canvas: &mut RgbaImage, font: &FontRef<'static>, glyph: Glyph, color: Rgba<u8>) {
+pub(crate) fn rasterize_glyph(
+    canvas: &mut RgbaImage,
+    font: &FontRef<'static>,
+    glyph: Glyph,
+    color: Rgba<u8>,
+) {
     let Some(outlined) = font.outline_glyph(glyph) else {
         return;
     };
@@ -890,7 +895,7 @@ fn rasterize_glyph(canvas: &mut RgbaImage, font: &FontRef<'static>, glyph: Glyph
     });
 }
 
-fn blend(dst: Rgba<u8>, src: Rgba<u8>, alpha: f32) -> Rgba<u8> {
+pub(crate) fn blend(dst: Rgba<u8>, src: Rgba<u8>, alpha: f32) -> Rgba<u8> {
     let a = alpha * (src[3] as f32 / 255.0);
     let inv = 1.0 - a;
     Rgba([
@@ -901,7 +906,7 @@ fn blend(dst: Rgba<u8>, src: Rgba<u8>, alpha: f32) -> Rgba<u8> {
     ])
 }
 
-fn fill_rect(canvas: &mut RgbaImage, x: u32, y: u32, w: u32, h: u32, color: Rgba<u8>) {
+pub(crate) fn fill_rect(canvas: &mut RgbaImage, x: u32, y: u32, w: u32, h: u32, color: Rgba<u8>) {
     let x_end = (x + w).min(canvas.width());
     let y_end = (y + h).min(canvas.height());
     for py in y..y_end {
@@ -950,7 +955,7 @@ fn draw_watermark(canvas: &mut RgbaImage, shot: &ShotTheme) {
     draw_str_at(canvas, &FONT_REG, text, (x, y), WATERMARK_PX, fg);
 }
 
-fn color_to_rgba_opt(c: Color) -> Option<Rgba<u8>> {
+pub(crate) fn color_to_rgba_opt(c: Color) -> Option<Rgba<u8>> {
     match c {
         Color::Reset => None,
         Color::Rgb(r, g, b) => Some(Rgba([r, g, b, 255])),

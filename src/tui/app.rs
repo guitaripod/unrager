@@ -179,7 +179,7 @@ pub struct App {
     pub whisper: WhisperState,
     pub notif_seen: SeenStore,
     pub notif_unread_badge: usize,
-    pub(super) client: Arc<GqlClient>,
+    pub(crate) client: Arc<GqlClient>,
     pub(super) tx: EventTx,
     pub(super) pending_thread: Option<crate::tui::event::RequestId>,
     pub(super) pending_open: Option<crate::tui::event::RequestId>,

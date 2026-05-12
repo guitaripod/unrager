@@ -187,6 +187,12 @@ pub struct MediaRegistry {
     /// inherits a stale grid. Cache misses force the placement; cache
     /// hits skip stdout entirely.
     placement_cache: HashMap<u32, (u32, u32)>,
+    /// When true, all kitty stdout writes (transmit, placement,
+    /// deletion) are suppressed. The registry still tracks ids and
+    /// `(cols, rows)` so the UI emits placeholder lines at the right
+    /// cells, but no escape codes leave the process. Used by the
+    /// headless `snapshot` CLI which composites images itself.
+    snapshot_mode: bool,
 }
 
 impl Default for MediaRegistry {
@@ -232,7 +238,52 @@ impl MediaRegistry {
             insertion_order: VecDeque::new(),
             avatar_cache_dir,
             placement_cache: HashMap::new(),
+            snapshot_mode: false,
         }
+    }
+
+    /// Construct a registry pre-configured for headless snapshot
+    /// rendering: forced into kitty mode at an explicit cell size, with
+    /// all stdout writes suppressed. The caller is expected to manually
+    /// register `ReadyKitty` entries via `register_snapshot_kitty` after
+    /// decoding image bytes itself — the async fetch paths
+    /// (`ensure_avatar_url`, `ensure_tweet_media`) are still available
+    /// but their transmit step becomes a no-op.
+    pub fn for_snapshot(cell: CellSize) -> Self {
+        let avatar_cache_dir = crate::config::cache_dir().ok().map(|p| p.join("avatars"));
+        if let Some(dir) = avatar_cache_dir.as_ref() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        Self {
+            entries: HashMap::new(),
+            mode: MediaMode::Kitty { cell },
+            next_id: 1,
+            semaphore: Arc::new(Semaphore::new(4)),
+            insertion_order: VecDeque::new(),
+            avatar_cache_dir,
+            placement_cache: HashMap::new(),
+            snapshot_mode: true,
+        }
+    }
+
+    pub fn is_snapshot(&self) -> bool {
+        self.snapshot_mode
+    }
+
+    /// Reserve the next kitty id. Mirrors the spawn-side allocation in
+    /// `ensure_*_url` but for callers driving the registry directly.
+    pub fn assign_id(&mut self) -> u32 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+
+    /// Register a fully-decoded image under `url` as `ReadyKitty`. Used
+    /// by snapshot mode after eagerly fetching+decoding bytes off-band:
+    /// the UI sees a normal ready entry, emits placeholder lines, and
+    /// the snapshot rasterizer maps `id` back to the actual pixels.
+    pub fn register_snapshot_kitty(&mut self, url: &str, id: u32, w: u32, h: u32) {
+        self.insert_entry(url.to_string(), MediaEntry::ReadyKitty { id, w, h });
     }
 
     /// Idempotent placement emit — writes the kitty graphics placement
@@ -246,7 +297,9 @@ impl MediaRegistry {
         if self.placement_cache.get(&id).copied() == Some((cols, rows)) {
             return;
         }
-        emit_kitty_placement(id, cols, rows);
+        if !self.snapshot_mode {
+            emit_kitty_placement(id, cols, rows);
+        }
         self.placement_cache.insert(id, (cols, rows));
     }
 
@@ -284,7 +337,9 @@ impl MediaRegistry {
             };
             if let Some(MediaEntry::ReadyKitty { id, .. }) = self.entries.remove(&old) {
                 self.placement_cache.remove(&id);
-                delete_image(id);
+                if !self.snapshot_mode {
+                    delete_image(id);
+                }
             }
         }
     }

@@ -53,8 +53,9 @@ The crates.io step reads `CARGO_REGISTRY_TOKEN` from repo secrets. Each publish 
   - `event.rs` — Event enum, event loop with tick/render/key/resize
   - `seen.rs` — read-tracking sqlite (30-day retention)
   - `session.rs` — session persistence (json)
+  - `snapshot.rs` — headless full-frame rasterizer (Buffer → PNG with avatars composited)
   - `test_util.rs` — test-only App factory and tweet/page builders
-- `src/cli/` — one module per subcommand (whoami, home, read, etc.)
+- `src/cli/` — one module per subcommand (whoami, home, read, snapshot, etc.)
 - `src/auth/` — chromium cookie extraction + OAuth 2.0 PKCE
 - `src/gql/` — GraphQL client, query ID scraper, endpoint builders
 - `src/parse/` — response → Tweet/User structs
@@ -164,6 +165,28 @@ Each file does `impl App { ... }` — Rust allows splitting impl blocks across m
 ## Testing
 
 Integration tests for App state transitions use `tui/test_util.rs` which provides `dummy_app()` (constructs an App with dummy GqlClient and channels), `make_tweet()`, and `make_page()`. Tests that trigger `tokio::spawn` (switch_source, push_tweet, engage, etc.) need `#[tokio::test]`. Pure state-mutation tests can use `#[test]`.
+
+## Snapshots (site assets)
+
+`unrager snapshot --view <name> --out <path>` re-renders any TUI view as a deterministic PNG without launching a real terminal. The flow:
+
+1. `cli/snapshot.rs` builds a real `App` (your live X session, dark theme by default), then swaps `app.media` for `MediaRegistry::for_snapshot(cell)` — a kitty-mode registry whose `place()` and `transmit_image()` paths are stdout no-ops.
+2. View-specific seeding: `seed_state` runs the gql fetch synchronously for the requested view (home / detail / notifications / profile / search), or sets up a synthetic `Ask` / `ReplyBar` / `InputMode::Help`.
+3. `prefetch_visible_images` walks every visible tweet/notification, fetches each avatar + media URL (using the avatar disk cache when present), decodes to RGBA in RAM, and registers it with `register_snapshot_kitty` so the UI emits the right placeholder rows.
+4. A `ratatui::Terminal<TestBackend>` runs one `ui::draw` pass.
+5. `tui/snapshot.rs::rasterize_full_frame` paints every cell (theme bg + glyphs) and then scans for placeholder cells (`\u{10EEEE}`), decoding kitty image ids from each cell's fg color and grouping contiguous runs per-id into rectangles. Each rectangle gets the decoded `RgbaImage` composited into it at `(cell.w × cell.h)` scale.
+6. PNG saved to `--out`.
+
+Defaults give 1920×1200 (160 cols × 12 px wide, 48 rows × 25 px tall) — close enough to the old screenshot dimensions that `site/public/index.html`'s `width="1920" height="1200"` only needed a one-digit bump from `1180`. Adjust with `--cols / --rows / --cell-w / --cell-h`.
+
+The 7 site-carousel PNGs (`detail.png`, `ask.png`, `compose.png`, `search.png`, `notifications.png`, `profile.png`, `help.png`) are regenerable in one shot:
+
+```sh
+for v in detail ask compose notifications profile help; do
+  unrager snapshot --view $v --out site/public/$v.png
+done
+unrager snapshot --view search --query rust --out site/public/search.png
+```
 
 ## Demos
 

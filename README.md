@@ -312,8 +312,12 @@ While `unrager serve` is running it owns the filter + seen caches; the TUI detec
 | `unrager mentions [--user @h]` | Mentions feed |
 | `unrager bookmarks "<query>"` | Search bookmarks |
 | `unrager notifs` | Recent notifications |
+| `unrager snapshot --view <name> --out <path>` | Headless full-frame PNG of any TUI view |
 
-All accept `-n <count>`, `--json`, `--max-pages <n>`.
+All read commands accept `-n <count>`, `--json`, `--max-pages <n>`. `snapshot` takes
+`--view {home,detail,notifications,profile,search,help,ask,compose}` plus
+optional `--cols / --rows / --cell-w / --cell-h` (defaults give 1920×1200),
+and `--query` / `--user` / `--tweet` to pick what each view focuses on.
 
 ### Write (requires OAuth 2.0 + credits)
 

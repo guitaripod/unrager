@@ -14,6 +14,8 @@ pub mod reply;
 pub mod search;
 #[cfg(feature = "server")]
 pub mod serve;
+#[cfg(feature = "tui")]
+pub mod snapshot;
 pub mod thread;
 pub mod tweet;
 pub mod update;
@@ -105,6 +107,12 @@ pub enum Command {
 
     #[command(about = "Update unrager to the latest release")]
     Update(update::Args),
+
+    #[cfg(feature = "tui")]
+    #[command(
+        about = "Render a headless screenshot of a TUI view to PNG (used to regenerate site assets)"
+    )]
+    Snapshot(snapshot::Args),
 
     #[cfg(feature = "server")]
     #[command(about = "Run the HTTP server exposing the web/mobile client API")]

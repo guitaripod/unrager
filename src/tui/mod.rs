@@ -21,6 +21,7 @@ pub mod media;
 pub mod screenshot;
 pub mod seen;
 pub mod session;
+pub mod snapshot;
 pub mod sound;
 pub mod source;
 #[cfg(test)]

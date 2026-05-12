@@ -518,6 +518,14 @@ fn detect_kitty_support() -> bool {
     if std::env::var("UNRAGER_FORCE_HALFBLOCKS").is_ok() {
         return false;
     }
+    if running_inside_multiplexer() && std::env::var("UNRAGER_FORCE_KITTY_IN_MUX").is_err() {
+        tracing::info!(
+            "multiplexer detected (TMUX/ZELLIJ); falling back to halfblocks. \
+             set UNRAGER_FORCE_KITTY_IN_MUX=1 to override (requires \
+             allow-passthrough on tmux)"
+        );
+        return false;
+    }
     if std::env::var("KITTY_WINDOW_ID").is_ok() {
         return true;
     }
@@ -541,6 +549,10 @@ fn detect_kitty_support() -> bool {
         }
     }
     false
+}
+
+fn running_inside_multiplexer() -> bool {
+    std::env::var("TMUX").is_ok() || std::env::var("ZELLIJ_SESSION_ID").is_ok()
 }
 
 const SRC_MAX_DIM: u32 = 800;

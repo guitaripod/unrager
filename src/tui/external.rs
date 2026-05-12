@@ -344,6 +344,7 @@ mod tests {
             quoted_tweet: None,
             media,
             url: "https://x.com/u/status/1".into(),
+            urls: vec![],
         }
     }
 

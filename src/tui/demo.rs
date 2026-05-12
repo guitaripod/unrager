@@ -58,6 +58,7 @@ fn tweet(
         quoted_tweet: None,
         media: Vec::new(),
         url: format!("https://x.com/{}/status/demo_{id}", author.handle),
+        urls: Vec::new(),
     }
 }
 

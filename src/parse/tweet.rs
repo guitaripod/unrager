@@ -1,5 +1,5 @@
 use crate::error::{Error, Result};
-use crate::model::{Media, MediaKind, Tweet, User};
+use crate::model::{Media, MediaKind, Tweet, TweetUrl, User};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
@@ -110,6 +110,8 @@ fn parse_tweet_node(node: &Value) -> Result<Tweet> {
     let text = strip_tco_urls(&text, &article_tcos);
     let text = strip_tco_urls(&text, &card_tcos);
 
+    let urls = collect_open_urls(legacy, &youtube_tcos, &article_tcos, &card_tcos);
+
     let url = format!("https://x.com/{}/status/{}", author.handle, rest_id);
 
     Ok(Tweet {
@@ -131,7 +133,41 @@ fn parse_tweet_node(node: &Value) -> Result<Tweet> {
         quoted_tweet,
         media,
         url,
+        urls,
     })
+}
+
+/// Collects entities.urls[] entries that aren't already consumed by the
+/// youtube / article / card embedders. These are the inline links that
+/// remain visible in the scrubbed tweet body and that the `M` key opens.
+fn collect_open_urls(
+    legacy: &Value,
+    youtube_tcos: &[String],
+    article_tcos: &[String],
+    card_tcos: &[String],
+) -> Vec<TweetUrl> {
+    let Some(arr) = legacy.pointer("/entities/urls").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(arr.len());
+    for u in arr {
+        let display = u.get("display_url").and_then(Value::as_str).unwrap_or("");
+        let expanded = u.get("expanded_url").and_then(Value::as_str).unwrap_or("");
+        if expanded.is_empty() {
+            continue;
+        }
+        if youtube_tcos.iter().any(|d| d == display)
+            || article_tcos.iter().any(|d| d == display)
+            || card_tcos.iter().any(|d| d == display)
+        {
+            continue;
+        }
+        out.push(TweetUrl {
+            expanded_url: expanded.to_string(),
+            display_url: display.to_string(),
+        });
+    }
+    out
 }
 
 fn parse_author(node: &Value) -> Result<User> {
@@ -979,6 +1015,68 @@ mod tests {
         });
         let tweet = parse_tweet_result(&v).unwrap();
         assert_eq!(tweet.text, "see https://t.co/ABC now");
+    }
+
+    #[test]
+    fn collect_urls_keeps_inline_link() {
+        let mut v = minimal_tweet_json("706", "song https://t.co/SPOT");
+        v["legacy"]["entities"] = json!({
+            "urls": [
+                {
+                    "url": "https://t.co/SPOT",
+                    "display_url": "open.spotify.com/track/abc",
+                    "expanded_url": "https://open.spotify.com/track/abc"
+                }
+            ]
+        });
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(tweet.urls.len(), 1);
+        assert_eq!(
+            tweet.urls[0].expanded_url,
+            "https://open.spotify.com/track/abc"
+        );
+        assert_eq!(tweet.urls[0].display_url, "open.spotify.com/track/abc");
+    }
+
+    #[test]
+    fn collect_urls_skips_youtube_embed() {
+        let mut v = minimal_tweet_json("707", "watch this https://t.co/YT");
+        v["legacy"]["entities"] = json!({
+            "urls": [
+                {
+                    "url": "https://t.co/YT",
+                    "display_url": "youtube.com/watch?v=dQw4w9WgXcQ",
+                    "expanded_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+                }
+            ]
+        });
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert!(tweet.urls.is_empty());
+    }
+
+    #[test]
+    fn collect_urls_mixes_kept_and_dropped() {
+        let mut v = minimal_tweet_json("708", "https://t.co/A and https://t.co/B");
+        v["legacy"]["entities"] = json!({
+            "urls": [
+                {
+                    "url": "https://t.co/A",
+                    "display_url": "youtu.be/dQw4w9WgXcQ",
+                    "expanded_url": "https://youtu.be/dQw4w9WgXcQ"
+                },
+                {
+                    "url": "https://t.co/B",
+                    "display_url": "github.com/rust-lang/rust",
+                    "expanded_url": "https://github.com/rust-lang/rust"
+                }
+            ]
+        });
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(tweet.urls.len(), 1);
+        assert_eq!(
+            tweet.urls[0].expanded_url,
+            "https://github.com/rust-lang/rust"
+        );
     }
 
     #[test]

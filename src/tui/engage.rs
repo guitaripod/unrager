@@ -112,6 +112,7 @@ mod tests {
             quoted_tweet: None,
             media: vec![],
             url: "https://x.com/alice/status/1".into(),
+            urls: vec![],
         }
     }
 

@@ -612,6 +612,7 @@ mod tests {
             quoted_tweet: None,
             media: Vec::<Media>::new(),
             url: "https://x.com/alice/status/1".into(),
+            urls: Vec::new(),
         }
     }
 

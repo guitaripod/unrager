@@ -129,6 +129,7 @@ pub fn make_tweet(id: &str, text: &str) -> Tweet {
         quoted_tweet: None,
         media: vec![],
         url: format!("https://x.com/test/status/{id}"),
+        urls: vec![],
     }
 }
 

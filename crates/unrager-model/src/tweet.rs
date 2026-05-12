@@ -37,6 +37,14 @@ pub struct Tweet {
     pub quoted_tweet: Option<Box<Tweet>>,
     pub media: Vec<Media>,
     pub url: String,
+    #[serde(default)]
+    pub urls: Vec<TweetUrl>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TweetUrl {
+    pub expanded_url: String,
+    pub display_url: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

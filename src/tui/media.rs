@@ -510,6 +510,36 @@ fn running_inside_multiplexer() -> bool {
 
 const SRC_MAX_DIM: u32 = 800;
 
+/// Rewrite `pbs.twimg.com/media/*` URLs to request the `small` size
+/// variant (~680×680). We downscale to `SRC_MAX_DIM` anyway, so fetching
+/// the full 1500–4000 px original wastes bandwidth and decode CPU —
+/// which on slower machines stretches the cold-load window long enough
+/// for the placement-text race to show. The rewrite only runs at the
+/// HTTP request site; the **original** URL stays the cache and dedup
+/// key so the same image is still recognised across sites.
+///
+/// Only `/media/<id>.<ext>` paths support `?name=small`. Avatars
+/// (`/profile_images/`), banners, and video posters use their own
+/// size conventions and pass through untouched.
+fn cdn_request_url(url: &str) -> String {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return url.to_string();
+    };
+    if parsed.host_str() != Some("pbs.twimg.com") {
+        return url.to_string();
+    }
+    if !parsed.path().starts_with("/media/") {
+        return url.to_string();
+    }
+    if let Some(q) = parsed.query() {
+        if q.split('&').any(|p| p.starts_with("name=")) {
+            return url.to_string();
+        }
+    }
+    let sep = if parsed.query().is_some() { '&' } else { '?' };
+    format!("{url}{sep}name=small")
+}
+
 /// Read bytes from `cache_path` if present; otherwise GET them and write
 /// the response atomically (tmp + rename) before returning. Cache write
 /// failures are swallowed — the fetched bytes are still returned so this
@@ -533,8 +563,9 @@ async fn load_or_fetch_bytes(
             }
         }
     }
+    let request_url = cdn_request_url(url);
     let bytes = reqwest::Client::new()
-        .get(url)
+        .get(&request_url)
         .send()
         .await?
         .error_for_status()?
@@ -612,8 +643,9 @@ async fn fetch_and_transmit_kitty(
     id: u32,
     url: &str,
 ) -> Result<(u32, u32), Box<dyn std::error::Error + Send + Sync>> {
+    let request_url = cdn_request_url(url);
     let bytes = reqwest::Client::new()
-        .get(url)
+        .get(&request_url)
         .send()
         .await?
         .error_for_status()?
@@ -635,8 +667,9 @@ async fn fetch_and_transmit_kitty(
 async fn fetch_and_decode(
     url: &str,
 ) -> Result<(Arc<Vec<u8>>, u32, u32), Box<dyn std::error::Error + Send + Sync>> {
+    let request_url = cdn_request_url(url);
     let bytes = reqwest::Client::new()
-        .get(url)
+        .get(&request_url)
         .send()
         .await?
         .error_for_status()?

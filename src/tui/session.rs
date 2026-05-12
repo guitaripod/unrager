@@ -24,6 +24,8 @@ pub struct SessionState {
     pub whisper_cursor: Option<String>,
     #[serde(default)]
     pub theme: Option<String>,
+    #[serde(default)]
+    pub screenshot_show_display_names: Option<bool>,
 }
 
 pub fn load(path: &Path) -> Option<SessionState> {
@@ -60,6 +62,7 @@ mod tests {
             reply_sort: Some(ReplySortOrder::Likes),
             whisper_cursor: Some("cursor-abc".into()),
             theme: Some("x-dark".into()),
+            screenshot_show_display_names: Some(true),
         };
         save(tmp.path(), &state).unwrap();
         let loaded = load(tmp.path()).unwrap();
@@ -88,6 +91,7 @@ mod tests {
             reply_sort: None,
             whisper_cursor: None,
             theme: None,
+            screenshot_show_display_names: None,
         };
         save(tmp.path(), &state).unwrap();
         let loaded = load(tmp.path()).unwrap();

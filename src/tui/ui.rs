@@ -4141,6 +4141,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  S              open Postcard composer (theme picker, save to PNG)"),
         Line::from("  C              open Postcard composer (default action: copy to clipboard)"),
         Line::from("                   · 1-7 pick preset, t tune custom colors, T thread chain"),
+        Line::from("                   · n toggle display name (default: handle only)"),
         Line::from("                   · s save, y copy clipboard"),
         Line::from("  p              open profile of selected tweet's author"),
         Line::from("  P              open own profile in browser"),
@@ -4493,6 +4494,12 @@ fn draw_compose_overlay(frame: &mut Frame, area: Rect, app: &App) {
         "thread:      off (T to include ancestor chain)".to_string()
     };
     lines.push(Line::from(Span::styled(thread_label, dim)));
+    let names_label = if app.screenshot_show_display_names {
+        "names:       show display name (n to hide)"
+    } else {
+        "names:       handle only (n to show display name)"
+    };
+    lines.push(Line::from(Span::styled(names_label.to_string(), dim)));
     lines.push(Line::from(""));
 
     if let Some(buf) = compose.tune_buffer.as_ref() {
@@ -4564,6 +4571,8 @@ fn draw_compose_overlay(frame: &mut Frame, area: Rect, app: &App) {
             Span::raw(" tune  "),
             Span::styled("T", key_style),
             Span::raw(" thread  "),
+            Span::styled("n", key_style),
+            Span::raw(" names  "),
             Span::styled("s", key_style),
             Span::raw(" save  "),
             Span::styled("y", key_style),

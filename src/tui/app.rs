@@ -158,6 +158,11 @@ pub struct App {
     /// kitty mode — halfblock/disabled terminals fall back to the
     /// no-gutter layout.
     pub feed_avatars: bool,
+    /// When true, screenshots render `Display Name @handle`. When false
+    /// (the default), screenshots show `@handle` only so the rasterized
+    /// image is less doxy. Toggle with `n` inside the screenshot composer.
+    /// Persisted in `session.json`.
+    pub screenshot_show_display_names: bool,
     pub feed_mode: FeedMode,
     pub self_handle: Option<String>,
     pub filter_mode: FilterMode,
@@ -244,6 +249,10 @@ impl App {
             .and_then(|s| s.feed_mode)
             .unwrap_or(FeedMode::All);
         let loaded_feed_avatars = loaded.as_ref().and_then(|s| s.feed_avatars).unwrap_or(true);
+        let loaded_screenshot_show_display_names = loaded
+            .as_ref()
+            .and_then(|s| s.screenshot_show_display_names)
+            .unwrap_or(false);
         let loaded_reply_sort = loaded
             .as_ref()
             .and_then(|s| s.reply_sort)
@@ -326,6 +335,7 @@ impl App {
             songlink_reg: crate::tui::songlink::SongLinkRegistry::new(),
             media_auto_expand: false,
             feed_avatars: loaded_feed_avatars,
+            screenshot_show_display_names: loaded_screenshot_show_display_names,
             feed_mode: loaded_feed_mode,
             reply_sort: loaded_reply_sort,
             self_handle: None,
@@ -477,6 +487,7 @@ impl App {
                 None
             },
             theme: Some(self.theme_name.clone()),
+            screenshot_show_display_names: Some(self.screenshot_show_display_names),
         };
         if let Err(e) = session::save(&self.session_path, &state) {
             tracing::warn!("failed to save session: {e}");

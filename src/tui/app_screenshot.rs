@@ -164,6 +164,11 @@ impl App {
         }
     }
 
+    pub(super) fn compose_toggle_display_names(&mut self) {
+        self.screenshot_show_display_names = !self.screenshot_show_display_names;
+        self.save_session();
+    }
+
     pub(super) fn compose_select(&mut self, slot: ThemeSlot) {
         if let Some(c) = self.compose.as_mut() {
             c.selected = slot;
@@ -477,7 +482,11 @@ impl App {
         let opts = RenderOpts {
             timestamps: self.timestamps,
             metrics: crate::tui::app::MetricsStyle::Visible,
-            display_names: crate::tui::app::DisplayNameStyle::Visible,
+            display_names: if self.screenshot_show_display_names {
+                crate::tui::app::DisplayNameStyle::Visible
+            } else {
+                crate::tui::app::DisplayNameStyle::Hidden
+            },
             media_enabled: false,
             media_auto_expand: false,
             media_max_rows: 0,

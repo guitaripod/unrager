@@ -65,6 +65,7 @@ pub fn dummy_app() -> (App, mpsc::UnboundedReceiver<Event>, TempDir) {
         songlink_reg: crate::tui::songlink::SongLinkRegistry::new(),
         media_auto_expand: false,
         feed_avatars: true,
+        screenshot_show_display_names: false,
         feed_mode: FeedMode::All,
         self_handle: Some("testuser".into()),
         filter_mode: FilterMode::Off,

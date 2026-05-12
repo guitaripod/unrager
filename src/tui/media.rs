@@ -77,15 +77,14 @@ impl CellSize {
 }
 
 pub fn detect_cell_size() -> Option<CellSize> {
-    if let Ok(ws) = crossterm::terminal::window_size() {
-        if ws.rows > 0 && ws.columns > 0 && ws.width > 0 && ws.height > 0 {
-            let w = ws.width as u32 / ws.columns as u32;
-            let h = ws.height as u32 / ws.rows as u32;
-            if w > 0 && h > 0 {
-                tracing::info!(w, h, source = "ioctl", "detected cell pixel size");
-                return Some(CellSize { w, h });
-            }
-        }
+    if let Some(cs) = detect_cell_size_ioctl() {
+        tracing::info!(
+            w = cs.w,
+            h = cs.h,
+            source = "ioctl",
+            "detected cell pixel size"
+        );
+        return Some(cs);
     }
     if let Some(cs) = query_cell_pixels_csi() {
         tracing::info!(
@@ -98,6 +97,23 @@ pub fn detect_cell_size() -> Option<CellSize> {
     }
     tracing::warn!("cell pixel size unknown; using default aspect");
     None
+}
+
+/// Non-blocking, side-effect-free cell size probe. Safe to call from
+/// inside the TUI render loop on resize. The CSI 16t fallback toggles
+/// raw mode and reads from stdin synchronously, which corrupts the
+/// active TUI session — so we never call it after startup.
+fn detect_cell_size_ioctl() -> Option<CellSize> {
+    let ws = crossterm::terminal::window_size().ok()?;
+    if ws.rows == 0 || ws.columns == 0 || ws.width == 0 || ws.height == 0 {
+        return None;
+    }
+    let w = u32::from(ws.width) / u32::from(ws.columns);
+    let h = u32::from(ws.height) / u32::from(ws.rows);
+    if w == 0 || h == 0 {
+        return None;
+    }
+    Some(CellSize { w, h })
 }
 
 fn query_cell_pixels_csi() -> Option<CellSize> {
@@ -275,6 +291,36 @@ impl MediaRegistry {
             MediaMode::Kitty { cell } => Some(cell),
             _ => None,
         }
+    }
+
+    /// Re-query the terminal cell pixel size after a resize / font-size
+    /// change / monitor swap. Cell pixel size is frozen in `mode` at
+    /// startup, so without this refresh every later sizing computation
+    /// reads stale dimensions — that's what causes the "stretched after
+    /// resize" symptom. Skips when not in Kitty mode (halfblocks doesn't
+    /// care about cell pixels). Returns true when the cell changed and
+    /// the placement cache was invalidated so the next render re-emits
+    /// every visible placement at the new size.
+    pub fn refresh_cell_size(&mut self) -> bool {
+        let MediaMode::Kitty { cell: old } = self.mode else {
+            return false;
+        };
+        let Some(new_cell) = detect_cell_size_ioctl() else {
+            return false;
+        };
+        if new_cell.w == old.w && new_cell.h == old.h {
+            return false;
+        }
+        tracing::info!(
+            old_w = old.w,
+            old_h = old.h,
+            new_w = new_cell.w,
+            new_h = new_cell.h,
+            "cell pixel size changed; invalidating placement cache"
+        );
+        self.mode = MediaMode::Kitty { cell: new_cell };
+        self.placement_cache.clear();
+        true
     }
 
     pub fn is_kitty(&self) -> bool {

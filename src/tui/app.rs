@@ -596,6 +596,7 @@ impl App {
             Event::Key(key) => self.handle_key(key),
             Event::Resize(_, _) => {
                 let (tw, th) = terminal.size().map(|r| (r.width, r.height))?;
+                self.media.refresh_cell_size();
                 ui::emit_media_placements(self, tw);
                 terminal.draw(|frame| ui::draw(frame, self))?;
                 ui::update_background(self, tw, th);

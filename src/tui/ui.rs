@@ -632,7 +632,12 @@ fn profile_header_lines(
     if let Some(id) = avatar_ready {
         for row in 0..AVATAR_ROWS as usize {
             let mut spans: Vec<Span<'static>> = vec![Span::raw("  ")];
-            spans.push(media::placeholder_row_for(id, row, AVATAR_COLS as usize));
+            spans.push(media::placeholder_row_for(
+                id,
+                AVATAR_ROWS as usize,
+                AVATAR_COLS as usize,
+                row,
+            ));
             spans.push(Span::raw(AVATAR_GAP));
             match row {
                 0 => spans.extend(name_line.iter().skip(1).cloned()),
@@ -2421,7 +2426,10 @@ fn apply_feed_avatar_gutter(
 
     for (i, line) in lines.iter_mut().enumerate() {
         let prefix: Vec<Span<'static>> = match (i < rows, kitty_id) {
-            (true, Some(id)) => vec![media::placeholder_row_for(id, i, cols), Span::raw(" ")],
+            (true, Some(id)) => vec![
+                media::placeholder_row_for(id, rows, cols, i),
+                Span::raw(" "),
+            ],
             _ => vec![blank_gutter.clone()],
         };
         let mut spans = prefix;
@@ -2535,7 +2543,7 @@ fn render_youtube_card(
         Some((nc, nr)) => {
             if let Some(MediaEntry::ReadyKitty { id, .. }) = ctx.media_reg.get(thumbnail_url) {
                 for row in 0..nr as usize {
-                    let placeholder = placeholder_row_span(*id, row, nc as usize);
+                    let placeholder = placeholder_row_span(*id, nr as usize, nc as usize, row);
                     lines.push(Line::from(vec![
                         indent.clone(),
                         Span::styled("│", border_style),
@@ -2670,7 +2678,7 @@ fn render_article_card(
             Some((nc, nr)) => {
                 if let Some(MediaEntry::ReadyKitty { id, .. }) = ctx.media_reg.get(cover_url) {
                     for row in 0..nr as usize {
-                        let placeholder = placeholder_row_span(*id, row, nc as usize);
+                        let placeholder = placeholder_row_span(*id, nr as usize, nc as usize, row);
                         lines.push(Line::from(vec![
                             indent.clone(),
                             Span::styled("│", border_style),
@@ -2833,7 +2841,7 @@ fn render_link_card(
             Some((nc, nr)) => {
                 if let Some(MediaEntry::ReadyKitty { id, .. }) = ctx.media_reg.get(cover_url) {
                     for row in 0..nr as usize {
-                        let placeholder = placeholder_row_span(*id, row, nc as usize);
+                        let placeholder = placeholder_row_span(*id, nr as usize, nc as usize, row);
                         lines.push(Line::from(vec![
                             indent.clone(),
                             Span::styled("│", border_style),
@@ -3141,8 +3149,13 @@ fn wrap_row_in_border(
     Line::from(spans)
 }
 
-fn placeholder_row_span(id: u32, row: usize, cols: usize) -> Span<'static> {
-    media::placeholder_row_for(id, row, cols)
+fn placeholder_row_span(
+    id: u32,
+    total_rows: usize,
+    total_cols: usize,
+    row: usize,
+) -> Span<'static> {
+    media::placeholder_row_for(id, total_rows, total_cols, row)
 }
 
 fn truncate_to_width(s: &str, w: usize) -> String {

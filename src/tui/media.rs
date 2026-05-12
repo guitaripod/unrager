@@ -200,14 +200,19 @@ pub struct MediaRegistry {
     insertion_order: VecDeque<String>,
     avatar_cache_dir: Option<PathBuf>,
     media_cache_dir: Option<PathBuf>,
-    /// Last `(cols, rows)` we emitted as a kitty placement for each
-    /// image id. Used to dedupe — re-emitting an identical placement on
-    /// every frame floods the terminal's graphics queue on some
-    /// backends (notably ghostty/linux), where placeholders can paint
-    /// before the matching placement is processed and the image briefly
-    /// inherits a stale grid. Cache misses force the placement; cache
-    /// hits skip stdout entirely.
-    placement_cache: HashMap<u32, (u32, u32)>,
+    /// Last `(cols, rows)` we emitted as a kitty placement, keyed by
+    /// `(image_id, placement_id)`. Per the kitty graphics-protocol
+    /// spec, every placement is identified by that pair — without a
+    /// distinct placement id, emitting a second placement for the same
+    /// image replaces the first. So when the same image appears in
+    /// both the feed (narrow) and the detail pane (wide) we MUST give
+    /// each location its own placement id, otherwise whichever
+    /// rendered last clobbers the other and the surviving location
+    /// shows a wrong-sized image. The placement id is derived from
+    /// `(cols, rows)` via `placement_id_from` so identical sizes share
+    /// an id (free dedup) and distinct sizes get distinct ids
+    /// (correctness).
+    placement_cache: HashMap<(u32, u32), (u32, u32)>,
 }
 
 impl Default for MediaRegistry {
@@ -257,17 +262,19 @@ impl MediaRegistry {
 
     /// Idempotent placement emit — writes the kitty graphics placement
     /// to stdout only when the requested `(cols, rows)` differs from
-    /// the last successful emit for `id`. Cuts per-frame command volume
-    /// by ~Nx where N is the number of visible images, which keeps the
-    /// terminal's graphics queue from backing up. Must be called every
-    /// frame for ids that need a placement so cache invalidation on
-    /// size changes still produces the new emit.
+    /// the last successful emit for `(image_id, placement_id)`. The
+    /// placement id is derived from `(cols, rows)` so the same image
+    /// at multiple sizes is recognised as distinct placements (each
+    /// keeps its own slot in the cache and the terminal's graphics
+    /// queue). Must be called every frame for ids that need a
+    /// placement so cache invalidation still produces the next emit.
     pub fn place(&mut self, id: u32, cols: u32, rows: u32) {
-        if self.placement_cache.get(&id).copied() == Some((cols, rows)) {
+        let pid = placement_id_from(cols, rows);
+        if self.placement_cache.get(&(id, pid)).copied() == Some((cols, rows)) {
             return;
         }
-        emit_kitty_placement(id, cols, rows);
-        self.placement_cache.insert(id, (cols, rows));
+        emit_kitty_placement(id, pid, cols, rows);
+        self.placement_cache.insert((id, pid), (cols, rows));
     }
 
     pub fn avatar_cache_path(&self, url: &str) -> Option<PathBuf> {
@@ -338,9 +345,10 @@ impl MediaRegistry {
             let Some(old) = self.insertion_order.pop_front() else {
                 break;
             };
-            if let Some(MediaEntry::ReadyKitty { id, .. }) = self.entries.remove(&old) {
-                self.placement_cache.remove(&id);
-                delete_image(id);
+            if let Some(MediaEntry::ReadyKitty { id: evicted, .. }) = self.entries.remove(&old) {
+                self.placement_cache
+                    .retain(|&(image_id, _), _| image_id != evicted);
+                delete_image(evicted);
             }
         }
     }
@@ -798,10 +806,24 @@ pub fn fit_cells_to_pane(cols: u32, rows: u32, max_cols: u32, max_rows: u32) -> 
     (c.max(1), r.max(1))
 }
 
-pub fn emit_kitty_placement(id: u32, cols: u32, rows: u32) {
+pub fn emit_kitty_placement(id: u32, placement_id: u32, cols: u32, rows: u32) {
     let mut out = std::io::stdout().lock();
-    let _ = write!(out, "\x1b_Ga=p,U=1,i={id},c={cols},r={rows},q=2\x1b\\");
+    let _ = write!(
+        out,
+        "\x1b_Ga=p,U=1,i={id},p={placement_id},c={cols},r={rows},q=2\x1b\\"
+    );
     let _ = out.flush();
+}
+
+/// Pack `(cols, rows)` into a non-zero 24-bit placement id. Same size
+/// always produces the same id (free dedup); distinct sizes produce
+/// distinct ids (so the same image rendered at two different
+/// rectangles becomes two placements rather than one clobbering the
+/// other). The id rides through into the kitty protocol as the
+/// underline color of each placeholder cell — see `placeholder_style`.
+fn placement_id_from(cols: u32, rows: u32) -> u32 {
+    let packed = (cols.min(0xFFF) << 12) | rows.min(0xFFF);
+    packed + 1
 }
 
 pub fn placeholder_lines(
@@ -812,8 +834,7 @@ pub fn placeholder_lines(
 ) -> Vec<Line<'static>> {
     let rows = (rows as usize).min(DIACRITICS.len());
     let cols = (cols as usize).min(DIACRITICS.len());
-    let color = id_color(id);
-    let style = Style::default().fg(color);
+    let style = placeholder_style(id, placement_id_from(cols as u32, rows as u32));
     let mut out = Vec::with_capacity(rows);
     for r in 0..rows {
         let spans: Vec<Span<'static>> = vec![indent.clone(), placeholder_row(r, cols, style)];
@@ -834,11 +855,27 @@ fn placeholder_row(row: usize, cols: usize, style: Style) -> Span<'static> {
     Span::styled(s, style)
 }
 
-/// Builds a single placeholder row span for a kitty image with the given id.
-/// Useful when the caller wants to embed the row inside a custom layout
-/// (like a bordered card) rather than using `placeholder_lines`.
-pub fn placeholder_row_for(id: u32, row: usize, cols: usize) -> Span<'static> {
-    placeholder_row(row, cols, Style::default().fg(id_color(id)))
+/// Builds a single placeholder row span for a kitty image at a known
+/// `(total_rows, total_cols)` rectangle. Useful when the caller embeds
+/// the row inside a custom layout (a bordered card, a feed-avatar
+/// gutter) rather than using `placeholder_lines`. The full size must
+/// be known so the placement id matches the corresponding `place()`
+/// call — that pair (image_id, placement_id) is what kitty uses to
+/// route the placeholder cell to the right placement rectangle.
+pub fn placeholder_row_for(
+    id: u32,
+    total_rows: usize,
+    total_cols: usize,
+    row: usize,
+) -> Span<'static> {
+    let pid = placement_id_from(total_cols as u32, total_rows as u32);
+    placeholder_row(row, total_cols, placeholder_style(id, pid))
+}
+
+fn placeholder_style(image_id: u32, placement_id: u32) -> Style {
+    Style::default()
+        .fg(id_color(image_id))
+        .underline_color(id_color(placement_id))
 }
 
 fn id_color(id: u32) -> Color {

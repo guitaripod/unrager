@@ -492,6 +492,7 @@ impl App {
             inline_threads: &self.inline_threads,
             media_reg: &self.media,
             youtube: &self.youtube,
+            songlink_reg: &self.songlink_reg,
             translations: &self.translations,
             liked_tweet_ids: &self.liked_tweet_ids,
             write_rate_limit: None,

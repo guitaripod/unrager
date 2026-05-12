@@ -204,6 +204,7 @@ pub struct RenderContext<'a> {
     pub inline_threads: &'a HashMap<String, InlineThread>,
     pub media_reg: &'a MediaRegistry,
     pub youtube: &'a crate::tui::youtube::YoutubeRegistry,
+    pub songlink_reg: &'a crate::tui::songlink::SongLinkRegistry,
     pub translations: &'a HashMap<String, String>,
     pub liked_tweet_ids: &'a HashSet<String>,
     pub write_rate_limit: Option<std::time::Duration>,
@@ -266,6 +267,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         inline_threads: &app.inline_threads,
         media_reg: &app.media,
         youtube: &app.youtube,
+        songlink_reg: &app.songlink_reg,
         translations: &app.translations,
         liked_tweet_ids: &app.liked_tweet_ids,
         write_rate_limit: app.client.write_rate_limit_remaining(),
@@ -2128,13 +2130,30 @@ pub(super) fn tweet_lines(
             .add_modifier(Modifier::BOLD)
     };
 
-    let body_text: &str = if let Some(tr) = translated_text {
+    let raw_body_text: &str = if let Some(tr) = translated_text {
         tr
     } else if in_reply_context && t.in_reply_to_tweet_id.is_some() {
         strip_leading_mentions(&t.text)
     } else {
         &t.text
     };
+    let music_display_urls: Vec<&str> = t
+        .urls
+        .iter()
+        .filter(|u| crate::tui::songlink::is_music_url(&u.expanded_url))
+        .map(|u| u.display_url.as_str())
+        .filter(|d| !d.is_empty())
+        .collect();
+    let stripped_body: Option<String> = if music_display_urls.is_empty() {
+        None
+    } else {
+        let mut s = raw_body_text.to_string();
+        for d in &music_display_urls {
+            s = strip_substring(&s, d);
+        }
+        Some(s)
+    };
+    let body_text: &str = stripped_body.as_deref().unwrap_or(raw_body_text);
 
     // When the avatar gutter is on, the leading 2-cell body indent
     // would push body text one column past the @handle. Drop it so
@@ -2383,6 +2402,18 @@ pub(super) fn tweet_lines(
                 _ => {}
             }
         }
+        for u in &t.urls {
+            if !crate::tui::songlink::is_music_url(&u.expanded_url) {
+                continue;
+            }
+            lines.extend(render_songlink_card(
+                ctx,
+                &u.expanded_url,
+                card_image_max_cols(wrap_width),
+                card_image_max_rows(ctx.opts.media_max_rows),
+                &indent,
+            ));
+        }
     }
 
     if avatars_on {
@@ -2617,6 +2648,145 @@ fn render_youtube_card(
     ]));
 
     lines
+}
+
+const SONGLINK_THUMB_ROWS: usize = 2;
+
+/// Returns the (cols, rows) of the inline song.link thumbnail in terminal
+/// cells given the current cell pixel aspect. Shared between rendering
+/// (placeholder cells) and placement emission (kitty `a=p,c=…,r=…`) so
+/// both stay in lockstep.
+pub(super) fn songlink_thumb_cells(cell: media::CellSize) -> (usize, usize) {
+    let cols = if cell.w == 0 {
+        4
+    } else {
+        ((SONGLINK_THUMB_ROWS as u64 * cell.h as u64).div_ceil(cell.w as u64) as usize).clamp(3, 8)
+    };
+    (cols, SONGLINK_THUMB_ROWS)
+}
+
+/// Inline song.link embed. Compact horizontal layout: small square thumbnail
+/// on the left, track title + artist stacked to its right. Two body rows
+/// total — total card height is four lines (top border + 2 body + bottom
+/// border).
+fn render_songlink_card(
+    ctx: &RenderContext,
+    source_url: &str,
+    max_cols: usize,
+    _max_rows: usize,
+    indent: &Span<'static>,
+) -> Vec<Line<'static>> {
+    use crate::tui::songlink::MetaState;
+    use unicode_width::UnicodeWidthStr;
+
+    let t = th();
+    let border_style = Style::default().fg(t.card_border);
+    let badge_style = Style::default()
+        .fg(t.media_link)
+        .add_modifier(Modifier::BOLD);
+    let brand_style = Style::default()
+        .fg(t.card_title)
+        .add_modifier(Modifier::BOLD);
+    let title_style = Style::default()
+        .fg(t.card_title)
+        .add_modifier(Modifier::BOLD);
+    let meta_style = Style::default().fg(t.card_meta);
+
+    let (title, artist_line, thumbnail_url) = match ctx.songlink_reg.get(source_url) {
+        Some(MetaState::Ready(m)) => {
+            let artist = if m.artist_name.is_empty() {
+                "song.link".to_string()
+            } else {
+                format!("{} · song.link", m.artist_name)
+            };
+            (m.title.clone(), artist, m.thumbnail_url.clone())
+        }
+        Some(MetaState::Failed) => (
+            domain_from_url(source_url).to_string(),
+            "song.link".to_string(),
+            String::new(),
+        ),
+        Some(MetaState::Loading) | None => (
+            "resolving…".to_string(),
+            "song.link".to_string(),
+            String::new(),
+        ),
+    };
+
+    let cell = ctx
+        .cell_size_override
+        .or_else(|| ctx.media_reg.cell_size())
+        .unwrap_or(media::CellSize { w: 1, h: 2 });
+    let (img_cols, img_rows) = songlink_thumb_cells(cell);
+
+    let inner_w = max_cols.saturating_sub(2).max(img_cols + 14);
+    let gap = "  ";
+    let text_w = inner_w.saturating_sub(1 + img_cols + gap.len() + 1).max(1);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    let label = "  🎵 song.link ";
+    let label_w = UnicodeWidthStr::width(label);
+    let top_right_dashes = inner_w.saturating_sub(label_w);
+    lines.push(Line::from(vec![
+        indent.clone(),
+        Span::styled("┌", border_style),
+        Span::styled("  ", border_style),
+        Span::styled("🎵", badge_style),
+        Span::styled(" song.link ", brand_style),
+        Span::styled("─".repeat(top_right_dashes), border_style),
+        Span::styled("┐", border_style),
+    ]));
+
+    let image_spans_for_row = |row: usize| -> Vec<Span<'static>> {
+        match ctx.media_reg.get(&thumbnail_url) {
+            Some(MediaEntry::ReadyKitty { id, .. }) => {
+                vec![placeholder_row_span(*id, img_rows, img_cols, row)]
+            }
+            Some(MediaEntry::ReadyPixels { pixels, w, h }) => {
+                let empty_indent = Span::raw("");
+                let mut rows =
+                    media::render_sextants(pixels, *w, *h, img_cols, img_rows, &empty_indent);
+                if let Some(line) = rows.get_mut(row) {
+                    std::mem::take(&mut line.spans)
+                } else {
+                    vec![Span::raw(" ".repeat(img_cols))]
+                }
+            }
+            _ => vec![Span::raw(" ".repeat(img_cols))],
+        }
+    };
+
+    let texts = [(title, title_style), (artist_line, meta_style)];
+    for (row, (text, style)) in texts.into_iter().enumerate() {
+        let display = truncate_to_width(&text, text_w);
+        let padded = pad_to_width(&display, text_w);
+        let mut spans: Vec<Span<'static>> = vec![indent.clone(), Span::styled("│", border_style)];
+        spans.extend(image_spans_for_row(row));
+        spans.push(Span::raw(gap.to_string()));
+        spans.push(Span::styled(padded, style));
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled("│", border_style));
+        lines.push(Line::from(spans));
+    }
+
+    lines.push(Line::from(vec![
+        indent.clone(),
+        Span::styled("└", border_style),
+        Span::styled("─".repeat(inner_w), border_style),
+        Span::styled("┘", border_style),
+    ]));
+
+    lines
+}
+
+fn domain_from_url(url: &str) -> &str {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    let end = rest.find('/').unwrap_or(rest.len());
+    rest[..end].strip_prefix("www.").unwrap_or(&rest[..end])
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3276,6 +3446,7 @@ pub fn emit_media_placements(app: &mut App, terminal_width: u16) {
         }
         collect_placements_for_tweet(
             &app.media,
+            &app.songlink_reg,
             cell,
             tweet,
             source_wrap,
@@ -3290,6 +3461,7 @@ pub fn emit_media_placements(app: &mut App, terminal_width: u16) {
                 let child_wrap = source_wrap.saturating_sub(4 + depth * 2);
                 collect_placements_for_tweet(
                     &app.media,
+                    &app.songlink_reg,
                     cell,
                     reply,
                     child_wrap,
@@ -3307,6 +3479,7 @@ pub fn emit_media_placements(app: &mut App, terminal_width: u16) {
         }
         collect_placements_for_tweet(
             &app.media,
+            &app.songlink_reg,
             cell,
             &detail.tweet,
             wrap,
@@ -3317,7 +3490,15 @@ pub fn emit_media_placements(app: &mut App, terminal_width: u16) {
             if feed_avatars_on && let Some(id) = ready_avatar_id(&app.media, &reply.author) {
                 to_place.push((id, avatar_cols, FEED_AVATAR_ROWS));
             }
-            collect_placements_for_tweet(&app.media, cell, reply, wrap, max_rows, &mut to_place);
+            collect_placements_for_tweet(
+                &app.media,
+                &app.songlink_reg,
+                cell,
+                reply,
+                wrap,
+                max_rows,
+                &mut to_place,
+            );
             if let Some(thread) = app.inline_threads.get(&reply.rest_id) {
                 for (depth, child) in &thread.replies {
                     if feed_avatars_on && let Some(id) = ready_avatar_id(&app.media, &child.author)
@@ -3327,6 +3508,7 @@ pub fn emit_media_placements(app: &mut App, terminal_width: u16) {
                     let child_wrap = wrap.saturating_sub(4 + depth * 2);
                     collect_placements_for_tweet(
                         &app.media,
+                        &app.songlink_reg,
                         cell,
                         child,
                         child_wrap,
@@ -3356,6 +3538,7 @@ fn ready_avatar_id(registry: &MediaRegistry, author: &crate::model::User) -> Opt
 
 fn collect_placements_for_tweet(
     registry: &MediaRegistry,
+    songlink_reg: &crate::tui::songlink::SongLinkRegistry,
     cell: media::CellSize,
     tweet: &Tweet,
     wrap_width: usize,
@@ -3391,9 +3574,25 @@ fn collect_placements_for_tweet(
             _ => {}
         }
     }
+    let (thumb_cols, thumb_rows) = songlink_thumb_cells(cell);
+    for u in &tweet.urls {
+        if !crate::tui::songlink::is_music_url(&u.expanded_url) {
+            continue;
+        }
+        let Some(crate::tui::songlink::MetaState::Ready(meta)) = songlink_reg.get(&u.expanded_url)
+        else {
+            continue;
+        };
+        if meta.thumbnail_url.is_empty() {
+            continue;
+        }
+        if let Some(MediaEntry::ReadyKitty { id, .. }) = registry.get(&meta.thumbnail_url) {
+            out.push((*id, thumb_cols as u32, thumb_rows as u32));
+        }
+    }
     if let Some(qt) = &tweet.quoted_tweet {
         let qt_wrap = wrap_width.saturating_sub(4);
-        collect_placements_for_tweet(registry, cell, qt, qt_wrap, max_rows, out);
+        collect_placements_for_tweet(registry, songlink_reg, cell, qt, qt_wrap, max_rows, out);
     }
 }
 
@@ -3506,6 +3705,30 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
         lines.push(String::new());
     }
     lines
+}
+
+/// Removes every occurrence of `needle` from `text`, collapsing whitespace
+/// around each removal so consecutive spaces and orphaned separators don't
+/// leak into the rendered body. Mirrors the parser's `strip_url`.
+fn strip_substring(text: &str, needle: &str) -> String {
+    if needle.is_empty() {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(idx) = rest.find(needle) {
+        let before = &rest[..idx];
+        let after = &rest[idx + needle.len()..];
+        out.push_str(before.trim_end_matches(|c: char| c.is_whitespace()));
+        let trimmed_after = after.trim_start_matches(|c: char| c.is_whitespace());
+        let had_leading_ws = before.ends_with(|c: char| c.is_whitespace());
+        if !out.is_empty() && !trimmed_after.is_empty() && had_leading_ws {
+            out.push(' ');
+        }
+        rest = trimmed_after;
+    }
+    out.push_str(rest);
+    out.trim().to_string()
 }
 
 fn strip_leading_mentions(text: &str) -> &str {
@@ -3914,6 +4137,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  o              open tweet in browser (auto-likes)"),
         Line::from("  O              open author profile in browser"),
         Line::from("  m              open all attachments in native viewer"),
+        Line::from("  M              open URLs in tweet body (song.link for music)"),
         Line::from("  S              open Postcard composer (theme picker, save to PNG)"),
         Line::from("  C              open Postcard composer (default action: copy to clipboard)"),
         Line::from("                   · 1-7 pick preset, t tune custom colors, T thread chain"),

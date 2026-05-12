@@ -150,6 +150,7 @@ pub struct App {
     pub(super) sound: Option<crate::tui::sound::Player>,
     pub(super) last_mordor_active: bool,
     pub youtube: YoutubeRegistry,
+    pub songlink_reg: crate::tui::songlink::SongLinkRegistry,
     pub media_auto_expand: bool,
     /// When true, every tweet row in feeds reserves a gutter for a
     /// square author-avatar chip. Toggled via leader `a`. Persisted in
@@ -322,6 +323,7 @@ impl App {
             sound,
             last_mordor_active: false,
             youtube: YoutubeRegistry::new(),
+            songlink_reg: crate::tui::songlink::SongLinkRegistry::new(),
             media_auto_expand: false,
             feed_avatars: loaded_feed_avatars,
             feed_mode: loaded_feed_mode,
@@ -426,8 +428,24 @@ impl App {
     pub fn ensure_tweet_resources(&mut self, tweet: &Tweet) {
         self.media.ensure_tweet_media(tweet, &self.tx);
         self.youtube.ensure_tweet(tweet, &self.tx);
+        self.songlink_reg.ensure_tweet(tweet, &self.tx);
         if self.feed_avatars && self.media.is_kitty() {
             self.queue_avatar(&tweet.author);
+        }
+    }
+
+    pub(super) fn handle_songlink_loaded(
+        &mut self,
+        source_url: String,
+        result: std::result::Result<crate::tui::songlink::SongLinkMeta, String>,
+    ) {
+        let thumbnail = match &result {
+            Ok(meta) if !meta.thumbnail_url.is_empty() => Some(meta.thumbnail_url.clone()),
+            _ => None,
+        };
+        self.songlink_reg.apply_result(&source_url, result);
+        if let Some(thumb) = thumbnail {
+            self.media.ensure_card_thumbnail_url(&thumb, &self.tx);
         }
     }
 
@@ -765,6 +783,10 @@ impl App {
                 shot,
                 destination,
             } => self.handle_screenshot_thread_resolved(result, shot, destination),
+            Event::OpenResolvedUrl { url } => self.open_url(&url),
+            Event::SongLinkMetaLoaded { source_url, result } => {
+                self.handle_songlink_loaded(source_url, result);
+            }
             Event::Quit => self.running = false,
             Event::FocusGained => {
                 self.terminal_focused = true;

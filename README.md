@@ -189,6 +189,7 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 | `o` | Open tweet in browser (auto-likes, except on your own tweets) |
 | `O` | Open tweet author's profile in browser |
 | `m` | Open all media (photos/GIFs/videos) in native viewer |
+| `M` | Open URLs in tweet body (music links auto-routed through song.link) |
 | `S` | Screenshot composer, default action save to `~/.cache/unrager/screenshots/` |
 | `C` | Screenshot composer, default action copy to clipboard |
 | `y` | Yank fixupx URL to clipboard |

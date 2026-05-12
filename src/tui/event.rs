@@ -182,6 +182,13 @@ pub enum Event {
         shot: crate::tui::screenshot::ShotTheme,
         destination: crate::tui::app_screenshot::Destination,
     },
+    OpenResolvedUrl {
+        url: String,
+    },
+    SongLinkMetaLoaded {
+        source_url: String,
+        result: std::result::Result<crate::tui::songlink::SongLinkMeta, String>,
+    },
 }
 
 pub type EventTx = mpsc::UnboundedSender<Event>;

@@ -148,6 +148,7 @@ impl App {
             (KeyCode::Char('o'), KeyModifiers::NONE) => self.open_tweet_in_browser(),
             (KeyCode::Char('O'), _) => self.open_author_in_browser(),
             (KeyCode::Char('m'), KeyModifiers::NONE) => self.open_media_external(),
+            (KeyCode::Char('M'), _) => self.open_links_in_tweet(),
             (KeyCode::Char('S'), _) => self.screenshot_save(),
             (KeyCode::Char('C'), _) => self.screenshot_copy(),
             (KeyCode::Char('q'), KeyModifiers::NONE) => self.back_out(true),

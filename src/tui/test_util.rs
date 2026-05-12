@@ -62,6 +62,7 @@ pub fn dummy_app() -> (App, mpsc::UnboundedReceiver<Event>, TempDir) {
         sound: None,
         last_mordor_active: false,
         youtube: crate::tui::youtube::YoutubeRegistry::new(),
+        songlink_reg: crate::tui::songlink::SongLinkRegistry::new(),
         media_auto_expand: false,
         feed_avatars: true,
         feed_mode: FeedMode::All,

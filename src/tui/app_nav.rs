@@ -425,6 +425,49 @@ impl App {
         self.open_url(&url);
     }
 
+    pub(super) fn open_links_in_tweet(&mut self) {
+        let Some(tweet) = self.selected_tweet() else {
+            return;
+        };
+        let urls: Vec<String> = tweet
+            .urls
+            .iter()
+            .map(|u| u.expanded_url.clone())
+            .filter(|u| !u.is_empty())
+            .collect();
+        if urls.is_empty() {
+            self.set_status("no links in tweet");
+            return;
+        }
+        let n = urls.len();
+        let label = if n == 1 {
+            "opening link…".to_string()
+        } else {
+            format!("opening {n} links…")
+        };
+        self.set_status(label);
+        for url in urls {
+            if crate::tui::songlink::is_music_url(&url) {
+                if let Some(crate::tui::songlink::MetaState::Ready(meta)) =
+                    self.songlink_reg.get(&url)
+                    && !meta.page_url.is_empty()
+                {
+                    self.open_url(&meta.page_url.clone());
+                    continue;
+                }
+                let tx = self.tx.clone();
+                tokio::spawn(async move {
+                    let resolved = crate::tui::songlink::resolve_page_url(&url)
+                        .await
+                        .unwrap_or(url);
+                    let _ = tx.send(Event::OpenResolvedUrl { url: resolved });
+                });
+            } else {
+                self.open_url(&url);
+            }
+        }
+    }
+
     pub(super) fn open_media_external(&mut self) {
         let Some(tweet) = self.selected_tweet().cloned() else {
             return;

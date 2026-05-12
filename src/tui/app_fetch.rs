@@ -625,6 +625,7 @@ impl App {
         for t in tweets {
             self.media.ensure_tweet_card_thumbnails(t, &self.tx);
             self.youtube.ensure_tweet(t, &self.tx);
+            self.songlink_reg.ensure_tweet(t, &self.tx);
         }
         if self.feed_avatars && self.media.is_kitty() {
             for t in tweets {

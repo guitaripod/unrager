@@ -215,7 +215,7 @@ kbd {
   display: grid;
   grid-template-areas: "stack";
   width: 100%;
-  aspect-ratio: 1920 / 1180;
+  aspect-ratio: 90 / 53;
   border-radius: 10px;
   overflow: hidden;
   border: 1px solid var(--border);

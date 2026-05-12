@@ -426,6 +426,9 @@ impl App {
     pub fn ensure_tweet_resources(&mut self, tweet: &Tweet) {
         self.media.ensure_tweet_media(tweet, &self.tx);
         self.youtube.ensure_tweet(tweet, &self.tx);
+        if self.feed_avatars && self.media.is_kitty() {
+            self.queue_avatar(&tweet.author);
+        }
     }
 
     pub fn is_own_profile(&self) -> bool {

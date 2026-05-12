@@ -15,6 +15,10 @@ const MAX_MEDIA_ENTRIES: usize = 128;
 /// covers roughly 1k–10k cached identities. Pruned once at startup; the
 /// cap is large enough that intra-session churn stays a no-op.
 const AVATAR_CACHE_CAP_BYTES: u64 = 50 * 1024 * 1024;
+/// LRU cap for the on-disk tweet-media cache. Combined with the
+/// `?name=small` rewrite, tweet photos average ~30–80 KB; 200 MB fits
+/// roughly 3k–6k cached images. Pruned once at startup.
+const MEDIA_CACHE_CAP_BYTES: u64 = 200 * 1024 * 1024;
 
 const PLACEHOLDER: char = '\u{10EEEE}';
 
@@ -179,6 +183,7 @@ pub struct MediaRegistry {
     semaphore: Arc<Semaphore>,
     insertion_order: VecDeque<String>,
     avatar_cache_dir: Option<PathBuf>,
+    media_cache_dir: Option<PathBuf>,
     /// Last `(cols, rows)` we emitted as a kitty placement for each
     /// image id. Used to dedupe — re-emitting an identical placement on
     /// every frame floods the terminal's graphics queue on some
@@ -208,20 +213,18 @@ impl MediaRegistry {
             MediaMode::Halfblocks
         };
         tracing::info!(?mode, "media mode selected");
-        let avatar_cache_dir = match crate::config::cache_dir() {
-            Ok(base) => {
-                let dir = base.join("avatars");
-                if let Err(e) = std::fs::create_dir_all(&dir) {
-                    tracing::warn!(error = %e, dir = %dir.display(), "avatar cache dir create failed; falling back to in-memory only");
-                    None
-                } else {
-                    prune_avatar_cache(&dir, AVATAR_CACHE_CAP_BYTES);
-                    Some(dir)
-                }
-            }
+        let (avatar_cache_dir, media_cache_dir) = match crate::config::cache_dir() {
+            Ok(base) => (
+                prepare_lru_cache(base.join("avatars"), AVATAR_CACHE_CAP_BYTES, "avatar"),
+                prepare_lru_cache(
+                    base.join("media-cache"),
+                    MEDIA_CACHE_CAP_BYTES,
+                    "tweet media",
+                ),
+            ),
             Err(e) => {
-                tracing::warn!(error = %e, "avatar cache disabled: cache_dir unresolvable");
-                None
+                tracing::warn!(error = %e, "disk caches disabled: cache_dir unresolvable");
+                (None, None)
             }
         };
         Self {
@@ -231,6 +234,7 @@ impl MediaRegistry {
             semaphore: Arc::new(Semaphore::new(4)),
             insertion_order: VecDeque::new(),
             avatar_cache_dir,
+            media_cache_dir,
             placement_cache: HashMap::new(),
         }
     }
@@ -252,6 +256,12 @@ impl MediaRegistry {
 
     pub fn avatar_cache_path(&self, url: &str) -> Option<PathBuf> {
         self.avatar_cache_dir
+            .as_ref()
+            .map(|dir| dir.join(format!("{}.bin", hex_sha256(url))))
+    }
+
+    fn media_cache_path(&self, url: &str) -> Option<PathBuf> {
+        self.media_cache_dir
             .as_ref()
             .map(|dir| dir.join(format!("{}.bin", hex_sha256(url))))
     }
@@ -343,12 +353,19 @@ impl MediaRegistry {
                     let url = media.url.clone();
                     let sem = self.semaphore.clone();
                     let tx = tx.clone();
+                    let cache_path = self.media_cache_path(&media.url);
                     if is_kitty {
                         let id = self.next_id;
                         self.next_id += 1;
                         tokio::spawn(async move {
                             let _permit = sem.acquire_owned().await.ok();
-                            match fetch_and_transmit_kitty(id, &url).await {
+                            match fetch_and_transmit_kitty_with_cache(
+                                id,
+                                &url,
+                                cache_path.as_deref(),
+                            )
+                            .await
+                            {
                                 Ok((w, h)) => {
                                     let _ = tx.send(Event::MediaLoadedKitty { url, id, w, h });
                                 }
@@ -363,7 +380,7 @@ impl MediaRegistry {
                     } else {
                         tokio::spawn(async move {
                             let _permit = sem.acquire_owned().await.ok();
-                            match fetch_and_decode(&url).await {
+                            match fetch_and_decode_with_cache(&url, cache_path.as_deref()).await {
                                 Ok((pixels, w, h)) => {
                                     let _ = tx.send(Event::MediaLoadedPixels { url, pixels, w, h });
                                 }
@@ -551,15 +568,15 @@ async fn load_or_fetch_bytes(
     if let Some(path) = cache_path {
         match tokio::fs::read(path).await {
             Ok(bytes) if !bytes.is_empty() => {
-                tracing::debug!(path = %path.display(), bytes = bytes.len(), "avatar cache hit");
+                tracing::debug!(path = %path.display(), bytes = bytes.len(), "disk cache hit");
                 return Ok(bytes);
             }
             Ok(_) => {
-                tracing::debug!(path = %path.display(), "avatar cache empty file, refetching");
+                tracing::debug!(path = %path.display(), "disk cache empty file, refetching");
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => {
-                tracing::warn!(error = %e, path = %path.display(), "avatar cache read failed; refetching");
+                tracing::warn!(error = %e, path = %path.display(), "disk cache read failed; refetching");
             }
         }
     }
@@ -574,7 +591,7 @@ async fn load_or_fetch_bytes(
         .to_vec();
     if let Some(path) = cache_path {
         if let Err(e) = write_cache_atomic(path, &bytes).await {
-            tracing::warn!(error = %e, path = %path.display(), "avatar cache write failed");
+            tracing::warn!(error = %e, path = %path.display(), "disk cache write failed");
         }
     }
     Ok(bytes)
@@ -636,54 +653,6 @@ async fn fetch_and_decode_with_cache(
             }
             Box::new(e)
         })?;
-    Ok((Arc::new(raw), w, h))
-}
-
-async fn fetch_and_transmit_kitty(
-    id: u32,
-    url: &str,
-) -> Result<(u32, u32), Box<dyn std::error::Error + Send + Sync>> {
-    let request_url = cdn_request_url(url);
-    let bytes = reqwest::Client::new()
-        .get(&request_url)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
-    let (raw, w, h) =
-        tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, u32, u32), image::ImageError> {
-            let img = image::load_from_memory(&bytes)?;
-            let img = downscale(img, SRC_MAX_DIM);
-            let rgba = img.to_rgba8();
-            let (w, h) = rgba.dimensions();
-            Ok((rgba.into_raw(), w, h))
-        })
-        .await??;
-    tokio::task::spawn_blocking(move || transmit_image(id, &raw, w, h)).await?;
-    Ok((w, h))
-}
-
-async fn fetch_and_decode(
-    url: &str,
-) -> Result<(Arc<Vec<u8>>, u32, u32), Box<dyn std::error::Error + Send + Sync>> {
-    let request_url = cdn_request_url(url);
-    let bytes = reqwest::Client::new()
-        .get(&request_url)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
-    let (raw, w, h) =
-        tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, u32, u32), image::ImageError> {
-            let img = image::load_from_memory(&bytes)?;
-            let img = downscale(img, 512);
-            let rgba = img.to_rgba8();
-            let (w, h) = rgba.dimensions();
-            Ok((rgba.into_raw(), w, h))
-        })
-        .await??;
     Ok((Arc::new(raw), w, h))
 }
 
@@ -943,15 +912,31 @@ fn hex_sha256(s: &str) -> String {
     out
 }
 
-/// Best-effort LRU prune of the on-disk avatar cache. Walks every file
-/// in `dir`, sorts by mtime ascending, and deletes from the oldest end
+/// Resolve a cache dir under `cache_dir()`, create it if missing, prune
+/// to `cap_bytes`, and return the path. `label` is for log messages only.
+fn prepare_lru_cache(dir: PathBuf, cap_bytes: u64, label: &str) -> Option<PathBuf> {
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        tracing::warn!(
+            error = %e,
+            dir = %dir.display(),
+            label,
+            "disk cache dir create failed; falling back to in-memory only"
+        );
+        return None;
+    }
+    prune_lru_cache(&dir, cap_bytes);
+    Some(dir)
+}
+
+/// Best-effort LRU prune of an on-disk cache. Walks every file in
+/// `dir`, sorts by mtime ascending, and deletes from the oldest end
 /// until the remaining total fits under `cap_bytes`. Errors are logged
 /// and swallowed — startup must not block on a broken cache directory.
-fn prune_avatar_cache(dir: &Path, cap_bytes: u64) {
+fn prune_lru_cache(dir: &Path, cap_bytes: u64) {
     let entries = match std::fs::read_dir(dir) {
         Ok(it) => it,
         Err(e) => {
-            tracing::warn!(error = %e, dir = %dir.display(), "avatar cache scan failed");
+            tracing::warn!(error = %e, dir = %dir.display(), "disk cache scan failed");
             return;
         }
     };
@@ -978,7 +963,7 @@ fn prune_avatar_cache(dir: &Path, cap_bytes: u64) {
             break;
         }
         if let Err(e) = std::fs::remove_file(&path) {
-            tracing::warn!(error = %e, path = %path.display(), "avatar cache prune remove failed");
+            tracing::warn!(error = %e, path = %path.display(), "disk cache prune remove failed");
             continue;
         }
         to_drop = to_drop.saturating_sub(size);

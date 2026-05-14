@@ -6,6 +6,10 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+## [0.17.1] — 2026-05-14
+
+- **Author avatars in the notifications and likers panes.** Both detail panes now reserve the same square kitty-graphics gutter the feed uses and pin the actor / user's avatar in it. New entries get queued for download as the page arrives (including silent whisper-poll prepends), placements are emitted each frame, and the view falls back to a blank gutter when the avatar isn't loaded yet so layout stays uniform. The likers pane switches each user to a two-row layout (handle on row 1, follower count on row 2) when avatars are on so the chip has somewhere to live without bleeding into the next entry. The redundant unread bullet is dropped from notifications and the trailing space after the reaction icon is tightened — the avatar is the read indicator, so the bullet was double duty.
+
 ## [0.17.0] — 2026-05-14
 
 - **Country flag + "based in" data next to handles.** Every tweet's author handle now picks up a flag emoji derived from X's own `account_based_in` field (the dropdown that powers the "Account based in: Japan" badge on web profiles), via a new `AboutAccountQuery` GraphQL operation. Country → ISO 3166-1 alpha-2 normalization is delegated to the `celes` crate so we don't ship our own gazetteer; the live-TUI flag itself is computed from two regional-indicator codepoints, while screenshots composite color Twemoji PNGs lazy-fetched into `~/.cache/unrager/flags/` (no bundled assets, no binary bloat — disk cache mirrors the avatar / media pattern; missing flags render as empty space rather than letter fallback so the look stays consistent across blocks). X's `"Europe"` region value maps to 🇪🇺. Lookups are persistent: `~/.cache/unrager/about.db` keys by user `rest_id` (not screen name, so handle renames don't invalidate) and stores the full `about_profile` payload, not just the country. Negative entries (users with no `account_based_in` set) carry a 30-day TTL so we eventually retry users who fill it in later; positive entries never expire because country effectively doesn't change. Fetches drip out under a `Semaphore(1)` from a deque drained on every Tick — saturating the page in one burst trips the AboutAccountQuery rate limit, so dedupe-per-page + one-fetch-per-second + bail-when-budget-low keeps things steady. AboutAccountQuery 429s land in their own dedicated rate-limit slot on the GqlClient, so a flag-fetch failure no longer bleeds into the shared read budget or surfaces the misleading "X cooldown" banner.
@@ -87,7 +91,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.17.0...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.17.1...HEAD
+[0.17.1]: https://github.com/guitaripod/unrager/releases/tag/0.17.1
 [0.17.0]: https://github.com/guitaripod/unrager/releases/tag/0.17.0
 [0.16.1]: https://github.com/guitaripod/unrager/releases/tag/0.16.1
 [0.16.0]: https://github.com/guitaripod/unrager/releases/tag/0.16.0

@@ -3,6 +3,7 @@ pub mod auth;
 pub mod cli;
 pub mod config;
 pub mod error;
+pub mod flag;
 pub mod gql;
 pub mod model;
 pub mod parse;

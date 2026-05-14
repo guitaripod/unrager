@@ -3,6 +3,8 @@ use crate::config::{self, AppConfig};
 use crate::error::Result;
 use crate::gql::GqlClient;
 use crate::model::Tweet;
+use crate::tui::about_fetch::AboutFetcher;
+use crate::tui::about_store::AboutStore;
 use crate::tui::ask;
 use crate::tui::background::Background;
 use crate::tui::brief::BriefView;
@@ -126,6 +128,10 @@ pub struct App {
     pub last_render_at: Option<Instant>,
     pub dirty: bool,
     pub seen: SeenStore,
+    pub about: AboutStore,
+    pub about_inflight: HashSet<String>,
+    pub about_pending: std::collections::VecDeque<(String, String)>,
+    pub about_fetcher: AboutFetcher,
     pub session_path: PathBuf,
     pub timestamps: TimestampStyle,
     pub metrics: MetricsStyle,
@@ -210,6 +216,8 @@ impl App {
         let config_dir = config::config_dir()?;
         let seen = SeenStore::open(&cache_dir.join("seen.db"))?;
         let notif_seen = SeenStore::open(&cache_dir.join("notif_seen.db"))?;
+        let about = AboutStore::open(&cache_dir.join("about.db"))?;
+        let about_fetcher = AboutFetcher::new(client.clone());
         let session_path = config_dir.join("session.json");
 
         let app_config = AppConfig::load(&config_dir);
@@ -316,6 +324,10 @@ impl App {
             last_render_at: None,
             dirty: true,
             seen,
+            about,
+            about_inflight: HashSet::new(),
+            about_pending: std::collections::VecDeque::new(),
+            about_fetcher,
             session_path,
             timestamps: loaded_timestamps,
             metrics: loaded_metrics,
@@ -627,6 +639,7 @@ impl App {
                 }
                 self.tick_status();
                 self.mark_current_seen();
+                self.drain_about_pending();
             }
             Event::Key(key) => self.handle_key(key),
             Event::Resize(_, _) => {
@@ -797,6 +810,9 @@ impl App {
             Event::OpenResolvedUrl { url } => self.open_url(&url),
             Event::SongLinkMetaLoaded { source_url, result } => {
                 self.handle_songlink_loaded(source_url, result);
+            }
+            Event::AboutProfileResolved { rest_id, result } => {
+                self.handle_about_profile_resolved(rest_id, result);
             }
             Event::Quit => self.running = false,
             Event::FocusGained => {

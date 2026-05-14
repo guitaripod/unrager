@@ -120,6 +120,9 @@ impl App {
                     && matches!(kind, SourceKind::User { .. })
                 {
                     self.queue_avatar(&user);
+                    let mut batch_seen = HashSet::new();
+                    self.enqueue_about(&user, &mut batch_seen);
+                    self.drain_about_pending();
                     self.source.profile_user = Some(user);
                 }
                 let total_incoming = page.tweets.len();
@@ -616,6 +619,7 @@ impl App {
     }
 
     pub(super) fn queue_source_media(&mut self, tweets: &[Tweet]) {
+        self.queue_about_fetch(tweets);
         if !self.media.supported() {
             return;
         }
@@ -644,6 +648,77 @@ impl App {
         if let Some(url) = user.avatar_url.as_deref() {
             self.media.ensure_avatar_url(url, &self.tx);
         }
+    }
+
+    pub(super) fn queue_about_fetch(&mut self, tweets: &[Tweet]) {
+        let mut batch: HashSet<String> = HashSet::new();
+        for t in tweets {
+            self.enqueue_about(&t.author, &mut batch);
+            if let Some(q) = t.quoted_tweet.as_deref() {
+                self.enqueue_about(&q.author, &mut batch);
+            }
+        }
+        self.drain_about_pending();
+    }
+
+    pub(super) fn enqueue_about(&mut self, user: &crate::model::User, batch: &mut HashSet<String>) {
+        if user.rest_id.is_empty() || user.handle.is_empty() {
+            return;
+        }
+        if !batch.insert(user.rest_id.clone()) {
+            return;
+        }
+        if self.about.has(&user.rest_id) {
+            return;
+        }
+        if self.about_inflight.contains(&user.rest_id) {
+            return;
+        }
+        if self.about_pending.iter().any(|(id, _)| id == &user.rest_id) {
+            return;
+        }
+        self.about_pending
+            .push_back((user.rest_id.clone(), user.handle.clone()));
+    }
+
+    /// Pops one request per call, only when nothing is in flight and the
+    /// read budget is healthy. Called from `queue_about_fetch` on
+    /// timeline load AND from the per-second Tick, so a single big page
+    /// drips out at ~1 request/sec instead of bursting and tripping the
+    /// AboutAccountQuery rate limit.
+    pub(super) fn drain_about_pending(&mut self) {
+        if !self.about_inflight.is_empty() {
+            return;
+        }
+        if self.client.about_rate_limit_remaining().is_some() {
+            return;
+        }
+        let Some((rest_id, handle)) = self.about_pending.pop_front() else {
+            return;
+        };
+        if self.about.has(&rest_id) {
+            return;
+        }
+        self.about_inflight.insert(rest_id.clone());
+        self.about_fetcher.spawn(rest_id, handle, self.tx.clone());
+    }
+
+    pub(super) fn handle_about_profile_resolved(
+        &mut self,
+        rest_id: String,
+        result: crate::tui::about_fetch::FetchOutcome,
+    ) {
+        self.about_inflight.remove(&rest_id);
+        match result {
+            Ok(profile) => self.about.put(&rest_id, profile),
+            Err(()) => {
+                // Transport / rate-limit / parse failure. Do not poison
+                // the cache — leave the entry untracked so a future feed
+                // load can retry once the limit clears.
+            }
+        }
+        self.dirty = true;
+        self.drain_about_pending();
     }
 
     pub(super) fn queue_thread_media(&mut self, replies: &[Tweet]) {

@@ -189,6 +189,10 @@ pub enum Event {
         source_url: String,
         result: std::result::Result<crate::tui::songlink::SongLinkMeta, String>,
     },
+    AboutProfileResolved {
+        rest_id: String,
+        result: crate::tui::about_fetch::FetchOutcome,
+    },
 }
 
 pub type EventTx = mpsc::UnboundedSender<Event>;

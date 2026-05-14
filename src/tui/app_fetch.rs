@@ -303,6 +303,7 @@ impl App {
             return;
         };
         view.loading = false;
+        let mut avatar_urls: Vec<String> = Vec::new();
         match result {
             Ok(page) => {
                 tracing::info!(
@@ -317,6 +318,12 @@ impl App {
                         && let Some(tid) = &n.target_tweet_id
                     {
                         favorited_ids.push(tid.clone());
+                    }
+                    if let Some(actor) = n.actors.first()
+                        && let Some(url) = actor.avatar_url.as_deref()
+                        && !url.is_empty()
+                    {
+                        avatar_urls.push(url.to_string());
                     }
                 }
                 if append {
@@ -335,6 +342,11 @@ impl App {
                 tracing::warn!("notification fetch failed: {e}");
                 view.error = Some(e.to_string());
                 self.clear_status();
+            }
+        }
+        if self.feed_avatars && self.media.is_kitty() {
+            for url in avatar_urls {
+                self.media.ensure_avatar_url(&url, &self.tx);
             }
         }
     }
@@ -588,6 +600,7 @@ impl App {
             return;
         }
         view.loading = false;
+        let mut avatar_urls: Vec<String> = Vec::new();
         match result {
             Ok(page) => {
                 if append {
@@ -595,10 +608,19 @@ impl App {
                         view.users.iter().map(|u| u.rest_id.clone()).collect();
                     for u in page.users {
                         if !existing.contains(&u.rest_id) {
+                            if let Some(url) = u.avatar_url.as_deref() {
+                                avatar_urls.push(url.to_string());
+                            }
                             view.users.push(u);
                         }
                     }
                 } else {
+                    avatar_urls.extend(
+                        page.users
+                            .iter()
+                            .filter_map(|u| u.avatar_url.clone())
+                            .filter(|s| !s.is_empty()),
+                    );
                     view.users = page.users;
                 }
                 view.cursor = page.next_cursor;
@@ -614,6 +636,11 @@ impl App {
             Err(e) => {
                 tracing::warn!("likers fetch failed: {e}");
                 view.error = Some(e.to_string());
+            }
+        }
+        if self.feed_avatars && self.media.is_kitty() {
+            for url in avatar_urls {
+                self.media.ensure_avatar_url(&url, &self.tx);
             }
         }
     }
@@ -774,13 +801,32 @@ impl App {
             .filter(|n| !self.notif_seen.is_seen(&n.id))
             .count();
 
+        let mut new_avatar_urls: Vec<String> = Vec::new();
         if let Some(FocusEntry::Notifications(view)) = self.focus_stack.last_mut()
             && view.selected() == 0
             && !view.loading
         {
+            let before: std::collections::HashSet<String> =
+                view.notifications.iter().map(|n| n.id.clone()).collect();
             let added = view.prepend_fresh(&raw_notifs);
             if added > 0 {
                 tracing::debug!(added, "merged fresh notifs into open view");
+                for n in view.notifications.iter().take(added) {
+                    if before.contains(&n.id) {
+                        continue;
+                    }
+                    if let Some(actor) = n.actors.first()
+                        && let Some(url) = actor.avatar_url.as_deref()
+                        && !url.is_empty()
+                    {
+                        new_avatar_urls.push(url.to_string());
+                    }
+                }
+            }
+        }
+        if self.feed_avatars && self.media.is_kitty() {
+            for url in new_avatar_urls {
+                self.media.ensure_avatar_url(&url, &self.tx);
             }
         }
 

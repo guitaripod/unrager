@@ -787,6 +787,7 @@ fn notification_lines(
     expanded: bool,
     actor_cursor: Option<usize>,
     liked: bool,
+    avatars_on: bool,
 ) -> Vec<Line<'static>> {
     let t = th();
     let mut lines = Vec::with_capacity(2);
@@ -815,19 +816,21 @@ fn notification_lines(
         _ => &n.notification_type.to_lowercase(),
     };
 
-    let (bullet, bullet_style) = if dim {
-        ("  ", Style::default())
+    let mut header: Vec<Span<'static>> = Vec::new();
+    if !avatars_on {
+        let (bullet, bullet_style) = if dim {
+            ("  ", Style::default())
+        } else {
+            ("● ", Style::default().fg(t.unread_dot))
+        };
+        header.push(Span::styled(bullet.to_string(), bullet_style));
+    }
+    let icon_style = if dim {
+        Style::default().fg(icon_color)
     } else {
-        ("● ", Style::default().fg(t.unread_dot))
+        Style::default().fg(icon_color).add_modifier(Modifier::BOLD)
     };
-
-    let mut header: Vec<Span<'static>> = vec![
-        Span::styled(bullet.to_string(), bullet_style),
-        Span::styled(
-            format!("{icon}  "),
-            Style::default().fg(icon_color).add_modifier(Modifier::BOLD),
-        ),
-    ];
+    header.push(Span::styled(format!("{icon} "), icon_style));
 
     if !n.actors.is_empty() {
         let first = &n.actors[0];
@@ -984,9 +987,7 @@ fn draw_detail(
         FocusEntry::Tweet(detail) => {
             draw_tweet_detail(frame, area, detail, ctx, active, reply_sort)
         }
-        FocusEntry::Likers(view) => {
-            draw_likers_detail(frame, area, view, ctx.raw_display_names, active)
-        }
+        FocusEntry::Likers(view) => draw_likers_detail(frame, area, view, ctx, active),
         FocusEntry::Notifications(view) => {
             draw_notifications_detail(frame, area, view, ctx, notif_seen, active)
         }
@@ -1014,7 +1015,16 @@ fn draw_notifications_detail(
         frame.render_widget(body, area);
         return;
     }
-    let wrap_width = (area.width as usize).saturating_sub(4);
+    let avatars_on = ctx.opts.feed_avatars;
+    let cell = avatar_cell_for(ctx);
+    let wrap_width = {
+        let w = (area.width as usize).saturating_sub(4);
+        if avatars_on {
+            w.saturating_sub(feed_avatar_gutter_cols(cell) as usize)
+        } else {
+            w
+        }
+    };
     let selected = view.selected();
     let items: Vec<PaneItem> = view
         .notifications
@@ -1032,7 +1042,28 @@ fn draw_notifications_detail(
                 .target_tweet_id
                 .as_ref()
                 .is_some_and(|tid| ctx.liked_tweet_ids.contains(tid));
-            let lines = notification_lines(n, seen, wrap_width, is_expanded, actor_cursor, liked);
+            let mut lines = notification_lines(
+                n,
+                seen,
+                wrap_width,
+                is_expanded,
+                actor_cursor,
+                liked,
+                avatars_on,
+            );
+            if avatars_on {
+                while lines.len() < FEED_AVATAR_ROWS as usize {
+                    lines.push(Line::from(""));
+                }
+                let kitty_id = if ctx.opts.avatars_inline_kitty {
+                    n.actors
+                        .first()
+                        .and_then(|a| ready_avatar_id(ctx.media_reg, a))
+                } else {
+                    None
+                };
+                apply_avatar_gutter(&mut lines, kitty_id, cell);
+            }
             PaneItem::new(lines)
         })
         .collect();
@@ -1232,7 +1263,7 @@ fn draw_likers_detail(
     frame: &mut Frame,
     area: Rect,
     view: &mut crate::tui::focus::LikersView,
-    display_names: DisplayNameStyle,
+    ctx: &RenderContext,
     active: bool,
 ) {
     let title = if view.loading && view.users.is_empty() {
@@ -1254,13 +1285,16 @@ fn draw_likers_detail(
         return;
     }
 
+    let display_names = ctx.raw_display_names;
+    let avatars_on = ctx.opts.feed_avatars;
+    let cell = avatar_cell_for(ctx);
     let selected = view.selected();
     let items: Vec<PaneItem> = view
         .users
         .iter()
         .map(|user| {
             let t = th();
-            let mut row: Vec<Span<'static>> = vec![
+            let mut handle_row: Vec<Span<'static>> = vec![
                 Span::raw("  "),
                 Span::styled(
                     user.handle.clone(),
@@ -1270,21 +1304,49 @@ fn draw_likers_detail(
                 ),
             ];
             if user.verified {
-                row.push(Span::styled(" ✓", Style::default().fg(t.verified)));
+                handle_row.push(Span::styled(" ✓", Style::default().fg(t.verified)));
             }
-            if matches!(display_names, DisplayNameStyle::Visible) && !user.name.is_empty() {
-                row.push(Span::styled(
-                    format!("  {}", user.name),
-                    Style::default().fg(t.text_muted),
-                ));
+            let show_name =
+                matches!(display_names, DisplayNameStyle::Visible) && !user.name.is_empty();
+            let mut lines: Vec<Line<'static>> = Vec::with_capacity(2);
+            if avatars_on {
+                if show_name {
+                    handle_row.push(Span::styled(
+                        format!("  {}", user.name),
+                        Style::default().fg(t.text_muted),
+                    ));
+                }
+                lines.push(Line::from(handle_row));
+                let mut meta: Vec<Span<'static>> = vec![Span::raw("  ")];
+                if user.followers > 0 {
+                    meta.push(Span::styled(
+                        format!("{} followers", short_count(user.followers)),
+                        Style::default().fg(t.text_muted),
+                    ));
+                }
+                lines.push(Line::from(meta));
+                let kitty_id = if ctx.opts.avatars_inline_kitty {
+                    ready_avatar_id(ctx.media_reg, user)
+                } else {
+                    None
+                };
+                apply_avatar_gutter(&mut lines, kitty_id, cell);
+            } else {
+                if show_name {
+                    handle_row.push(Span::styled(
+                        format!("  {}", user.name),
+                        Style::default().fg(t.text_muted),
+                    ));
+                }
+                if user.followers > 0 {
+                    handle_row.push(Span::styled(
+                        format!("  {} followers", short_count(user.followers)),
+                        Style::default().fg(t.text_muted),
+                    ));
+                }
+                lines.push(Line::from(handle_row));
             }
-            if user.followers > 0 {
-                row.push(Span::styled(
-                    format!("  {} followers", short_count(user.followers)),
-                    Style::default().fg(t.text_muted),
-                ));
-            }
-            PaneItem::new(vec![Line::from(row)])
+            PaneItem::new(lines)
         })
         .collect();
 
@@ -2580,23 +2642,25 @@ fn apply_feed_avatar_gutter(
     ctx: &RenderContext,
     cell: media::CellSize,
 ) {
-    if lines.is_empty() {
-        return;
-    }
     let kitty_id = if ctx.opts.avatars_inline_kitty {
-        author.avatar_url.as_deref().and_then(|url| {
-            if url.is_empty() {
-                return None;
-            }
-            match ctx.media_reg.get(url) {
-                Some(MediaEntry::ReadyKitty { id, .. }) => Some(*id),
-                _ => None,
-            }
-        })
+        ready_avatar_id(ctx.media_reg, author)
     } else {
         None
     };
+    apply_avatar_gutter(lines, kitty_id, cell);
+}
 
+/// Underlying gutter applier — resolves the kitty id elsewhere so
+/// non-tweet panes (notifications, likers) can reuse the same chip
+/// geometry without going through `RenderContext`.
+fn apply_avatar_gutter(
+    lines: &mut Vec<Line<'static>>,
+    kitty_id: Option<u32>,
+    cell: media::CellSize,
+) {
+    if lines.is_empty() {
+        return;
+    }
     let cols = feed_avatar_cols(cell) as usize;
     let rows = FEED_AVATAR_ROWS as usize;
     let blank_gutter = Span::raw(" ".repeat(cols + 1));
@@ -2613,6 +2677,12 @@ fn apply_feed_avatar_gutter(
         spans.append(&mut line.spans);
         line.spans = spans;
     }
+}
+
+fn avatar_cell_for(ctx: &RenderContext) -> media::CellSize {
+    ctx.cell_size_override
+        .or_else(|| ctx.media_reg.cell_size())
+        .unwrap_or(media::CellSize { w: 1, h: 2 })
 }
 
 fn image_max_cols(wrap_width: usize) -> usize {
@@ -3663,6 +3733,28 @@ pub fn emit_media_placements(app: &mut App, terminal_width: u16) {
                     );
                 }
             }
+        }
+    }
+
+    if feed_avatars_on {
+        match app.focus_stack.last() {
+            Some(FocusEntry::Notifications(view)) => {
+                for n in &view.notifications {
+                    if let Some(actor) = n.actors.first()
+                        && let Some(id) = ready_avatar_id(&app.media, actor)
+                    {
+                        to_place.push((id, avatar_cols, FEED_AVATAR_ROWS));
+                    }
+                }
+            }
+            Some(FocusEntry::Likers(view)) => {
+                for user in &view.users {
+                    if let Some(id) = ready_avatar_id(&app.media, user) {
+                        to_place.push((id, avatar_cols, FEED_AVATAR_ROWS));
+                    }
+                }
+            }
+            _ => {}
         }
     }
 

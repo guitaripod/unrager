@@ -4481,6 +4481,7 @@ fn draw_leader_overlay(frame: &mut Frame, area: Rect, app: &App) {
     );
     let absolute_on = matches!(app.timestamps, crate::tui::app::TimestampStyle::Absolute);
     let images_on = app.media_auto_expand;
+    let avatars_on = app.feed_avatars;
     let filter_on = matches!(app.filter_mode, crate::tui::filter::FilterMode::On);
 
     let rows: Vec<(&str, &str, Option<Span>)> = vec![
@@ -4520,6 +4521,7 @@ fn draw_leader_overlay(frame: &mut Frame, area: Rect, app: &App) {
             )),
         ),
         ("i", "images auto-expand", Some(on_off(images_on))),
+        ("a", "feed avatars", Some(on_off(avatars_on))),
         ("r", "rage filter", Some(on_off(filter_on))),
     ];
 

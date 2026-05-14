@@ -504,6 +504,7 @@ impl App {
             songlink_reg: &self.songlink_reg,
             translations: &self.translations,
             liked_tweet_ids: &self.liked_tweet_ids,
+            about_store: &self.about,
             write_rate_limit: None,
             self_handle: None,
             cell_size_override: Some(screenshot::grid_cell_size()),

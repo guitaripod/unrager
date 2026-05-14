@@ -207,6 +207,7 @@ pub struct RenderContext<'a> {
     pub songlink_reg: &'a crate::tui::songlink::SongLinkRegistry,
     pub translations: &'a HashMap<String, String>,
     pub liked_tweet_ids: &'a HashSet<String>,
+    pub about_store: &'a crate::tui::about_store::AboutStore,
     pub write_rate_limit: Option<std::time::Duration>,
     pub self_handle: Option<&'a str>,
     /// Overrides the cell pixel size used for sizing the feed-avatar
@@ -270,6 +271,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         songlink_reg: &app.songlink_reg,
         translations: &app.translations,
         liked_tweet_ids: &app.liked_tweet_ids,
+        about_store: &app.about,
         write_rate_limit: app.client.write_rate_limit_remaining(),
         self_handle: app.self_handle.as_deref(),
         cell_size_override: None,
@@ -615,6 +617,10 @@ fn profile_header_lines(
         name_line.push(Span::styled("  ·  ", muted));
     }
     name_line.push(Span::styled(format!("@{}", user.handle), handle_style));
+    if let Some(flag) = flag_for_user(ctx, &user.rest_id) {
+        name_line.push(Span::raw(" "));
+        name_line.push(Span::raw(flag));
+    }
     if user.verified {
         name_line.push(Span::styled(
             " ✓",
@@ -660,8 +666,96 @@ fn profile_header_lines(
         }
     }
 
+    if let Some(Some(about)) = ctx.about_store.get(&user.rest_id) {
+        for line in about_profile_lines(about, muted, name_style) {
+            lines.push(line);
+        }
+    }
+
     lines.push(Line::from(""));
     lines
+}
+
+fn about_profile_lines(
+    about: &crate::model::AboutProfile,
+    muted: Style,
+    value_style: Style,
+) -> Vec<Line<'static>> {
+    let mut out: Vec<Line<'static>> = Vec::new();
+
+    if let Some(country) = about.account_based_in.as_deref() {
+        let mut spans = vec![Span::raw("  "), Span::styled("based in ", muted)];
+        if let Some(flag) = crate::flag::emoji_for(country) {
+            spans.push(Span::raw(flag));
+            spans.push(Span::raw(" "));
+        }
+        spans.push(Span::styled(country.to_string(), value_style));
+        if let Some(src) = about.source.as_deref() {
+            spans.push(Span::styled(format!("  ·  via {src}"), muted));
+        }
+        if about.location_accurate == Some(false) {
+            spans.push(Span::styled("  ·  unverified", muted));
+        }
+        out.push(Line::from(spans));
+    } else if let Some(src) = about.source.as_deref() {
+        out.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled("region source ", muted),
+            Span::styled(src.to_string(), value_style),
+        ]));
+    }
+
+    if let Some(joined) = about.created_at {
+        let when = joined.format("%b %Y").to_string();
+        let mut spans = vec![
+            Span::raw("  "),
+            Span::styled("joined ", muted),
+            Span::styled(when, value_style),
+        ];
+        if about.is_blue_verified {
+            if let Some(since) = about.verified_since {
+                spans.push(Span::styled(
+                    format!("  ·  blue since {}", since.format("%b %Y")),
+                    muted,
+                ));
+            } else {
+                spans.push(Span::styled("  ·  blue", muted));
+            }
+        }
+        out.push(Line::from(spans));
+    } else if about.is_blue_verified
+        && let Some(since) = about.verified_since
+    {
+        out.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled("blue since ", muted),
+            Span::styled(since.format("%b %Y").to_string(), value_style),
+        ]));
+    }
+
+    if let Some(affiliate) = about.affiliate_username.as_deref() {
+        out.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled("affiliated with @", muted),
+            Span::styled(affiliate.to_string(), value_style),
+        ]));
+    }
+
+    if let Some(n) = about.username_changes
+        && n > 0
+    {
+        let label = if n == 1 {
+            "1 username change".to_string()
+        } else {
+            format!("{n} username changes")
+        };
+        out.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(label, muted),
+        ]));
+    }
+
+    out
 }
 
 fn notification_lines(
@@ -1948,13 +2042,23 @@ fn draw_reply_bar(
     }
 }
 
-fn author_spans(handle: &str, verified: bool, name: &str, show_name: bool) -> Vec<Span<'static>> {
+fn author_spans(
+    handle: &str,
+    verified: bool,
+    name: &str,
+    show_name: bool,
+    flag: Option<&str>,
+) -> Vec<Span<'static>> {
     let t = th();
     let color = theme::handle_color(handle);
     let mut spans = vec![Span::styled(
         format!("@{handle}"),
         Style::default().fg(color).add_modifier(Modifier::BOLD),
     )];
+    if let Some(f) = flag {
+        spans.push(Span::raw(" "));
+        spans.push(Span::raw(f.to_string()));
+    }
     if verified {
         spans.push(Span::styled(" ✓", Style::default().fg(t.verified)));
     }
@@ -1966,6 +2070,15 @@ fn author_spans(handle: &str, verified: bool, name: &str, show_name: bool) -> Ve
         ));
     }
     spans
+}
+
+fn flag_for_user(ctx: &RenderContext, rest_id: &str) -> Option<String> {
+    ctx.about_store
+        .get(rest_id)?
+        .as_ref()?
+        .account_based_in
+        .as_deref()
+        .and_then(crate::flag::emoji_for)
 }
 
 const TEXT_LINES_IN_CARD: usize = 3;
@@ -2074,11 +2187,13 @@ pub(super) fn tweet_lines(
         ));
     }
     let show_name = matches!(opts.display_names, DisplayNameStyle::Visible);
+    let flag = flag_for_user(ctx, &t.author.rest_id);
     header.extend(author_spans(
         &t.author.handle,
         t.author.verified,
         &t.author.name,
         show_name,
+        flag.as_deref(),
     ));
     header.push(Span::styled(
         "  ·  ",

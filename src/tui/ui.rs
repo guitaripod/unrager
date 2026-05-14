@@ -200,6 +200,14 @@ pub struct RenderOpts {
     /// ISO 3166-1 alpha-2 letters since the bundled monospace fonts
     /// don't include flag emoji and would render tofu.
     pub flag_style: FlagStyle,
+    /// When true, suppress the reply-count span, the engagement-only
+    /// heart, and the extra stats row regardless of `metrics` or the
+    /// per-tweet `expanded` flag. The screenshot composer uses this
+    /// to honor its 'metrics off' setting even though it forces
+    /// `expanded = true` to render full bodies — without this flag,
+    /// expansion would re-enable the metrics row through
+    /// `effective_expanded`.
+    pub suppress_metrics_row: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -266,6 +274,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         feed_avatars: app.feed_avatars && app.media.is_kitty(),
         avatars_inline_kitty: true,
         flag_style: FlagStyle::Emoji,
+        suppress_metrics_row: false,
     };
     let filter_ctx = FilterRenderCtx {
         mode: filter_mode,
@@ -2237,13 +2246,18 @@ pub(super) fn tweet_lines(
         };
         header.push(Span::styled(label, Style::default().fg(color)));
     }
-    let show_extra = effective_expanded || matches!(opts.metrics, MetricsStyle::Visible);
-    let extras = if show_extra {
+    let show_extra = !opts.suppress_metrics_row
+        && (effective_expanded || matches!(opts.metrics, MetricsStyle::Visible));
+    let extras = if opts.suppress_metrics_row {
+        Vec::new()
+    } else if show_extra {
         extra_stats_spans(t)
     } else {
         engagement_only_spans(t)
     };
-    if let Some(reply_span) = reply_count_span(t) {
+    if !opts.suppress_metrics_row
+        && let Some(reply_span) = reply_count_span(t)
+    {
         header.push(Span::raw("    "));
         header.push(reply_span);
     }

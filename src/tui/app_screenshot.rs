@@ -502,6 +502,7 @@ impl App {
             feed_avatars: self.feed_avatars && tweet.author.avatar_url.is_some(),
             avatars_inline_kitty: false,
             flag_style: FlagStyle::Alpha2,
+            suppress_metrics_row: !self.screenshot_show_metrics,
         };
         let ctx = RenderContext {
             opts,

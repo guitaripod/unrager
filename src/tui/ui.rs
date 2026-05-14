@@ -4720,21 +4720,25 @@ fn draw_compose_overlay(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::styled(" 1-7", key_style),
-            Span::raw(" preset  "),
+            Span::raw(" theme    "),
             Span::styled("t", key_style),
-            Span::raw(" tune  "),
+            Span::raw(" tune    "),
             Span::styled("T", key_style),
-            Span::raw(" thread  "),
-            Span::styled("n", key_style),
-            Span::raw(" names  "),
+            Span::raw(" thread"),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(" n", key_style),
+            Span::raw(" names    "),
             Span::styled("m", key_style),
-            Span::raw(" metrics  "),
-            Span::styled("s", key_style),
-            Span::raw(" save  "),
+            Span::raw(" metrics"),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(" s", key_style),
+            Span::raw(" save    "),
             Span::styled("y", key_style),
-            Span::raw(" clipboard  "),
+            Span::raw(" clipboard    "),
             Span::styled("Enter", key_style),
-            Span::raw(" commit  "),
+            Span::raw(" commit    "),
             Span::styled("Esc", key_style),
             Span::raw(" cancel"),
         ]));

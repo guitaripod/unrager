@@ -21,6 +21,7 @@ pub enum Operation {
     FavoriteTweet,
     UnfavoriteTweet,
     CreateTweet,
+    AboutAccountQuery,
 }
 
 impl Operation {
@@ -41,6 +42,7 @@ impl Operation {
             Self::FavoriteTweet => "FavoriteTweet",
             Self::UnfavoriteTweet => "UnfavoriteTweet",
             Self::CreateTweet => "CreateTweet",
+            Self::AboutAccountQuery => "AboutAccountQuery",
         }
     }
 }
@@ -156,4 +158,5 @@ const FALLBACK_QUERY_IDS: &[(&str, &str)] = &[
     ("FavoriteTweet", "lI07N6Otwv1PhnEgXILM7A"),
     ("UnfavoriteTweet", "ZYKSe-w7KEslx3JhSIk5LA"),
     ("CreateTweet", "c50A_puUoQGK_4SXseYz3A"),
+    ("AboutAccountQuery", "XRqGa7EeokUU5kppkh13EA"),
 ];

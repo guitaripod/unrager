@@ -327,6 +327,14 @@ pub fn create_tweet_features() -> Value {
     })
 }
 
+pub fn about_account_variables(screen_name: &str) -> Value {
+    json!({ "screenName": screen_name })
+}
+
+pub fn about_account_features() -> Value {
+    json!({})
+}
+
 pub fn favoriters_variables(tweet_id: &str, count: u32, cursor: Option<&str>) -> Value {
     let mut vars = json!({
         "tweetId": tweet_id,

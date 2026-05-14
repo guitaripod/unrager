@@ -18,6 +18,7 @@ pub mod engage;
 pub mod event;
 pub mod external;
 pub mod filter;
+pub mod flag_cache;
 pub mod focus;
 pub mod media;
 pub mod screenshot;

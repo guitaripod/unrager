@@ -27,6 +27,11 @@ pub struct GqlClient {
     client_uuid: String,
     read_rate_limit_until: Mutex<Option<std::time::Instant>>,
     write_rate_limit_until: Mutex<Option<std::time::Instant>>,
+    /// Dedicated bucket for `AboutAccountQuery`. X enforces this endpoint's
+    /// budget independently, and a 429 here must NOT spill into the shared
+    /// `read_rate_limit_until` — otherwise a flag-fetch failure would
+    /// freeze the main feed and surface a misleading "X cooldown" banner.
+    about_rate_limit_until: Mutex<Option<std::time::Instant>>,
     transaction_key: Mutex<Option<TransactionKeyMaterial>>,
 }
 
@@ -67,6 +72,7 @@ impl GqlClient {
             client_uuid,
             read_rate_limit_until: Mutex::new(None),
             write_rate_limit_until: Mutex::new(None),
+            about_rate_limit_until: Mutex::new(None),
             transaction_key: Mutex::new(None),
         })
     }
@@ -105,7 +111,13 @@ impl GqlClient {
         variables: &Value,
         features: &Value,
     ) -> Result<Value> {
-        if let Some(remaining) = self.rate_limit_remaining_for(method.kind()) {
+        if matches!(op, Operation::AboutAccountQuery) {
+            if let Some(remaining) = self.about_rate_limit_remaining() {
+                return Err(Error::RateLimited {
+                    remaining_secs: remaining.as_secs().max(1),
+                });
+            }
+        } else if let Some(remaining) = self.rate_limit_remaining_for(method.kind()) {
             return Err(Error::RateLimited {
                 remaining_secs: remaining.as_secs().max(1),
             });
@@ -158,7 +170,7 @@ impl GqlClient {
         };
 
         let res = req.send().await?;
-        self.parse(res, method.kind()).await
+        self.parse(res, method.kind(), op).await
     }
 
     fn lookup_qid(&self, op: Operation) -> Option<QueryId> {
@@ -288,20 +300,55 @@ impl GqlClient {
         crate::gql::transaction::generate_id(material, method, path)
     }
 
-    async fn parse(&self, res: reqwest::Response, kind: RateLimitKind) -> Result<Value> {
+    async fn parse(
+        &self,
+        res: reqwest::Response,
+        kind: RateLimitKind,
+        op: Operation,
+    ) -> Result<Value> {
         let status = res.status();
+        let reset_hdr = res
+            .headers()
+            .get("x-rate-limit-reset")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok());
+        let remaining_hdr = res
+            .headers()
+            .get("x-rate-limit-remaining")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok());
+        let is_about = matches!(op, Operation::AboutAccountQuery);
+
         if status.as_u16() == 429 {
-            let reset_hdr = res
-                .headers()
-                .get("x-rate-limit-reset")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.parse::<u64>().ok());
-            let remaining = compute_rate_limit_remaining(reset_hdr);
-            self.record_rate_limit(kind, remaining);
+            let cooldown = compute_rate_limit_remaining(reset_hdr);
+            if is_about {
+                self.record_about_cooldown(cooldown);
+            } else {
+                self.record_rate_limit(kind, cooldown);
+            }
             return Err(Error::RateLimited {
-                remaining_secs: remaining.as_secs().max(1),
+                remaining_secs: cooldown.as_secs().max(1),
             });
         }
+
+        // Proactive throttle: when AboutAccountQuery's budget is nearly
+        // exhausted, sleep the bucket until reset so the next caller bails
+        // before triggering a real 429. The headers are advisory so we
+        // leave the main feed buckets alone — they're allowed to keep
+        // firing until the server actually slams the door.
+        if is_about
+            && let (Some(rem), Some(reset)) = (remaining_hdr, reset_hdr)
+            && rem <= 2
+        {
+            let cooldown = compute_rate_limit_remaining(Some(reset));
+            tracing::info!(
+                rem,
+                cooldown_secs = cooldown.as_secs(),
+                "AboutAccountQuery budget low, parking until reset"
+            );
+            self.record_about_cooldown(cooldown);
+        }
+
         let body = res.text().await?;
         if !status.is_success() {
             return Err(Error::GraphqlStatus {
@@ -367,6 +414,19 @@ impl GqlClient {
         if let Ok(mut guard) = slot.lock() {
             *guard = Some(std::time::Instant::now() + remaining);
         }
+    }
+
+    fn record_about_cooldown(&self, remaining: Duration) {
+        if let Ok(mut guard) = self.about_rate_limit_until.lock() {
+            *guard = Some(std::time::Instant::now() + remaining);
+        }
+    }
+
+    pub fn about_rate_limit_remaining(&self) -> Option<Duration> {
+        let until = *self.about_rate_limit_until.lock().ok()?;
+        let until = until?;
+        let now = std::time::Instant::now();
+        if until > now { Some(until - now) } else { None }
     }
 }
 

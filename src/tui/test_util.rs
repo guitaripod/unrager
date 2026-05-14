@@ -73,6 +73,7 @@ pub fn dummy_app() -> (App, mpsc::UnboundedReceiver<Event>, TempDir) {
         media_auto_expand: false,
         feed_avatars: true,
         screenshot_show_display_names: false,
+        screenshot_show_metrics: false,
         feed_mode: FeedMode::All,
         self_handle: Some("testuser".into()),
         filter_mode: FilterMode::Off,

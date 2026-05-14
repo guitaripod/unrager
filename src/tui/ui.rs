@@ -194,6 +194,18 @@ pub struct RenderOpts {
     /// reserved as plain spaces — used by the screenshot rasterizer,
     /// which composites avatar pixels separately.
     pub avatars_inline_kitty: bool,
+    /// How the country badge next to a handle renders. The live TUI
+    /// uses regional-indicator emoji because modern terminals draw
+    /// real flag glyphs; the screenshot rasterizer falls back to the
+    /// ISO 3166-1 alpha-2 letters since the bundled monospace fonts
+    /// don't include flag emoji and would render tofu.
+    pub flag_style: FlagStyle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlagStyle {
+    Emoji,
+    Alpha2,
 }
 
 pub struct RenderContext<'a> {
@@ -253,6 +265,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         media_max_rows: (pane_h.saturating_sub(4) / 2).clamp(6, 24),
         feed_avatars: app.feed_avatars && app.media.is_kitty(),
         avatars_inline_kitty: true,
+        flag_style: FlagStyle::Emoji,
     };
     let filter_ctx = FilterRenderCtx {
         mode: filter_mode,
@@ -2073,12 +2086,16 @@ fn author_spans(
 }
 
 fn flag_for_user(ctx: &RenderContext, rest_id: &str) -> Option<String> {
-    ctx.about_store
+    let country = ctx
+        .about_store
         .get(rest_id)?
         .as_ref()?
         .account_based_in
-        .as_deref()
-        .and_then(crate::flag::emoji_for)
+        .as_deref()?;
+    match ctx.opts.flag_style {
+        FlagStyle::Emoji => crate::flag::emoji_for(country),
+        FlagStyle::Alpha2 => crate::flag::alpha2_for(country).map(str::to_string),
+    }
 }
 
 const TEXT_LINES_IN_CARD: usize = 3;
@@ -4615,6 +4632,12 @@ fn draw_compose_overlay(frame: &mut Frame, area: Rect, app: &App) {
         "names:       handle only (n to show display name)"
     };
     lines.push(Line::from(Span::styled(names_label.to_string(), dim)));
+    let metrics_label = if app.screenshot_show_metrics {
+        "metrics:     on  (m to hide replies / RTs / likes / views)"
+    } else {
+        "metrics:     off (m to show replies / RTs / likes / views)"
+    };
+    lines.push(Line::from(Span::styled(metrics_label.to_string(), dim)));
     lines.push(Line::from(""));
 
     if let Some(buf) = compose.tune_buffer.as_ref() {
@@ -4688,6 +4711,8 @@ fn draw_compose_overlay(frame: &mut Frame, area: Rect, app: &App) {
             Span::raw(" thread  "),
             Span::styled("n", key_style),
             Span::raw(" names  "),
+            Span::styled("m", key_style),
+            Span::raw(" metrics  "),
             Span::styled("s", key_style),
             Span::raw(" save  "),
             Span::styled("y", key_style),

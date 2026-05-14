@@ -14,7 +14,7 @@ use crate::tui::screenshot::{
     self, Capture, PRESET_ARCADE, PRESET_BLUEPRINT, PRESET_CUTOUT, PRESET_GLASS, PRESET_MOSS,
     PRESET_SYNTHWAVE, RenderArgs, ShotTheme, TweetBlock,
 };
-use crate::tui::ui::{self, RenderContext, RenderOpts};
+use crate::tui::ui::{self, FlagStyle, RenderContext, RenderOpts};
 use image::RgbaImage;
 use ratatui::text::Line;
 use std::path::PathBuf;
@@ -166,6 +166,11 @@ impl App {
 
     pub(super) fn compose_toggle_display_names(&mut self) {
         self.screenshot_show_display_names = !self.screenshot_show_display_names;
+        self.save_session();
+    }
+
+    pub(super) fn compose_toggle_metrics(&mut self) {
+        self.screenshot_show_metrics = !self.screenshot_show_metrics;
         self.save_session();
     }
 
@@ -481,7 +486,11 @@ impl App {
     ) -> Vec<Line<'static>> {
         let opts = RenderOpts {
             timestamps: self.timestamps,
-            metrics: crate::tui::app::MetricsStyle::Visible,
+            metrics: if self.screenshot_show_metrics {
+                crate::tui::app::MetricsStyle::Visible
+            } else {
+                crate::tui::app::MetricsStyle::Hidden
+            },
             display_names: if self.screenshot_show_display_names {
                 crate::tui::app::DisplayNameStyle::Visible
             } else {
@@ -492,6 +501,7 @@ impl App {
             media_max_rows: 0,
             feed_avatars: self.feed_avatars && tweet.author.avatar_url.is_some(),
             avatars_inline_kitty: false,
+            flag_style: FlagStyle::Alpha2,
         };
         let ctx = RenderContext {
             opts,

@@ -26,6 +26,8 @@ pub struct SessionState {
     pub theme: Option<String>,
     #[serde(default)]
     pub screenshot_show_display_names: Option<bool>,
+    #[serde(default)]
+    pub screenshot_show_metrics: Option<bool>,
 }
 
 pub fn load(path: &Path) -> Option<SessionState> {
@@ -63,6 +65,7 @@ mod tests {
             whisper_cursor: Some("cursor-abc".into()),
             theme: Some("x-dark".into()),
             screenshot_show_display_names: Some(true),
+            screenshot_show_metrics: Some(true),
         };
         save(tmp.path(), &state).unwrap();
         let loaded = load(tmp.path()).unwrap();
@@ -92,6 +95,7 @@ mod tests {
             whisper_cursor: None,
             theme: None,
             screenshot_show_display_names: None,
+            screenshot_show_metrics: None,
         };
         save(tmp.path(), &state).unwrap();
         let loaded = load(tmp.path()).unwrap();

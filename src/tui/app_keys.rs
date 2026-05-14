@@ -398,6 +398,7 @@ impl App {
             (KeyCode::Char('t'), _) => self.compose_begin_tune(),
             (KeyCode::Char('T'), _) => self.compose_toggle_thread(),
             (KeyCode::Char('n'), _) => self.compose_toggle_display_names(),
+            (KeyCode::Char('m'), _) => self.compose_toggle_metrics(),
             (KeyCode::Char('s'), _) => self.compose_confirm(Destination::Disk),
             (KeyCode::Char('y'), _) => self.compose_confirm(Destination::Clipboard),
             (KeyCode::Enter, _) => {

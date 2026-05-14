@@ -19,6 +19,7 @@ use ratatui::style::{Color, Modifier};
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::{Paragraph, Widget};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -110,6 +111,16 @@ pub struct TweetBlock {
     /// top-left — the screenshot's analogue of the live TUI's kitty
     /// avatar chip. When `None`, the gutter stays blank.
     pub author_avatar: Option<RgbaImage>,
+    /// Country flag PNGs decoded to RGBA, keyed by ISO 3166-1 alpha-2
+    /// code. Whenever `paint_buffer` encounters a regional-indicator
+    /// pair (e.g. `🇺🇸`) it looks up the corresponding image and
+    /// composites it over the two cells. Codes absent from this map
+    /// render as empty space — we deliberately do not fall back to the
+    /// letters since they'd look out of place next to a real flag in
+    /// other blocks. The map is populated lazily by the caller
+    /// (`tui::flag_cache`), which fetches missing PNGs from the
+    /// Twemoji CDN and caches them under `~/.cache/unrager/flags/`.
+    pub flags: HashMap<String, RgbaImage>,
 }
 
 /// Cells reserved at the top-left of every block for the author-avatar
@@ -426,6 +437,7 @@ pub fn render(args: RenderArgs<'_>) -> Capture {
             lines: Vec::new(),
             media_images: Vec::new(),
             author_avatar: None,
+            flags: HashMap::new(),
         }]
     } else {
         args.blocks
@@ -478,6 +490,7 @@ pub fn render(args: RenderArgs<'_>) -> Capture {
             &grid,
             shot,
             bg,
+            &block.flags,
         );
         if let Some(avatar) = block.avatar.as_ref() {
             imageops::overlay(&mut canvas, avatar, text_origin_x as i64, cursor_y as i64);
@@ -518,6 +531,7 @@ struct PreparedBlock {
     /// cells (in pixels). The renderer overlays it at the block's
     /// top-left, after `paint_buffer` has drawn the gutter spaces.
     avatar: Option<RgbaImage>,
+    flags: HashMap<String, RgbaImage>,
 }
 
 impl PreparedBlock {
@@ -563,6 +577,7 @@ fn prepare_block(block: TweetBlock, grid: &Grid, content_px: u32) -> PreparedBlo
         scaled_media,
         media_h,
         avatar,
+        flags: block.flags,
     }
 }
 
@@ -759,6 +774,7 @@ fn last_nonblank_row(buf: &Buffer) -> u16 {
     0
 }
 
+#[allow(clippy::too_many_arguments)]
 fn paint_buffer(
     canvas: &mut RgbaImage,
     buf: &Buffer,
@@ -767,6 +783,7 @@ fn paint_buffer(
     grid: &Grid,
     shot: &ShotTheme,
     canvas_bg: Rgba<u8>,
+    flags: &HashMap<String, RgbaImage>,
 ) {
     let (origin_x, origin_y) = origin;
     let default_fg = rgba_from(shot.text);
@@ -785,11 +802,87 @@ fn paint_buffer(
             if sym.is_empty() || sym == " " {
                 continue;
             }
+
+            // Regional-indicator pair → flag emoji. ab_glyph can't render
+            // color emoji or apply ligature shaping, so the bundled
+            // monospace fonts would draw both codepoints as tofu.
+            // Composite the cached Twemoji PNG when we have it; when we
+            // don't (offline, fetch failed, country not yet cached), the
+            // two cells deliberately stay empty — letters look out of
+            // place next to real flags in other blocks of the same image.
+            if let Some(alpha2) = regional_indicator_pair_to_alpha2(sym) {
+                if let Some(flag) = flags.get(&alpha2) {
+                    composite_flag(canvas, flag, px_x, px_y, grid.cell_w * 2, grid.line_h);
+                }
+                continue;
+            }
+
             let fg = color_to_rgba_opt(cell.fg).unwrap_or(default_fg);
             let bold = cell.modifier.contains(Modifier::BOLD);
             let font: &FontRef<'static> = if bold { &FONT_BOLD } else { &FONT_REG };
             draw_str(canvas, font, sym, (px_x, px_y), grid, fg);
         }
+    }
+}
+
+/// Converts a two-codepoint regional-indicator string into the ISO 3166-1
+/// alpha-2 country code. Returns `None` for anything else.
+fn regional_indicator_pair_to_alpha2(sym: &str) -> Option<String> {
+    let mut chars = sym.chars();
+    let a = chars.next()?;
+    let b = chars.next()?;
+    if chars.next().is_some() {
+        return None;
+    }
+    Some(format!(
+        "{}{}",
+        regional_indicator_char(a)?,
+        regional_indicator_char(b)?
+    ))
+}
+
+fn regional_indicator_char(ch: char) -> Option<char> {
+    let cp = ch as u32;
+    if !(0x1F1E6..=0x1F1FF).contains(&cp) {
+        return None;
+    }
+    Some(char::from_u32(u32::from(b'A') + (cp - 0x1F1E6)).unwrap())
+}
+
+/// Resizes the (square 72×72) Twemoji PNG to fit the two-cell slot and
+/// alpha-blends it onto the canvas. The flag is centered horizontally
+/// inside the slot in case the source's aspect doesn't match the
+/// available cell area; height fills the line.
+fn composite_flag(
+    canvas: &mut RgbaImage,
+    flag: &RgbaImage,
+    px_x: u32,
+    px_y: u32,
+    slot_w: u32,
+    slot_h: u32,
+) {
+    let src_w = flag.width().max(1);
+    let src_h = flag.height().max(1);
+    // Aspect-preserve fit within the slot.
+    let scale = (slot_w as f32 / src_w as f32).min(slot_h as f32 / src_h as f32);
+    let dst_w = ((src_w as f32) * scale).round().max(1.0) as u32;
+    let dst_h = ((src_h as f32) * scale).round().max(1.0) as u32;
+    let resized = imageops::resize(flag, dst_w, dst_h, imageops::FilterType::Triangle);
+    let off_x = px_x + (slot_w.saturating_sub(dst_w)) / 2;
+    let off_y = px_y + (slot_h.saturating_sub(dst_h)) / 2;
+    for (rx, ry, src_px) in resized.enumerate_pixels() {
+        let cx = off_x + rx;
+        let cy = off_y + ry;
+        if cx >= canvas.width() || cy >= canvas.height() {
+            continue;
+        }
+        let alpha = src_px[3] as f32 / 255.0;
+        if alpha <= 0.0 {
+            continue;
+        }
+        let existing = *canvas.get_pixel(cx, cy);
+        let blended = blend(existing, *src_px, alpha);
+        canvas.put_pixel(cx, cy, blended);
     }
 }
 
@@ -1018,7 +1111,29 @@ mod tests {
             lines,
             media_images: Vec::new(),
             author_avatar: None,
+            flags: HashMap::new(),
         }]
+    }
+
+    #[test]
+    fn regional_indicator_pair_decodes_to_alpha2() {
+        assert_eq!(
+            regional_indicator_pair_to_alpha2("🇺🇸"),
+            Some("US".to_string())
+        );
+        assert_eq!(
+            regional_indicator_pair_to_alpha2("🇯🇵"),
+            Some("JP".to_string())
+        );
+    }
+
+    #[test]
+    fn regional_indicator_pair_rejects_non_flag_input() {
+        assert_eq!(regional_indicator_pair_to_alpha2("hi"), None);
+        assert_eq!(regional_indicator_pair_to_alpha2("A"), None);
+        assert_eq!(regional_indicator_pair_to_alpha2(""), None);
+        // single regional indicator without partner
+        assert_eq!(regional_indicator_pair_to_alpha2("🇺"), None);
     }
 
     #[test]
@@ -1077,6 +1192,7 @@ mod tests {
                 lines: plain_lines(),
                 media_images: Vec::new(),
                 author_avatar: None,
+                flags: HashMap::new(),
             })
             .collect();
         let thread = render(RenderArgs {
@@ -1249,6 +1365,7 @@ mod tests {
                     lines: recolored,
                     media_images: Vec::new(),
                     author_avatar: None,
+                    flags: HashMap::new(),
                 }],
                 shot_theme: &shot,
             });
@@ -1336,6 +1453,7 @@ mod tests {
                         lines: recolored,
                         media_images: Vec::new(),
                         author_avatar: None,
+                        flags: HashMap::new(),
                     }
                 })
                 .collect()

@@ -355,12 +355,15 @@ impl App {
                 Some(url) => load_avatar_image(&url, avatar_cache_path.as_deref()).await,
                 None => None,
             };
+            let flag_codes = crate::tui::flag_cache::extract_alpha2_codes(&lines);
+            let flags = crate::tui::flag_cache::load_flags(flag_codes).await;
             let capture = screenshot::render(RenderArgs {
                 tweet_id,
                 blocks: vec![TweetBlock {
                     lines,
                     media_images: images,
                     author_avatar,
+                    flags,
                 }],
                 shot_theme: &shot,
             });
@@ -416,10 +419,13 @@ impl App {
                     Some(url) => load_avatar_image(&url, avatar_cache_path.as_deref()).await,
                     None => None,
                 };
+                let flag_codes = crate::tui::flag_cache::extract_alpha2_codes(&lines);
+                let flags = crate::tui::flag_cache::load_flags(flag_codes).await;
                 blocks.push(TweetBlock {
                     lines,
                     media_images: images,
                     author_avatar,
+                    flags,
                 });
             }
             let capture = screenshot::render(RenderArgs {
@@ -501,7 +507,7 @@ impl App {
             media_max_rows: 0,
             feed_avatars: self.feed_avatars && tweet.author.avatar_url.is_some(),
             avatars_inline_kitty: false,
-            flag_style: FlagStyle::Alpha2,
+            flag_style: FlagStyle::Emoji,
             suppress_metrics_row: !self.screenshot_show_metrics,
         };
         let ctx = RenderContext {

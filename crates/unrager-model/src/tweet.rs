@@ -88,3 +88,28 @@ pub struct PollOption {
     pub label: String,
     pub count: u64,
 }
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AboutProfile {
+    pub rest_id: String,
+    pub handle: String,
+    pub name: String,
+    #[serde(default)]
+    pub account_based_in: Option<String>,
+    #[serde(default)]
+    pub location_accurate: Option<bool>,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub username_changes: Option<u64>,
+    #[serde(default)]
+    pub affiliate_username: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub is_blue_verified: bool,
+    #[serde(default)]
+    pub verified: bool,
+    #[serde(default)]
+    pub verified_since: Option<DateTime<Utc>>,
+}

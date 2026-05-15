@@ -78,12 +78,22 @@ impl App {
         } else {
             None
         };
+        let seen_ids = self.home_seen_ids_for_request(&kind, append, silent);
+        tracing::info!(
+            kind = ?kind,
+            append,
+            silent,
+            cursor = cursor.is_some(),
+            seen_ids = seen_ids.len(),
+            source_total = self.source.tweets.len(),
+            "timeline fetch started"
+        );
         tokio::spawn(async move {
-            let mut result = source::fetch_page(&client, &kind, cursor.clone()).await;
+            let mut result = source::fetch_page(&client, &kind, cursor.clone(), &seen_ids).await;
             if result.is_err() && !append {
                 tracing::info!("transient fetch error, retrying in 2s");
                 tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                result = source::fetch_page(&client, &kind, cursor).await;
+                result = source::fetch_page(&client, &kind, cursor, &seen_ids).await;
             }
             let _ = tx.send(Event::TimelineLoaded {
                 kind,
@@ -92,6 +102,26 @@ impl App {
                 silent,
             });
         });
+    }
+
+    /// Builds the `seenTweetIds` array sent to the For You GraphQL operation.
+    /// Empty for everything else: the chronological Following feed
+    /// (HomeLatestTimeline) and non-Home sources are cursor-driven and the
+    /// field is either ignored or actively distorts the response. Capped to
+    /// the most recent 100 IDs to keep the request body bounded.
+    fn home_seen_ids_for_request(
+        &self,
+        kind: &SourceKind,
+        append: bool,
+        silent: bool,
+    ) -> Vec<String> {
+        if !matches!(kind, SourceKind::Home { following: false }) || !append || silent {
+            return Vec::new();
+        }
+        const MAX_SEEN: usize = 100;
+        let tweets = &self.source.tweets;
+        let start = tweets.len().saturating_sub(MAX_SEEN);
+        tweets[start..].iter().map(|t| t.rest_id.clone()).collect()
     }
 
     pub(super) fn handle_timeline_loaded(
@@ -144,12 +174,12 @@ impl App {
                 }
                 let filter_active =
                     matches!(self.filter_mode, FilterMode::On) && self.filter_classifier.is_some();
-                let cold_start_home = !silent
+                let cold_start_following = !silent
                     && self.source.tweets.is_empty()
-                    && matches!(kind, SourceKind::Home { .. });
+                    && matches!(kind, SourceKind::Home { following: true });
                 let held: Vec<Tweet> = if !filter_active {
                     Vec::new()
-                } else if cold_start_home {
+                } else if cold_start_following {
                     std::mem::take(&mut page.tweets)
                 } else if matches!(kind, SourceKind::Home { following: true }) {
                     let mut uncached = Vec::new();
@@ -204,6 +234,7 @@ impl App {
                         self.liked_tweet_ids.insert(t.rest_id.clone());
                     }
                 }
+                let held_count = held.len();
                 self.pending_classification.extend(held.iter().cloned());
                 if total_incoming > 0 && self.source.cursor.is_some() {
                     self.source.exhausted = false;
@@ -217,6 +248,21 @@ impl App {
                     self.source.tweets.clone()
                 };
                 new_tweets.extend(held);
+                tracing::info!(
+                    kind = ?kind,
+                    append,
+                    silent,
+                    incoming = total_incoming,
+                    hidden,
+                    held = held_count,
+                    pending = self.pending_classification.len(),
+                    inflight = self.filter_inflight.len(),
+                    added,
+                    cursor = self.source.cursor.is_some(),
+                    exhausted = self.source.exhausted,
+                    total = self.source.tweets.len(),
+                    "timeline fetch loaded"
+                );
                 self.queue_source_media(&new_tweets);
                 self.queue_filter_classification(new_tweets);
                 if silent {
@@ -229,6 +275,7 @@ impl App {
                 if silent {
                     tracing::warn!("silent timeline refresh failed: {e}");
                 } else {
+                    tracing::warn!(kind = ?kind, append, "timeline fetch failed: {e}");
                     self.error = Some(e.to_string());
                     self.clear_status();
                 }
@@ -473,7 +520,7 @@ impl App {
             let result = match user_id {
                 Some(id) => crate::tui::source::fetch_user_tweets_by_id(&client, &id, None).await,
                 None => {
-                    crate::tui::source::fetch_page(&client, &SourceKind::User { handle }, None)
+                    crate::tui::source::fetch_page(&client, &SourceKind::User { handle }, None, &[])
                         .await
                 }
             };

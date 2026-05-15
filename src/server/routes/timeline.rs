@@ -48,7 +48,7 @@ pub async fn home(
         .gql
         .post(
             op,
-            &endpoints::home_timeline_variables(count, q.cursor.as_deref()),
+            &endpoints::home_timeline_variables(count, q.cursor.as_deref(), &[]),
             &endpoints::home_timeline_features(),
         )
         .await?;

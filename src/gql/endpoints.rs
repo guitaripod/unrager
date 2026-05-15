@@ -86,14 +86,14 @@ pub fn user_tweets_features() -> Value {
     tweet_read_features()
 }
 
-pub fn home_timeline_variables(count: u32, cursor: Option<&str>) -> Value {
+pub fn home_timeline_variables(count: u32, cursor: Option<&str>, seen_ids: &[&str]) -> Value {
     let mut vars = json!({
         "count": count,
         "includePromotedContent": false,
         "latestControlAvailable": true,
         "requestContext": "launch",
         "withCommunity": true,
-        "seenTweetIds": []
+        "seenTweetIds": seen_ids,
     });
     if let Some(c) = cursor {
         vars["cursor"] = Value::String(c.to_string());

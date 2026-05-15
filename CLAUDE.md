@@ -51,7 +51,7 @@ The crates.io step reads `CARGO_REGISTRY_TOKEN` from repo secrets. Each publish 
   - `source.rs` — Source struct, fetch_page dispatchers for all feed types
   - `focus.rs` — TweetDetail for the detail pane (focal + replies)
   - `event.rs` — Event enum, event loop with tick/render/key/resize
-  - `seen.rs` — read-tracking sqlite (30-day retention)
+  - `seen.rs` — read-tracking sqlite (2-day retention)
   - `session.rs` — session persistence (json)
   - `test_util.rs` — test-only App factory and tweet/page builders
 - `src/cli/` — one module per subcommand (whoami, home, read, etc.)
@@ -84,8 +84,8 @@ When debugging a silent failure — a fetch that seems stuck, missing data, a TU
 - `~/.config/unrager/config.toml` — general settings (browser command, query ID overrides)
 - `~/.config/unrager/filter.toml` — rage filter rubric (auto-created)
 - `~/.cache/unrager/unrager.log.YYYY-MM-DD` — rolling log file
-- `~/.cache/unrager/seen.db` — read tracking (auto-pruned to 30 days)
-- `~/.cache/unrager/filter.db` — filter verdict cache (auto-pruned to 30 days)
+- `~/.cache/unrager/seen.db` — read tracking (auto-pruned to 2 days)
+- `~/.cache/unrager/filter.db` — filter verdict cache (auto-pruned to 7 days; rubric-hash invalidates the rest)
 - `~/.cache/unrager/query-ids.json` — scraped GraphQL query ID cache
 - `~/.cache/unrager/media/<tweet_id>/` — downloaded attachments for external viewer (`m` key); one subdir per tweet so Linux image viewers can arrow through siblings
 - `~/.cache/unrager/avatars/<sha256(url)>.bin` — author-avatar disk cache; LRU-pruned to 50 MB on startup; URL-keyed so X's per-upload URL rotation self-invalidates

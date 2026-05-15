@@ -3,7 +3,7 @@ use rusqlite::{Connection, params};
 use std::collections::HashSet;
 use std::path::Path;
 
-const RETENTION_DAYS: i64 = 30;
+const RETENTION_DAYS: i64 = 2;
 
 pub struct SeenStore {
     conn: Connection,

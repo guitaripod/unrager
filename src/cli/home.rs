@@ -40,7 +40,7 @@ pub async fn run(args: Args) -> Result<()> {
         let response = client
             .post(
                 op,
-                &endpoints::home_timeline_variables(args.count, cursor.as_deref()),
+                &endpoints::home_timeline_variables(args.count, cursor.as_deref(), &[]),
                 &endpoints::home_timeline_features(),
             )
             .await?;

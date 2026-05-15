@@ -266,7 +266,7 @@ pub fn parse_verdict(raw: &str) -> FilterDecision {
     FilterDecision::Keep
 }
 
-const RETENTION_DAYS: i64 = 30;
+const RETENTION_DAYS: i64 = 7;
 
 pub struct FilterCache {
     conn: Connection,
@@ -391,7 +391,7 @@ impl Classifier {
         Self {
             http: cfg.ollama.build_client(),
             ollama: cfg.ollama.clone(),
-            sem: Arc::new(Semaphore::new(2)),
+            sem: Arc::new(Semaphore::new(8)),
             system_prompt: Arc::new(build_system_prompt(cfg)),
         }
     }

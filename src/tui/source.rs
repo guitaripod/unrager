@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashSet;
 
-const PAGE_SIZE: u32 = 20;
+const PAGE_SIZE: u32 = 40;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PaneState {
@@ -217,6 +217,7 @@ pub async fn fetch_page(
     client: &GqlClient,
     kind: &SourceKind,
     cursor: Option<String>,
+    seen_ids: &[String],
 ) -> Result<TimelinePage> {
     if crate::tui::demo::is_demo_mode() {
         return Ok(match cursor {
@@ -225,7 +226,7 @@ pub async fn fetch_page(
         });
     }
     match kind {
-        SourceKind::Home { following } => fetch_home(client, *following, cursor).await,
+        SourceKind::Home { following } => fetch_home(client, *following, cursor, seen_ids).await,
         SourceKind::User { handle } => fetch_user(client, handle, cursor).await,
         SourceKind::Search { query, product } => {
             fetch_search(client, query, product.as_api(), cursor).await
@@ -246,16 +247,18 @@ async fn fetch_home(
     client: &GqlClient,
     following: bool,
     cursor: Option<String>,
+    seen_ids: &[String],
 ) -> Result<TimelinePage> {
     let op = if following {
         Operation::HomeLatestTimeline
     } else {
         Operation::HomeTimeline
     };
+    let seen_refs: Vec<&str> = seen_ids.iter().map(String::as_str).collect();
     let response = client
         .post(
             op,
-            &endpoints::home_timeline_variables(PAGE_SIZE, cursor.as_deref()),
+            &endpoints::home_timeline_variables(PAGE_SIZE, cursor.as_deref(), &seen_refs),
             &endpoints::home_timeline_features(),
         )
         .await?;

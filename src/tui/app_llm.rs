@@ -91,6 +91,10 @@ impl App {
         else {
             return;
         };
+        let mut cache_hits = 0u32;
+        let mut spawned = 0u32;
+        let mut already_inflight = 0u32;
+        let input = tweets.len();
         for t in &tweets {
             if self.filter_verdicts.contains_key(&t.rest_id) {
                 continue;
@@ -98,9 +102,11 @@ impl App {
             if let Some(decision) = cache.get(&t.rest_id) {
                 self.filter_verdicts
                     .insert(t.rest_id.clone(), FilterState::Classified(decision));
+                cache_hits += 1;
                 continue;
             }
             if !self.filter_inflight.insert(t.rest_id.clone()) {
+                already_inflight += 1;
                 continue;
             }
             self.filter_verdicts
@@ -110,6 +116,17 @@ impl App {
                 text: filter::build_classification_text(t),
             };
             classifier.classify_async(payload, self.tx.clone());
+            spawned += 1;
+        }
+        if input > 0 {
+            tracing::debug!(
+                input,
+                cache_hits,
+                spawned,
+                already_inflight,
+                inflight_total = self.filter_inflight.len(),
+                "filter classification queued"
+            );
         }
     }
 
@@ -120,6 +137,7 @@ impl App {
         }
         self.filter_verdicts
             .insert(rest_id.clone(), FilterState::Classified(verdict));
+        let mut removed_from_source = false;
         if matches!(verdict, FilterDecision::Hide) {
             if self.filter_counted_ids.insert(rest_id.clone()) {
                 self.filter_hidden_count += 1;
@@ -129,9 +147,19 @@ impl App {
                 .iter()
                 .any(|t| t.rest_id == rest_id);
             if !in_pending {
+                let before = self.source.tweets.len();
                 self.remove_tweet_by_id(&rest_id);
+                removed_from_source = self.source.tweets.len() < before;
             }
         }
+        tracing::debug!(
+            rest_id = %rest_id,
+            verdict = ?verdict,
+            removed_from_source,
+            pending = self.pending_classification.len(),
+            inflight = self.filter_inflight.len(),
+            "filter tweet classified"
+        );
         self.drain_pending_classification();
     }
 
@@ -200,6 +228,11 @@ impl App {
         let target = baseline + super::app::FETCH_TARGET_TWEETS;
 
         if self.source.tweets.len() >= target {
+            tracing::debug!(
+                total = self.source.tweets.len(),
+                target,
+                "fetch target reached, loading off"
+            );
             self.fetch_baseline = None;
             self.source.loading = false;
             self.clear_status();
@@ -216,12 +249,24 @@ impl App {
 
         if total_eventual < target && can_fetch_more {
             if !self.source.loading {
+                tracing::debug!(
+                    total = self.source.tweets.len(),
+                    pending = self.pending_classification.len(),
+                    target,
+                    "fetch target short, paginating more"
+                );
                 self.fetch_source(true, false);
             }
             return;
         }
 
         if self.pending_classification.is_empty() {
+            tracing::debug!(
+                total = self.source.tweets.len(),
+                target,
+                can_fetch_more,
+                "fetch target unreachable but pending empty, loading off"
+            );
             self.fetch_baseline = None;
             self.source.loading = false;
             self.clear_status();

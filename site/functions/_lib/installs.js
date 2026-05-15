@@ -3,6 +3,7 @@ const GITHUB_URL =
   "https://api.github.com/repos/guitaripod/unrager/releases?per_page=100";
 const UA = "unrager-site (+https://unrager.com)";
 const BINARY_SUFFIXES = [".tar.gz", ".tar.xz", ".tgz", ".zip"];
+const CACHE_VERSION = 2;
 
 const isBinaryAsset = (name) => {
   const lower = (name || "").toLowerCase();
@@ -26,18 +27,19 @@ const fetchCrates = async () => {
   return total;
 };
 
-const fetchGithubReleases = async () => {
+const fetchGithubReleases = async (token) => {
+  const headers = {
+    "User-Agent": UA,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
   let url = GITHUB_URL;
   let total = 0;
   let pages = 0;
   while (url && pages < 10) {
-    const r = await fetch(url, {
-      headers: {
-        "User-Agent": UA,
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-      },
-    });
+    const r = await fetch(url, { headers });
     if (!r.ok) throw new Error(`github ${r.status}`);
     const releases = await r.json();
     for (const rel of releases) {
@@ -51,10 +53,11 @@ const fetchGithubReleases = async () => {
   return total;
 };
 
-export const gather = async () => {
+export const gather = async (env = {}) => {
+  const token = env.GITHUB_TOKEN || env.GH_TOKEN || null;
   const [c, g] = await Promise.allSettled([
     fetchCrates(),
-    fetchGithubReleases(),
+    fetchGithubReleases(token),
   ]);
   const crates = c.status === "fulfilled" ? c.value : null;
   const gh = g.status === "fulfilled" ? g.value : null;
@@ -65,5 +68,12 @@ export const gather = async () => {
     errors.push(`github: ${g.reason?.message || g.reason}`);
   const total = (crates ?? 0) + (gh ?? 0);
   const hasAny = crates !== null || gh !== null;
-  return { crates, gh, total, hasAny, errors };
+  const bothOk = crates !== null && gh !== null;
+  return { crates, gh, total, hasAny, bothOk, errors, githubAuthed: !!token };
+};
+
+export const cacheKeyFor = (request) => {
+  const u = new URL(request.url);
+  u.searchParams.set("__cv", String(CACHE_VERSION));
+  return u.toString();
 };

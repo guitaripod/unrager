@@ -1,29 +1,31 @@
-import { gather } from "../_lib/installs.js";
+import { gather, cacheKeyFor } from "../_lib/installs.js";
 
 export const onRequestGet = async (context) => {
   const cache = caches.default;
-  const cacheKey = new URL(context.request.url).toString();
+  const cacheKey = cacheKeyFor(context.request);
   const hit = await cache.match(cacheKey);
   if (hit) return hit;
 
-  const { total, hasAny } = await gather();
+  const { total, hasAny, bothOk } = await gather(context.env);
   const body = {
     schemaVersion: 1,
     label: "installs",
     message: hasAny ? total.toLocaleString("en-US") : "n/a",
     color: hasAny ? "1D9BF0" : "lightgrey",
-    cacheSeconds: 1800,
+    cacheSeconds: bothOk ? 1800 : 60,
   };
 
   const response = new Response(JSON.stringify(body), {
     headers: {
       "Content-Type": "application/json; charset=utf-8",
-      "Cache-Control": "public, max-age=1800, s-maxage=1800",
+      "Cache-Control": bothOk
+        ? "public, max-age=1800, s-maxage=1800"
+        : "public, max-age=60, s-maxage=60",
       "Access-Control-Allow-Origin": "*",
     },
   });
 
-  if (hasAny) context.waitUntil(cache.put(cacheKey, response.clone()));
+  if (bothOk) context.waitUntil(cache.put(cacheKey, response.clone()));
 
   return response;
 };

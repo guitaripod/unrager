@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+## [0.17.3] — 2026-05-15
+
 - **Filter now catches rage-bait that has no named topic.** The classifier prompt grew a second clause that asks "would you mute, block, report, or tap Not interested on this author?" alongside the existing topic blacklist. Validated on a 14-tweet adversarial set: subtweets ("you know exactly which founder I am talking about"), generic ratio-bait ("imagine being this guy"), reply-farming Q's ("what is the most controversial opinion you actually believe?"), and vague moral-panic posts now classify as HIDE even though none of them mention a blacklisted topic. The topic list still runs first so calmly-toned political/war/culture-war content stays hidden — pure replacement of topics with mute-framing was tested and lost ~13% on the in-domain demo set, so both layers are kept. Cached verdicts from the previous prompt are invalidated automatically: a `PROMPT_VERSION` constant is now folded into the rubric hash, so any future prompt edit re-asks gemma4 cleanly without manual `filter.db` deletion.
 
 ## [0.17.2] — 2026-05-15
@@ -102,7 +104,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.17.2...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.17.3...HEAD
+[0.17.3]: https://github.com/guitaripod/unrager/releases/tag/0.17.3
 [0.17.2]: https://github.com/guitaripod/unrager/releases/tag/0.17.2
 [0.17.1]: https://github.com/guitaripod/unrager/releases/tag/0.17.1
 [0.17.0]: https://github.com/guitaripod/unrager/releases/tag/0.17.0

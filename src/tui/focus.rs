@@ -21,6 +21,7 @@ pub struct TweetDetail {
     pub error: Option<String>,
     pub state: PaneState,
     pub reply_bar: Option<ReplyBar>,
+    pub reply_draft: Option<String>,
     pub new_reply_ids: HashSet<String>,
 }
 
@@ -33,6 +34,7 @@ impl TweetDetail {
             error: None,
             state: PaneState::default(),
             reply_bar: None,
+            reply_draft: None,
             new_reply_ids: HashSet::new(),
         }
     }

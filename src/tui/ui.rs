@@ -2021,7 +2021,7 @@ fn draw_tweet_detail(
 
     if let Some(bar_area) = bar_area {
         if let Some(bar) = &detail.reply_bar {
-            draw_reply_bar(frame, bar_area, bar, active, ctx.write_rate_limit);
+            draw_reply_bar(frame, bar_area, bar, active);
         }
     }
 }
@@ -2031,7 +2031,6 @@ fn draw_reply_bar(
     area: Rect,
     bar: &crate::tui::compose::ReplyBar,
     active: bool,
-    write_rate_limit: Option<std::time::Duration>,
 ) {
     let t = th();
     let wrap_width = area.width as usize;
@@ -2047,16 +2046,11 @@ fn draw_reply_bar(
 
     let mut lines: Vec<Line<'static>> = vec![sep_line];
 
-    let (cursor_col, cursor_row) = if bar.sending || bar.editor.input.is_empty() {
-        let mut spans: Vec<Span<'static>> = vec![Span::styled("> ", prompt_style)];
-        if bar.sending {
-            spans.push(Span::styled("sending…", Style::default().fg(t.text_muted)));
-        } else {
-            spans.push(Span::styled(
-                "type your reply…",
-                Style::default().fg(t.text_muted),
-            ));
-        }
+    let (cursor_col, cursor_row) = if bar.editor.input.is_empty() {
+        let spans: Vec<Span<'static>> = vec![
+            Span::styled("> ", prompt_style),
+            Span::styled("type your reply…", Style::default().fg(t.text_muted)),
+        ];
         lines.push(Line::from(spans));
         (2usize, 0usize)
     } else {
@@ -2090,34 +2084,19 @@ fn draw_reply_bar(
         crate::tui::editor::VimMode::Insert => Style::default().fg(t.mode_vim_insert),
         crate::tui::editor::VimMode::Normal => Style::default().fg(t.mode_vim_normal),
     };
-    let hint_span = if let Some(remaining) = write_rate_limit {
-        Span::styled(
-            format!("  ⊘ X cooldown · wait {}", format_countdown(remaining)),
-            Style::default().fg(t.error).add_modifier(Modifier::BOLD),
-        )
-    } else {
-        Span::styled(
-            "  Enter send · Esc close",
-            Style::default().fg(t.text_muted),
-        )
-    };
     lines.push(Line::from(vec![
         Span::styled(format!("-- {mode_tag} -- "), mode_style),
         Span::styled(format!("{char_count}/280"), count_style),
-        hint_span,
+        Span::styled(
+            "  Enter copy+open · Esc Esc close (draft kept)",
+            Style::default().fg(t.text_muted),
+        ),
     ]));
-
-    if let Some(ref err) = bar.error {
-        lines.push(Line::from(Span::styled(
-            err.clone(),
-            Style::default().fg(t.error),
-        )));
-    }
 
     let para = Paragraph::new(lines);
     frame.render_widget(para, area);
 
-    if active && !bar.sending {
+    if active {
         let cursor_x = area.x + cursor_col as u16;
         let cursor_y = area.y + 1 + cursor_row as u16;
         if cursor_x < area.right() && cursor_y < area.bottom() {

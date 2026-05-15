@@ -99,9 +99,11 @@ The left pane stays live. `Tab` swaps focus between panes, `,`/`.` adjusts the s
   <img src="assets/compose.png" alt="reply composer open over the home feed, with the vim insert-mode indicator and a 24/280 character counter at the bottom" width="800">
 </p>
 
-Every text input in the TUI — reply (`r`), direct compose, ask-gemma input (`A`), command palette (`:`) — is a miniature Vim editor. Insert/Normal modes, `hjkl` motion, `w`/`b` word jumps, `dd`/`dw`, counts, `^`/`$`, everything a two-minute muscle-memory habit expects. The status line at the bottom of each pane shows `INSERT` or `NORMAL` and the live character counter (`24/280`).
+Every text input in the TUI — reply (`r`), ask-gemma input (`A`), command palette (`:`) — is a miniature Vim editor. Insert/Normal modes, `hjkl` motion, `w`/`b` word jumps, `dd`/`dw`, counts, `^`/`$`, everything a two-minute muscle-memory habit expects. The status line at the bottom of each pane shows `INSERT` or `NORMAL` and the live character counter (`24/280`).
 
-Submitting a reply with `r` auto-likes the tweet you're replying to (unless it's already liked) — reciprocal-like etiquette without the manual step. Opening a tweet in the browser with `o` does the same: anything worth a closer look gets a like on the way out, unless it's already liked, it's your own tweet, or X is write-rate-limiting you.
+Submit (`Enter` in insert mode) doesn't post over the X GraphQL write endpoint — that path errors out on most accounts in a way unrager can't route around. Instead, the composed text is copied to your clipboard and the parent tweet opens in your browser. Paste, send, done. The full Vim editor experience inside the terminal; the actual post happens in the place X is happiest about. Press `Esc` twice (Insert → Normal → exit) to close the editor — your draft is kept in memory until you leave the parent tweet's detail pane, so an accidental close doesn't lose your text.
+
+Submitting a reply with `r` auto-likes the tweet you're replying to — that happens the moment you hit Enter, before the browser opens, so the reciprocal-like etiquette stays intact. The like is gated the same way `o` is: skipped if it's your own tweet, already liked, or X is write-rate-limiting you.
 
 ## Search and translation
 

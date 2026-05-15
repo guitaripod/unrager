@@ -343,18 +343,11 @@ impl App {
             let Some(bar) = &mut detail.reply_bar else {
                 return;
             };
-            if bar.sending {
-                return;
-            }
             bar.editor.handle_key(key)
         };
         match result {
             EditorResult::Submit => self.submit_reply(),
-            EditorResult::ExitNormal => {
-                if let Some(FocusEntry::Tweet(detail)) = self.focus_stack.last_mut() {
-                    detail.reply_bar = None;
-                }
-            }
+            EditorResult::ExitNormal => self.exit_reply_keep_draft(),
             EditorResult::Consumed => {}
         }
     }

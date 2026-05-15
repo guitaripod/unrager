@@ -607,9 +607,7 @@ impl App {
             || self.pending_thread.is_some()
             || self.pending_open.is_some()
             || self.focus_stack.last().is_some_and(|e| match e {
-                FocusEntry::Tweet(d) => {
-                    d.loading || d.reply_bar.as_ref().is_some_and(|b| b.sending)
-                }
+                FocusEntry::Tweet(d) => d.loading,
                 FocusEntry::Likers(l) => l.loading,
                 FocusEntry::Notifications(n) => n.loading,
                 FocusEntry::Ask(a) => a.streaming,
@@ -795,12 +793,6 @@ impl App {
                 error,
             } => {
                 self.handle_engage_result(rest_id, action, error);
-            }
-            Event::ReplyResult {
-                in_reply_to,
-                result,
-            } => {
-                self.handle_reply_result(in_reply_to, result);
             }
             Event::ThreadRefreshed { focal_id, result } => {
                 self.handle_thread_refreshed(focal_id, result);

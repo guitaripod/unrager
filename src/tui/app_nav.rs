@@ -7,7 +7,6 @@ use crate::tui::event::Event;
 use crate::tui::external;
 use crate::tui::focus::{FocusEntry, TweetDetail};
 use crate::tui::source::{self, SourceKind};
-use crate::tui::ui;
 
 impl App {
     pub(super) fn switch_source(&mut self, kind: SourceKind) {
@@ -680,87 +679,61 @@ impl App {
         if detail.reply_bar.is_some() {
             return;
         }
-        detail.reply_bar = Some(crate::tui::compose::ReplyBar::new());
-        self.active = ActivePane::Detail;
-        if let Some(remaining) = self.write_rate_limit_remaining() {
-            self.set_status(format!(
-                "X cooldown · wait {} before sending",
-                ui::format_countdown(remaining)
-            ));
-        } else {
-            self.set_status("reply: type, Enter send, Esc close");
+        let mut bar = crate::tui::compose::ReplyBar::new();
+        if let Some(draft) = detail.reply_draft.take() {
+            bar.editor.cursor_pos = draft.len();
+            bar.editor.input = draft;
         }
+        detail.reply_bar = Some(bar);
+        self.active = ActivePane::Detail;
+        self.set_status("reply: type, Enter copy+open, Esc Esc close");
     }
 
     pub(super) fn submit_reply(&mut self) {
-        let (text, in_reply_to, already_liked) = {
+        let (text, tweet_url, in_reply_to, already_liked, is_own) = {
             let Some(FocusEntry::Tweet(detail)) = self.focus_stack.last() else {
                 return;
             };
             let Some(bar) = &detail.reply_bar else {
                 return;
             };
-            if bar.sending || bar.editor.input.trim().is_empty() {
+            let trimmed = bar.editor.input.trim().to_string();
+            if trimmed.is_empty() {
                 return;
             }
+            let is_own = self
+                .self_handle
+                .as_ref()
+                .is_some_and(|h| h.eq_ignore_ascii_case(&detail.tweet.author.handle));
             (
-                bar.editor.input.trim().to_string(),
+                trimmed,
+                detail.tweet.url.clone(),
                 detail.tweet.rest_id.clone(),
                 detail.tweet.favorited,
+                is_own,
             )
         };
-        if self.block_if_write_limited() {
-            return;
-        }
-        if let Some(FocusEntry::Tweet(detail)) = self.focus_stack.last_mut() {
-            if let Some(bar) = &mut detail.reply_bar {
-                bar.sending = true;
-                bar.error = None;
-            }
-        }
         self.error = None;
-        self.set_status("sending reply…");
-        crate::tui::compose::dispatch_reply(
-            text,
-            in_reply_to.clone(),
-            self.client.clone(),
-            self.tx.clone(),
-        );
-        if !already_liked {
+        self.copy_to_clipboard(text, "reply copied · paste in browser");
+        self.open_url(&tweet_url);
+        if let Some(FocusEntry::Tweet(detail)) = self.focus_stack.last_mut() {
+            detail.reply_bar = None;
+            detail.reply_draft = None;
+        }
+        if !is_own && !already_liked && self.write_rate_limit_remaining().is_none() {
             self.engage_by_id(EngageAction::Like, in_reply_to, false);
         }
     }
 
-    pub(super) fn handle_reply_result(
-        &mut self,
-        in_reply_to: String,
-        result: std::result::Result<String, String>,
-    ) {
-        let is_match = matches!(
-            self.focus_stack.last(),
-            Some(FocusEntry::Tweet(d)) if d.tweet.rest_id == in_reply_to && d.reply_bar.is_some()
-        );
-        if !is_match {
-            return;
-        }
-        match result {
-            Ok(new_id) => {
-                self.error = None;
-                self.set_status(format!("reply sent · {new_id}"));
-                if let Some(FocusEntry::Tweet(detail)) = self.focus_stack.last_mut() {
-                    detail.reply_bar = None;
-                }
-                self.fetch_thread(in_reply_to);
-            }
-            Err(err) => {
-                let friendly = crate::tui::compose::friendly_error(&err);
-                if let Some(FocusEntry::Tweet(detail)) = self.focus_stack.last_mut() {
-                    if let Some(bar) = &mut detail.reply_bar {
-                        bar.sending = false;
-                        bar.error = Some(friendly.clone());
-                    }
-                }
-                self.error = Some(friendly);
+    pub(super) fn exit_reply_keep_draft(&mut self) {
+        if let Some(FocusEntry::Tweet(detail)) = self.focus_stack.last_mut() {
+            if let Some(bar) = detail.reply_bar.take() {
+                let trimmed = bar.editor.input.trim();
+                detail.reply_draft = if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(bar.editor.input)
+                };
             }
         }
     }

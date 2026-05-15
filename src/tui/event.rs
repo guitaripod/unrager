@@ -157,10 +157,6 @@ pub enum Event {
         action: crate::tui::engage::EngageAction,
         error: Option<String>,
     },
-    ReplyResult {
-        in_reply_to: String,
-        result: std::result::Result<String, String>,
-    },
     ThreadRefreshed {
         focal_id: String,
         result: crate::error::Result<crate::parse::timeline::TimelinePage>,

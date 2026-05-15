@@ -375,12 +375,18 @@ impl App {
     }
 
     fn selected_author_handle(&self) -> Option<String> {
-        if self.active == ActivePane::Detail
-            && let Some(FocusEntry::Notifications(view)) = self.focus_stack.last()
-        {
-            let n = view.notifications.get(view.selected())?;
-            let idx = view.actor_cursor.unwrap_or(0);
-            return n.actors.get(idx).map(|a| a.handle.clone());
+        if self.active == ActivePane::Detail {
+            match self.focus_stack.last() {
+                Some(FocusEntry::Notifications(view)) => {
+                    let n = view.notifications.get(view.selected())?;
+                    let idx = view.actor_cursor.unwrap_or(0);
+                    return n.actors.get(idx).map(|a| a.handle.clone());
+                }
+                Some(FocusEntry::Likers(view)) => {
+                    return view.selected_user().map(|u| u.handle.clone());
+                }
+                _ => {}
+            }
         }
         self.selected_tweet().map(|t| t.author.handle.clone())
     }

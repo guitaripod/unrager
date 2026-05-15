@@ -20,3 +20,22 @@ impl ReplyBar {
         }
     }
 }
+
+#[derive(Debug)]
+pub struct TweetComposeBar {
+    pub editor: VimEditor,
+}
+
+impl Default for TweetComposeBar {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TweetComposeBar {
+    pub fn new() -> Self {
+        Self {
+            editor: VimEditor::with_limit(TWEET_CHAR_LIMIT),
+        }
+    }
+}

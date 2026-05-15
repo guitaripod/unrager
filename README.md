@@ -196,7 +196,8 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 | `C` | Screenshot composer, default action copy to clipboard |
 | `y` | Yank fixupx URL to clipboard |
 | `Y` | Yank tweet JSON to clipboard |
-| `r` | Reply to selected tweet (auto-likes the target on submit) |
+| `r` | Reply to selected tweet — `Enter` copies text + opens the parent in browser, auto-likes the target (skipped on own tweets) |
+| `c` | Compose a new tweet — `Enter` copies text + opens X's composer in browser |
 | `Ctrl-r` | Reload source / refresh thread replies |
 | `u` | Jump to next unread |
 | `U` | Mark all as read |

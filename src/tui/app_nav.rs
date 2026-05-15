@@ -1,4 +1,4 @@
-use super::app::{ActivePane, App, FeedMode};
+use super::app::{ActivePane, App, FeedMode, InputMode};
 use crate::config;
 use crate::model::Tweet;
 use crate::tui::ask;
@@ -736,6 +736,49 @@ impl App {
                 };
             }
         }
+    }
+
+    pub(super) fn start_compose_tweet(&mut self) {
+        if self.tweet_compose_bar.is_some() {
+            return;
+        }
+        let mut bar = crate::tui::compose::TweetComposeBar::new();
+        if let Some(draft) = self.tweet_compose_draft.take() {
+            bar.editor.cursor_pos = draft.len();
+            bar.editor.input = draft;
+        }
+        self.tweet_compose_bar = Some(bar);
+        self.mode = InputMode::Compose;
+        self.error = None;
+        self.set_status("compose: type, Enter copy+open, Esc Esc close");
+    }
+
+    pub(super) fn submit_compose_tweet(&mut self) {
+        let text = match self.tweet_compose_bar.as_ref() {
+            Some(bar) => bar.editor.input.trim().to_string(),
+            None => return,
+        };
+        if text.is_empty() {
+            return;
+        }
+        self.error = None;
+        self.copy_to_clipboard(text, "tweet copied · paste in browser");
+        self.open_url("https://x.com/compose/post");
+        self.tweet_compose_bar = None;
+        self.tweet_compose_draft = None;
+        self.mode = InputMode::Normal;
+    }
+
+    pub(super) fn exit_compose_tweet_keep_draft(&mut self) {
+        if let Some(bar) = self.tweet_compose_bar.take() {
+            let trimmed = bar.editor.input.trim();
+            self.tweet_compose_draft = if trimmed.is_empty() {
+                None
+            } else {
+                Some(bar.editor.input)
+            };
+        }
+        self.mode = InputMode::Normal;
     }
 
     pub(super) fn cycle_reply_sort(&mut self) {

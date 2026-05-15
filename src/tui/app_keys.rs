@@ -43,7 +43,11 @@ impl App {
             return;
         }
         if matches!(self.mode, InputMode::ScreenshotCompose) {
-            self.handle_key_compose(key);
+            self.handle_key_screenshot_compose(key);
+            return;
+        }
+        if matches!(self.mode, InputMode::Compose) {
+            self.handle_key_compose_tweet(key);
             return;
         }
         if matches!(self.mode, InputMode::Help | InputMode::Changelog) {
@@ -145,6 +149,7 @@ impl App {
             (KeyCode::Char('n'), KeyModifiers::NONE) => {
                 self.open_notifications();
             }
+            (KeyCode::Char('c'), KeyModifiers::NONE) => self.start_compose_tweet(),
             (KeyCode::Char('o'), KeyModifiers::NONE) => self.open_tweet_in_browser(),
             (KeyCode::Char('O'), _) => self.open_author_in_browser(),
             (KeyCode::Char('m'), KeyModifiers::NONE) => self.open_media_external(),
@@ -352,7 +357,26 @@ impl App {
         }
     }
 
-    fn handle_key_compose(&mut self, key: KeyEvent) {
+    fn handle_key_compose_tweet(&mut self, key: KeyEvent) {
+        use crate::tui::editor::EditorResult;
+
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.running = false;
+            return;
+        }
+
+        let Some(bar) = self.tweet_compose_bar.as_mut() else {
+            return;
+        };
+        let result = bar.editor.handle_key(key);
+        match result {
+            EditorResult::Submit => self.submit_compose_tweet(),
+            EditorResult::ExitNormal => self.exit_compose_tweet_keep_draft(),
+            EditorResult::Consumed => {}
+        }
+    }
+
+    fn handle_key_screenshot_compose(&mut self, key: KeyEvent) {
         use crate::tui::app_screenshot::{Destination, ThemeSlot};
 
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {

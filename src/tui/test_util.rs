@@ -107,6 +107,8 @@ pub fn dummy_app() -> (App, mpsc::UnboundedReceiver<Event>, TempDir) {
         changelog_scroll: 0,
         changelog_loading: false,
         compose: None,
+        tweet_compose_bar: None,
+        tweet_compose_draft: None,
     };
     (app, rx, tmp)
 }

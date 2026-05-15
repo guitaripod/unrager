@@ -48,6 +48,7 @@ pub enum InputMode {
     Changelog,
     Leader,
     ScreenshotCompose,
+    Compose,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -208,6 +209,8 @@ pub struct App {
     pub changelog_scroll: u16,
     pub changelog_loading: bool,
     pub compose: Option<crate::tui::app_screenshot::ComposeState>,
+    pub tweet_compose_bar: Option<crate::tui::compose::TweetComposeBar>,
+    pub tweet_compose_draft: Option<String>,
 }
 
 pub const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -392,6 +395,8 @@ impl App {
             changelog_scroll: 0,
             changelog_loading: false,
             compose: None,
+            tweet_compose_bar: None,
+            tweet_compose_draft: None,
         };
         app.apply_effective_theme();
         Ok(app)
@@ -1709,5 +1714,158 @@ mod tests {
 
         assert_eq!(app.mode, InputMode::Normal);
         assert_eq!(app.feed_mode, feed_before);
+    }
+
+    #[tokio::test]
+    async fn start_compose_tweet_creates_bar_and_sets_mode() {
+        let (mut app, _rx, _tmp) = dummy_app();
+        assert_eq!(app.mode, InputMode::Normal);
+        assert!(app.tweet_compose_bar.is_none());
+
+        app.start_compose_tweet();
+
+        assert_eq!(app.mode, InputMode::Compose);
+        assert!(app.tweet_compose_bar.is_some());
+        assert!(app.tweet_compose_draft.is_none());
+    }
+
+    #[tokio::test]
+    async fn start_compose_tweet_idempotent() {
+        let (mut app, _rx, _tmp) = dummy_app();
+        app.start_compose_tweet();
+        if let Some(bar) = app.tweet_compose_bar.as_mut() {
+            bar.editor.input.push_str("draft");
+            bar.editor.cursor_pos = 5;
+        }
+
+        app.start_compose_tweet();
+
+        assert_eq!(
+            app.tweet_compose_bar.as_ref().unwrap().editor.input,
+            "draft",
+            "second start must not overwrite an open bar"
+        );
+    }
+
+    #[tokio::test]
+    async fn compose_tweet_draft_persists_across_esc() {
+        let (mut app, _rx, _tmp) = dummy_app();
+        app.start_compose_tweet();
+        if let Some(bar) = app.tweet_compose_bar.as_mut() {
+            bar.editor.input.push_str("half-written thought");
+            bar.editor.cursor_pos = bar.editor.input.len();
+        }
+
+        app.exit_compose_tweet_keep_draft();
+
+        assert!(app.tweet_compose_bar.is_none());
+        assert_eq!(app.mode, InputMode::Normal);
+        assert_eq!(
+            app.tweet_compose_draft.as_deref(),
+            Some("half-written thought")
+        );
+    }
+
+    #[tokio::test]
+    async fn compose_tweet_draft_dropped_when_blank() {
+        let (mut app, _rx, _tmp) = dummy_app();
+        app.start_compose_tweet();
+        if let Some(bar) = app.tweet_compose_bar.as_mut() {
+            bar.editor.input.push_str("   \n  ");
+            bar.editor.cursor_pos = bar.editor.input.len();
+        }
+
+        app.exit_compose_tweet_keep_draft();
+
+        assert!(app.tweet_compose_bar.is_none());
+        assert!(
+            app.tweet_compose_draft.is_none(),
+            "whitespace-only buffer is not a draft worth keeping"
+        );
+    }
+
+    #[tokio::test]
+    async fn compose_tweet_draft_rehydrates_on_reopen() {
+        let (mut app, _rx, _tmp) = dummy_app();
+        app.tweet_compose_draft = Some("resume me".into());
+
+        app.start_compose_tweet();
+
+        let bar = app.tweet_compose_bar.as_ref().expect("bar should exist");
+        assert_eq!(bar.editor.input, "resume me");
+        assert_eq!(bar.editor.cursor_pos, "resume me".len());
+        assert!(
+            app.tweet_compose_draft.is_none(),
+            "draft must be consumed on rehydrate so it doesn't re-prepend on next reopen"
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_compose_tweet_empty_is_noop() {
+        let (mut app, _rx, _tmp) = dummy_app();
+        app.start_compose_tweet();
+
+        app.submit_compose_tweet();
+
+        assert!(
+            app.tweet_compose_bar.is_some(),
+            "submit on empty buffer must not close the modal"
+        );
+        assert_eq!(app.mode, InputMode::Compose);
+    }
+
+    #[tokio::test]
+    async fn start_reply_hydrates_draft_from_tweet_detail() {
+        let (mut app, _rx, _tmp) = dummy_app();
+        app.push_tweet(make_tweet("focal", "the focal tweet"));
+        if let Some(FocusEntry::Tweet(detail)) = app.focus_stack.last_mut() {
+            detail.reply_draft = Some("half-typed reply".into());
+        }
+
+        app.start_reply();
+
+        let Some(FocusEntry::Tweet(detail)) = app.focus_stack.last() else {
+            panic!("focus stack must hold the tweet");
+        };
+        let bar = detail.reply_bar.as_ref().expect("reply bar should exist");
+        assert_eq!(bar.editor.input, "half-typed reply");
+        assert!(detail.reply_draft.is_none());
+    }
+
+    #[tokio::test]
+    async fn exit_reply_keep_draft_stashes_text() {
+        let (mut app, _rx, _tmp) = dummy_app();
+        app.push_tweet(make_tweet("focal", "the focal tweet"));
+        app.start_reply();
+        if let Some(FocusEntry::Tweet(detail)) = app.focus_stack.last_mut()
+            && let Some(bar) = detail.reply_bar.as_mut()
+        {
+            bar.editor.input.push_str("draft reply text");
+            bar.editor.cursor_pos = bar.editor.input.len();
+        }
+
+        app.exit_reply_keep_draft();
+
+        let Some(FocusEntry::Tweet(detail)) = app.focus_stack.last() else {
+            panic!("focus stack must hold the tweet");
+        };
+        assert!(detail.reply_bar.is_none());
+        assert_eq!(detail.reply_draft.as_deref(), Some("draft reply text"));
+    }
+
+    #[tokio::test]
+    async fn back_out_drops_reply_draft_with_tweet_detail() {
+        let (mut app, _rx, _tmp) = dummy_app();
+        app.push_tweet(make_tweet("focal", "the focal tweet"));
+        if let Some(FocusEntry::Tweet(detail)) = app.focus_stack.last_mut() {
+            detail.reply_draft = Some("will die with the detail pane".into());
+        }
+
+        app.back_out(false);
+
+        assert!(
+            app.focus_stack.is_empty(),
+            "back_out drops the detail and its reply_draft"
+        );
     }
 }

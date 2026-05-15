@@ -360,6 +360,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.mode == InputMode::ScreenshotCompose {
         draw_compose_overlay(frame, frame.area(), app);
     }
+    if app.mode == InputMode::Compose {
+        draw_compose_tweet_overlay(frame, frame.area(), app);
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2102,6 +2105,94 @@ fn draw_reply_bar(
         if cursor_x < area.right() && cursor_y < area.bottom() {
             frame.set_cursor_position((cursor_x, cursor_y));
         }
+    }
+}
+
+fn draw_compose_tweet_overlay(frame: &mut Frame, area: Rect, app: &App) {
+    let Some(bar) = app.tweet_compose_bar.as_ref() else {
+        return;
+    };
+
+    let w = area.width.clamp(40, 72);
+    let h: u16 = 12;
+    let x = (area.width.saturating_sub(w)) / 2;
+    let y = (area.height.saturating_sub(h)) / 2;
+    let popup = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
+
+    frame.render_widget(Clear, popup);
+
+    let t = th();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(t.accent))
+        .title(Span::styled(
+            " compose · new tweet ",
+            Style::default().fg(t.heading).add_modifier(Modifier::BOLD),
+        ));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let wrap_width = inner.width as usize;
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let (cursor_col, cursor_row) = if bar.editor.input.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "type your tweet…",
+            Style::default().fg(t.text_muted),
+        )));
+        (0usize, 0usize)
+    } else {
+        let (wrapped, c_col, c_row) =
+            reply_wrap_input("", &bar.editor.input, bar.editor.cursor_pos, wrap_width);
+        for visual_line in wrapped {
+            lines.push(Line::from(Span::raw(visual_line)));
+        }
+        (c_col, c_row)
+    };
+
+    let body_height = inner.height.saturating_sub(2) as usize;
+    while lines.len() < body_height {
+        lines.push(Line::from(""));
+    }
+
+    let char_count = bar.editor.char_count();
+    let count_style = if char_count > 280 {
+        Style::default().fg(t.error)
+    } else {
+        Style::default().fg(t.text_muted)
+    };
+    let mode_tag = match bar.editor.mode {
+        crate::tui::editor::VimMode::Insert => "INSERT",
+        crate::tui::editor::VimMode::Normal => "NORMAL",
+    };
+    let mode_style = match bar.editor.mode {
+        crate::tui::editor::VimMode::Insert => Style::default().fg(t.mode_vim_insert),
+        crate::tui::editor::VimMode::Normal => Style::default().fg(t.mode_vim_normal),
+    };
+    lines.push(Line::from(Span::styled(
+        "─".repeat(wrap_width),
+        Style::default().fg(t.text_muted),
+    )));
+    lines.push(Line::from(vec![
+        Span::styled(format!("-- {mode_tag} -- "), mode_style),
+        Span::styled(format!("{char_count}/280"), count_style),
+        Span::styled(
+            "  Enter send · Shift+Enter newline · Esc Esc close",
+            Style::default().fg(t.text_muted),
+        ),
+    ]));
+
+    let para = Paragraph::new(lines);
+    frame.render_widget(para, inner);
+
+    let cursor_x = inner.x + cursor_col as u16;
+    let cursor_y = inner.y + cursor_row as u16;
+    if cursor_x < inner.right() && cursor_y < inner.bottom() {
+        frame.set_cursor_position((cursor_x, cursor_y));
     }
 }
 
@@ -4365,7 +4456,10 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  T              translate tweet to English (toggle)"),
         Line::from("  A              ask gemma (digit = preset, thread context if in detail)"),
         Line::from("  B              run a profile on the selected author (R re-read)"),
-        Line::from("  r              reply to selected tweet (auto-likes the target on submit)"),
+        Line::from("  c              compose new tweet (Enter copies text + opens browser)"),
+        Line::from(
+            "  r              reply to tweet (Enter copies + opens parent, auto-likes others)",
+        ),
         Line::from("  f              like / unlike"),
         Line::from("  s              cycle reply sort order"),
         Line::from("  x              expand / collapse tweet body"),

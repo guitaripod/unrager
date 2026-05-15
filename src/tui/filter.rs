@@ -12,11 +12,24 @@ use tokio::sync::Semaphore;
 use tracing::{debug, warn};
 
 const DEFAULT_CONFIG: &str = include_str!("filter_default.toml");
-const SYSTEM_TEMPLATE: &str = "HIDE or KEEP? HIDE the tweet if it is about, or written by someone from, any of these categories. When in doubt, HIDE.
+const SYSTEM_TEMPLATE: &str = "HIDE or KEEP this tweet?
+
+HIDE if it is about, or written by someone primarily known for, any of these topics:
 {TOPICS}
+
+ALSO HIDE, even if no topic above applies, when you would tap \"Not interested\", mute, block, or report the author after seeing this. Specifically:
+- subtweets, vaguebooking, \"you know who you are\" callouts
+- ratio bait, dunking, \"imagine being this person\" posts
+- engagement farming: \"RT if you agree\", \"unpopular opinion: [bait]\", \"what is the most controversial...\"
+- manufactured outrage with no information content beyond \"be mad\"
+- doom-posting and vague moral panic with no specifics
+
+KEEP technical, scientific, art, music, sports, personal-life, and humor tweets — including spicy opinions, frustration, trash talk, and sharp critique — as long as the post has actual content, not just an invitation to be angry.
 {GUIDANCE}
+When in doubt, HIDE.
 One word answer:";
 
+const PROMPT_VERSION: &str = "v2-mute-signals";
 const MAX_TEXT_CHARS: usize = 500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,6 +208,8 @@ impl FilterConfig {
         }
         hasher.update(b"---\n");
         hasher.update(self.extra_guidance.trim().as_bytes());
+        hasher.update(b"---\n");
+        hasher.update(PROMPT_VERSION.as_bytes());
         let digest = hasher.finalize();
         hex16(&digest[..8])
     }
@@ -746,6 +761,29 @@ mod tests {
         assert!(prompt.contains("- politics"));
         assert!(prompt.contains("keep humor"));
         assert!(prompt.contains("HIDE or KEEP"));
+    }
+
+    #[test]
+    fn system_prompt_includes_negative_action_signals() {
+        let prompt = build_system_prompt(&cfg(vec!["war"], ""));
+        assert!(prompt.contains("Not interested"));
+        assert!(prompt.contains("subtweets"));
+        assert!(prompt.contains("ratio bait"));
+        assert!(prompt.contains("engagement farming"));
+    }
+
+    #[test]
+    fn rubric_hash_changes_when_prompt_version_changes() {
+        let c = cfg(vec!["war"], "");
+        let baseline = c.rubric_hash();
+        let mut hasher = Sha256::new();
+        hasher.update(b"war\n");
+        hasher.update(b"---\n");
+        hasher.update(b"");
+        hasher.update(b"---\n");
+        hasher.update(b"v1-different");
+        let alt = hex16(&hasher.finalize()[..8]);
+        assert_ne!(baseline, alt);
     }
 
     #[test]

@@ -6,20 +6,14 @@ export const onRequestGet = async (context) => {
   const hit = await cache.match(cacheKey);
   if (hit) return hit;
 
-  const { crates, gh, total, hasAny, errors } = await gather();
+  const { total, hasAny } = await gather();
   const body = {
-    total,
-    sources: {
-      crates_io: { count: crates, url: "https://crates.io/crates/unrager" },
-      github_releases: {
-        count: gh,
-        url: "https://github.com/guitaripod/unrager/releases",
-        note: "binary tarballs only; SHA256SUMS excluded",
-      },
-    },
-    updated_at: new Date().toISOString(),
+    schemaVersion: 1,
+    label: "installs",
+    message: hasAny ? total.toLocaleString("en-US") : "n/a",
+    color: hasAny ? "1D9BF0" : "lightgrey",
+    cacheSeconds: 1800,
   };
-  if (errors.length) body.errors = errors;
 
   const response = new Response(JSON.stringify(body), {
     headers: {

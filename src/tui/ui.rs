@@ -1696,19 +1696,29 @@ fn reply_wrap_input(
     let mut cursor_row = 0usize;
     let mut byte_offset = 0usize;
     let mut found_cursor = false;
+    let mut trailing_newline = false;
 
     for ch in full.chars() {
+        if byte_offset == target_byte && !found_cursor {
+            cursor_col = col;
+            cursor_row = result_lines.len();
+            found_cursor = true;
+        }
+
+        if ch == '\n' {
+            result_lines.push(std::mem::take(&mut current));
+            col = 0;
+            byte_offset += ch.len_utf8();
+            trailing_newline = true;
+            continue;
+        }
+        trailing_newline = false;
+
         let w = UnicodeWidthChar::width(ch).unwrap_or(1);
 
         if width > 0 && col + w > width {
             result_lines.push(std::mem::take(&mut current));
             col = 0;
-        }
-
-        if byte_offset == target_byte && !found_cursor {
-            cursor_col = col;
-            cursor_row = result_lines.len();
-            found_cursor = true;
         }
 
         current.push(ch);
@@ -1726,7 +1736,7 @@ fn reply_wrap_input(
         }
     }
 
-    if !current.is_empty() || result_lines.is_empty() {
+    if !current.is_empty() || result_lines.is_empty() || trailing_newline {
         result_lines.push(current);
     }
 
@@ -1931,8 +1941,17 @@ fn draw_tweet_detail(
     active: bool,
     reply_sort: ReplySortOrder,
 ) {
-    let bar_height: u16 = if detail.reply_bar.is_some() { 4 } else { 0 };
-    let (thread_area, bar_area) = if bar_height > 0 && area.height > bar_height + 4 {
+    let bar_height: u16 = if let Some(bar) = &detail.reply_bar {
+        let wrap_width = area.width as usize;
+        let (wrapped, _, _) =
+            reply_wrap_input("> ", &bar.editor.input, bar.editor.cursor_pos, wrap_width);
+        let input_lines = wrapped.len().max(1) as u16;
+        let desired = (input_lines + 2).min(10);
+        desired.min(area.height.saturating_sub(4)).max(3)
+    } else {
+        0
+    };
+    let (thread_area, bar_area) = if bar_height > 0 && area.height > bar_height {
         let [top, bot] =
             Layout::vertical([Constraint::Min(0), Constraint::Length(bar_height)]).areas(area);
         (top, Some(bot))
@@ -2114,7 +2133,15 @@ fn draw_compose_tweet_overlay(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     let w = area.width.clamp(40, 72);
-    let h: u16 = 12;
+    let inner_w = w.saturating_sub(2) as usize;
+    let (wrapped_input, c_col, c_row) = if bar.editor.input.is_empty() {
+        (Vec::new(), 0usize, 0usize)
+    } else {
+        reply_wrap_input("", &bar.editor.input, bar.editor.cursor_pos, inner_w)
+    };
+    let body_lines = wrapped_input.len().max(4) as u16;
+    let max_h = area.height.saturating_sub(2);
+    let h: u16 = (body_lines + 4).clamp(8, max_h.max(8));
     let x = (area.width.saturating_sub(w)) / 2;
     let y = (area.height.saturating_sub(h)) / 2;
     let popup = Rect {
@@ -2146,9 +2173,7 @@ fn draw_compose_tweet_overlay(frame: &mut Frame, area: Rect, app: &App) {
         )));
         (0usize, 0usize)
     } else {
-        let (wrapped, c_col, c_row) =
-            reply_wrap_input("", &bar.editor.input, bar.editor.cursor_pos, wrap_width);
-        for visual_line in wrapped {
+        for visual_line in wrapped_input {
             lines.push(Line::from(Span::raw(visual_line)));
         }
         (c_col, c_row)

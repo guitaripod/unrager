@@ -68,7 +68,15 @@ impl VimEditor {
                 self.enter_normal();
                 EditorResult::Consumed
             }
-            (KeyCode::Enter, m) if m.contains(KeyModifiers::SHIFT) => {
+            (KeyCode::Enter, m)
+                if m.contains(KeyModifiers::SHIFT)
+                    || m.contains(KeyModifiers::ALT)
+                    || m.contains(KeyModifiers::CONTROL) =>
+            {
+                self.insert_char('\n');
+                EditorResult::Consumed
+            }
+            (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
                 self.insert_char('\n');
                 EditorResult::Consumed
             }

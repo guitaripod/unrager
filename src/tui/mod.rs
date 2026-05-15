@@ -36,7 +36,10 @@ pub mod youtube;
 
 use crate::error::Result;
 use app::App;
-use crossterm::event::{DisableFocusChange, EnableFocusChange};
+use crossterm::event::{
+    DisableFocusChange, EnableFocusChange, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
+};
 use crossterm::execute;
 use event::EventLoop;
 use std::io::stdout;
@@ -46,7 +49,18 @@ pub async fn run() -> Result<()> {
     let is_dark = detect_is_dark();
     let mut terminal = ratatui::init();
     let _ = execute!(stdout(), EnableFocusChange);
+    let kbd_enhanced = matches!(
+        crossterm::terminal::supports_keyboard_enhancement(),
+        Ok(true)
+    ) && execute!(
+        stdout(),
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+    )
+    .is_ok();
     let result = run_inner(&mut terminal, is_dark).await;
+    if kbd_enhanced {
+        let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
+    }
     let _ = execute!(stdout(), DisableFocusChange);
     media::cleanup_all();
     ratatui::restore();

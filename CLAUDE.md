@@ -94,6 +94,19 @@ When debugging a silent failure — a fetch that seems stuck, missing data, a TU
 
 When adding or changing key bindings, features, CLI commands, or config paths, update `README.md` to match. The key bindings table, features section, and config table must stay current.
 
+## Keeping the CHANGELOG in sync
+
+Every user-facing commit (anything a user can notice — key bindings, fetch paths, rendering, CLI commands, defaults, error messages) appends a bullet to `## [Unreleased]` in `CHANGELOG.md` in the same commit, newest at the top of the section. Pure refactors, test changes, dependency bumps, and CI/build-hygiene commits don't need entries.
+
+Match the existing style:
+
+- Lead with a **bolded one-line user-facing claim** — the sentence you'd put in the commit subject — then a body explaining what the user can now do and what was broken if it's a fix.
+- No first-person voice. Never write "I", "we", "myself", "us" as the author. The codebase is the subject, not the author. "users" is fine.
+- Mechanism detail is welcome in the body when it earns its place, but the body must *support* the user-facing claim — don't open the body with internal symbol names (`submit_reply was reading detail.tweet`); open with what the user sees, then say *why* if it sharpens the picture.
+- Don't summarize the diff. Summarize the change in behavior.
+
+If you write a commit and find no `[Unreleased]` bullet matches it, that is the signal to write one — not a signal that the commit is somehow exempt.
+
 ## Adding a new key binding
 
 1. Add the match arm in `handle_key` (global) or `handle_key_source`/`handle_key_detail` (pane-specific) in `app_keys.rs`

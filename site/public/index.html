@@ -42,6 +42,10 @@
         <a class="btn primary" href="https://github.com/guitaripod/unrager">github<span aria-hidden="true"> →</span></a>
         <a class="btn" href="https://github.com/guitaripod/unrager/releases">releases</a>
       </nav>
+
+      <p class="stat" hidden>
+        <strong id="install-count">—</strong><span class="stat-label"> installs</span>
+      </p>
     </header>
 
     <figure class="shot" aria-roledescription="carousel" aria-label="tour of unrager's screens">
@@ -146,6 +150,40 @@
         } catch (_) { /* noop */ }
       });
     });
+
+    (async () => {
+      try {
+        const r = await fetch('/api/downloads', { headers: { 'Accept': 'application/json' } });
+        if (!r.ok) return;
+        const d = await r.json();
+        if (typeof d.total !== 'number' || d.total <= 0) return;
+        const el = document.getElementById('install-count');
+        const wrap = document.querySelector('.stat');
+        if (!el || !wrap) return;
+
+        const target = d.total;
+        const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const fmt = n => n.toLocaleString('en-US');
+
+        if (reduce) {
+          el.textContent = fmt(target);
+          wrap.hidden = false;
+          return;
+        }
+
+        el.textContent = '0';
+        wrap.hidden = false;
+        const duration = Math.min(1200, 400 + target * 2);
+        const start = performance.now();
+        const ease = t => 1 - Math.pow(1 - t, 3);
+        const tick = now => {
+          const t = Math.min(1, (now - start) / duration);
+          el.textContent = fmt(Math.round(target * ease(t)));
+          if (t < 1) requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      } catch (_) { /* noop */ }
+    })();
 
     (() => {
       const shot = document.querySelector('.shot');

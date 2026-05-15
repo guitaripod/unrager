@@ -200,6 +200,22 @@ kbd {
 
 .btn.primary:hover { background: rgba(29, 155, 240, 0.18); }
 
+.stat {
+  margin: .9rem 0 0;
+  text-align: center;
+  font-size: .78rem;
+  color: var(--muted);
+  letter-spacing: .02em;
+}
+
+.stat strong {
+  color: var(--accent);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-label { opacity: .8; }
+
 /* ─── screenshot carousel ──────────────────── */
 
 .shot {

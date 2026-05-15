@@ -2057,8 +2057,19 @@ fn draw_reply_bar(
     let t = th();
     let wrap_width = area.width as usize;
 
-    let separator = "─".repeat(wrap_width);
-    let sep_line = Line::from(Span::styled(separator, Style::default().fg(t.text_muted)));
+    let label = format!(" replying to @{} ", bar.target.author_handle);
+    let label_w = label.chars().count();
+    let lead = "── ";
+    let lead_w = lead.chars().count();
+    let trail_w = wrap_width.saturating_sub(lead_w + label_w);
+    let sep_line = Line::from(vec![
+        Span::styled(lead.to_string(), Style::default().fg(t.text_muted)),
+        Span::styled(
+            label,
+            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("─".repeat(trail_w), Style::default().fg(t.text_muted)),
+    ]);
 
     let prompt_style = if active {
         Style::default().fg(t.accent).add_modifier(Modifier::BOLD)

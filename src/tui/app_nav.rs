@@ -673,20 +673,27 @@ impl App {
             self.mark_current_seen();
             self.push_tweet(tweet);
         }
+        let Some(target_tweet) = self.selected_tweet().cloned() else {
+            return;
+        };
+        let target = crate::tui::compose::ReplyTarget::from_tweet(&target_tweet);
+        let target_handle = target.author_handle.clone();
         let Some(FocusEntry::Tweet(detail)) = self.focus_stack.last_mut() else {
             return;
         };
         if detail.reply_bar.is_some() {
             return;
         }
-        let mut bar = crate::tui::compose::ReplyBar::new();
+        let mut bar = crate::tui::compose::ReplyBar::new(target);
         if let Some(draft) = detail.reply_draft.take() {
             bar.editor.cursor_pos = draft.len();
             bar.editor.input = draft;
         }
         detail.reply_bar = Some(bar);
         self.active = ActivePane::Detail;
-        self.set_status("reply: type, Enter copy+open, Esc Esc close");
+        self.set_status(format!(
+            "reply to @{target_handle}: Enter copy+open, Esc Esc close"
+        ));
     }
 
     pub(super) fn submit_reply(&mut self) {
@@ -704,12 +711,12 @@ impl App {
             let is_own = self
                 .self_handle
                 .as_ref()
-                .is_some_and(|h| h.eq_ignore_ascii_case(&detail.tweet.author.handle));
+                .is_some_and(|h| h.eq_ignore_ascii_case(&bar.target.author_handle));
             (
                 trimmed,
-                detail.tweet.url.clone(),
-                detail.tweet.rest_id.clone(),
-                detail.tweet.favorited,
+                bar.target.url.clone(),
+                bar.target.rest_id.clone(),
+                bar.target.favorited,
                 is_own,
             )
         };

@@ -126,6 +126,43 @@ fn MediaItem(media: Media, proxy_url: String) -> Element {
                 small { class: "article-id", title: "article id: {article_id}", "id: {article_id}" }
             }
         },
+        MediaKind::Broadcast {
+            broadcast_id,
+            title,
+            broadcaster_name,
+            is_live,
+        } => {
+            let watch_url = format!("https://x.com/i/broadcasts/{broadcast_id}");
+            rsx! {
+                a {
+                    class: "media-item linkcard broadcast",
+                    href: "{watch_url}",
+                    target: "_blank",
+                    rel: "noopener",
+                    onclick: move |e: Event<MouseData>| e.stop_propagation(),
+                    div { class: "linkcard",
+                        div { class: "broadcast-badge",
+                            if *is_live { "● LIVE" } else { "Broadcast" }
+                        }
+                        if !title.is_empty() {
+                            div { class: "title", "{title}" }
+                        }
+                        if !broadcaster_name.is_empty() {
+                            p { class: "description", "by {broadcaster_name}" }
+                        }
+                        div { class: "domain-row",
+                            span { class: "domain",
+                                IconLink {}
+                                span { "x.com" }
+                            }
+                            span { class: "external-hint",
+                                IconExternal {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
         MediaKind::Poll {
             options,
             counts_final,

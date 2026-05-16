@@ -76,6 +76,12 @@ pub enum MediaKind {
         domain: String,
         target_url: String,
     },
+    Broadcast {
+        broadcast_id: String,
+        title: String,
+        broadcaster_name: String,
+        is_live: bool,
+    },
     Poll {
         options: Vec<PollOption>,
         ends_at: Option<DateTime<Utc>>,

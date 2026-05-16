@@ -365,7 +365,10 @@ impl MediaRegistry {
         self.ensure_tweet_media_filtered(tweet, tx, |k| {
             matches!(
                 k,
-                MediaKind::YouTube { .. } | MediaKind::Article { .. } | MediaKind::LinkCard { .. }
+                MediaKind::YouTube { .. }
+                    | MediaKind::Article { .. }
+                    | MediaKind::LinkCard { .. }
+                    | MediaKind::Broadcast { .. }
             )
         });
     }
@@ -399,7 +402,8 @@ impl MediaRegistry {
                 | MediaKind::AnimatedGif
                 | MediaKind::YouTube { .. }
                 | MediaKind::Article { .. }
-                | MediaKind::LinkCard { .. } => {
+                | MediaKind::LinkCard { .. }
+                | MediaKind::Broadcast { .. } => {
                     if media.url.is_empty() {
                         continue;
                     }

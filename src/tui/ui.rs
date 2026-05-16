@@ -2343,6 +2343,7 @@ const GLYPH_YOUTUBE: &str = "▶";
 const GLYPH_ARTICLE: &str = "❏";
 const GLYPH_LINK: &str = "🔗";
 const GLYPH_POLL: &str = "▥";
+const GLYPH_BROADCAST: &str = "◉";
 
 pub(super) fn tweet_lines(
     t: &Tweet,
@@ -2722,6 +2723,23 @@ pub(super) fn tweet_lines(
                         &indent,
                     ));
                 }
+                crate::model::MediaKind::Broadcast {
+                    title,
+                    broadcaster_name,
+                    is_live,
+                    ..
+                } => {
+                    lines.extend(render_broadcast_card(
+                        ctx,
+                        title,
+                        broadcaster_name,
+                        *is_live,
+                        &m.url,
+                        image_max_cols(wrap_width),
+                        ctx.opts.media_max_rows,
+                        &indent,
+                    ));
+                }
                 crate::model::MediaKind::Poll {
                     options,
                     ends_at,
@@ -2840,6 +2858,14 @@ fn media_kind_badge(kind: &crate::model::MediaKind, t: &Theme) -> (&'static str,
         crate::model::MediaKind::YouTube { .. } => (GLYPH_YOUTUBE, t.youtube_red),
         crate::model::MediaKind::Article { .. } => (GLYPH_ARTICLE, t.media_article),
         crate::model::MediaKind::LinkCard { .. } => (GLYPH_LINK, t.media_link),
+        crate::model::MediaKind::Broadcast { is_live, .. } => {
+            let color = if *is_live {
+                t.youtube_red
+            } else {
+                t.media_link
+            };
+            (GLYPH_BROADCAST, color)
+        }
         crate::model::MediaKind::Poll { .. } => (GLYPH_POLL, t.media_poll),
     }
 }
@@ -2984,6 +3010,148 @@ fn render_youtube_card(
         Span::styled("│", border_style),
         Span::raw(title_pad.clone()),
         Span::styled(author_padded, meta_style),
+        Span::raw(title_pad),
+        Span::styled("│", border_style),
+    ]));
+
+    lines.push(Line::from(vec![
+        indent.clone(),
+        Span::styled("└", border_style),
+        Span::styled("─".repeat(inner_w), border_style),
+        Span::styled("┘", border_style),
+    ]));
+
+    lines
+}
+
+/// Broadcast embed card. Visually mirrors the YouTube card (top border with
+/// status badge, thumbnail body, divider, title + broadcaster subtitle) so
+/// the two read at a glance. The badge swaps between a red "● LIVE
+/// Broadcast" while the stream is running and a muted "Broadcast" once it
+/// has ended.
+#[allow(clippy::too_many_arguments)]
+fn render_broadcast_card(
+    ctx: &RenderContext,
+    title: &str,
+    broadcaster_name: &str,
+    is_live: bool,
+    thumbnail_url: &str,
+    max_cols: usize,
+    max_rows: usize,
+    indent: &Span<'static>,
+) -> Vec<Line<'static>> {
+    use unicode_width::UnicodeWidthStr;
+
+    let t = th();
+    let border_style = Style::default().fg(t.card_border);
+    let live_style = Style::default()
+        .fg(t.youtube_red)
+        .add_modifier(Modifier::BOLD);
+    let brand_style = Style::default()
+        .fg(t.card_title)
+        .add_modifier(Modifier::BOLD);
+    let title_style = Style::default().fg(t.card_title);
+    let meta_style = Style::default().fg(t.card_meta);
+
+    let image_cells = if thumbnail_url.is_empty() {
+        None
+    } else {
+        image_cells_for_card(ctx.media_reg, thumbnail_url, max_cols, max_rows)
+    };
+    let inner_w: usize = match image_cells {
+        Some((c, _)) => c as usize,
+        None => max_cols.saturating_sub(2).max(20),
+    };
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    let (badge_text, badge_style, brand_text) = if is_live {
+        ("  ● LIVE ", live_style, "Broadcast ")
+    } else {
+        ("  ◉ ", brand_style, "Broadcast ")
+    };
+    let label_w = UnicodeWidthStr::width(badge_text) + UnicodeWidthStr::width(brand_text);
+    let top_right_dashes = inner_w.saturating_sub(label_w);
+    lines.push(Line::from(vec![
+        indent.clone(),
+        Span::styled("┌", border_style),
+        Span::styled(badge_text, badge_style),
+        Span::styled(brand_text, brand_style),
+        Span::styled("─".repeat(top_right_dashes), border_style),
+        Span::styled("┐", border_style),
+    ]));
+
+    match image_cells {
+        Some((nc, nr)) => {
+            if let Some(MediaEntry::ReadyKitty { id, .. }) = ctx.media_reg.get(thumbnail_url) {
+                for row in 0..nr as usize {
+                    let placeholder = placeholder_row_span(*id, nr as usize, nc as usize, row);
+                    lines.push(Line::from(vec![
+                        indent.clone(),
+                        Span::styled("│", border_style),
+                        placeholder,
+                        Span::styled("│", border_style),
+                    ]));
+                }
+            } else if let Some(MediaEntry::ReadyPixels { pixels, w, h }) =
+                ctx.media_reg.get(thumbnail_url)
+            {
+                let empty_indent = Span::raw("");
+                let sextants =
+                    media::render_sextants(pixels, *w, *h, nc as usize, nr as usize, &empty_indent);
+                for row in sextants {
+                    lines.push(wrap_row_in_border(indent, row, inner_w, &border_style));
+                }
+            } else {
+                for _ in 0..nr as usize {
+                    lines.push(blank_body_row(indent, inner_w, &border_style));
+                }
+            }
+        }
+        None => {
+            for _ in 0..2 {
+                lines.push(blank_body_row(indent, inner_w, &border_style));
+            }
+        }
+    }
+
+    lines.push(Line::from(vec![
+        indent.clone(),
+        Span::styled("├", border_style),
+        Span::styled("─".repeat(inner_w), border_style),
+        Span::styled("┤", border_style),
+    ]));
+
+    let title_pad = " ".to_string();
+    let title_body_w = inner_w.saturating_sub(2).max(1);
+    let title_text = if title.is_empty() {
+        "Broadcast".to_string()
+    } else {
+        title.to_string()
+    };
+    let title_display = truncate_to_width(&title_text, title_body_w);
+    let title_padded = pad_to_width(&title_display, title_body_w);
+    lines.push(Line::from(vec![
+        indent.clone(),
+        Span::styled("│", border_style),
+        Span::raw(title_pad.clone()),
+        Span::styled(title_padded, title_style.add_modifier(Modifier::BOLD)),
+        Span::raw(title_pad.clone()),
+        Span::styled("│", border_style),
+    ]));
+
+    let meta_line = if broadcaster_name.is_empty() {
+        "x.com".to_string()
+    } else {
+        format!("by {broadcaster_name} · x.com")
+    };
+    let meta_display = truncate_to_width(&meta_line, title_body_w);
+    let meta_padded = pad_to_width(&meta_display, title_body_w);
+    lines.push(Line::from(vec![
+        indent.clone(),
+        Span::styled("│", border_style),
+        Span::raw(title_pad.clone()),
+        Span::styled(meta_padded, meta_style),
         Span::raw(title_pad),
         Span::styled("│", border_style),
     ]));
@@ -3931,7 +4099,8 @@ fn collect_placements_for_tweet(
             }
             crate::model::MediaKind::YouTube { .. }
             | crate::model::MediaKind::Article { .. }
-            | crate::model::MediaKind::LinkCard { .. } => {
+            | crate::model::MediaKind::LinkCard { .. }
+            | crate::model::MediaKind::Broadcast { .. } => {
                 let inner_cols = (max_cols.saturating_sub(2)).max(10) as u32;
                 if let Some(MediaEntry::ReadyKitty { id, w, h }) = registry.get(&media_item.url) {
                     let (nc, nr) = media::kitty_image_cells(cell, *w, *h, inner_cols);

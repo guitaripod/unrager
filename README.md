@@ -277,7 +277,7 @@ just mobile-android                    # .apk, `adb install`
 
 Mobile builds require the platform SDKs (Xcode / Android NDK). Reqwest on Android needs `openssl = { features = ["vendored"] }` — see the Dioxus mobile docs. Native apps point at your Tailscale hostname via `UNRAGER_SERVER_URL`.
 
-Feature parity with the TUI: all seven sources, tweet detail + thread, compose/reply, like, media (photos, videos, gifs, link cards, polls, YouTube), filter/ask/brief/translate streaming over SSE, session persistence, settings page, command palette (⌘K), help overlay (?).
+Feature parity with the TUI: all seven sources, tweet detail + thread, compose/reply, like, media (photos, videos, gifs, link cards, polls, YouTube, X broadcasts), filter/ask/brief/translate streaming over SSE, session persistence, settings page, command palette (⌘K), help overlay (?).
 
 While `unrager serve` is running it owns the filter + seen caches; the TUI detects the lockfile (`~/.cache/unrager/server.lock`) — run one or the other.
 
@@ -285,7 +285,7 @@ While `unrager serve` is running it owns the filter + seen caches; the TUI detec
 
 - **Inline media** — photos, video posters, and GIF first-frames render inside the terminal via the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) on Ghostty, Kitty, and WezTerm. Multiple images side-by-side. Toggle with `I`. Falls back to `▣`/`▶`/`↻` glyphs elsewhere.
 - **Author avatars** — every feed row, detail focal, reply, and inline thread carries a square kitty-graphics chip of the poster's avatar; profile headers pin a larger one beside the name. Avatars cache at `~/.cache/unrager/avatars/` (LRU-pruned to 50 MB, self-invalidating since X rotates the URL on every photo change). Postcard screenshots composite the chip in too. Toggle feed chips with `<space> a`; disabling skips downloads and suppresses screenshot avatars. Kitty-only — halfblock and disabled terminals fall back to the no-gutter layout.
-- **Inline cards** — YouTube links, X Articles, generic link previews (any brand), and polls render as bordered preview cards with cover image, title, description, and metadata. `m` opens the source URL in your browser.
+- **Inline cards** — YouTube links, X Articles, X Broadcasts (with a red `● LIVE` badge while running), generic link previews (any brand), and polls render as bordered preview cards with cover image, title, description, and metadata. `m` opens the source URL in your browser.
 - **Originals mode** — `V` on home feeds hides replies, quotes, and retweets. `◇` appears in the status bar. Persists across sessions.
 - **Notifications view** — press `n` or `:notifs` to browse notifications in a dedicated feed. Enter opens the target tweet or navigates to the actor's profile. Ambient whisper continues in the status bar independently.
 - **Read tracking** — tweets mark as read on cursor. For You feed hides already-seen tweets and deduplicates across pages. `u` jumps to next unread.

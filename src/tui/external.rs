@@ -90,6 +90,7 @@ pub fn collect_open_targets(tweet: &Tweet, tweet_dir: &Path) -> Vec<OpenTarget> 
             MediaKind::YouTube { .. }
             | MediaKind::Article { .. }
             | MediaKind::LinkCard { .. }
+            | MediaKind::Broadcast { .. }
             | MediaKind::Poll { .. } => continue,
         };
         let path = tweet_dir.join(file_name_for(i, &url));
@@ -113,6 +114,9 @@ pub fn collect_remote_urls(tweet: &Tweet) -> Vec<String> {
             }
             MediaKind::LinkCard { target_url, .. } if !target_url.is_empty() => {
                 Some(target_url.clone())
+            }
+            MediaKind::Broadcast { broadcast_id, .. } => {
+                Some(format!("https://x.com/i/broadcasts/{broadcast_id}"))
             }
             _ => None,
         })

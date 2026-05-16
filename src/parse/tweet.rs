@@ -104,13 +104,22 @@ fn parse_tweet_node(node: &Value) -> Result<Tweet> {
     media.extend(youtube_media);
     let (article_media, article_tcos) = parse_article_embed(node, legacy);
     media.extend(article_media);
+    let (broadcast_media, broadcast_tcos) = parse_broadcast_embed(node, legacy);
+    media.extend(broadcast_media);
     let (card_media, card_tcos) = parse_card_embed(node, legacy);
     media.extend(card_media);
     let text = strip_tco_urls(&text, &youtube_tcos);
     let text = strip_tco_urls(&text, &article_tcos);
+    let text = strip_tco_urls(&text, &broadcast_tcos);
     let text = strip_tco_urls(&text, &card_tcos);
 
-    let urls = collect_open_urls(legacy, &youtube_tcos, &article_tcos, &card_tcos);
+    let urls = collect_open_urls(
+        legacy,
+        &youtube_tcos,
+        &article_tcos,
+        &broadcast_tcos,
+        &card_tcos,
+    );
 
     let url = format!("https://x.com/{}/status/{}", author.handle, rest_id);
 
@@ -144,6 +153,7 @@ fn collect_open_urls(
     legacy: &Value,
     youtube_tcos: &[String],
     article_tcos: &[String],
+    broadcast_tcos: &[String],
     card_tcos: &[String],
 ) -> Vec<TweetUrl> {
     let Some(arr) = legacy.pointer("/entities/urls").and_then(Value::as_array) else {
@@ -158,6 +168,7 @@ fn collect_open_urls(
         }
         if youtube_tcos.iter().any(|d| d == display)
             || article_tcos.iter().any(|d| d == display)
+            || broadcast_tcos.iter().any(|d| d == display)
             || card_tcos.iter().any(|d| d == display)
         {
             continue;
@@ -361,6 +372,95 @@ fn parse_article_embed(node: &Value, legacy: &Value) -> (Vec<Media>, Vec<String>
     (embeds, display_urls)
 }
 
+/// Detects an X (formerly Periscope) broadcast card. The card's `name` ends
+/// in `:broadcast` and exposes a rich set of bindings: id, title, broadcaster
+/// display name, RUNNING/ENDED state, and several thumbnail sizes. Picks the
+/// largest available thumbnail under `~1080p` so the kitty renderer has room
+/// to downscale, and returns the card's display_url so the t.co link gets
+/// stripped from the tweet body.
+fn parse_broadcast_embed(node: &Value, legacy: &Value) -> (Vec<Media>, Vec<String>) {
+    let mut embeds = Vec::new();
+    let mut display_urls = Vec::new();
+
+    let Some(card_legacy) = node.pointer("/card/legacy") else {
+        return (embeds, display_urls);
+    };
+    let name = card_legacy
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if !name.ends_with(":broadcast") {
+        return (embeds, display_urls);
+    }
+    let Some(broadcast_id) = card_binding_string(card_legacy, "broadcast_id") else {
+        return (embeds, display_urls);
+    };
+    if broadcast_id.is_empty() {
+        return (embeds, display_urls);
+    }
+
+    let title = card_binding_string(card_legacy, "broadcast_title").unwrap_or_default();
+    let broadcaster_name = card_binding_string(card_legacy, "broadcaster_display_name")
+        .or_else(|| card_binding_string(card_legacy, "broadcaster_username"))
+        .unwrap_or_default();
+    let is_live = card_binding_string(card_legacy, "broadcast_state")
+        .map(|s| s.eq_ignore_ascii_case("RUNNING"))
+        .unwrap_or(false);
+    let thumbnail = pick_broadcast_thumbnail(card_legacy);
+
+    let card_tco = card_legacy
+        .get("url")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if let (false, Some(d)) = (card_tco.is_empty(), lookup_card_display(legacy, card_tco)) {
+        display_urls.push(d);
+    }
+
+    embeds.push(Media {
+        kind: MediaKind::Broadcast {
+            broadcast_id,
+            title: decode_html_entities(&title),
+            broadcaster_name,
+            is_live,
+        },
+        url: thumbnail,
+        video_url: None,
+        alt_text: None,
+    });
+
+    (embeds, display_urls)
+}
+
+fn pick_broadcast_thumbnail(card_legacy: &Value) -> String {
+    const CANDIDATES: [&str; 4] = [
+        "broadcast_thumbnail_large",
+        "broadcast_thumbnail",
+        "broadcast_thumbnail_x_large",
+        "broadcast_thumbnail_small",
+    ];
+    for key in CANDIDATES {
+        if let Some(url) = card_binding_image(card_legacy, key) {
+            if !url.is_empty() {
+                return url;
+            }
+        }
+    }
+    String::new()
+}
+
+fn lookup_card_display(legacy: &Value, card_tco: &str) -> Option<String> {
+    let arr = legacy.pointer("/entities/urls")?.as_array()?;
+    for u in arr {
+        if u.get("url").and_then(Value::as_str) == Some(card_tco) {
+            return u
+                .get("display_url")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+        }
+    }
+    None
+}
+
 /// Parses the generic Twitter `card` attached to a tweet. Handles two card
 /// families:
 ///
@@ -389,6 +489,9 @@ fn parse_card_embed(node: &Value, legacy: &Value) -> (Vec<Media>, Vec<String>) {
         if let Some(poll) = parse_poll_card(card_legacy) {
             embeds.push(poll);
         }
+        return (embeds, display_urls);
+    }
+    if name.ends_with(":broadcast") {
         return (embeds, display_urls);
     }
 
@@ -1400,6 +1503,93 @@ mod tests {
                 assert_eq!(preview_text, "it's a classic");
             }
             _ => panic!("expected Article"),
+        }
+    }
+
+    #[test]
+    fn parse_broadcast_card_extracts_metadata_and_strips_url() {
+        let mut v = minimal_tweet_json("4001", "streaming https://t.co/BC again");
+        v["legacy"]["entities"] = json!({
+            "urls": [{
+                "url": "https://t.co/BC",
+                "display_url": "x.com/i/broadcasts/1…",
+                "expanded_url": "https://twitter.com/i/broadcasts/1abc"
+            }]
+        });
+        v["card"] = json!({
+            "legacy": {
+                "name": "745291183405076480:broadcast",
+                "url": "https://t.co/BC",
+                "binding_values": [
+                    {"key": "broadcast_id", "value": {"string_value": "1abc", "type": "STRING"}},
+                    {"key": "broadcast_title", "value": {"string_value": "going live", "type": "STRING"}},
+                    {"key": "broadcaster_display_name", "value": {"string_value": "Stanky", "type": "STRING"}},
+                    {"key": "broadcast_state", "value": {"string_value": "RUNNING", "type": "STRING"}},
+                    {"key": "broadcast_thumbnail_large", "value": {
+                        "image_value": {"url": "https://pbs.twimg.com/card_img/x/y?name=800x419", "width": 800, "height": 419},
+                        "type": "IMAGE"
+                    }}
+                ]
+            }
+        });
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(tweet.media.len(), 1);
+        match &tweet.media[0].kind {
+            MediaKind::Broadcast {
+                broadcast_id,
+                title,
+                broadcaster_name,
+                is_live,
+            } => {
+                assert_eq!(broadcast_id, "1abc");
+                assert_eq!(title, "going live");
+                assert_eq!(broadcaster_name, "Stanky");
+                assert!(*is_live);
+            }
+            other => panic!("expected Broadcast, got {other:?}"),
+        }
+        assert_eq!(
+            tweet.media[0].url,
+            "https://pbs.twimg.com/card_img/x/y?name=800x419"
+        );
+        assert_eq!(tweet.text, "streaming again");
+        assert!(tweet.urls.is_empty());
+    }
+
+    #[test]
+    fn parse_broadcast_ended_state_is_not_live() {
+        let mut v = minimal_tweet_json("4002", "replay https://t.co/BC2");
+        v["legacy"]["entities"] = json!({
+            "urls": [{
+                "url": "https://t.co/BC2",
+                "display_url": "x.com/i/broadcasts/2…",
+                "expanded_url": "https://twitter.com/i/broadcasts/2def"
+            }]
+        });
+        v["card"] = json!({
+            "legacy": {
+                "name": "745291183405076480:broadcast",
+                "url": "https://t.co/BC2",
+                "binding_values": [
+                    {"key": "broadcast_id", "value": {"string_value": "2def", "type": "STRING"}},
+                    {"key": "broadcast_state", "value": {"string_value": "ENDED", "type": "STRING"}},
+                    {"key": "broadcaster_username", "value": {"string_value": "fallback", "type": "STRING"}}
+                ]
+            }
+        });
+        let tweet = parse_tweet_result(&v).unwrap();
+        match &tweet.media[0].kind {
+            MediaKind::Broadcast {
+                is_live,
+                broadcaster_name,
+                title,
+                ..
+            } => {
+                assert!(!is_live);
+                assert_eq!(broadcaster_name, "fallback");
+                assert!(title.is_empty());
+            }
+            other => panic!("expected Broadcast, got {other:?}"),
         }
     }
 

@@ -53,6 +53,7 @@ fn render_into(out: &mut String, t: &Tweet, indent_level: usize) {
                 MediaKind::YouTube { .. } => "youtube",
                 MediaKind::Article { .. } => "article",
                 MediaKind::LinkCard { .. } => "link",
+                MediaKind::Broadcast { .. } => "broadcast",
                 MediaKind::Poll { .. } => "poll",
             };
             let alt = m

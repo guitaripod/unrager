@@ -79,8 +79,30 @@ fn prepend_selection_marker(line: &mut Line<'static>, active: bool, highlight_bg
             t.sel_marker_inactive
         }
     };
-    let marker = Span::styled("▌ ", Style::default().fg(marker_fg).bg(highlight_bg));
+    let marker_style = Style::default().fg(marker_fg).bg(highlight_bg);
 
+    let first_content = line.spans.first().map(|s| s.content.as_ref().to_string());
+
+    if let Some(content) = first_content {
+        if content.starts_with('\u{10EEEE}')
+            && let Some(second) = line.spans.get_mut(1)
+            && second.content.as_ref() == " "
+        {
+            second.content = Cow::Owned("▌".to_string());
+            second.style = marker_style;
+            return;
+        }
+        let len = content.chars().count();
+        if len > 2 && content.chars().all(|c| c == ' ') {
+            let new_len = len - 1;
+            let first = line.spans.first_mut().unwrap();
+            first.content = Cow::Owned(" ".repeat(new_len));
+            line.spans.insert(1, Span::styled("▌", marker_style));
+            return;
+        }
+    }
+
+    let marker = Span::styled("▌ ", marker_style);
     if let Some(first) = line.spans.first_mut() {
         let content = first.content.as_ref();
         if content.starts_with("  ") {
@@ -2770,6 +2792,10 @@ fn apply_avatar_gutter(
     let cols = feed_avatar_cols(cell) as usize;
     let rows = FEED_AVATAR_ROWS as usize;
     let blank_gutter = Span::raw(" ".repeat(cols + 1));
+
+    while lines.len() < rows {
+        lines.push(Line::from(Vec::<Span<'static>>::new()));
+    }
 
     for (i, line) in lines.iter_mut().enumerate() {
         let prefix: Vec<Span<'static>> = match (i < rows, kitty_id) {

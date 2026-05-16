@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+## [0.17.5] — 2026-05-16
+
 - **X Broadcasts now render as a thumbnail-anchored card instead of a truncated URL.** Tweets linking to `x.com/i/broadcasts/<id>` used to show up as `x.com/i/broadcasts/1…` in the body text with no preview. Broadcast tweets now expose a YouTube-style card with the broadcast's actual thumbnail (kitty graphics when supported, sextant fallback otherwise), title, and broadcaster name pulled from the card binding values X already ships. A bold red `● LIVE` badge in the top border highlights streams whose `broadcast_state` is `RUNNING`; ended replays show a neutral `Broadcast` badge. The t.co link is stripped from the body so it doesn't duplicate the card. Press `m` (open media externally) to launch the broadcast in your browser — the URL is routed through the same `collect_remote_urls` path YouTube and Article cards already use.
 
 ## [0.17.4] — 2026-05-16
@@ -111,7 +113,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.17.4...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.17.5...HEAD
+[0.17.5]: https://github.com/guitaripod/unrager/releases/tag/0.17.5
 [0.17.4]: https://github.com/guitaripod/unrager/releases/tag/0.17.4
 [0.17.3]: https://github.com/guitaripod/unrager/releases/tag/0.17.3
 [0.17.2]: https://github.com/guitaripod/unrager/releases/tag/0.17.2

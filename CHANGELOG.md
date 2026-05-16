@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+## [0.17.4] — 2026-05-16
+
 - **Avatars no longer get cropped in half on media-only tweets.** Tweets that arrive with no text body (just attached media) used to render as a single header line, which left the bottom row of the two-row avatar chip unpainted — only the top half of the author's avatar showed up next to the handle. The feed-card renderer now pads the line list out to the avatar's row height before applying the gutter, so the chip fully renders regardless of how short the card is.
 - **Selection cursor no longer shoves the avatar to the right on the focused tweet.** Previously the `▌ ` cursor was prepended in front of the avatar gutter on the highlighted card, pushing the avatar and everything to the right of it two columns over compared to unselected cards — selecting a tweet made it visibly "jump" sideways. The cursor bar is now embedded inside the avatar gutter (replacing the trailing space between the avatar and the handle text, or the last column of the blank-gutter rows below the chip) so the avatar stays pinned to column 0 whether the tweet is selected or not. Body and image columns no longer shift on selection either; non-avatar panes keep the existing left-edge cursor.
 
@@ -107,7 +109,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.17.3...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.17.4...HEAD
+[0.17.4]: https://github.com/guitaripod/unrager/releases/tag/0.17.4
 [0.17.3]: https://github.com/guitaripod/unrager/releases/tag/0.17.3
 [0.17.2]: https://github.com/guitaripod/unrager/releases/tag/0.17.2
 [0.17.1]: https://github.com/guitaripod/unrager/releases/tag/0.17.1

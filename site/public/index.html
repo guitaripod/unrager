@@ -44,7 +44,27 @@
       </nav>
 
       <p class="stat" hidden>
-        <strong id="install-count">—</strong><span class="stat-label"> installs</span>
+        <button class="stat-trigger" type="button" aria-expanded="false" aria-controls="downloads-popover">
+          <strong id="install-count">—</strong><span class="stat-label">downloads</span>
+        </button>
+        <span class="stat-popover" id="downloads-popover" role="tooltip">
+          <span class="stat-popover-title">what this counts</span>
+          <span class="stat-popover-body">HTTP requests that fetched the binary, not unique people. Updating with <code>cargo install --force</code> or re-running the install script counts again.</span>
+          <span class="stat-popover-rows">
+            <span class="stat-popover-row">
+              <span class="stat-popover-key">crates.io</span>
+              <span class="stat-popover-val" id="dl-crates">—</span>
+            </span>
+            <span class="stat-popover-row">
+              <span class="stat-popover-key">GitHub releases</span>
+              <span class="stat-popover-val" id="dl-gh">—</span>
+            </span>
+          </span>
+          <span class="stat-popover-foot">
+            <span class="stat-popover-note">tarballs only · SHA256SUMS excluded</span>
+            <span class="stat-popover-when">updated <span id="dl-updated">just now</span></span>
+          </span>
+        </span>
       </p>
     </header>
 
@@ -159,11 +179,64 @@
         if (typeof d.total !== 'number' || d.total <= 0) return;
         const el = document.getElementById('install-count');
         const wrap = document.querySelector('.stat');
-        if (!el || !wrap) return;
+        const trigger = wrap?.querySelector('.stat-trigger');
+        const popover = wrap?.querySelector('.stat-popover');
+        if (!el || !wrap || !trigger || !popover) return;
 
         const target = d.total;
         const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
         const fmt = n => n.toLocaleString('en-US');
+
+        const crates = d.sources?.crates_io?.count;
+        const gh = d.sources?.github_releases?.count;
+        const setVal = (id, n) => {
+          const e = document.getElementById(id);
+          if (e) e.textContent = typeof n === 'number' ? fmt(n) : '—';
+        };
+        setVal('dl-crates', crates);
+        setVal('dl-gh', gh);
+
+        const relTime = (iso) => {
+          const t = (Date.now() - new Date(iso).getTime()) / 1000;
+          if (!isFinite(t) || t < 0) return 'just now';
+          if (t < 60) return 'just now';
+          if (t < 3600) {
+            const m = Math.round(t / 60);
+            return `${m} min ago`;
+          }
+          if (t < 86400) {
+            const h = Math.round(t / 3600);
+            return `${h} hr ago`;
+          }
+          const days = Math.round(t / 86400);
+          return `${days} day${days === 1 ? '' : 's'} ago`;
+        };
+        const when = document.getElementById('dl-updated');
+        if (when && d.updated_at) when.textContent = relTime(d.updated_at);
+
+        const close = () => {
+          wrap.classList.remove('is-open');
+          trigger.setAttribute('aria-expanded', 'false');
+        };
+        const open = () => {
+          wrap.classList.add('is-open');
+          trigger.setAttribute('aria-expanded', 'true');
+        };
+        const toggle = () => (wrap.classList.contains('is-open') ? close() : open());
+
+        trigger.addEventListener('click', (e) => {
+          e.stopPropagation();
+          toggle();
+        });
+        trigger.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') close();
+        });
+        document.addEventListener('click', (e) => {
+          if (!wrap.contains(e.target)) close();
+        });
+        document.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') close();
+        });
 
         if (reduce) {
           el.textContent = fmt(target);

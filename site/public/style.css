@@ -200,21 +200,202 @@ kbd {
 
 .btn.primary:hover { background: rgba(29, 155, 240, 0.18); }
 
+.hero { --hero-dim: 1; }
+
+.hero:has(.stat:hover),
+.hero:has(.stat:focus-within),
+.hero:has(.stat.is-open) {
+  --hero-dim: 0.18;
+}
+
+.hero > *:not(.stat) {
+  opacity: var(--hero-dim);
+  transition: opacity 260ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero > *:not(.stat) { transition: none; }
+}
+
 .stat {
+  position: relative;
+  display: inline-block;
   margin: .9rem 0 0;
-  text-align: center;
   font-size: .78rem;
   color: var(--muted);
   letter-spacing: .02em;
 }
 
-.stat strong {
+.stat-trigger {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: .25em .55em;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  cursor: help;
+  border-radius: 6px;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.stat-trigger:hover,
+.stat-trigger:focus-visible,
+.stat.is-open .stat-trigger {
+  background: var(--accent-dim);
+  color: var(--text);
+  outline: none;
+}
+
+.stat-trigger:focus-visible {
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.stat-trigger strong {
   color: var(--accent);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+  margin-right: .35em;
 }
 
-.stat-label { opacity: .8; }
+.stat-label {
+  opacity: .85;
+  border-bottom: 1px dotted currentColor;
+  padding-bottom: 1px;
+}
+
+.stat-popover {
+  position: absolute;
+  bottom: calc(100% + 14px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  width: max-content;
+  max-width: min(340px, calc(100vw - 2rem));
+  padding: .9rem 1rem .8rem;
+  background:
+    linear-gradient(180deg, rgba(29, 155, 240, 0.05), transparent 80px),
+    var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow:
+    0 18px 40px -12px rgba(0, 0, 0, .65),
+    0 2px 8px -2px rgba(0, 0, 0, .4),
+    inset 0 1px 0 rgba(255, 255, 255, .03);
+  font-size: .76rem;
+  text-align: left;
+  color: var(--text);
+  letter-spacing: 0;
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease,
+    visibility 180ms;
+  z-index: 10;
+}
+
+.stat-popover::after,
+.stat-popover::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  border: 7px solid transparent;
+}
+
+.stat-popover::after {
+  top: 100%;
+  transform: translateX(-50%);
+  border-top-color: var(--bg-2);
+}
+
+.stat-popover::before {
+  top: calc(100% + 1px);
+  transform: translateX(-50%);
+  border-top-color: var(--border);
+  border-width: 8px;
+  margin-left: -1px;
+}
+
+.stat:hover .stat-popover,
+.stat:focus-within .stat-popover,
+.stat.is-open .stat-popover {
+  opacity: 1;
+  pointer-events: auto;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
+}
+
+.stat-popover-title {
+  display: block;
+  color: var(--accent);
+  font-weight: 600;
+  font-size: .68rem;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  margin-bottom: .5rem;
+}
+
+.stat-popover-body {
+  display: block;
+  color: var(--muted-2);
+  line-height: 1.55;
+}
+
+.stat-popover-body code {
+  color: var(--text);
+  background: var(--bg-3);
+  padding: 0 .35em;
+  border-radius: 3px;
+  font-size: .92em;
+}
+
+.stat-popover-rows {
+  display: block;
+  margin: .8rem 0 .65rem;
+  padding: .6rem 0;
+  border-top: 1px solid var(--border-soft);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.stat-popover-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  padding: .12rem 0;
+}
+
+.stat-popover-key {
+  color: var(--muted);
+}
+
+.stat-popover-val {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.stat-popover-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: .68rem;
+  color: var(--muted);
+}
+
+.stat-popover-note { opacity: .85; }
+
+@media (max-width: 480px) {
+  .stat-popover {
+    max-width: calc(100vw - 1.5rem);
+  }
+  .stat-popover-foot {
+    flex-direction: column;
+    gap: .2rem;
+  }
+}
 
 /* ─── screenshot carousel ──────────────────── */
 

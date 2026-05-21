@@ -121,7 +121,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.17.6...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.17.7...HEAD
+[0.17.7]: https://github.com/guitaripod/unrager/releases/tag/0.17.7
 [0.17.6]: https://github.com/guitaripod/unrager/releases/tag/0.17.6
 [0.17.5]: https://github.com/guitaripod/unrager/releases/tag/0.17.5
 [0.17.4]: https://github.com/guitaripod/unrager/releases/tag/0.17.4

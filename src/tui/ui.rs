@@ -4833,13 +4833,21 @@ fn draw_changelog_overlay(frame: &mut Frame, area: Rect, app: &App) {
                 for raw_line in release.body.lines() {
                     let trimmed = raw_line.trim();
                     if let Some(section) = trimmed.strip_prefix("## ") {
-                        lines.push(Line::from(Span::styled(section, heading_style)));
+                        if section.eq_ignore_ascii_case("install flavors") {
+                            break;
+                        }
+                        lines.push(Line::from(Span::styled(section.to_string(), heading_style)));
                     } else if trimmed.starts_with("- ") {
-                        lines.push(Line::from(format!("  {trimmed}")));
+                        let mut spans = vec![Span::raw("  ")];
+                        spans.extend(render_changelog_inline(trimmed, Style::default()));
+                        lines.push(Line::from(spans));
                     } else if trimmed.to_lowercase().starts_with("**full changelog**") {
                         continue;
                     } else if !trimmed.is_empty() {
-                        lines.push(Line::from(trimmed.to_string()));
+                        lines.push(Line::from(render_changelog_inline(
+                            trimmed,
+                            Style::default(),
+                        )));
                     }
                 }
                 lines.push(Line::from(""));
@@ -4862,6 +4870,50 @@ fn draw_changelog_overlay(frame: &mut Frame, area: Rect, app: &App) {
         .scroll((app.changelog_scroll, 0))
         .wrap(Wrap { trim: false });
     frame.render_widget(changelog, popup);
+}
+
+/// Render a single line of GitHub-flavored markdown with inline `**bold**` and
+/// `` `code` `` spans honored. Unclosed delimiters are emitted as literal
+/// characters so we don't swallow stray asterisks or backticks in prose.
+fn render_changelog_inline(text: &str, base: Style) -> Vec<Span<'static>> {
+    let t = th();
+    let bold = base.add_modifier(Modifier::BOLD);
+    let code = Style::default().fg(t.accent);
+
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut buf = String::new();
+    let mut rest = text;
+
+    let flush = |buf: &mut String, spans: &mut Vec<Span<'static>>, style: Style| {
+        if !buf.is_empty() {
+            spans.push(Span::styled(std::mem::take(buf), style));
+        }
+    };
+
+    while !rest.is_empty() {
+        if let Some(after) = rest.strip_prefix("**") {
+            if let Some(end) = after.find("**") {
+                flush(&mut buf, &mut spans, base);
+                spans.push(Span::styled(after[..end].to_string(), bold));
+                rest = &after[end + 2..];
+                continue;
+            }
+        }
+        if let Some(after) = rest.strip_prefix('`') {
+            if let Some(end) = after.find('`') {
+                flush(&mut buf, &mut spans, base);
+                spans.push(Span::styled(after[..end].to_string(), code));
+                rest = &after[end + 1..];
+                continue;
+            }
+        }
+        let ch = rest.chars().next().unwrap();
+        buf.push(ch);
+        rest = &rest[ch.len_utf8()..];
+    }
+
+    flush(&mut buf, &mut spans, base);
+    spans
 }
 
 fn draw_leader_overlay(frame: &mut Frame, area: Rect, app: &App) {
@@ -5162,7 +5214,64 @@ fn draw_compose_overlay(frame: &mut Frame, area: Rect, app: &App) {
 
 #[cfg(test)]
 mod tests {
-    use super::{strip_leading_mentions, wrap_text};
+    use super::{render_changelog_inline, strip_leading_mentions, wrap_text};
+    use ratatui::style::Style;
+
+    fn span_text(text: &str) -> Vec<String> {
+        render_changelog_inline(text, Style::default())
+            .into_iter()
+            .map(|s| s.content.into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn changelog_inline_renders_plain_text_as_single_span() {
+        assert_eq!(span_text("hello world"), vec!["hello world"]);
+    }
+
+    #[test]
+    fn changelog_inline_splits_bold_marker_into_three_spans() {
+        assert_eq!(
+            span_text("- **Brave Origin is now auto-detected.** rest of bullet"),
+            vec![
+                "- ",
+                "Brave Origin is now auto-detected.",
+                " rest of bullet",
+            ]
+        );
+    }
+
+    #[test]
+    fn changelog_inline_splits_inline_code_into_three_spans() {
+        assert_eq!(
+            span_text("path is `~/.config/foo` here"),
+            vec!["path is ", "~/.config/foo", " here"]
+        );
+    }
+
+    #[test]
+    fn changelog_inline_treats_unclosed_bold_as_literal() {
+        assert_eq!(
+            span_text("plain **dangling text"),
+            vec!["plain **dangling text"]
+        );
+    }
+
+    #[test]
+    fn changelog_inline_treats_unclosed_code_as_literal() {
+        assert_eq!(
+            span_text("plain `dangling text"),
+            vec!["plain `dangling text"]
+        );
+    }
+
+    #[test]
+    fn changelog_inline_handles_bold_and_code_in_same_line() {
+        assert_eq!(
+            span_text("**title** body `path` rest"),
+            vec!["title", " body ", "path", " rest"]
+        );
+    }
 
     #[test]
     fn strips_single_mention() {

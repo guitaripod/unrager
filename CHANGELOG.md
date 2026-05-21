@@ -6,6 +6,10 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+## [0.17.7] — 2026-05-21
+
+- **In-app changelog (`W`) no longer renders raw markdown.** Bullets that contained `**bolded headlines**` or backticked `` `code spans` `` were showing the literal asterisks and backticks because the changelog overlay treated each release body as plain text — that's why every multi-paragraph entry since 0.17.3 looked broken. The overlay now parses inline `**…**` and `` `…` `` per line and emits styled spans (bold for emphasis, accent color for code), so prose reads naturally and `BraveSoftware/Brave-Origin-*`-style paths actually look like paths. The boilerplate `## Install flavors` footer that the release workflow appends to every release body is now stripped from the in-app view as well; it was duplicated across every entry and pushed the user-facing notes off-screen.
+
 ## [0.17.6] — 2026-05-21
 
 - **Brave Origin is now auto-detected.** Brave Origin is a separate Brave product (minimalist build without Leo/Wallet/Rewards/VPN) that ships its own Beta and Nightly channels alongside the standard Brave Browser. Until now, autodetect only knew about `BraveSoftware/Brave-Browser{,-Beta,-Nightly}`, so a freshly-installed Brave Origin user saw `unrager doctor` report no cookie store at all and the TUI fell back to "not logged in" with no hint why. The browser table now includes a separate `Brave Origin` entry covering `BraveSoftware/Brave-Origin{,-Beta,-Nightly}` on both Linux and macOS, with its own `"Brave Origin Safe Storage"` macOS keychain lookup since the standalone app provisions a distinct keychain item. `unrager doctor` also gains a third hint when no Chromium store is found, pointing users at `UNRAGER_COOKIES_PATH` for non-standard installs (Flatpak, Snap, browser sandboxes) so the workaround is discoverable from the diagnostic itself.

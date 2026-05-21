@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+## [0.17.6] — 2026-05-21
+
 - **Brave Origin is now auto-detected.** Brave Origin is a separate Brave product (minimalist build without Leo/Wallet/Rewards/VPN) that ships its own Beta and Nightly channels alongside the standard Brave Browser. Until now, autodetect only knew about `BraveSoftware/Brave-Browser{,-Beta,-Nightly}`, so a freshly-installed Brave Origin user saw `unrager doctor` report no cookie store at all and the TUI fell back to "not logged in" with no hint why. The browser table now includes a separate `Brave Origin` entry covering `BraveSoftware/Brave-Origin{,-Beta,-Nightly}` on both Linux and macOS, with its own `"Brave Origin Safe Storage"` macOS keychain lookup since the standalone app provisions a distinct keychain item. `unrager doctor` also gains a third hint when no Chromium store is found, pointing users at `UNRAGER_COOKIES_PATH` for non-standard installs (Flatpak, Snap, browser sandboxes) so the workaround is discoverable from the diagnostic itself.
 
 ## [0.17.5] — 2026-05-16
@@ -115,7 +117,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.17.5...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.17.6...HEAD
+[0.17.6]: https://github.com/guitaripod/unrager/releases/tag/0.17.6
 [0.17.5]: https://github.com/guitaripod/unrager/releases/tag/0.17.5
 [0.17.4]: https://github.com/guitaripod/unrager/releases/tag/0.17.4
 [0.17.3]: https://github.com/guitaripod/unrager/releases/tag/0.17.3

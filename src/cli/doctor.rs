@@ -80,6 +80,13 @@ fn print_cookies(report: &mut Report) {
     } else {
         println!("✗ cookies     no Chromium-family browser cookie store found");
         println!("              → install Vivaldi / Chrome / Brave / Edge, then log into x.com");
+        println!(
+            "              → or, if your browser is installed at a non-standard path (Flatpak, Snap, sandbox),"
+        );
+        println!("                point UNRAGER_COOKIES_PATH at the Cookies file directly, e.g.:");
+        println!(
+            "                export UNRAGER_COOKIES_PATH=\"$HOME/.config/BraveSoftware/Brave-Browser/Default/Cookies\""
+        );
         report.errors += 1;
     }
 }

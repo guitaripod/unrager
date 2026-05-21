@@ -79,6 +79,21 @@ const BROWSERS: &[Browser] = &[
         macos_keychain_account: "Brave",
     },
     Browser {
+        label: "Brave Origin",
+        linux_roots: &[
+            "BraveSoftware/Brave-Origin",
+            "BraveSoftware/Brave-Origin-Beta",
+            "BraveSoftware/Brave-Origin-Nightly",
+        ],
+        macos_roots: &[
+            "BraveSoftware/Brave-Origin",
+            "BraveSoftware/Brave-Origin-Beta",
+            "BraveSoftware/Brave-Origin-Nightly",
+        ],
+        macos_keychain_service: "Brave Origin Safe Storage",
+        macos_keychain_account: "Brave Origin",
+    },
+    Browser {
         label: "Microsoft Edge",
         linux_roots: &[
             "microsoft-edge",
@@ -467,6 +482,20 @@ mod tests {
             "/Users/alice/Library/Application Support/BraveSoftware/Brave-Browser/Default/Cookies",
         );
         assert_eq!(infer_browser_from_path(&path).label, "Brave");
+    }
+
+    #[test]
+    fn infer_browser_labels_brave_origin_beta_override() {
+        let path =
+            PathBuf::from("/home/alice/.config/BraveSoftware/Brave-Origin-Beta/Default/Cookies");
+        assert_eq!(infer_browser_from_path(&path).label, "Brave Origin");
+    }
+
+    #[test]
+    fn infer_browser_labels_brave_origin_nightly_override() {
+        let path =
+            PathBuf::from("/home/alice/.config/BraveSoftware/Brave-Origin-Nightly/Default/Cookies");
+        assert_eq!(infer_browser_from_path(&path).label, "Brave Origin");
     }
 
     #[test]

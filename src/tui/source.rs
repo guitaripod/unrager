@@ -92,6 +92,10 @@ pub struct Source {
     pub loading: bool,
     pub silent_refreshing: bool,
     pub exhausted: bool,
+    /// Consecutive `append` fetches that added no net-new tweets. Drives
+    /// `EMPTY_APPEND_LIMIT`-based exhaustion so a recycling cursor can't spin
+    /// the auto-paginate loop forever. Reset whenever a load makes progress.
+    pub empty_appends: u32,
     pub state: PaneState,
     pub profile_user: Option<crate::model::User>,
 }
@@ -132,6 +136,7 @@ impl Source {
         self.tweets = page.tweets;
         self.cursor = page.next_cursor;
         self.exhausted = self.cursor.is_none();
+        self.empty_appends = 0;
         let last = self.tweets.len().saturating_sub(1);
         let current = self.state.selected.min(last);
         self.state = PaneState::with_selected(current);
@@ -144,12 +149,9 @@ impl Source {
             .into_iter()
             .filter(|t| !existing.contains(t.rest_id.as_str()))
             .collect();
-        let incoming = deduped.len();
         self.tweets.extend(deduped);
         self.cursor = page.next_cursor;
-        if self.cursor.is_none() || incoming == 0 {
-            self.exhausted = true;
-        }
+        self.exhausted = self.cursor.is_none();
     }
 
     pub fn prepend_fresh(&mut self, page: TimelinePage) -> usize {

@@ -236,8 +236,29 @@ impl App {
                 }
                 let held_count = held.len();
                 self.pending_classification.extend(held.iter().cloned());
-                if total_incoming > 0 && self.source.cursor.is_some() {
-                    self.source.exhausted = false;
+                if total_incoming > 0 {
+                    // `hidden` counts only newly-classified tweets (ids fresh
+                    // to `filter_counted_ids`), so a heavily-filtered page of
+                    // genuinely new tweets still reads as progress — only a
+                    // page that surfaced nothing new (X recycling behind a
+                    // stale cursor) leaves all three at zero.
+                    let made_progress = added > 0 || held_count > 0 || hidden > 0;
+                    if append && !made_progress {
+                        self.source.empty_appends = self.source.empty_appends.saturating_add(1);
+                        if self.source.empty_appends >= EMPTY_APPEND_LIMIT {
+                            tracing::info!(
+                                empty_appends = self.source.empty_appends,
+                                "pagination exhausted: X is recycling already-loaded tweets"
+                            );
+                            self.source.exhausted = true;
+                            self.fetch_baseline = None;
+                        }
+                    } else {
+                        self.source.empty_appends = 0;
+                        if self.source.cursor.is_some() {
+                            self.source.exhausted = false;
+                        }
+                    }
                 }
                 self.error = None;
                 let mut new_tweets: Vec<Tweet> = if silent {
@@ -650,9 +671,12 @@ impl App {
         let mut avatar_urls: Vec<String> = Vec::new();
         match result {
             Ok(page) => {
+                let mut all_dupes = false;
                 if append {
                     let existing: std::collections::HashSet<String> =
                         view.users.iter().map(|u| u.rest_id.clone()).collect();
+                    let incoming = page.users.len();
+                    let before = view.users.len();
                     for u in page.users {
                         if !existing.contains(&u.rest_id) {
                             if let Some(url) = u.avatar_url.as_deref() {
@@ -661,6 +685,7 @@ impl App {
                             view.users.push(u);
                         }
                     }
+                    all_dupes = incoming > 0 && view.users.len() == before;
                 } else {
                     avatar_urls.extend(
                         page.users
@@ -671,7 +696,7 @@ impl App {
                     view.users = page.users;
                 }
                 view.cursor = page.next_cursor;
-                view.exhausted = view.cursor.is_none();
+                view.exhausted = view.cursor.is_none() || all_dupes;
                 view.error = None;
                 tracing::info!(
                     tweet_id = %view.tweet_id,

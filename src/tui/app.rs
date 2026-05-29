@@ -217,6 +217,14 @@ pub const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", 
 
 pub(super) const FETCH_TARGET_TWEETS: usize = 50;
 
+/// Consecutive paginated fetches that surface zero new tweets (X recycling
+/// its recommendations behind a stale cursor) before the source is marked
+/// exhausted. A page whose tweets were all hidden by the filter still counts
+/// as progress and resets the streak, so this only trips on genuine
+/// recycling — generous enough to ride out a recycled blip while paginating
+/// toward a full page, bounded so it never hammers the API into a cooldown.
+pub(super) const EMPTY_APPEND_LIMIT: u32 = 5;
+
 impl App {
     pub async fn new(tx: EventTx, is_dark: bool) -> Result<Self> {
         let client = Arc::new(common::build_gql_client().await?);
@@ -245,10 +253,10 @@ impl App {
         };
 
         let loaded = session::load(&session_path);
-        let (initial_kind, initial_selected) = loaded
+        let initial_kind = loaded
             .as_ref()
-            .map(|s| (s.source_kind.clone(), s.selected))
-            .unwrap_or_else(|| (SourceKind::Home { following: false }, 0));
+            .map(|s| s.source_kind.clone())
+            .unwrap_or(SourceKind::Home { following: false });
         let loaded_metrics = loaded
             .as_ref()
             .and_then(|s| s.metrics)
@@ -288,8 +296,7 @@ impl App {
         let theme_is_dark = theme.is_dark;
         crate::tui::theme::set_active(theme);
 
-        let mut source = Source::new(initial_kind.clone());
-        source.set_selected(initial_selected);
+        let source = Source::new(initial_kind.clone());
 
         let mut whisper_state = WhisperState::new();
         if let Some(ref s) = loaded {
@@ -884,6 +891,277 @@ mod tests {
             has_classifier,
             cache,
             counted_ids: counted,
+        }
+    }
+
+    fn tweet_at(id: &str, secs_ago: i64) -> Tweet {
+        let mut t = make_tweet(id, id);
+        t.created_at = Utc::now() - chrono::Duration::seconds(secs_ago);
+        t
+    }
+
+    fn dupe_page(count: usize, cursor: &str) -> crate::parse::timeline::TimelinePage {
+        let mut page = make_page(
+            (0..count)
+                .map(|i| make_tweet(&format!("a{i}"), "dupe"))
+                .collect(),
+        );
+        page.next_cursor = Some(cursor.to_string());
+        page
+    }
+
+    /// Paginated (older) tweets must append BELOW the cursor on both feeds so
+    /// the list grows downward like a normal infinite scroll.
+    #[tokio::test]
+    async fn paginated_tweets_land_below_cursor() {
+        for following in [true, false] {
+            let kind = SourceKind::Home { following };
+            let (mut app, _rx, _tmp) = dummy_app();
+            app.source = Source::new(kind.clone());
+            app.filter_mode = FilterMode::Off;
+            let page1 = make_page(
+                (0..10)
+                    .map(|i| tweet_at(&format!("a{i}"), i * 10))
+                    .collect(),
+            );
+            app.handle_timeline_loaded(kind.clone(), Ok(page1), false, false);
+            app.source.set_selected(9);
+            let older = make_page(
+                (0..5)
+                    .map(|i| tweet_at(&format!("b{i}"), 200 + i * 10))
+                    .collect(),
+            );
+            app.handle_timeline_loaded(kind.clone(), Ok(older), true, false);
+            let sel = app.source.selected();
+            let new_positions: Vec<usize> = app
+                .source
+                .tweets
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| t.rest_id.starts_with('b'))
+                .map(|(i, _)| i)
+                .collect();
+            assert!(
+                new_positions.iter().all(|&p| p > sel),
+                "following={following}: new tweets {new_positions:?} not all below cursor {sel}"
+            );
+        }
+    }
+
+    /// On the Following feed a classified tweet OLDER than everything loaded
+    /// sorts to the tail — below a scrolled-down cursor.
+    #[tokio::test]
+    async fn drain_following_older_lands_below_cursor() {
+        let (mut app, _rx, _tmp) = dummy_app();
+        app.source = Source::new(SourceKind::Home { following: true });
+        app.filter_mode = FilterMode::On;
+        app.source.tweets = (0..10)
+            .map(|i| tweet_at(&format!("a{i}"), i * 10))
+            .collect();
+        app.source.set_selected(9);
+        let new_old = tweet_at("b0", 500);
+        app.filter_verdicts.insert(
+            "b0".into(),
+            crate::tui::filter::FilterState::Classified(FilterDecision::Keep),
+        );
+        app.pending_classification.push(new_old);
+        app.drain_pending_classification();
+        let pos = app
+            .source
+            .tweets
+            .iter()
+            .position(|t| t.rest_id == "b0")
+            .unwrap();
+        assert!(
+            pos > app.source.selected(),
+            "older tweet should land below cursor"
+        );
+    }
+
+    /// The deliberate chronological insert keeps the cursor pinned to its
+    /// focal tweet when a genuinely newer tweet (a top-of-feed refresh, never
+    /// a paginated older page) sorts in above it.
+    #[tokio::test]
+    async fn drain_following_newer_inserts_chronologically() {
+        let (mut app, _rx, _tmp) = dummy_app();
+        app.source = Source::new(SourceKind::Home { following: true });
+        app.filter_mode = FilterMode::On;
+        app.source.tweets = (0..10)
+            .map(|i| tweet_at(&format!("a{i}"), 100 + i * 10))
+            .collect();
+        app.source.set_selected(5);
+        let newer = tweet_at("b0", 0);
+        app.filter_verdicts.insert(
+            "b0".into(),
+            crate::tui::filter::FilterState::Classified(FilterDecision::Keep),
+        );
+        app.pending_classification.push(newer);
+        app.drain_pending_classification();
+        let pos = app
+            .source
+            .tweets
+            .iter()
+            .position(|t| t.rest_id == "b0")
+            .unwrap();
+        assert_eq!(pos, 0, "newer tweet sorts to the top");
+        assert_eq!(
+            app.source.tweets[app.source.selected()].rest_id,
+            "a5",
+            "cursor stays pinned to its focal tweet"
+        );
+    }
+
+    /// A paginated page of tweets the feed already holds (X recycling its
+    /// recommendations behind a stale cursor) must not spin the auto-paginate
+    /// loop forever: after EMPTY_APPEND_LIMIT all-duplicate pages the source
+    /// is marked exhausted so no further fetch is issued.
+    #[tokio::test]
+    async fn repeated_all_dupe_pages_mark_exhausted() {
+        let (mut app, _rx, _tmp) = dummy_app();
+        let kind = SourceKind::Home { following: false };
+        app.source = Source::new(kind.clone());
+        app.filter_mode = FilterMode::Off;
+        let mut seed = make_page(
+            (0..10)
+                .map(|i| tweet_at(&format!("a{i}"), i * 10))
+                .collect(),
+        );
+        seed.next_cursor = Some("c".into());
+        app.handle_timeline_loaded(kind.clone(), Ok(seed), false, false);
+        assert!(!app.source.exhausted);
+
+        for n in 1..EMPTY_APPEND_LIMIT {
+            app.handle_timeline_loaded(kind.clone(), Ok(dupe_page(10, "c")), true, false);
+            assert_eq!(app.source.empty_appends, n);
+            assert!(!app.source.exhausted, "must tolerate {n} all-dupe page(s)");
+        }
+        app.handle_timeline_loaded(kind.clone(), Ok(dupe_page(10, "c")), true, false);
+        assert!(
+            app.source.exhausted,
+            "exhausted after EMPTY_APPEND_LIMIT dupe pages"
+        );
+        assert_eq!(
+            app.source.tweets.len(),
+            10,
+            "no duplicate tweets accumulated"
+        );
+    }
+
+    /// A page that adds even one new tweet resets the empty-append streak so a
+    /// brief overlap never accumulates toward false exhaustion.
+    #[tokio::test]
+    async fn progress_resets_empty_append_streak() {
+        let (mut app, _rx, _tmp) = dummy_app();
+        let kind = SourceKind::Home { following: false };
+        app.source = Source::new(kind.clone());
+        app.filter_mode = FilterMode::Off;
+        let mut seed = make_page(
+            (0..10)
+                .map(|i| tweet_at(&format!("a{i}"), i * 10))
+                .collect(),
+        );
+        seed.next_cursor = Some("c".into());
+        app.handle_timeline_loaded(kind.clone(), Ok(seed), false, false);
+
+        app.handle_timeline_loaded(kind.clone(), Ok(dupe_page(10, "c")), true, false);
+        assert_eq!(app.source.empty_appends, 1);
+
+        let fresh = {
+            let mut p = make_page(vec![tweet_at("z0", 999)]);
+            p.next_cursor = Some("c".into());
+            p
+        };
+        app.handle_timeline_loaded(kind.clone(), Ok(fresh), true, false);
+        assert_eq!(app.source.empty_appends, 0, "progress clears the streak");
+        assert!(!app.source.exhausted);
+    }
+
+    /// With an aggressive filter, paginated pages can come back with every
+    /// new tweet hidden (added=0, held=0) yet still be genuine forward
+    /// progress — they must NOT count toward exhaustion, or the feed stops
+    /// after a handful of survivors instead of paginating toward a full page.
+    #[tokio::test]
+    async fn heavily_filtered_new_pages_are_not_exhaustion() {
+        let (mut app, _rx, _tmp) = dummy_app();
+        let cache_tmp = NamedTempFile::new().unwrap();
+        let mut cache = FilterCache::open(cache_tmp.path(), "h".into()).unwrap();
+        let pages = EMPTY_APPEND_LIMIT as usize + 2;
+        for i in 0..pages {
+            for j in 0..3 {
+                cache.put(&format!("h{i}_{j}"), FilterDecision::Hide);
+            }
+        }
+        app.filter_cache = Some(cache);
+        let cfg = crate::tui::filter::FilterConfig {
+            drop_topics: vec![],
+            extra_guidance: String::new(),
+            ollama: crate::tui::filter::OllamaConfig {
+                model: "test".into(),
+                host: "http://127.0.0.1:1".into(),
+                timeout_seconds: 1,
+                keep_alive: "10s".into(),
+            },
+        };
+        app.filter_classifier = Some(crate::tui::filter::Classifier::new(&cfg));
+        app.filter_mode = crate::tui::filter::FilterMode::On;
+        let kind = SourceKind::Home { following: false };
+        app.source = Source::new(kind.clone());
+        app.source.tweets = vec![make_tweet("seed", "keep")];
+        app.source.cursor = Some("c".into());
+
+        for i in 0..pages {
+            let mut p = make_page(
+                (0..3)
+                    .map(|j| make_tweet(&format!("h{i}_{j}"), "x"))
+                    .collect(),
+            );
+            p.next_cursor = Some("c".into());
+            app.handle_timeline_loaded(kind.clone(), Ok(p), true, false);
+            assert_eq!(
+                app.source.empty_appends, 0,
+                "page {i}: new-but-hidden is progress"
+            );
+            assert!(
+                !app.source.exhausted,
+                "page {i}: heavy filtering is not exhaustion"
+            );
+        }
+    }
+
+    /// The likers pane paginates a stable cursor; a page that adds no new
+    /// users means the end was reached, so it must stop re-fetching.
+    #[tokio::test]
+    async fn likers_append_all_dupes_marks_exhausted() {
+        use crate::model::User;
+        use crate::tui::focus::{FocusEntry, LikersPage, LikersView};
+        let (mut app, _rx, _tmp) = dummy_app();
+        let mk_user = |id: &str| User {
+            rest_id: id.to_string(),
+            handle: id.to_string(),
+            name: id.to_string(),
+            verified: false,
+            followers: 0,
+            following: 0,
+            avatar_url: None,
+        };
+        let mut view = LikersView::new("tweet1".into(), "likers".into());
+        view.users = vec![mk_user("u0"), mk_user("u1")];
+        view.cursor = Some("c".into());
+        view.exhausted = false;
+        app.focus_stack.push(FocusEntry::Likers(view));
+
+        let page = LikersPage {
+            users: vec![mk_user("u0"), mk_user("u1")],
+            next_cursor: Some("c2".into()),
+        };
+        app.handle_likers_page_loaded("tweet1".into(), Ok(page), true);
+
+        match app.focus_stack.last() {
+            Some(FocusEntry::Likers(v)) => {
+                assert_eq!(v.users.len(), 2, "duplicate likers not appended");
+                assert!(v.exhausted, "all-duplicate liker page marks exhausted");
+            }
+            _ => panic!("expected likers view on the focus stack"),
         }
     }
 

@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-05-29
+
 - **For You no longer hides tweets you've already seen, so the feed fills out instead of thinning to a handful.** A local filter dropped every incoming tweet already in your 2-day read history (`seen.db`) — on top of X's own dedup and the rage filter — so after a browsing session For You could collapse to two or three survivors. Already-seen tweets now stay in the feed (dimmed by the existing read-styling) for a fuller, smoother scroll that doesn't run dry once you've worked through X's fresh recommendations. `seenTweetIds` is still sent so X keeps surfacing variety rather than re-serving the same recent posts, and in-list de-duplication still prevents a single tweet appearing twice in one continuous feed.
 - **Home feeds now gather a full batch of 25 tweets per load before showing them, instead of trickling filtered survivors in one at a time.** With the rage filter on, kept tweets used to pop into the feed individually as the local classifier finished each one, so a heavily-filtered For You feed looked broken — three tweets, then a long pause, then maybe one more. The initial load now keeps fetching and classifying in the background behind a `collecting tweets… N/25` progress line, and only paints once 25 tweets survive the filter. Scrolling toward the bottom kicks off the same work for the next batch, so the feed grows in 25-tweet pages. It can take a while on a heavily-filtered feed — it pulls and classifies as many raw pages as needed — but it no longer looks empty or stuck. The first-paint curtain lifts early if the feed genuinely runs dry so it never hangs.
 - **The For You feed no longer dead-ends with a false `[end of timeline]` when X recycles, and reaching the bottom keeps working instead of giving up.** When X's algorithm re-serves recommendations the feed already holds (routine for For You behind a long-lived cursor), every paginated page deduped to zero new tweets. Two bugs stacked on top of that: the client resurrected `exhausted = false` off the *raw, pre-dedup* page count and re-fired immediately, hammering X with hundreds of fetches a minute into a rate-limit cooldown; and once a stop was eventually reached it showed `[end of timeline]`, which is wrong for an effectively endless feed. Now a page counts as progress if it surfaced any *new* tweet — kept, held for classification, **or hidden by the filter** — so heavy filtering keeps the feed paginating. A run of genuinely-recycled pages (nothing new at all) only *pauses* the automatic burst rather than dead-ending it; the feed stays re-fetchable, so scrolling to the bottom re-attempts the work. While paused the header shows a muted `[caught up · scroll to retry]` hint so it's clear the feed isn't broken — just waiting on X for something new. A truly null cursor (Following/Search reaching the real bottom) still shows `[end of timeline]`.
@@ -127,7 +129,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.17.7...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.18.0...HEAD
+[0.18.0]: https://github.com/guitaripod/unrager/releases/tag/0.18.0
 [0.17.7]: https://github.com/guitaripod/unrager/releases/tag/0.17.7
 [0.17.6]: https://github.com/guitaripod/unrager/releases/tag/0.17.6
 [0.17.5]: https://github.com/guitaripod/unrager/releases/tag/0.17.5

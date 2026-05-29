@@ -241,23 +241,22 @@ impl App {
                     // to `filter_counted_ids`), so a heavily-filtered page of
                     // genuinely new tweets still reads as progress — only a
                     // page that surfaced nothing new (X recycling behind a
-                    // stale cursor) leaves all three at zero.
+                    // stale cursor) leaves all three at zero. A run of those
+                    // pauses the auto-paginate burst (via `try_advance_fetch_target`)
+                    // without dead-ending the feed — `exhausted` stays
+                    // cursor-driven, so scrolling re-attempts the work and X's
+                    // recycling never shows a false `[end of timeline]`.
                     let made_progress = added > 0 || held_count > 0 || hidden > 0;
                     if append && !made_progress {
                         self.source.empty_appends = self.source.empty_appends.saturating_add(1);
-                        if self.source.empty_appends >= EMPTY_APPEND_LIMIT {
+                        if self.source.empty_appends == EMPTY_APPEND_LIMIT {
                             tracing::info!(
                                 empty_appends = self.source.empty_appends,
-                                "pagination exhausted: X is recycling already-loaded tweets"
+                                "pagination paused: X is recycling already-loaded tweets; retries on scroll"
                             );
-                            self.source.exhausted = true;
-                            self.fetch_baseline = None;
                         }
                     } else {
                         self.source.empty_appends = 0;
-                        if self.source.cursor.is_some() {
-                            self.source.exhausted = false;
-                        }
                     }
                 }
                 self.error = None;

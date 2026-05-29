@@ -430,6 +430,15 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
             "[end of timeline]",
             Style::default().fg(t.text_muted),
         ));
+    } else if !app.source.is_empty()
+        && !app.source.loading
+        && app.source.empty_appends >= crate::tui::app::EMPTY_APPEND_LIMIT
+    {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            "[caught up · scroll to retry]",
+            Style::default().fg(t.text_muted),
+        ));
     }
     let unread = {
         let ids: Vec<String> = app

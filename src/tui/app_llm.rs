@@ -262,7 +262,10 @@ impl App {
             .kind
             .as_ref()
             .is_some_and(|k| matches!(k, SourceKind::Home { .. }));
-        let can_fetch_more = self.source.cursor.is_some() && !self.source.exhausted && is_home;
+        let can_fetch_more = self.source.cursor.is_some()
+            && !self.source.exhausted
+            && is_home
+            && self.source.empty_appends < super::app::EMPTY_APPEND_LIMIT;
 
         if total_eventual < target && can_fetch_more {
             if !self.source.loading {

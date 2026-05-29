@@ -215,14 +215,16 @@ pub struct App {
 
 pub const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-pub(super) const FETCH_TARGET_TWEETS: usize = 50;
+pub(super) const FETCH_TARGET_TWEETS: usize = 25;
 
 /// Consecutive paginated fetches that surface zero new tweets (X recycling
-/// its recommendations behind a stale cursor) before the source is marked
-/// exhausted. A page whose tweets were all hidden by the filter still counts
-/// as progress and resets the streak, so this only trips on genuine
-/// recycling — generous enough to ride out a recycled blip while paginating
-/// toward a full page, bounded so it never hammers the API into a cooldown.
+/// its recommendations behind a stale cursor) before the automatic paginate
+/// burst pauses (`try_advance_fetch_target` stops issuing fetches). A page
+/// whose tweets were all hidden by the filter still counts as progress and
+/// resets the streak, so this only trips on genuine recycling — generous
+/// enough to ride out a recycled blip while paginating toward a full batch,
+/// bounded so it never hammers the API into a cooldown. The pause is not a
+/// dead end: `exhausted` stays cursor-driven, so scrolling re-attempts.
 pub(super) const EMPTY_APPEND_LIMIT: u32 = 5;
 
 /// Home feeds stay behind a "collecting…" curtain until this many tweets
@@ -1019,12 +1021,13 @@ mod tests {
         );
     }
 
-    /// A paginated page of tweets the feed already holds (X recycling its
-    /// recommendations behind a stale cursor) must not spin the auto-paginate
-    /// loop forever: after EMPTY_APPEND_LIMIT all-duplicate pages the source
-    /// is marked exhausted so no further fetch is issued.
+    /// Pages of tweets the feed already holds (X recycling its recommendations
+    /// behind a stale cursor) count up `empty_appends` so the auto-paginate
+    /// burst pauses (see `try_advance_fetch_target`), but they must NOT mark a
+    /// cursor-present feed exhausted — that would dead-end For You with a false
+    /// `[end of timeline]`. The feed stays re-fetchable so scrolling retries.
     #[tokio::test]
-    async fn repeated_all_dupe_pages_mark_exhausted() {
+    async fn repeated_all_dupe_pages_pause_without_dead_ending() {
         let (mut app, _rx, _tmp) = dummy_app();
         let kind = SourceKind::Home { following: false };
         app.source = Source::new(kind.clone());
@@ -1038,20 +1041,37 @@ mod tests {
         app.handle_timeline_loaded(kind.clone(), Ok(seed), false, false);
         assert!(!app.source.exhausted);
 
-        for n in 1..EMPTY_APPEND_LIMIT {
+        for n in 1..=EMPTY_APPEND_LIMIT + 1 {
             app.handle_timeline_loaded(kind.clone(), Ok(dupe_page(10, "c")), true, false);
             assert_eq!(app.source.empty_appends, n);
-            assert!(!app.source.exhausted, "must tolerate {n} all-dupe page(s)");
+            assert!(
+                !app.source.exhausted,
+                "cursor-present recycling must never dead-end the feed (n={n})"
+            );
         }
-        app.handle_timeline_loaded(kind.clone(), Ok(dupe_page(10, "c")), true, false);
-        assert!(
-            app.source.exhausted,
-            "exhausted after EMPTY_APPEND_LIMIT dupe pages"
-        );
         assert_eq!(
             app.source.tweets.len(),
             10,
             "no duplicate tweets accumulated"
+        );
+    }
+
+    /// A null cursor is a genuine end (Following/Search reaching the bottom) and
+    /// still marks the feed exhausted so `[end of timeline]` shows there.
+    #[tokio::test]
+    async fn null_cursor_still_exhausts() {
+        let (mut app, _rx, _tmp) = dummy_app();
+        let kind = SourceKind::Home { following: true };
+        app.source = Source::new(kind.clone());
+        app.filter_mode = FilterMode::Off;
+        app.source.tweets = (0..5).map(|i| tweet_at(&format!("a{i}"), i * 10)).collect();
+        app.source.cursor = Some("c".into());
+        let mut end = make_page(vec![tweet_at("b0", 999)]);
+        end.next_cursor = None;
+        app.handle_timeline_loaded(kind, Ok(end), true, false);
+        assert!(
+            app.source.exhausted,
+            "null cursor is a real end of timeline"
         );
     }
 

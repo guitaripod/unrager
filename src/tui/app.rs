@@ -876,12 +876,6 @@ mod tests {
     use chrono::Utc;
     use tempfile::NamedTempFile;
 
-    fn fresh_seen() -> (NamedTempFile, SeenStore) {
-        let tmp = NamedTempFile::new().unwrap();
-        let store = SeenStore::open(tmp.path()).unwrap();
-        (tmp, store)
-    }
-
     fn off_filter(counted: &mut HashSet<String>) -> crate::tui::app_fetch::FilterContext<'_> {
         crate::tui::app_fetch::FilterContext {
             mode: FilterMode::Off,
@@ -1249,86 +1243,32 @@ mod tests {
         }
     }
 
-    #[test]
-    fn filter_seen_on_home_for_you() {
-        let (_tmp, mut seen) = fresh_seen();
-        seen.mark_seen("1");
-        seen.mark_seen("2");
-        let mut page = make_page(vec![
-            make_tweet("1", "old"),
-            make_tweet("2", "old"),
+    /// For You no longer prunes tweets you've already seen — they stay in the
+    /// feed (dimmed by the read-styling) so it fills out smoothly instead of
+    /// running dry once you've worked through X's fresh pool.
+    #[tokio::test]
+    async fn for_you_keeps_already_seen_tweets() {
+        let (mut app, _rx, _tmp) = dummy_app();
+        let kind = SourceKind::Home { following: false };
+        app.source = Source::new(kind.clone());
+        app.filter_mode = FilterMode::Off;
+        app.seen.mark_seen("1");
+        app.seen.mark_seen("2");
+        let page = make_page(vec![
+            make_tweet("1", "seen"),
+            make_tweet("2", "seen"),
             make_tweet("3", "new"),
         ]);
-        let kind = SourceKind::Home { following: false };
-        let mut counted = HashSet::new();
-        filter_incoming_page(
-            &mut page,
-            &kind,
-            FeedMode::All,
-            &seen,
-            off_filter(&mut counted),
+        app.handle_timeline_loaded(kind, Ok(page), false, false);
+        assert_eq!(
+            app.source.tweets.len(),
+            3,
+            "already-seen tweets are no longer pruned from For You"
         );
-        assert_eq!(page.tweets.len(), 1);
-        assert_eq!(page.tweets[0].rest_id, "3");
-    }
-
-    #[test]
-    fn filter_seen_keeps_all_when_everything_seen() {
-        let (_tmp, mut seen) = fresh_seen();
-        seen.mark_seen("1");
-        seen.mark_seen("2");
-        let mut page = make_page(vec![make_tweet("1", "a"), make_tweet("2", "b")]);
-        let kind = SourceKind::Home { following: false };
-        let mut counted = HashSet::new();
-        filter_incoming_page(
-            &mut page,
-            &kind,
-            FeedMode::All,
-            &seen,
-            off_filter(&mut counted),
-        );
-        assert_eq!(page.tweets.len(), 2);
-    }
-
-    #[test]
-    fn filter_seen_skipped_on_following() {
-        let (_tmp, mut seen) = fresh_seen();
-        seen.mark_seen("1");
-        let mut page = make_page(vec![make_tweet("1", "seen"), make_tweet("2", "unseen")]);
-        let kind = SourceKind::Home { following: true };
-        let mut counted = HashSet::new();
-        filter_incoming_page(
-            &mut page,
-            &kind,
-            FeedMode::All,
-            &seen,
-            off_filter(&mut counted),
-        );
-        assert_eq!(page.tweets.len(), 2);
-    }
-
-    #[test]
-    fn filter_seen_skipped_on_non_home() {
-        let (_tmp, mut seen) = fresh_seen();
-        seen.mark_seen("1");
-        let mut page = make_page(vec![make_tweet("1", "seen")]);
-        let kind = SourceKind::User {
-            handle: "someone".into(),
-        };
-        let mut counted = HashSet::new();
-        filter_incoming_page(
-            &mut page,
-            &kind,
-            FeedMode::All,
-            &seen,
-            off_filter(&mut counted),
-        );
-        assert_eq!(page.tweets.len(), 1);
     }
 
     #[test]
     fn filter_originals_removes_replies_quotes_rts() {
-        let (_tmp, seen) = fresh_seen();
         let mut reply = make_tweet("1", "replying");
         reply.in_reply_to_tweet_id = Some("0".into());
         let mut quote = make_tweet("2", "quoting");
@@ -1343,7 +1283,6 @@ mod tests {
             &mut page,
             &kind,
             FeedMode::Originals,
-            &seen,
             off_filter(&mut counted),
         );
         assert_eq!(page.tweets.len(), 1);
@@ -1352,7 +1291,6 @@ mod tests {
 
     #[test]
     fn filter_originals_only_applies_to_home() {
-        let (_tmp, seen) = fresh_seen();
         let mut reply = make_tweet("1", "replying");
         reply.in_reply_to_tweet_id = Some("0".into());
 
@@ -1365,7 +1303,6 @@ mod tests {
             &mut page,
             &kind,
             FeedMode::Originals,
-            &seen,
             off_filter(&mut counted),
         );
         assert_eq!(page.tweets.len(), 1);
@@ -1373,7 +1310,6 @@ mod tests {
 
     #[test]
     fn filter_cache_hides_tweets() {
-        let (_tmp, seen) = fresh_seen();
         let cache_tmp = NamedTempFile::new().unwrap();
         let mut cache = FilterCache::open(cache_tmp.path(), "test_hash".to_string()).unwrap();
         cache.put("2", FilterDecision::Hide);
@@ -1390,7 +1326,6 @@ mod tests {
             &mut page,
             &kind,
             FeedMode::All,
-            &seen,
             on_filter(Some(&cache), true, &mut counted),
         );
         assert_eq!(hidden, 1);
@@ -1401,7 +1336,6 @@ mod tests {
 
     #[test]
     fn filter_cache_does_not_recount_same_id() {
-        let (_tmp, seen) = fresh_seen();
         let cache_tmp = NamedTempFile::new().unwrap();
         let mut cache = FilterCache::open(cache_tmp.path(), "test_hash".to_string()).unwrap();
         cache.put("hidden1", FilterDecision::Hide);
@@ -1418,7 +1352,6 @@ mod tests {
             &mut page,
             &kind,
             FeedMode::All,
-            &seen,
             on_filter(Some(&cache), true, &mut counted),
         );
         assert_eq!(first, 2);
@@ -1434,7 +1367,6 @@ mod tests {
             &mut page2,
             &kind,
             FeedMode::All,
-            &seen,
             on_filter(Some(&cache), true, &mut counted),
         );
         assert_eq!(second, 1, "already-counted ids must not increment again");
@@ -1444,7 +1376,6 @@ mod tests {
 
     #[test]
     fn filter_cache_skipped_when_filter_off() {
-        let (_tmp, seen) = fresh_seen();
         let cache_tmp = NamedTempFile::new().unwrap();
         let mut cache = FilterCache::open(cache_tmp.path(), "test_hash".to_string()).unwrap();
         cache.put("1", FilterDecision::Hide);
@@ -1456,7 +1387,6 @@ mod tests {
             &mut page,
             &kind,
             FeedMode::All,
-            &seen,
             crate::tui::app_fetch::FilterContext {
                 mode: FilterMode::Off,
                 has_classifier: true,
@@ -1470,7 +1400,6 @@ mod tests {
 
     #[test]
     fn filter_cache_skipped_when_no_classifier() {
-        let (_tmp, seen) = fresh_seen();
         let cache_tmp = NamedTempFile::new().unwrap();
         let mut cache = FilterCache::open(cache_tmp.path(), "test_hash".to_string()).unwrap();
         cache.put("1", FilterDecision::Hide);
@@ -1482,7 +1411,6 @@ mod tests {
             &mut page,
             &kind,
             FeedMode::All,
-            &seen,
             on_filter(Some(&cache), false, &mut counted),
         );
         assert_eq!(hidden, 0);
@@ -1491,8 +1419,6 @@ mod tests {
 
     #[test]
     fn filter_pipeline_combined() {
-        let (_tmp, mut seen) = fresh_seen();
-        seen.mark_seen("1");
         let cache_tmp = NamedTempFile::new().unwrap();
         let mut cache = FilterCache::open(cache_tmp.path(), "test_hash".to_string()).unwrap();
         cache.put("3", FilterDecision::Hide);
@@ -1501,7 +1427,7 @@ mod tests {
         reply.in_reply_to_tweet_id = Some("0".into());
 
         let mut page = make_page(vec![
-            make_tweet("1", "seen"),
+            make_tweet("1", "standalone"),
             reply,
             make_tweet("3", "hidden by filter"),
             make_tweet("4", "survives"),
@@ -1512,12 +1438,15 @@ mod tests {
             &mut page,
             &kind,
             FeedMode::Originals,
-            &seen,
             on_filter(Some(&cache), true, &mut counted),
         );
-        assert_eq!(hidden, 1);
-        assert_eq!(page.tweets.len(), 1);
-        assert_eq!(page.tweets[0].rest_id, "4");
+        assert_eq!(
+            hidden, 1,
+            "the reply is dropped by Originals, tweet 3 by the cache"
+        );
+        assert_eq!(page.tweets.len(), 2);
+        assert_eq!(page.tweets[0].rest_id, "1");
+        assert_eq!(page.tweets[1].rest_id, "4");
     }
 
     #[test]

@@ -5,7 +5,6 @@ use crate::parse::timeline::TimelinePage;
 use crate::tui::event::{self, Event, EventTx};
 use crate::tui::filter::{FilterCache, FilterDecision, FilterMode};
 use crate::tui::focus::{self, FocusEntry, TweetDetail};
-use crate::tui::seen::SeenStore;
 use crate::tui::source::{self, SourceKind};
 use crate::tui::whisper::{self, NotifEntry, WhisperEntry};
 use std::collections::{HashMap, HashSet};
@@ -160,7 +159,6 @@ impl App {
                     &mut page,
                     &kind,
                     self.feed_mode,
-                    &self.seen,
                     FilterContext {
                         mode: self.filter_mode,
                         has_classifier: self.filter_classifier.is_some(),
@@ -1123,20 +1121,8 @@ pub fn filter_incoming_page(
     page: &mut TimelinePage,
     kind: &SourceKind,
     feed_mode: FeedMode,
-    seen: &SeenStore,
     filter: FilterContext<'_>,
 ) -> usize {
-    if matches!(kind, SourceKind::Home { following: false }) {
-        let unseen: Vec<_> = page
-            .tweets
-            .iter()
-            .filter(|t| !seen.is_seen(&t.rest_id))
-            .cloned()
-            .collect();
-        if !unseen.is_empty() {
-            page.tweets = unseen;
-        }
-    }
     if matches!(feed_mode, FeedMode::Originals) && matches!(kind, SourceKind::Home { .. }) {
         page.tweets.retain(|t| {
             t.in_reply_to_tweet_id.is_none()

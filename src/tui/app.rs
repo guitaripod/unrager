@@ -225,6 +225,14 @@ pub(super) const FETCH_TARGET_TWEETS: usize = 50;
 /// toward a full page, bounded so it never hammers the API into a cooldown.
 pub(super) const EMPTY_APPEND_LIMIT: u32 = 5;
 
+/// Home feeds stay behind a "collecting…" curtain until this many tweets
+/// survive the filter, then reveal the whole batch at once — rather than
+/// trickling survivors in one at a time as the classifier finishes, which
+/// makes a heavily-filtered feed look broken. The curtain also lifts when
+/// the load cycle finishes (feed exhausted or nothing left to classify) so
+/// it never hangs below the target.
+pub(super) const INITIAL_RENDER_TARGET: usize = 25;
+
 impl App {
     pub async fn new(tx: EventTx, is_dark: bool) -> Result<Self> {
         let client = Arc::new(common::build_gql_client().await?);
@@ -1126,6 +1134,62 @@ mod tests {
                 "page {i}: heavy filtering is not exhaustion"
             );
         }
+    }
+
+    /// Home feeds stay hidden behind the "collecting…" curtain while the feed
+    /// is below the render target and still actively loading, then reveal once
+    /// the target is reached.
+    #[test]
+    fn render_floor_hidden_until_target_while_loading() {
+        let (mut app, _rx, _tmp) = dummy_app();
+        app.source = Source::new(SourceKind::Home { following: false });
+        app.source.tweets = (0..10).map(|i| make_tweet(&format!("a{i}"), "x")).collect();
+        app.source.loading = true;
+        app.pending_classification = vec![make_tweet("p", "x")];
+        app.refresh_render_floor();
+        assert!(
+            !app.source.render_floor_met,
+            "below target while loading stays hidden"
+        );
+
+        app.source.tweets = (0..INITIAL_RENDER_TARGET)
+            .map(|i| make_tweet(&format!("a{i}"), "x"))
+            .collect();
+        app.refresh_render_floor();
+        assert!(app.source.render_floor_met, "reaching the target reveals");
+    }
+
+    /// If the feed exhausts before the target, reveal whatever was collected
+    /// so it never hangs on "collecting…".
+    #[test]
+    fn render_floor_reveals_on_exhaustion_below_target() {
+        let (mut app, _rx, _tmp) = dummy_app();
+        app.source = Source::new(SourceKind::Home { following: false });
+        app.source.tweets = (0..8).map(|i| make_tweet(&format!("a{i}"), "x")).collect();
+        app.source.loading = true;
+        app.pending_classification = vec![make_tweet("p", "x")];
+        app.refresh_render_floor();
+        assert!(!app.source.render_floor_met);
+        app.source.exhausted = true;
+        app.refresh_render_floor();
+        assert!(
+            app.source.render_floor_met,
+            "exhausted reveals whatever was collected"
+        );
+    }
+
+    /// Once revealed, a feed that later drops below the target (HIDE removals,
+    /// a reload-in-progress) must not snap back behind the curtain.
+    #[test]
+    fn render_floor_is_sticky_once_met() {
+        let (mut app, _rx, _tmp) = dummy_app();
+        app.source = Source::new(SourceKind::Home { following: false });
+        app.source.render_floor_met = true;
+        app.source.tweets = vec![make_tweet("a", "x")];
+        app.source.loading = true;
+        app.pending_classification = vec![make_tweet("p", "x")];
+        app.refresh_render_floor();
+        assert!(app.source.render_floor_met);
     }
 
     /// The likers pane paginates a stable cursor; a page that adds no new

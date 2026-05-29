@@ -197,6 +197,23 @@ impl App {
             self.source.state.selected = cursor;
         }
         self.try_advance_fetch_target();
+        self.refresh_render_floor();
+    }
+
+    /// Lifts the "collecting…" curtain once the feed has gathered
+    /// `INITIAL_RENDER_TARGET` tweets, or the load cycle has otherwise
+    /// finished (exhausted, or no fetch in flight with nothing left to
+    /// classify). Called after every classification drain, so it sees the
+    /// post-`try_advance_fetch_target` loading state. Sticky: never re-hides.
+    pub(super) fn refresh_render_floor(&mut self) {
+        if self.source.render_floor_met {
+            return;
+        }
+        let enough = self.source.tweets.len() >= super::app::INITIAL_RENDER_TARGET;
+        let cycle_done = !self.source.loading && self.pending_classification.is_empty();
+        if enough || self.source.exhausted || cycle_done {
+            self.source.render_floor_met = true;
+        }
     }
 
     pub(super) fn sort_source_if_following(&mut self) {

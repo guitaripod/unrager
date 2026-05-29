@@ -589,11 +589,20 @@ fn draw_source_list(
         base_title
     };
 
-    if source.is_empty() {
-        let msg = if source.loading {
-            "loading timeline…"
+    let priming = matches!(source.kind, Some(SourceKind::Home { .. })) && !source.render_floor_met;
+    if source.is_empty() || priming {
+        let msg = if let Some(err) = error {
+            err.to_string()
+        } else if priming {
+            format!(
+                "collecting tweets… {}/{}",
+                source.tweets.len(),
+                crate::tui::app::INITIAL_RENDER_TARGET
+            )
+        } else if source.loading {
+            "loading timeline…".to_string()
         } else {
-            error.unwrap_or("no tweets")
+            "no tweets".to_string()
         };
         let body = Paragraph::new(msg).block(block_with_focus(&title, active));
         frame.render_widget(body, area);

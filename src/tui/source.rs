@@ -96,6 +96,10 @@ pub struct Source {
     /// `EMPTY_APPEND_LIMIT`-based exhaustion so a recycling cursor can't spin
     /// the auto-paginate loop forever. Reset whenever a load makes progress.
     pub empty_appends: u32,
+    /// Sticky once the initial batch is ready: Home feeds render the
+    /// "collecting…" curtain until `INITIAL_RENDER_TARGET` tweets are
+    /// gathered (or the load cycle ends), then reveal them all at once.
+    pub render_floor_met: bool,
     pub state: PaneState,
     pub profile_user: Option<crate::model::User>,
 }
@@ -137,6 +141,7 @@ impl Source {
         self.cursor = page.next_cursor;
         self.exhausted = self.cursor.is_none();
         self.empty_appends = 0;
+        self.render_floor_met = false;
         let last = self.tweets.len().saturating_sub(1);
         let current = self.state.selected.min(last);
         self.state = PaneState::with_selected(current);

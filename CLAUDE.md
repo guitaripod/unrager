@@ -89,6 +89,13 @@ When debugging a silent failure — a fetch that seems stuck, missing data, a TU
 - `~/.cache/unrager/query-ids.json` — scraped GraphQL query ID cache
 - `~/.cache/unrager/media/<tweet_id>/` — downloaded attachments for external viewer (`m` key); one subdir per tweet so Linux image viewers can arrow through siblings
 - `~/.cache/unrager/avatars/<sha256(url)>.bin` — author-avatar disk cache; LRU-pruned to 50 MB on startup; URL-keyed so X's per-upload URL rotation self-invalidates
+- `~/.cache/unrager/emoji/<stem>.png` — color emoji PNGs (Twemoji) composited into screenshots; keyed by Twemoji filename stem, cached forever (tiny files)
+
+## Emoji in screenshots
+
+`src/tui/emoji_cache.rs` is the general color-emoji cache for the screenshot rasterizer (`ab_glyph` only draws monochrome outlines, so emoji must be image-composited). `screenshot.rs::paint_buffer` detects any emoji grapheme via `emoji_cache::is_emoji_grapheme` (an exact `emojis`-crate lookup — false-positive-safe against bare digits/`#`/`*`/CJK), maps it to a Twemoji filename stem via `twemoji_stem` (grabTheRightIcon rule: ZWJ present → keep all codepoints, else strip U+FE0F; then lowercase-hex join with `-`), and composites the cached PNG over the cell(s) at `UnicodeWidthStr::width`-many cells. On a miss it falls through to the outline font.
+
+PNGs come from the maintained `jdecked/twemoji` fork (the original `twitter/twemoji` is frozen at Emoji 14.0). The version is **resolved at runtime** once per process via jsDelivr's data API (`resolve-then-pin`), falling back to `FALLBACK_TWEMOJI_VERSION` offline — so the latest emoji render without a rebuild. The only build-time-bound piece is detection: bump the `emojis` crate (and `FALLBACK_TWEMOJI_VERSION`) together when a new Emoji release lands. Flags are no longer special-cased — a flag is just an emoji whose stem is two regional indicators.
 
 ## Keeping README in sync
 

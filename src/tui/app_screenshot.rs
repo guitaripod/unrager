@@ -355,15 +355,15 @@ impl App {
                 Some(url) => load_avatar_image(&url, avatar_cache_path.as_deref()).await,
                 None => None,
             };
-            let flag_codes = crate::tui::flag_cache::extract_alpha2_codes(&lines);
-            let flags = crate::tui::flag_cache::load_flags(flag_codes).await;
+            let emoji_stems = crate::tui::emoji_cache::extract_emoji_stems(&lines);
+            let emoji = crate::tui::emoji_cache::load_emoji(emoji_stems).await;
             let capture = screenshot::render(RenderArgs {
                 tweet_id,
                 blocks: vec![TweetBlock {
                     lines,
                     media_images: images,
                     author_avatar,
-                    flags,
+                    emoji,
                 }],
                 shot_theme: &shot,
             });
@@ -419,13 +419,13 @@ impl App {
                     Some(url) => load_avatar_image(&url, avatar_cache_path.as_deref()).await,
                     None => None,
                 };
-                let flag_codes = crate::tui::flag_cache::extract_alpha2_codes(&lines);
-                let flags = crate::tui::flag_cache::load_flags(flag_codes).await;
+                let emoji_stems = crate::tui::emoji_cache::extract_emoji_stems(&lines);
+                let emoji = crate::tui::emoji_cache::load_emoji(emoji_stems).await;
                 blocks.push(TweetBlock {
                     lines,
                     media_images: images,
                     author_avatar,
-                    flags,
+                    emoji,
                 });
             }
             let capture = screenshot::render(RenderArgs {

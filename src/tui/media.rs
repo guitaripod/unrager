@@ -260,6 +260,23 @@ impl MediaRegistry {
         }
     }
 
+    /// Test-only constructor that forces Kitty mode with a fixed cell size
+    /// and no disk caches, so placement/sizing logic can be exercised
+    /// without a real terminal.
+    #[cfg(test)]
+    pub(crate) fn with_kitty_cell(cell: CellSize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            mode: MediaMode::Kitty { cell },
+            next_id: 1,
+            semaphore: Arc::new(Semaphore::new(4)),
+            insertion_order: VecDeque::new(),
+            avatar_cache_dir: None,
+            media_cache_dir: None,
+            placement_cache: HashMap::new(),
+        }
+    }
+
     /// Idempotent placement emit — writes the kitty graphics placement
     /// to stdout only when the requested `(cols, rows)` differs from
     /// the last successful emit for `(image_id, placement_id)`. The
@@ -345,10 +362,15 @@ impl MediaRegistry {
             let Some(old) = self.insertion_order.pop_front() else {
                 break;
             };
-            if let Some(MediaEntry::ReadyKitty { id: evicted, .. }) = self.entries.remove(&old) {
-                self.placement_cache
-                    .retain(|&(image_id, _), _| image_id != evicted);
-                delete_image(evicted);
+            match self.entries.remove(&old) {
+                Some(MediaEntry::ReadyKitty { id: evicted, .. }) => {
+                    tracing::debug!(url = %old, "media evicted (kitty)");
+                    self.placement_cache
+                        .retain(|&(image_id, _), _| image_id != evicted);
+                    delete_image(evicted);
+                }
+                Some(_) => tracing::debug!(url = %old, "media evicted"),
+                None => {}
             }
         }
     }
@@ -407,6 +429,7 @@ impl MediaRegistry {
                     if media.url.is_empty() {
                         continue;
                     }
+                    tracing::debug!(url = %media.url, kitty = is_kitty, "media queued");
                     self.insert_entry(media.url.clone(), MediaEntry::Loading);
                     let url = media.url.clone();
                     let sem = self.semaphore.clone();
@@ -564,16 +587,19 @@ impl MediaRegistry {
     }
 
     pub fn mark_ready_kitty(&mut self, url: &str, id: u32, w: u32, h: u32) {
+        tracing::debug!(url = %url, w, h, "media ready (kitty)");
         self.entries
             .insert(url.to_string(), MediaEntry::ReadyKitty { id, w, h });
     }
 
     pub fn mark_ready_pixels(&mut self, url: &str, pixels: Arc<Vec<u8>>, w: u32, h: u32) {
+        tracing::debug!(url = %url, w, h, "media ready (pixels)");
         self.entries
             .insert(url.to_string(), MediaEntry::ReadyPixels { pixels, w, h });
     }
 
     pub fn mark_failed(&mut self, url: &str, err: String) {
+        tracing::warn!(url = %url, error = %err, "media failed");
         self.entries
             .insert(url.to_string(), MediaEntry::Failed(err));
     }

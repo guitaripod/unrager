@@ -4092,6 +4092,18 @@ fn ready_avatar_id(registry: &MediaRegistry, author: &crate::model::User) -> Opt
     }
 }
 
+/// Collects the kitty image placements (`(image_id, cols, rows)`) for one
+/// tweet's media.
+///
+/// Each card kind must size its placement through the *same* path its
+/// renderer uses: the kitty placement_id is derived from `(cols, rows)` and
+/// encoded into the placeholder cells, so a placement emitted at different
+/// dimensions than the cells were drawn at leaves the terminal with no
+/// placement for those cells — the image silently fails to appear.
+/// YouTube/Broadcast render at `image_max_cols`/`media_max_rows`;
+/// Article/LinkCard render at the narrower `card_image_*` caps. Both go
+/// through [`image_cells_for_card`] here so they can never drift from the
+/// renderer.
 fn collect_placements_for_tweet(
     registry: &MediaRegistry,
     songlink_reg: &crate::tui::songlink::SongLinkRegistry,
@@ -4115,15 +4127,23 @@ fn collect_placements_for_tweet(
                     }
                 }
             }
-            crate::model::MediaKind::YouTube { .. }
-            | crate::model::MediaKind::Article { .. }
-            | crate::model::MediaKind::LinkCard { .. }
-            | crate::model::MediaKind::Broadcast { .. } => {
-                let inner_cols = (max_cols.saturating_sub(2)).max(10) as u32;
-                if let Some(MediaEntry::ReadyKitty { id, w, h }) = registry.get(&media_item.url) {
-                    let (nc, nr) = media::kitty_image_cells(cell, *w, *h, inner_cols);
-                    let (c, r) = media::fit_cells_to_pane(nc, nr, inner_cols, max_rows as u32);
-                    if c > 0 && r > 0 {
+            crate::model::MediaKind::YouTube { .. } | crate::model::MediaKind::Broadcast { .. } => {
+                if let Some(MediaEntry::ReadyKitty { id, .. }) = registry.get(&media_item.url) {
+                    if let Some((c, r)) =
+                        image_cells_for_card(registry, &media_item.url, max_cols, max_rows)
+                    {
+                        out.push((*id, c, r));
+                    }
+                }
+            }
+            crate::model::MediaKind::Article { .. } | crate::model::MediaKind::LinkCard { .. } => {
+                if let Some(MediaEntry::ReadyKitty { id, .. }) = registry.get(&media_item.url) {
+                    if let Some((c, r)) = image_cells_for_card(
+                        registry,
+                        &media_item.url,
+                        card_image_max_cols(wrap_width),
+                        card_image_max_rows(max_rows),
+                    ) {
                         out.push((*id, c, r));
                     }
                 }
@@ -5232,8 +5252,76 @@ fn draw_compose_overlay(frame: &mut Frame, area: Rect, app: &App) {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_changelog_inline, strip_leading_mentions, wrap_text};
+    use super::{
+        card_image_max_cols, card_image_max_rows, collect_placements_for_tweet,
+        image_cells_for_card, image_max_cols, render_changelog_inline, strip_leading_mentions,
+        wrap_text,
+    };
     use ratatui::style::Style;
+
+    /// Regression: a card's kitty placement must be sized through the same
+    /// path its renderer uses. Article/LinkCard render at the narrower
+    /// `card_image_*` caps; emitting the placement at the wider
+    /// `image_max_*` sizing produced a placement_id that didn't match the
+    /// placeholder cells, so the terminal drew nothing (blank cover).
+    #[test]
+    fn article_card_placement_matches_card_render_sizing() {
+        use crate::model::{Media, MediaKind};
+        use crate::tui::media::{CellSize, MediaRegistry};
+        use crate::tui::songlink::SongLinkRegistry;
+        use crate::tui::test_util::make_tweet;
+
+        let cell = CellSize { w: 9, h: 17 };
+        let mut reg = MediaRegistry::with_kitty_cell(cell);
+        let cover = "https://pbs.twimg.com/media/HLCuDlba8AEGRVw.jpg";
+        reg.mark_ready_kitty(cover, 7, 680, 272);
+
+        let mut tweet = make_tweet("1", "body");
+        tweet.media = vec![Media {
+            kind: MediaKind::Article {
+                article_id: "a".into(),
+                title: "t".into(),
+                preview_text: "p".into(),
+            },
+            url: cover.into(),
+            video_url: None,
+            alt_text: None,
+        }];
+
+        let songlink = SongLinkRegistry::new();
+        // Wide pane: image_max_cols(90)=80 > the 50-col card cap, so the two
+        // sizing formulas genuinely diverge here.
+        let wrap_width = 90;
+        let max_rows = 12;
+
+        let mut out: Vec<(u32, u32, u32)> = Vec::new();
+        collect_placements_for_tweet(
+            &reg, &songlink, cell, &tweet, wrap_width, max_rows, &mut out,
+        );
+        assert_eq!(out.len(), 1, "one placement for the article cover");
+        let (_id, c, r) = out[0];
+
+        let card_dims = image_cells_for_card(
+            &reg,
+            cover,
+            card_image_max_cols(wrap_width),
+            card_image_max_rows(max_rows),
+        )
+        .expect("card render dims");
+        assert_eq!(
+            (c, r),
+            card_dims,
+            "placement matches the card renderer sizing"
+        );
+
+        let buggy_dims = image_cells_for_card(&reg, cover, image_max_cols(wrap_width), max_rows)
+            .expect("image_max dims");
+        assert_ne!(
+            (c, r),
+            buggy_dims,
+            "card sizing must differ from the old image_max sizing on a wide pane"
+        );
+    }
 
     fn span_text(text: &str) -> Vec<String> {
         render_changelog_inline(text, Style::default())

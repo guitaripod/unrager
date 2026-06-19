@@ -16,7 +16,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window.makeKeyAndVisible()
         AppLogger.shared.info("scene connected", category: .app)
         AppEnvironment.shared.prefetchWhoami()
-        SessionSync.restore { [weak self] mode in self?.applyAppearance(mode) }
+        SessionSync.restore()
         #if DEBUG
         handleDebugLaunch(root)
         #endif
@@ -98,8 +98,4 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         }
     }
     #endif
-
-    func applyAppearance(_ mode: AppearanceMode) {
-        window?.overrideUserInterfaceStyle = UIUserInterfaceStyle(rawValue: mode.rawValue) ?? .unspecified
-    }
 }

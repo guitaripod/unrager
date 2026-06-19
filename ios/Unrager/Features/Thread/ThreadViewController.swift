@@ -38,7 +38,7 @@ final class ThreadViewController: UIViewController {
         let ownTweet = self.selfHandle?.caseInsensitiveCompare(tweet.author.handle) == .orderedSame
         let indent = self.indentLevel(for: id)
         cell.configure(with: tweet, imagesEnabled: AppSettings.imagesEnabled,
-                       contentWidth: max(120, width - CGFloat(indent) * 18),
+                       contentWidth: max(120, width - CGFloat(min(indent, 3)) * ThreadRailView.step),
                        inReplyContext: true, focal: isFocal, ownTweet: ownTweet, indentLevel: indent)
         cell.onTapAuthor = { [weak self] in self?.push(ProfileViewController(handle: tweet.author.handle)) }
         cell.onLike = { [weak self] in self?.toggleLike(tweet, cell: cell) }

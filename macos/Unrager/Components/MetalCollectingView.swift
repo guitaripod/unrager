@@ -279,7 +279,12 @@ enum CollectingShader {
         intensity *= mix(0.7, 1.25, prog);
 
         float3 bg = u.background;
-        float3 color = bg + glow * intensity;
+        float3 color;
+        if (u.isDark > 0.5) {
+            color = bg + glow * intensity;
+        } else {
+            color = mix(bg, accent, clamp(intensity, 0.0, 0.9));
+        }
 
         // Fine grain to avoid banding on the gradients.
         float grain = (hash(dot(frag, float2(12.9898, 78.233)) + t) - 0.5) * 0.012;

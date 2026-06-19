@@ -152,17 +152,28 @@ final class ComposeViewController: UIViewController {
         dismiss(animated: true)
     }
 
-    /// Opens the real X app's composer (`twitter://post`) when it's installed,
-    /// prefilled with the draft; falls back to the web intent (which can anchor
-    /// a reply via `in_reply_to`) only when the app is absent.
+    /// Hands the draft off to the real X app. A reply opens the parent tweet
+    /// in-app so the reply lands in the right thread (matching the TUI — the X
+    /// URL scheme can't prefill a reply composer); a new tweet opens the
+    /// composer prefilled. The web URL is the fallback when the app is absent.
     private func openInX(text: String) {
-        var app = URLComponents(string: "twitter://post")
-        app?.queryItems = [URLQueryItem(name: "message", value: text)]
-        if let appURL = app?.url, UIApplication.shared.canOpenURL(appURL) {
+        let appURL: URL?
+        let webURL: URL?
+        switch mode {
+        case let .reply(tweet):
+            appURL = URL(string: "twitter://status?id=\(tweet.restID)")
+            webURL = URL(string: tweet.url)
+        default:
+            var components = URLComponents(string: "twitter://post")
+            components?.queryItems = [URLQueryItem(name: "message", value: text)]
+            appURL = components?.url
+            webURL = intentURL(text: text)
+        }
+        if let appURL, UIApplication.shared.canOpenURL(appURL) {
             UIApplication.shared.open(appURL)
             return
         }
-        if let web = intentURL(text: text) { UIApplication.shared.open(web) }
+        if let webURL { UIApplication.shared.open(webURL) }
     }
 
     private func intentURL(text: String) -> URL? {

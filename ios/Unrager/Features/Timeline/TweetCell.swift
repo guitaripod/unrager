@@ -1,6 +1,44 @@
 import UIKit
 import UnragerKit
 
+/// The leading nesting guides for a thread reply: one rounded vertical rail per
+/// depth level, so a reply-to-a-reply shows two aligned rails where a
+/// reply-to-the-root shows one. Consecutive same-depth replies share rail
+/// positions, reading as continuous thread lines. Drawn (not subviews) so the
+/// count is cheap to change on reuse.
+final class ThreadRailView: UIView {
+    static let step: CGFloat = 16
+
+    var level = 0 {
+        didSet { if level != oldValue { setNeedsDisplay() } }
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        isOpaque = false
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: ThreadRailView, _) in
+            view.setNeedsDisplay()
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func draw(_ rect: CGRect) {
+        guard level > 0, let ctx = UIGraphicsGetCurrentContext() else { return }
+        ctx.setStrokeColor(DesignSystem.Color.separator.cgColor)
+        ctx.setLineWidth(2)
+        ctx.setLineCap(.round)
+        for index in 0..<level {
+            let x = CGFloat(index) * Self.step + Self.step / 2
+            ctx.move(to: CGPoint(x: x, y: 3))
+            ctx.addLine(to: CGPoint(x: x, y: rect.height - 3))
+        }
+        ctx.strokePath()
+    }
+}
+
 /// The feed's tweet card. Custom cell (not list configuration), opaque
 /// background, rounded corners on the image views themselves, no shadows or
 /// sublayer masks — so it scrolls without off-screen render passes. Images
@@ -34,12 +72,11 @@ final class TweetCell: UICollectionViewCell {
     private let actionBar = UIStackView()
     private let analyticsView = TweetAnalyticsView()
     private let separator = UIView()
-    private let threadSpine = UIView()
+    private let threadRail = ThreadRailView()
     private var avatarLeading: NSLayoutConstraint!
-    private var spineLeading: NSLayoutConstraint!
+    private var railWidth: NSLayoutConstraint!
 
-    private static let indentStep: CGFloat = 18
-    private static let maxIndent = 4
+    private static let maxIndent = 3
 
     private let replyButton = TweetCell.makeActionButton(symbol: "bubble.left")
     private let retweetButton = TweetCell.makeActionButton(symbol: "arrow.2.squarepath")
@@ -126,9 +163,10 @@ final class TweetCell: UICollectionViewCell {
     /// depth; the postcard renders flat and never calls this.
     func setIndent(_ level: Int) {
         let clamped = min(max(0, level), Self.maxIndent)
-        avatarLeading.constant = DesignSystem.Spacing.l + CGFloat(clamped) * Self.indentStep
-        threadSpine.isHidden = clamped == 0
-        spineLeading.constant = DesignSystem.Spacing.l + CGFloat(max(0, clamped - 1)) * Self.indentStep + 22
+        avatarLeading.constant = DesignSystem.Spacing.l + CGFloat(clamped) * ThreadRailView.step
+        railWidth.constant = CGFloat(clamped) * ThreadRailView.step
+        threadRail.level = clamped
+        threadRail.isHidden = clamped == 0
     }
 
     /// `@handle` color-hashed + a separator + the relative (feed) or absolute
@@ -286,17 +324,16 @@ final class TweetCell: UICollectionViewCell {
 
         contentView.addManaged(avatar)
         contentView.addManaged(column)
-        threadSpine.backgroundColor = DesignSystem.Color.separator
-        threadSpine.isHidden = true
-        contentView.addManaged(threadSpine)
+        threadRail.isHidden = true
+        contentView.addManaged(threadRail)
         separator.backgroundColor = DesignSystem.Color.separator
         contentView.addManaged(separator)
 
         let avatarLeading = avatar.leadingAnchor.constraint(
             equalTo: contentView.leadingAnchor, constant: DesignSystem.Spacing.l)
         self.avatarLeading = avatarLeading
-        let spineLeading = threadSpine.centerXAnchor.constraint(equalTo: contentView.leadingAnchor)
-        self.spineLeading = spineLeading
+        let railWidth = threadRail.widthAnchor.constraint(equalToConstant: 0)
+        self.railWidth = railWidth
 
         NSLayoutConstraint.activate([
             avatar.topAnchor.constraint(equalTo: contentView.topAnchor, constant: DesignSystem.Spacing.m),
@@ -304,10 +341,10 @@ final class TweetCell: UICollectionViewCell {
             avatar.widthAnchor.constraint(equalToConstant: 44),
             avatar.heightAnchor.constraint(equalToConstant: 44),
 
-            spineLeading,
-            threadSpine.widthAnchor.constraint(equalToConstant: 2),
-            threadSpine.topAnchor.constraint(equalTo: contentView.topAnchor),
-            threadSpine.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            threadRail.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: DesignSystem.Spacing.l),
+            railWidth,
+            threadRail.topAnchor.constraint(equalTo: contentView.topAnchor),
+            threadRail.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
 
             column.topAnchor.constraint(equalTo: contentView.topAnchor, constant: DesignSystem.Spacing.m),
             column.leadingAnchor.constraint(equalTo: avatar.trailingAnchor, constant: DesignSystem.Spacing.m),

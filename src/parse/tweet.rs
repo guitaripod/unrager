@@ -260,14 +260,45 @@ fn parse_media(legacy: &Value) -> Vec<Media> {
                 .get("ext_alt_text")
                 .and_then(Value::as_str)
                 .map(str::to_string);
+            let (width, height) = parse_media_dimensions(m, &kind);
             Some(Media {
                 kind,
                 url,
                 video_url,
                 alt_text,
+                width,
+                height,
             })
         })
         .collect()
+}
+
+/// Pulls the source aspect of a photo/video/GIF so clients can size it to its
+/// true ratio. Photos carry pixel dimensions in `original_info`; videos and
+/// GIFs carry an `aspect_ratio` pair (e.g. `[16, 9]`), with `original_info` as
+/// a fallback. Returns `(None, None)` when nothing usable is present.
+fn parse_media_dimensions(m: &Value, kind: &MediaKind) -> (Option<u32>, Option<u32>) {
+    let dim = |p: &str| m.pointer(p).and_then(Value::as_u64).map(|v| v as u32);
+    if matches!(kind, MediaKind::Video | MediaKind::AnimatedGif) {
+        if let Some(ratio) = m
+            .pointer("/video_info/aspect_ratio")
+            .and_then(Value::as_array)
+        {
+            let w = ratio.first().and_then(Value::as_u64).map(|v| v as u32);
+            let h = ratio.get(1).and_then(Value::as_u64).map(|v| v as u32);
+            if let (Some(w), Some(h)) = (w, h) {
+                if w > 0 && h > 0 {
+                    return (Some(w), Some(h));
+                }
+            }
+        }
+    }
+    let w = dim("/original_info/width");
+    let h = dim("/original_info/height");
+    match (w, h) {
+        (Some(w), Some(h)) if w > 0 && h > 0 => (Some(w), Some(h)),
+        _ => (None, None),
+    }
 }
 
 fn best_video_variant(m: &Value) -> Option<String> {
@@ -311,6 +342,8 @@ fn parse_youtube_embeds(legacy: &Value) -> (Vec<Media>, Vec<String>) {
             url: thumbnail,
             video_url: None,
             alt_text: None,
+            width: None,
+            height: None,
         });
         if let Some(display) = u.get("display_url").and_then(Value::as_str) {
             display_urls.push(display.to_string());
@@ -343,6 +376,8 @@ fn parse_article_embed(node: &Value, legacy: &Value) -> (Vec<Media>, Vec<String>
             url: cover_url,
             video_url: None,
             alt_text: None,
+            width: None,
+            height: None,
         });
         return (embeds, display_urls);
     }
@@ -365,6 +400,8 @@ fn parse_article_embed(node: &Value, legacy: &Value) -> (Vec<Media>, Vec<String>
                 url: String::new(),
                 video_url: None,
                 alt_text: None,
+                width: None,
+                height: None,
             });
         }
     }
@@ -426,6 +463,8 @@ fn parse_broadcast_embed(node: &Value, legacy: &Value) -> (Vec<Media>, Vec<Strin
         url: thumbnail,
         video_url: None,
         alt_text: None,
+        width: None,
+        height: None,
     });
 
     (embeds, display_urls)
@@ -536,6 +575,8 @@ fn parse_card_embed(node: &Value, legacy: &Value) -> (Vec<Media>, Vec<String>) {
         url: cover,
         video_url: None,
         alt_text: None,
+        width: None,
+        height: None,
     });
 
     if let Some(d) = display_url {
@@ -573,6 +614,8 @@ fn parse_poll_card(card_legacy: &Value) -> Option<Media> {
         url: String::new(),
         video_url: None,
         alt_text: None,
+        width: None,
+        height: None,
     })
 }
 

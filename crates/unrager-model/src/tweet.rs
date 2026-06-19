@@ -54,6 +54,15 @@ pub struct Media {
     #[serde(default)]
     pub video_url: Option<String>,
     pub alt_text: Option<String>,
+    /// Natural pixel width of the source media (photo `original_info`, or the
+    /// numerator of a video/GIF `aspect_ratio`). `None` for non-visual kinds.
+    /// Clients use `width`/`height` to size the attachment to its true aspect
+    /// instead of assuming 16:9.
+    #[serde(default)]
+    pub width: Option<u32>,
+    /// Natural pixel height of the source media, paired with [`Media::width`].
+    #[serde(default)]
+    pub height: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

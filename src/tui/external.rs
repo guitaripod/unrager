@@ -358,6 +358,8 @@ mod tests {
             url: url.into(),
             video_url: None,
             alt_text: None,
+            width: None,
+            height: None,
         }
     }
 
@@ -367,6 +369,8 @@ mod tests {
             url: poster.into(),
             video_url: video_url.map(str::to_string),
             alt_text: None,
+            width: None,
+            height: None,
         }
     }
 
@@ -376,6 +380,8 @@ mod tests {
             url: poster.into(),
             video_url: video_url.map(str::to_string),
             alt_text: None,
+            width: None,
+            height: None,
         }
     }
 

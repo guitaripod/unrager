@@ -5286,6 +5286,8 @@ mod tests {
             url: cover.into(),
             video_url: None,
             alt_text: None,
+            width: None,
+            height: None,
         }];
 
         let songlink = SongLinkRegistry::new();

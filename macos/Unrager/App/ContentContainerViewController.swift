@@ -50,23 +50,32 @@ final class ContentContainerViewController: NSViewController {
     var currentTitle: String { stack.last?.title ?? "" }
 
     func setRoot(_ controller: NSViewController) {
-        let savedFrame = view.window?.frame
-        for child in children { detach(child) }
-        stack = [controller]
-        attach(controller)
-        onStackChange?()
-        restoreWindowFrame(savedFrame)
+        withWindowSizeLocked {
+            for child in children { detach(child) }
+            stack = [controller]
+            attach(controller)
+            onStackChange?()
+        }
     }
 
     /// The window's size tracks the content split-item's fitting size, so swapping
-    /// in a scroll-backed root (e.g. Settings) makes the window re-fit to that
-    /// near-zero height. Restoring the prior frame — synchronously and once more
-    /// after the layout pass — keeps a source switch from ever resizing the
-    /// window. The required height floor is the backstop if both are bypassed.
-    private func restoreWindowFrame(_ frame: NSRect?) {
-        guard let frame, let window = view.window, window.isVisible else { return }
-        window.setFrame(frame, display: true)
-        DispatchQueue.main.async { [weak window] in window?.setFrame(frame, display: true) }
+    /// in a scroll-backed root (e.g. Settings — whose tall scroll content, or
+    /// near-zero frame, would otherwise drive the window) resizes it. Pinning the
+    /// window's min == max == its current size across the swap clamps any
+    /// AppKit-driven resize to a no-op; the original limits are restored on the
+    /// next runloop so the user can resize freely again.
+    private func withWindowSizeLocked(_ body: () -> Void) {
+        guard let window = view.window, window.isVisible else { body(); return }
+        let savedMin = window.minSize
+        let savedMax = window.maxSize
+        let size = window.frame.size
+        window.minSize = size
+        window.maxSize = size
+        body()
+        DispatchQueue.main.async { [weak window] in
+            window?.minSize = savedMin
+            window?.maxSize = savedMax
+        }
     }
 
     func push(_ controller: NSViewController) {

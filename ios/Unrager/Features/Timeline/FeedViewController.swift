@@ -107,6 +107,9 @@ class FeedViewController: UIViewController {
         let share = UIAction(title: "Share…", image: DesignSystem.icon("square.and.arrow.up")) { [weak self] _ in
             self?.shareTweet(tweet)
         }
+        let screenshot = UIAction(title: "Postcard…", image: DesignSystem.icon("photo.badge.plus")) { [weak self] _ in
+            self?.presentPostcard(tweet)
+        }
         let saveMedia = saveMediaAction(tweet)
         let open = UIAction(title: "Open in X", image: DesignSystem.icon("safari")) { _ in
             if let url = URL(string: tweet.url) { UIApplication.shared.open(url) }
@@ -119,8 +122,15 @@ class FeedViewController: UIViewController {
         }
         var topLevel: [UIMenuElement] = [ask, translate, like, likers]
         if let saveMedia { topLevel.append(saveMedia) }
-        topLevel.append(UIMenu(options: .displayInline, children: [share, open, copy, copyEmbed]))
+        topLevel.append(UIMenu(options: .displayInline, children: [share, screenshot, open, copy, copyEmbed]))
         return UIMenu(children: topLevel)
+    }
+
+    /// Presents the postcard composer for `tweet`, wrapped in its own
+    /// navigation controller so it carries Cancel / Share bar buttons.
+    func presentPostcard(_ tweet: Tweet) {
+        let postcard = PostcardViewController(tweet: tweet)
+        present(UINavigationController(rootViewController: postcard), animated: true)
     }
 
     /// The fixupx embed-friendly URL (`https://fixupx.com/<handle>/status/<id>`)
@@ -546,24 +556,35 @@ class FeedViewController: UIViewController {
 
     // MARK: - Unread navigation
 
-    private lazy var unreadButton = UIBarButtonItem(
-        image: DesignSystem.icon("arrow.down.to.line.compact"),
-        primaryAction: UIAction { [weak self] _ in self?.jumpToNextUnread() })
+    private lazy var unreadButtonView: UIButton = {
+        var config = UIButton.Configuration.tinted()
+        config.cornerStyle = .capsule
+        config.image = DesignSystem.icon("chevron.down", pointSize: 11, weight: .bold)
+        config.imagePlacement = .leading
+        config.imagePadding = 4
+        config.baseForegroundColor = DesignSystem.Color.accent
+        config.contentInsets = NSDirectionalEdgeInsets(top: 5, leading: 10, bottom: 5, trailing: 12)
+        let button = UIButton(configuration: config)
+        button.addAction(UIAction { [weak self] _ in self?.jumpToNextUnread() }, for: .touchUpInside)
+        return button
+    }()
 
-    /// Reflects the unread count on the jump-to-unread button: an `N↑` text
-    /// badge when there are unread tweets (matching the TUI's header counter), a
-    /// bare down-arrow icon otherwise.
+    private lazy var unreadButton: UIBarButtonItem = {
+        let item = UIBarButtonItem(customView: unreadButtonView)
+        item.isHidden = true
+        return item
+    }()
+
+    /// Shows a "⌄ N" pill — a down-chevron and the unread count — only while
+    /// there are unread tweets below the fold (the jump scrolls *down* to the
+    /// next one). Hidden entirely at zero, so there's no bare, inert arrow.
     func updateUnreadCount() {
         guard viewModel.supportsSeenTracking else { return }
         let count = viewModel.unreadCount
-        if count > 0 {
-            unreadButton.image = nil
-            unreadButton.title = "\(count) ↑"
-        } else {
-            unreadButton.title = nil
-            unreadButton.image = DesignSystem.icon("arrow.down.to.line.compact")
-        }
-        unreadButton.accessibilityLabel = count > 0 ? "\(count) unread, jump to next" : "Jump to next unread"
+        unreadButton.isHidden = count == 0
+        guard count > 0 else { return }
+        unreadButtonView.configuration?.title = "\(count)"
+        unreadButtonView.accessibilityLabel = "\(count) unread below, jump to next"
     }
 
     /// Shows the "jump to next unread" button only on seen-tracking feeds

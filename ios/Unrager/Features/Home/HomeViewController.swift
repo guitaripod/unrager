@@ -8,9 +8,16 @@ final class HomeViewController: FeedViewController {
     private var originals = false
     private let titleButton = UIButton(type: .system)
 
+    /// The dedicated Following tab pins Following; the For You / Home tab reopens
+    /// on whatever mode it was last left on (`ClientSettings.homeFollowing`).
+    /// Originals is restored for both. Local state is authoritative — the feed
+    /// loads from it immediately, with no wait for the server session.
     init(initialFollowing: Bool = false) {
-        following = initialFollowing
-        super.init(viewModel: TimelineViewModel(source: .home(following: initialFollowing, originals: false)))
+        let restoredFollowing = initialFollowing || ClientSettings.homeFollowing
+        let restoredOriginals = ClientSettings.homeOriginals
+        following = restoredFollowing
+        originals = restoredOriginals
+        super.init(viewModel: TimelineViewModel(source: .home(following: restoredFollowing, originals: restoredOriginals)))
     }
 
     @available(*, unavailable)
@@ -21,23 +28,7 @@ final class HomeViewController: FeedViewController {
         configureTitleMenu()
         configureNavItems()
         configureComposeButton()
-        observeSessionRestore()
-    }
-
-    /// Applies the server-restored Home feed state (Following + Originals) once
-    /// the session resolves, so the app reopens on the feed it was left on.
-    private func observeSessionRestore() {
-        NotificationCenter.default.addObserver(
-            forName: SessionSync.didRestoreHome, object: nil, queue: .main) { [weak self] note in
-            let following = note.userInfo?["following"] as? Bool ?? false
-            let originals = note.userInfo?["originals"] as? Bool ?? false
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                self.originals = originals
-                self.switchHome(following: following)
-                self.updateOriginalsBadge()
-            }
-        }
+        updateTabBarItem()
     }
 
     private func configureTitleMenu() {
@@ -124,8 +115,16 @@ final class HomeViewController: FeedViewController {
 
     private func switchHome(following: Bool) {
         self.following = following
+        ClientSettings.homeFollowing = following
         viewModel.updateSource(.home(following: following, originals: originals))
+        updateTabBarItem()
         afterSwitch()
+    }
+
+    /// Flips For You ↔ Following — bound to a double-tap on the Home tab.
+    func toggleFeedMode() {
+        Haptics.selection()
+        switchHome(following: !following)
     }
 
     #if DEBUG
@@ -135,6 +134,7 @@ final class HomeViewController: FeedViewController {
 
     private func toggleOriginals() {
         originals.toggle()
+        ClientSettings.homeOriginals = originals
         Haptics.selection()
         if case .home = viewModel.source {
             viewModel.updateSource(.home(following: following, originals: originals))
@@ -145,6 +145,17 @@ final class HomeViewController: FeedViewController {
     private func updateOriginalsBadge() {
         originalsButton.image = DesignSystem.icon(
             originals ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+    }
+
+    /// Mirrors the live feed mode onto the tab bar so the Home tab reads
+    /// "Following" (not "For You") while in Following mode, and vice versa.
+    private func updateTabBarItem() {
+        let title = following ? "Following" : "For You"
+        let image = DesignSystem.icon(following ? "person.2.fill" : "sparkles")
+        tabBarItem.title = title
+        tabBarItem.image = image
+        navigationController?.tabBarItem.title = title
+        navigationController?.tabBarItem.image = image
     }
 
     private func afterSwitch() {

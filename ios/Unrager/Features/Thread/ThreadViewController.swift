@@ -306,6 +306,9 @@ extension ThreadViewController: UICollectionViewDelegate {
                 UIAction(title: "Liked by", image: DesignSystem.icon("heart.text.square")) { [weak self] _ in
                     self?.push(LikersViewController(tweetID: tweet.restID))
                 },
+                UIAction(title: "Postcard…", image: DesignSystem.icon("photo.badge.plus")) { [weak self] _ in
+                    self?.present(UINavigationController(rootViewController: PostcardViewController(tweet: tweet)), animated: true)
+                },
                 UIAction(title: "Copy embed link", image: DesignSystem.icon("link.badge.plus")) { _ in
                     UIPasteboard.general.string = FeedViewController.fixupxURL(tweet)
                 },

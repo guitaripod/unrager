@@ -1,12 +1,16 @@
 import UIKit
 import UnragerKit
 
-/// Bridges the server's `/api/session` to the app's local state so a source /
-/// feed-mode / filter choice persists across launches and is shared with the
-/// TUI (the server is the single source of truth). On launch `restore()` pulls
-/// the session and applies `filter_enabled`, `feed_mode` (the Originals toggle)
-/// and a canonical light/dark `theme`; thereafter the feed and Settings call the
-/// `patch*` helpers on every relevant change.
+/// Bridges the server's `/api/session` to the app's local state so the filter
+/// choice and theme persist across launches and stay shared with the TUI (the
+/// server is the source of truth for those). On launch `restore()` pulls the
+/// session and applies `filter_enabled` and a canonical light/dark `theme`;
+/// thereafter Settings and the feed call the `patch*` helpers on every change.
+///
+/// The Home feed mode (Following + Originals) is the one exception: it's
+/// restored from local `ClientSettings`, not the server, so the device's own
+/// last choice is authoritative and can't be clobbered by a stale session.
+/// iOS still *patches* feed mode so the TUI sees what the phone is doing.
 ///
 /// `theme` is restored defensively but never patched from iOS: the app's
 /// appearance axis (system/light/dark) is coarser than the TUI's named themes,
@@ -15,30 +19,15 @@ import UnragerKit
 enum SessionSync {
     private static let api = AppEnvironment.shared.api
 
-    /// Posted once the server session has been applied, carrying the restored
-    /// Home feed state so the active Home feed can switch to it. Carries
-    /// `following` and `originals` flags in `userInfo`.
-    static let didRestoreHome = Notification.Name("unrager.sessionDidRestoreHome")
-
     static func restore(applyAppearance: @escaping @MainActor (AppearanceMode) -> Void) {
         Task {
             guard let state = try? await api.session() else { return }
             AppSettings.filterEnabled = state.filterEnabled
-            let originals = state.feedMode == .originals
             if let appearance = appearance(from: state.theme), AppSettings.appearance == .system {
                 AppSettings.appearance = appearance
                 applyAppearance(appearance)
             }
-            if case let .home(following) = state.currentSource {
-                NotificationCenter.default.post(
-                    name: didRestoreHome, object: nil,
-                    userInfo: ["following": following, "originals": originals])
-            } else if originals {
-                NotificationCenter.default.post(
-                    name: didRestoreHome, object: nil,
-                    userInfo: ["following": false, "originals": true])
-            }
-            AppLogger.shared.info("session restored: filter=\(state.filterEnabled) originals=\(originals)", category: .app)
+            AppLogger.shared.info("session restored: filter=\(state.filterEnabled)", category: .app)
         }
     }
 

@@ -6,9 +6,14 @@ import UIKit
 /// bar minimizes on scroll-down.
 final class RootViewController: UITabBarController {
     private var selectedTabs: [TabItem] = []
+    /// Timestamp of the last re-tap on the active Home tab; a second re-tap
+    /// within the window is treated as a double-tap and toggles For You ↔
+    /// Following.
+    private var lastHomeReselect: TimeInterval = 0
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        delegate = self
         rebuildTabs()
         tabBarMinimizeBehavior = .onScrollDown
     }
@@ -55,5 +60,28 @@ final class RootViewController: UITabBarController {
     @objc private func searchCommand() {
         guard let index = selectedTabs.firstIndex(of: .search) else { return }
         selectedIndex = index
+    }
+}
+
+extension RootViewController: UITabBarControllerDelegate {
+    /// Detects a double-tap on the already-selected Home tab (two re-taps within
+    /// a short window) and toggles its feed mode. Re-tapping any other tab — or
+    /// the Home tab when it isn't at its root — is left to default behavior.
+    func tabBarController(_ tabBarController: UITabBarController, shouldSelect viewController: UIViewController) -> Bool {
+        guard viewController === selectedViewController,
+              let nav = viewController as? UINavigationController,
+              nav.viewControllers.count == 1,
+              let home = nav.viewControllers.first as? HomeViewController else {
+            lastHomeReselect = 0
+            return true
+        }
+        let now = Date().timeIntervalSinceReferenceDate
+        if now - lastHomeReselect < 0.45 {
+            home.toggleFeedMode()
+            lastHomeReselect = 0
+        } else {
+            lastHomeReselect = now
+        }
+        return true
     }
 }

@@ -8,6 +8,8 @@ enum ClientSettings {
     private enum Key {
         static let markSeen = "unrager.ios.markSeen"
         static let tabs = "unrager.ios.tabs"
+        static let homeFollowing = "unrager.ios.homeFollowing"
+        static let homeOriginals = "unrager.ios.homeOriginals"
     }
 
     /// When on, tweets scrolled past on Following / Mentions are reported to
@@ -15,6 +17,21 @@ enum ClientSettings {
     static var markSeenEnabled: Bool {
         get { defaults.object(forKey: Key.markSeen) as? Bool ?? true }
         set { defaults.set(newValue, forKey: Key.markSeen) }
+    }
+
+    /// Whether the Home tab last sat on Following (vs For You). Restored on
+    /// launch so the feed reopens where it was left — local is authoritative;
+    /// the server session is synced but never clobbers this.
+    static var homeFollowing: Bool {
+        get { defaults.bool(forKey: Key.homeFollowing) }
+        set { defaults.set(newValue, forKey: Key.homeFollowing) }
+    }
+
+    /// Whether the Home feed's "Originals only" filter was last on. Persisted
+    /// locally so the toggle survives relaunch.
+    static var homeOriginals: Bool {
+        get { defaults.bool(forKey: Key.homeOriginals) }
+        set { defaults.set(newValue, forKey: Key.homeOriginals) }
     }
 
     /// The user's ordered tab-bar selection (max 5). Persisted as raw values;

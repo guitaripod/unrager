@@ -54,9 +54,14 @@ final class EditTabsViewController: UIViewController {
             cell.contentConfiguration = content
             let isActive = self?.dataSource.sectionIdentifier(for: indexPath.section) == .active
             if isActive {
-                cell.accessories = [.reorder(displayed: .always), .delete(displayed: .always)]
+                cell.accessories = [
+                    .reorder(displayed: .always),
+                    .delete(displayed: .always, actionHandler: { [weak self] in self?.remove(tab) }),
+                ]
             } else {
-                cell.accessories = [.insert(displayed: .always)]
+                cell.accessories = [
+                    .insert(displayed: .always, actionHandler: { [weak self] in self?.add(tab) }),
+                ]
             }
         }
         dataSource = UICollectionViewDiffableDataSource(collectionView: collectionView) { cv, ip, tab in

@@ -71,6 +71,12 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                     guard !photoIndices.isEmpty else { return }
                     root.present(MediaViewerViewController(tweetID: tweet.restID, photoMediaIndices: photoIndices, startIndex: 0), animated: false)
                 }
+            case "postcard" where parts.count > 1:
+                let id = parts[1]
+                Task {
+                    guard let tweet = try? await api.tweet(id: id) else { return }
+                    root.present(UINavigationController(rootViewController: PostcardViewController(tweet: tweet)), animated: false)
+                }
             case "compose":
                 root.present(UINavigationController(rootViewController: ComposeViewController(mode: .new)), animated: false)
             case "brief" where parts.count > 1:

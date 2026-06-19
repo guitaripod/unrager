@@ -22,6 +22,10 @@ class FeedViewController: UIViewController {
     /// while scrolling, so `AVPlayer` allocation/decode never lands on the scroll
     /// path — the source of the start-of-scroll frame spike.
     private var isScrolling = false
+    /// A feed replace (e.g. the network result landing over the instant cache
+    /// seed) that arrived mid-scroll; held until the scroll settles so tweets
+    /// never reflow under the user's finger.
+    private var pendingTweets: [Tweet]?
 
     /// Navigation hooks; if unset, falls back to opening the X URL in the browser.
     var openTweet: ((Tweet) -> Void)?
@@ -492,6 +496,31 @@ class FeedViewController: UIViewController {
     }
 
     private func apply(_ tweets: [Tweet]) {
+        // Replacing the list mid-scroll (network result landing over the cache
+        // seed) reflows tweets under the user. While they're actively scrolling,
+        // stash it and apply when the scroll settles; a pure pagination append
+        // (more tweets than shown, same prefix) is safe to apply immediately
+        // since it only grows the bottom.
+        let hadItems = dataSource.snapshot().numberOfItems > 0
+        let activelyScrolling = collectionView.isDragging || collectionView.isDecelerating
+        if hadItems, !tweets.isEmpty, activelyScrolling, !isPureAppend(tweets) {
+            pendingTweets = tweets
+            return
+        }
+        pendingTweets = nil
+        applyNow(tweets)
+    }
+
+    /// True when `tweets` only adds rows after the current list (infinite scroll)
+    /// — those grow the bottom and never disturb the viewport, so they needn't
+    /// be deferred.
+    private func isPureAppend(_ tweets: [Tweet]) -> Bool {
+        let current = dataSource.snapshot().itemIdentifiers
+        guard tweets.count >= current.count else { return false }
+        return zip(current, tweets).allSatisfy { $0 == $1.restID }
+    }
+
+    private func applyNow(_ tweets: [Tweet]) {
         var changed: [String] = []
         for tweet in tweets {
             if let existing = tweetsByID[tweet.restID], existing.displayDiffers(from: tweet) {
@@ -504,12 +533,50 @@ class FeedViewController: UIViewController {
         snapshot.appendItems(tweets.map(\.restID), toSection: 0)
         if !changed.isEmpty { snapshot.reconfigureItems(changed) }
         if !tweets.isEmpty { lastErrorText = nil }
-        dataSource.apply(snapshot, animatingDifferences: !tweets.isEmpty)
+
+        // When the user has scrolled into the list, keep their viewport visually
+        // fixed across the update: anchor on a visible tweet, apply without
+        // animation, and restore its on-screen position so inserts/removals
+        // above it don't shove the content.
+        let hadItems = dataSource.snapshot().numberOfItems > 0
+        let anchor = (hadItems && !tweets.isEmpty && collectionView.contentOffset.y > 1)
+            ? scrollAnchor(in: snapshot) : nil
+        dataSource.apply(snapshot, animatingDifferences: anchor == nil && !tweets.isEmpty) { [weak self] in
+            if let anchor { self?.restoreScrollAnchor(anchor) }
+        }
         updateChrome()
         updateUnreadCount()
         if !isScrolling {
             DispatchQueue.main.async { [weak self] in self?.settleVideoPlayback() }
         }
+    }
+
+    /// Flushes a deferred feed replace once the scroll comes to rest.
+    private func flushPendingTweets() {
+        guard let pending = pendingTweets else { return }
+        pendingTweets = nil
+        applyNow(pending)
+    }
+
+    /// The topmost on-screen tweet that survives into `snapshot`, with its
+    /// distance below the viewport top — the anchor for a scroll-stable update.
+    private func scrollAnchor(in snapshot: NSDiffableDataSourceSnapshot<Int, String>) -> (id: String, offset: CGFloat)? {
+        let surviving = Set(snapshot.itemIdentifiers)
+        for indexPath in collectionView.indexPathsForVisibleItems.sorted() {
+            guard let id = dataSource.itemIdentifier(for: indexPath), surviving.contains(id),
+                  let attributes = collectionView.layoutAttributesForItem(at: indexPath) else { continue }
+            return (id, attributes.frame.minY - collectionView.contentOffset.y)
+        }
+        return nil
+    }
+
+    private func restoreScrollAnchor(_ anchor: (id: String, offset: CGFloat)) {
+        guard let indexPath = dataSource.indexPath(for: anchor.id),
+              let attributes = collectionView.layoutAttributesForItem(at: indexPath) else { return }
+        let target = attributes.frame.minY - anchor.offset
+        let maxOffset = max(0, collectionView.contentSize.height - collectionView.bounds.height
+            + collectionView.adjustedContentInset.bottom)
+        collectionView.setContentOffset(CGPoint(x: 0, y: min(max(0, target), maxOffset)), animated: false)
     }
 
     // MARK: - Inline video playback (scroll-aware)
@@ -740,12 +807,12 @@ extension FeedViewController: UICollectionViewDelegate {
     }
 
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-        if !decelerate { settleVideoPlayback() }
+        if !decelerate { settleVideoPlayback(); flushPendingTweets() }
     }
 
-    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { settleVideoPlayback() }
-    func scrollViewDidScrollToTop(_ scrollView: UIScrollView) { settleVideoPlayback() }
-    func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) { settleVideoPlayback() }
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { settleVideoPlayback(); flushPendingTweets() }
+    func scrollViewDidScrollToTop(_ scrollView: UIScrollView) { settleVideoPlayback(); flushPendingTweets() }
+    func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) { settleVideoPlayback(); flushPendingTweets() }
 
     func collectionView(_ collectionView: UICollectionView, contextMenuConfigurationForItemAt indexPath: IndexPath, point: CGPoint) -> UIContextMenuConfiguration? {
         guard let id = dataSource.itemIdentifier(for: indexPath), let tweet = tweetsByID[id] else { return nil }

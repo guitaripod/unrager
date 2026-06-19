@@ -17,6 +17,7 @@ use super::macos as backend;
 type Aes128CbcDec = cbc::Decryptor<Aes128>;
 
 const COOKIES_PATH_ENV: &str = "UNRAGER_COOKIES_PATH";
+const BROWSER_ENV: &str = "UNRAGER_BROWSER";
 const PBKDF2_SALT: &[u8] = b"saltysalt";
 const PBKDF2_KEY_LEN: usize = 16;
 const AES_IV: [u8; 16] = [0x20; 16];
@@ -172,12 +173,53 @@ fn save_cached_session(session: &XSession) {
     }
 }
 
+/// The browser label the user has pinned cookie extraction to, if any:
+/// `UNRAGER_BROWSER` env first, then `cookie_browser` in `config.toml`. A pin
+/// is matched case-insensitively against [`Browser::label`], so `"vivaldi"`,
+/// `"Vivaldi"`, and `"VIVALDI"` all select the Vivaldi entry.
+pub fn pinned_browser() -> Option<String> {
+    if let Some(v) = std::env::var_os(BROWSER_ENV) {
+        let v = v.to_string_lossy().trim().to_string();
+        if !v.is_empty() {
+            return Some(v);
+        }
+    }
+    let dir = crate::config::config_dir().ok()?;
+    crate::config::AppConfig::load(&dir)
+        .cookie_browser
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn browser_matches_pin(browser: &Browser, pin: &str) -> bool {
+    browser.label.eq_ignore_ascii_case(pin)
+}
+
 async fn extract_session_from_browser() -> Result<XSession> {
     let candidates = candidate_paths()?;
+    let pin = pinned_browser();
+    if let Some(pin) = &pin {
+        if !BROWSERS.iter().any(|b| browser_matches_pin(b, pin)) {
+            let known = BROWSERS
+                .iter()
+                .map(|b| b.label)
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(Error::Config(format!(
+                "cookie_browser \"{pin}\" is not a known browser (choose one of: {known})"
+            )));
+        }
+        tracing::debug!("cookie source pinned to {pin}");
+    }
     tracing::debug!("checking {} candidate cookie paths", candidates.len());
 
     let mut tried = Vec::new();
     for Candidate { browser, path } in &candidates {
+        if let Some(pin) = &pin {
+            if !browser_matches_pin(browser, pin) {
+                continue;
+            }
+        }
         if !path.exists() {
             continue;
         }

@@ -93,7 +93,7 @@ When debugging a silent failure — a fetch that seems stuck, missing data, a TU
 
 - `~/.config/unrager/session.json` — TUI state
 - `~/.config/unrager/tokens.json` — OAuth tokens (0600)
-- `~/.config/unrager/config.toml` — general settings (browser command, query ID overrides)
+- `~/.config/unrager/config.toml` — general settings (browser command, `cookie_browser` pin, query ID overrides)
 - `~/.config/unrager/filter.toml` — rage filter rubric (auto-created)
 - `~/.cache/unrager/unrager.log.YYYY-MM-DD` — rolling log file
 - `~/.cache/unrager/seen.db` — read tracking (auto-pruned to 2 days)

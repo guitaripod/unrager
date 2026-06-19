@@ -48,6 +48,7 @@ fn print_cookies(report: &mut Report) {
     };
 
     let with_session: Vec<_> = results.iter().filter(|r| r.has_x_session).collect();
+    let pin = chromium::pinned_browser();
 
     if !with_session.is_empty() {
         println!(
@@ -55,7 +56,22 @@ fn print_cookies(report: &mut Report) {
             with_session.len()
         );
         for r in &with_session {
-            println!("              - {} ({})", r.browser, r.path.display());
+            let pinned = pin
+                .as_deref()
+                .is_some_and(|p| r.browser.eq_ignore_ascii_case(p));
+            let tag = if pinned { "  ← pinned source" } else { "" };
+            println!("              - {} ({}){tag}", r.browser, r.path.display());
+        }
+        if let Some(pin) = &pin {
+            if !with_session
+                .iter()
+                .any(|r| r.browser.eq_ignore_ascii_case(pin))
+            {
+                println!(
+                    "              ! pinned to \"{pin}\" but it has no x.com session — unrager will fail to authenticate"
+                );
+                report.errors += 1;
+            }
         }
     } else if !results.is_empty() {
         println!(

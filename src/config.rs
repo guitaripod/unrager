@@ -7,6 +7,12 @@ use std::path::{Path, PathBuf};
 pub struct AppConfig {
     #[serde(default = "default_browser")]
     pub browser: String,
+    /// Restrict cookie extraction to a single Chromium-family browser by label
+    /// (e.g. `"Vivaldi"`, `"Brave"`). When set, the session loader uses only
+    /// that browser's profiles and never falls back to another. Unset = the
+    /// default auto-detect order. Overridden by the `UNRAGER_BROWSER` env var.
+    #[serde(default)]
+    pub cookie_browser: Option<String>,
     #[serde(default)]
     pub query_ids: std::collections::HashMap<String, String>,
     #[serde(default)]

@@ -147,10 +147,22 @@ final class ComposeViewController: UIViewController {
         let text = textView.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard hasContent else { return }
         UIPasteboard.general.string = text
-        guard let url = intentURL(text: text) else { return }
         Haptics.success()
-        UIApplication.shared.open(url)
+        openInX(text: text)
         dismiss(animated: true)
+    }
+
+    /// Opens the real X app's composer (`twitter://post`) when it's installed,
+    /// prefilled with the draft; falls back to the web intent (which can anchor
+    /// a reply via `in_reply_to`) only when the app is absent.
+    private func openInX(text: String) {
+        var app = URLComponents(string: "twitter://post")
+        app?.queryItems = [URLQueryItem(name: "message", value: text)]
+        if let appURL = app?.url, UIApplication.shared.canOpenURL(appURL) {
+            UIApplication.shared.open(appURL)
+            return
+        }
+        if let web = intentURL(text: text) { UIApplication.shared.open(web) }
     }
 
     private func intentURL(text: String) -> URL? {

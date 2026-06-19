@@ -141,9 +141,9 @@ final class PostcardViewController: UIViewController {
         let threadToggle = makeToggle(title: "Thread", control: threadSwitch, isOn: options.showsThread)
         threadSwitch.addAction(UIAction { [weak self] _ in self?.toggleThread() }, for: .valueChanged)
         let toggleRow = UIStackView(arrangedSubviews: [nameToggle, metricsToggle, threadToggle])
-        toggleRow.axis = .horizontal
-        toggleRow.spacing = DesignSystem.Spacing.l
-        toggleRow.distribution = .fillEqually
+        toggleRow.axis = .vertical
+        toggleRow.spacing = DesignSystem.Spacing.s
+        toggleRow.alignment = .fill
 
         let actions = makeActionRow()
 
@@ -170,14 +170,21 @@ final class PostcardViewController: UIViewController {
         return bar
     }
 
+    /// A full-width settings-style row: label on the left, switch pinned right,
+    /// so labels never truncate and the switch never overlaps them.
     private func makeToggle(title: String, control: UISwitch, isOn: Bool) -> UIView {
         control.isOn = isOn
         control.onTintColor = DesignSystem.Color.accent
+        control.setContentHuggingPriority(.required, for: .horizontal)
+        control.setContentCompressionResistancePriority(.required, for: .horizontal)
         let label = UILabel()
         label.text = title
         label.font = DesignSystem.Typography.handle()
         label.textColor = DesignSystem.Color.label
-        let row = UIStackView(arrangedSubviews: [label, control])
+        label.setContentCompressionResistancePriority(.required, for: .horizontal)
+        let spacer = UIView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let row = UIStackView(arrangedSubviews: [label, spacer, control])
         row.axis = .horizontal
         row.alignment = .center
         row.spacing = DesignSystem.Spacing.s

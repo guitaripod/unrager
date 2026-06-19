@@ -14,6 +14,7 @@ final class NotificationsViewController: UIViewController {
     private var exhausted = false
     private var loading = false
     private var hasLoadedOnce = false
+    private var lastRefresh: Date?
 
     private lazy var registration = UICollectionView.CellRegistration<UICollectionViewListCell, String> {
         [weak self] cell, _, id in
@@ -187,6 +188,16 @@ final class NotificationsViewController: UIViewController {
         reload()
     }
 
+    /// Re-checks for new activity whenever the tab comes forward, so the list is
+    /// fresh without a manual pull — debounced so rapid tab-switching doesn't
+    /// hammer the endpoint, and skipped while the first load is still settling.
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        guard hasLoadedOnce, !loading else { return }
+        if let last = lastRefresh, Date().timeIntervalSince(last) < 8 { return }
+        load(reset: true)
+    }
+
     @objc private func reload() { load(reset: true) }
 
     private func load(reset: Bool) {
@@ -195,7 +206,7 @@ final class NotificationsViewController: UIViewController {
         if reset { exhausted = false; cursor = nil }
         if order.isEmpty { emptyState.isHidden = true; loadingIndicator.startAnimating() }
         Task {
-            defer { loading = false; hasLoadedOnce = true; loadingIndicator.stopAnimating(); collectionView.refreshControl?.endRefreshing() }
+            defer { loading = false; hasLoadedOnce = true; lastRefresh = Date(); loadingIndicator.stopAnimating(); collectionView.refreshControl?.endRefreshing() }
             do {
                 let page = try await AppEnvironment.shared.api.notifications(cursor: reset ? nil : cursor)
                 if reset { items.removeAll(); order.removeAll() }

@@ -187,7 +187,8 @@ final class PostcardView: UIView {
             name.text = tweet.author.name
             name.font = .systemFont(ofSize: 19, weight: .bold)
             name.textColor = theme.text
-            name.numberOfLines = 1
+            name.numberOfLines = 2
+            name.lineBreakMode = .byWordWrapping
             name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             nameRow.addArrangedSubview(name)
             if tweet.author.verified {
@@ -198,7 +199,8 @@ final class PostcardView: UIView {
             handle.text = "@\(tweet.author.handle)"
             handle.font = .systemFont(ofSize: 19, weight: .bold)
             handle.textColor = theme.text
-            handle.numberOfLines = 1
+            handle.numberOfLines = 2
+            handle.lineBreakMode = .byWordWrapping
             handle.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             nameRow.addArrangedSubview(handle)
             if tweet.author.verified {
@@ -263,7 +265,7 @@ final class PostcardView: UIView {
     // MARK: - Body
 
     private func makeBody(tweet: Tweet) -> UIView? {
-        let text = tweet.text
+        let text = TweetText.displayText(for: tweet, stripLeadingMentions: true)
         guard !text.isEmpty else { return nil }
         let label = UILabel()
         label.numberOfLines = 0

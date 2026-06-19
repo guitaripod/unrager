@@ -37,7 +37,7 @@ final class ThreadViewController: UIViewController {
         let isFocal = id == self.focalID
         let ownTweet = self.selfHandle?.caseInsensitiveCompare(tweet.author.handle) == .orderedSame
         cell.configure(with: tweet, imagesEnabled: AppSettings.imagesEnabled,
-                       contentWidth: max(120, width), inReplyContext: self.replyOrder.contains(id),
+                       contentWidth: max(120, width), inReplyContext: true,
                        focal: isFocal, ownTweet: ownTweet)
         cell.onTapAuthor = { [weak self] in self?.push(ProfileViewController(handle: tweet.author.handle)) }
         cell.onLike = { [weak self] in self?.toggleLike(tweet, cell: cell) }

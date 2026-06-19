@@ -1,6 +1,24 @@
 import UIKit
 import UnragerKit
 
+/// A full-bleed tappable settings row that highlights on touch-down, used for
+/// the navigation rows inside grouped cards.
+private final class RowButton: UIControl {
+    var onTap: (() -> Void)?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        addAction(UIAction { [weak self] _ in self?.onTap?() }, for: .touchUpInside)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var isHighlighted: Bool {
+        didSet { backgroundColor = isHighlighted ? DesignSystem.Color.separator.withAlphaComponent(0.25) : .clear }
+    }
+}
+
 /// Server address, appearance, image toggle, and a connection test. The server
 /// URL is the one piece of client config the app needs — everything else lives
 /// server-side.
@@ -19,15 +37,15 @@ final class SettingsViewController: UIViewController {
         super.viewDidLoad()
         title = "Settings"
         view.backgroundColor = DesignSystem.Color.background
-        navigationItem.largeTitleDisplayMode = .always
+        navigationItem.largeTitleDisplayMode = .never
         buildLayout()
     }
 
     private func buildLayout() {
         stack.axis = .vertical
-        stack.spacing = DesignSystem.Spacing.l
+        stack.spacing = DesignSystem.Spacing.xl
         stack.isLayoutMarginsRelativeArrangement = true
-        stack.directionalLayoutMargins = .init(top: 20, leading: 20, bottom: 20, trailing: 20)
+        stack.directionalLayoutMargins = .init(top: 18, leading: 16, bottom: 32, trailing: 16)
 
         view.addManaged(scrollView)
         scrollView.pinEdges(toSafeAreaOf: view)
@@ -41,7 +59,8 @@ final class SettingsViewController: UIViewController {
 
         serverField.text = AppSettings.serverURLString
         serverField.placeholder = "http://192.168.1.10:7777"
-        serverField.borderStyle = .roundedRect
+        serverField.borderStyle = .none
+        serverField.font = DesignSystem.Typography.body()
         serverField.autocapitalizationType = .none
         serverField.autocorrectionType = .no
         serverField.keyboardType = .URL
@@ -52,77 +71,167 @@ final class SettingsViewController: UIViewController {
         statusLabel.textColor = DesignSystem.Color.secondaryLabel
         statusLabel.numberOfLines = 0
 
-        let testButton = UIButton(configuration: .tinted())
-        testButton.setTitle("Test connection", for: .normal)
-        testButton.addAction(UIAction { [weak self] _ in self?.testConnection() }, for: .touchUpInside)
-
         appearanceControl.selectedSegmentIndex = AppSettings.appearance.rawValue
         appearanceControl.addTarget(self, action: #selector(appearanceChanged), for: .valueChanged)
 
         imagesSwitch.isOn = AppSettings.imagesEnabled
         imagesSwitch.addTarget(self, action: #selector(imagesChanged), for: .valueChanged)
-        let imagesRow = labeledRow("Load images", accessory: imagesSwitch)
 
         markSeenSwitch.isOn = ClientSettings.markSeenEnabled
         markSeenSwitch.addTarget(self, action: #selector(markSeenChanged), for: .valueChanged)
-        let markSeenRow = labeledRow("Track seen tweets", accessory: markSeenSwitch)
-
-        profileButton.setTitle("Open my profile →", for: .normal)
-        profileButton.contentHorizontalAlignment = .leading
-        profileButton.addAction(UIAction { [weak self] _ in self?.openMyProfile() }, for: .touchUpInside)
-
-        stack.addArrangedSubview(section("Server", views: [
-            captionLabel("The unrager server (`unrager serve`). Use your Mac's LAN/Tailscale address from a real device."),
-            serverField, testButton, statusLabel,
-        ]))
-        stack.addArrangedSubview(section("Account", views: [profileButton]))
-
-        let editTabsButton = UIButton(configuration: .gray())
-        editTabsButton.setTitle("Edit tabs →", for: .normal)
-        editTabsButton.contentHorizontalAlignment = .leading
-        editTabsButton.addAction(UIAction { [weak self] _ in
-            self?.navigationController?.pushViewController(EditTabsViewController(), animated: true)
-        }, for: .touchUpInside)
-        stack.addArrangedSubview(section("Tabs", views: [
-            editTabsButton,
-            captionLabel("Choose up to \(TabItem.maxCount) tabs and reorder them."),
-        ]))
-
-        stack.addArrangedSubview(section("Appearance", views: [appearanceControl]))
-        stack.addArrangedSubview(section("Feed", views: [
-            imagesRow,
-            markSeenRow,
-            captionLabel("Reports tweets you scroll past on Following and Mentions to the server's read tracker and dims them on reload."),
-        ]))
 
         filterSwitch.isOn = AppSettings.filterEnabled
         filterSwitch.addTarget(self, action: #selector(filterChanged), for: .valueChanged)
-        let rubricButton = UIButton(configuration: .gray())
-        rubricButton.setTitle("Edit filter rubric →", for: .normal)
-        rubricButton.contentHorizontalAlignment = .leading
-        rubricButton.addAction(UIAction { [weak self] _ in
-            self?.navigationController?.pushViewController(FilterSettingsViewController(), animated: true)
-        }, for: .touchUpInside)
-        stack.addArrangedSubview(section("Rage filter", views: [
-            labeledRow("Hide rage tweets", accessory: filterSwitch),
-            captionLabel("Runs each tweet through your local Ollama classifier; matches are removed from the feed. Refresh after toggling."),
-            rubricButton,
-        ]))
 
-        stack.addArrangedSubview(section("About", views: [
-            captionLabel("unrager · a calm X client. The server does the X work; this app is a thin native client."),
-        ]))
+        stack.addArrangedSubview(section("Server", card: card([
+            fieldRow(serverField),
+            navRow("Test connection", icon: "bolt.horizontal") { [weak self] in self?.testConnection() },
+            contentRow(statusLabel),
+        ]), footnote: "The unrager server (`unrager serve`). Use your Mac's LAN / Tailscale address from a real device."))
+
+        stack.addArrangedSubview(section("Account", card: card([
+            navRow("Open my profile", icon: "person.crop.circle") { [weak self] in self?.openMyProfile() },
+        ])))
+
+        stack.addArrangedSubview(section("Tabs", card: card([
+            navRow("Edit tabs", icon: "rectangle.grid.1x2") { [weak self] in
+                self?.navigationController?.pushViewController(EditTabsViewController(), animated: true)
+            },
+        ]), footnote: "Choose up to \(TabItem.maxCount) tabs and reorder them."))
+
+        stack.addArrangedSubview(section("Appearance", card: card([contentRow(appearanceControl)])))
+
+        stack.addArrangedSubview(section("Feed", card: card([
+            toggleRow("Load images", imagesSwitch),
+            toggleRow("Track seen tweets", markSeenSwitch),
+        ]), footnote: "Reports tweets you scroll past on Following and Mentions to the server's read tracker and dims them on reload."))
+
+        stack.addArrangedSubview(section("Rage filter", card: card([
+            toggleRow("Hide rage tweets", filterSwitch),
+            navRow("Edit filter rubric", icon: "slider.horizontal.3") { [weak self] in
+                self?.navigationController?.pushViewController(FilterSettingsViewController(), animated: true)
+            },
+        ]), footnote: "Runs each tweet through your local Ollama classifier; matches are removed from the feed. Refresh after toggling."))
+
+        stack.addArrangedSubview(section("About", card: card([
+            contentRow(captionLabel("unrager · a calm X client. The server does the X work; this app is a thin native client.")),
+        ])))
     }
 
-    private func section(_ title: String, views: [UIView]) -> UIView {
+    // MARK: - Grouped-card building blocks
+
+    private func section(_ title: String, card: UIView, footnote: String? = nil) -> UIView {
         let header = UILabel()
         header.text = title.uppercased()
         header.font = DesignSystem.Typography.caption()
         header.textColor = DesignSystem.Color.secondaryLabel
-        let inner = UIStackView(arrangedSubviews: [header] + views)
+        header.directionalLayoutMargins = .init(top: 0, leading: 4, bottom: 0, trailing: 4)
+
+        let column = UIStackView(arrangedSubviews: [headerWrap(header), card])
+        column.axis = .vertical
+        column.spacing = DesignSystem.Spacing.xs
+        if let footnote {
+            column.addArrangedSubview(footnoteLabel(footnote))
+        }
+        return column
+    }
+
+    private func headerWrap(_ label: UILabel) -> UIView {
+        let wrap = UIView()
+        wrap.addManaged(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: wrap.leadingAnchor, constant: 16),
+            label.trailingAnchor.constraint(equalTo: wrap.trailingAnchor, constant: -16),
+            label.topAnchor.constraint(equalTo: wrap.topAnchor),
+            label.bottomAnchor.constraint(equalTo: wrap.bottomAnchor),
+        ])
+        return wrap
+    }
+
+    /// A rounded, elevated container stacking rows with hairline separators
+    /// inset to the row content — the native grouped-settings card.
+    private func card(_ rows: [UIView]) -> UIView {
+        let inner = UIStackView()
         inner.axis = .vertical
-        inner.spacing = DesignSystem.Spacing.s
-        return inner
+        inner.spacing = 0
+        for (index, row) in rows.enumerated() {
+            if index > 0 { inner.addArrangedSubview(separator()) }
+            inner.addArrangedSubview(row)
+        }
+        let container = UIView()
+        container.backgroundColor = DesignSystem.Color.elevatedBackground
+        container.layer.cornerRadius = 14
+        container.layer.cornerCurve = .continuous
+        container.clipsToBounds = true
+        container.addManaged(inner)
+        inner.pinEdges(to: container)
+        return container
+    }
+
+    private func separator() -> UIView {
+        let line = UIView()
+        line.backgroundColor = DesignSystem.Color.separator
+        let wrap = UIView()
+        wrap.addManaged(line)
+        NSLayoutConstraint.activate([
+            line.heightAnchor.constraint(equalToConstant: 0.5),
+            line.leadingAnchor.constraint(equalTo: wrap.leadingAnchor, constant: 16),
+            line.trailingAnchor.constraint(equalTo: wrap.trailingAnchor),
+            line.topAnchor.constraint(equalTo: wrap.topAnchor),
+            line.bottomAnchor.constraint(equalTo: wrap.bottomAnchor),
+        ])
+        return wrap
+    }
+
+    private func toggleRow(_ title: String, _ control: UISwitch) -> UIView {
+        let label = UILabel()
+        label.text = title
+        label.font = DesignSystem.Typography.body()
+        label.textColor = DesignSystem.Color.label
+        control.setContentHuggingPriority(.required, for: .horizontal)
+        let row = paddedRow([label, UIView(), control])
+        return row
+    }
+
+    private func navRow(_ title: String, icon: String, _ action: @escaping () -> Void) -> UIView {
+        let button = RowButton()
+        button.onTap = action
+        let glyph = UIImageView(image: DesignSystem.icon(icon, pointSize: 16, weight: .regular))
+        glyph.tintColor = DesignSystem.Color.accent
+        glyph.setContentHuggingPriority(.required, for: .horizontal)
+        let label = UILabel()
+        label.text = title
+        label.font = DesignSystem.Typography.body()
+        label.textColor = DesignSystem.Color.label
+        let chevron = UIImageView(image: DesignSystem.icon("chevron.right", pointSize: 13, weight: .semibold))
+        chevron.tintColor = DesignSystem.Color.separator
+        chevron.setContentHuggingPriority(.required, for: .horizontal)
+        let content = UIStackView(arrangedSubviews: [glyph, label, UIView(), chevron])
+        content.axis = .horizontal
+        content.alignment = .center
+        content.spacing = DesignSystem.Spacing.m
+        content.isUserInteractionEnabled = false
+        button.addManaged(content)
+        content.pinEdges(to: button, insets: UIEdgeInsets(top: 12, left: 16, bottom: 12, right: 16))
+        return button
+    }
+
+    private func fieldRow(_ field: UITextField) -> UIView { paddedRow([field]) }
+    private func contentRow(_ view: UIView) -> UIView { paddedRow([view]) }
+
+    private func paddedRow(_ subviews: [UIView]) -> UIView {
+        let row = UIStackView(arrangedSubviews: subviews)
+        row.axis = .horizontal
+        row.alignment = .center
+        row.spacing = DesignSystem.Spacing.s
+        row.isLayoutMarginsRelativeArrangement = true
+        row.directionalLayoutMargins = .init(top: 12, leading: 16, bottom: 12, trailing: 16)
+        return row
+    }
+
+    private func footnoteLabel(_ text: String) -> UIView {
+        let label = captionLabel(text)
+        return headerWrap(label)
     }
 
     private func captionLabel(_ text: String) -> UILabel {
@@ -132,15 +241,6 @@ final class SettingsViewController: UIViewController {
         label.textColor = DesignSystem.Color.secondaryLabel
         label.numberOfLines = 0
         return label
-    }
-
-    private func labeledRow(_ title: String, accessory: UIView) -> UIView {
-        let label = UILabel()
-        label.text = title
-        label.font = DesignSystem.Typography.body()
-        let row = UIStackView(arrangedSubviews: [label, UIView(), accessory])
-        row.axis = .horizontal
-        return row
     }
 
     @objc private func serverChanged() {

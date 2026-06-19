@@ -89,7 +89,7 @@ final class SettingsViewController: NSViewController {
         let column = NSStackView(views: [
             section("Server",
                     rows: [paddedRow([serverRow]), contentRow(statusLabel)],
-                    footnote: "The unrager server (`unrager serve`). Use your Mac's LAN / Tailscale address."),
+                    footnote: "The unrager server (`unrager serve`) — a Linux box, a Mac, any machine you keep running. Use its LAN or Tailscale address."),
             section("Appearance",
                     rows: [contentRow(appearanceControl), contentRow(fontScaleControl)],
                     footnote: "Text size scales the whole app."),

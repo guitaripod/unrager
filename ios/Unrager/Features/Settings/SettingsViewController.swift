@@ -95,7 +95,7 @@ final class SettingsViewController: UIViewController {
             fieldRow(serverField),
             navRow("Test connection", icon: "bolt.horizontal") { [weak self] in self?.testConnection() },
             contentRow(statusLabel),
-        ]), footnote: "The unrager server (`unrager serve`). Use your Mac's LAN / Tailscale address from a real device."))
+        ]), footnote: "The unrager server (`unrager serve`) — a Linux box, a Mac, any machine you keep running. Use its LAN or Tailscale address."))
 
         stack.addArrangedSubview(section("Account", card: card([
             navRow("Open my profile", icon: "person.crop.circle") { [weak self] in self?.openMyProfile() },

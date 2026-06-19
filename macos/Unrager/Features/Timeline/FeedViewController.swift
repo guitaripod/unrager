@@ -209,12 +209,35 @@ class FeedViewController: NSViewController {
 
     private func apply(_ newTweets: [Tweet]) {
         let added = newTweets.filter { tweet in !tweets.contains { $0.restID == tweet.restID } }
+        // Keep the viewport fixed when the network result replaces the cache
+        // seed while the user has scrolled, so tweets don't jump under them.
+        let scrolled = !tweets.isEmpty && !newTweets.isEmpty && scrollView.contentView.bounds.origin.y > 1
+        let anchor = scrolled ? topRowAnchor() : nil
         tweets = newTweets
         if !newTweets.isEmpty { lastErrorText = nil }
         tableView.reloadData()
+        if let anchor { restoreRowAnchor(anchor) }
         updateChrome()
         reconcileSeen(added.map(\.restID))
         reportUnread()
+    }
+
+    /// The id of the topmost visible row and its distance below the viewport
+    /// top — the anchor for a scroll-stable reload.
+    private func topRowAnchor() -> (id: String, offset: CGFloat)? {
+        let visible = scrollView.contentView.bounds
+        let rows = tableView.rows(in: visible)
+        guard rows.location != NSNotFound, rows.location >= 0, rows.location < tweets.count else { return nil }
+        let rect = tableView.rect(ofRow: rows.location)
+        return (tweets[rows.location].restID, rect.minY - visible.minY)
+    }
+
+    private func restoreRowAnchor(_ anchor: (id: String, offset: CGFloat)) {
+        guard let row = tweets.firstIndex(where: { $0.restID == anchor.id }) else { return }
+        tableView.layoutSubtreeIfNeeded()
+        let target = max(0, tableView.rect(ofRow: row).minY - anchor.offset)
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: target))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
     /// Feeds where seen-dimming is meaningful: For-You hides seen tweets

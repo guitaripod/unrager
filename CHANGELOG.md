@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-06-20
+
 - **Notifications now carry the actor's avatar and a media thumbnail.** The API's notification payload gained the actor `avatar_url` and the target tweet's media, so the native clients show each actor's face beside the action chip and a rounded thumbnail (with a play glyph on videos) when a notification is about a post with attachments — no longer a flat, faceless list.
 - **A batch of native-client fixes across iOS and macOS.** Opening a reply no longer flashes the whole thread and folds it in — the focal tweet shows immediately with replies settling under it. Full-screen video now plays with sound (the audio session routes through `.playback`); inline feed clips stay muted. Tweets with several attachments offer "Save all" plus a per-item list instead of only the first. The Postcard composer gained a **Thread** toggle that stacks the whole root→focal reply chain under one continuous accent bar, matching the TUI's thread screenshot. The "collecting tweets… N/25" loader now counts up live as the filter classifies each tweet. Notifications got a loading spinner, and "Liked by" is hidden on tweets that aren't your own (X only exposes your own likers).
 - **The iOS tab bar and Home feed got a smarter, stickier UX.** The Home tab now relabels itself "Following" (with the right icon) while in Following mode instead of always reading "For You", and double-tapping it toggles For You ↔ Following. The Edit Tabs screen can finally *add* tabs — the green "＋" on each available tab works now — not just remove them. The "Originals only" filter and the For You/Following choice persist locally across launches, so the feed reopens exactly where you left it instead of resetting. The confusing "N ↑" nav counter is now a clear "⌄ N" pill that appears only when there are unread tweets below and is hidden otherwise.
@@ -145,7 +147,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.18.1...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.19.0...HEAD
+[0.19.0]: https://github.com/guitaripod/unrager/releases/tag/0.19.0
 [0.18.1]: https://github.com/guitaripod/unrager/releases/tag/0.18.1
 [0.18.0]: https://github.com/guitaripod/unrager/releases/tag/0.18.0
 [0.17.7]: https://github.com/guitaripod/unrager/releases/tag/0.17.7

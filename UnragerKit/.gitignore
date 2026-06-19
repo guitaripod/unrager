@@ -1,0 +1,7 @@
+## SPM
+.build/
+build-*/
+Package.resolved
+.swiftpm/
+*.xcuserstate
+xcuserdata/

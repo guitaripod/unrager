@@ -1,0 +1,16 @@
+## Xcode / XcodeGen
+Unrager.xcodeproj/
+DerivedData/
+build/
+build-device/
+build-*/
+.build/
+*.xcuserstate
+xcuserdata/
+
+## Secrets (generated locally / by CI)
+Unrager/Secrets.swift
+
+## SPM
+Package.resolved
+.swiftpm/

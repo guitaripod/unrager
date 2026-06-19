@@ -50,16 +50,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libdbus-1-dev pkg-config
 
-      # Stub the web bundle so rust-embed has a folder to compile against on
-      # the full flavor. The real bundle is produced by the web-bundle job
-      # and packaged at release time; for compile-only checks, an empty
-      # placeholder is sufficient.
-      - name: Stub web bundle (full flavor only)
-        if: matrix.flavor.name == 'full'
-        run: |
-          mkdir -p crates/unrager-app/dist
-          echo "<!doctype html><title>stub</title>" > crates/unrager-app/dist/index.html
-
       # fmt + test only need to run once per OS; run on the default (tui) flavor
       - name: cargo fmt --check
         if: matrix.flavor.name == 'tui (default)'
@@ -88,104 +78,6 @@ jobs:
         if: matrix.flavor.name == 'full'
         run: cargo run --release --features server -- serve --help > /dev/null
 
-  # Client-only lint against the browser target. Catches wasm-specific
-  # regressions in the Dioxus app that native builds miss (e.g., a call
-  # site that only compiles when web_sys is available).
-  wasm-check:
-    name: wasm32 clippy (Dioxus client)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install stable toolchain with wasm32 target
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-          targets: wasm32-unknown-unknown
-
-      - name: Cache cargo
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-wasm-
-
-      - name: clippy --target wasm32
-        run: cargo clippy -p unrager-app --target wasm32-unknown-unknown --all-targets -- -D warnings
-
-  # Actually build the PWA bundle so we catch Dioxus bundler regressions
-  # before release day. Also sanity-checks the static assets (manifest,
-  # service worker, icons) exist in the packaged bundle.
-  web-bundle:
-    name: web bundle (dx)
-    needs: wasm-check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install stable toolchain with wasm32 target
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-
-      - name: Cache cargo
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-webbundle-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-webbundle-
-
-      - name: Install dioxus-cli via cargo-binstall
-        uses: cargo-bins/cargo-binstall@main
-
-      - name: Install dioxus-cli
-        run: cargo binstall -y --force dioxus-cli
-
-      - name: Bundle web client
-        working-directory: crates/unrager-app
-        run: dx bundle --platform web --release
-
-      - name: Stage + verify static assets
-        run: |
-          set -eux
-          rm -rf crates/unrager-app/dist
-          mkdir -p crates/unrager-app/dist
-          cp -r target/dx/unrager-app/release/web/public/. crates/unrager-app/dist/
-          cp crates/unrager-app/static/* crates/unrager-app/dist/
-          # Every file the PWA needs must be present after bundling.
-          test -f crates/unrager-app/dist/index.html
-          test -f crates/unrager-app/dist/manifest.webmanifest
-          test -f crates/unrager-app/dist/sw.js
-          test -f crates/unrager-app/dist/icon.svg
-          # WASM blob and JS glue — Dioxus names them with hashes, so glob.
-          ls crates/unrager-app/dist/assets/*.wasm
-          ls crates/unrager-app/dist/assets/*.js
-
-      - name: Verify manifest is valid JSON
-        run: python3 -m json.tool crates/unrager-app/dist/manifest.webmanifest > /dev/null
-
-      - name: Build binary with bundle embedded (full flavor)
-        run: cargo build --release --features server
-
-      - name: Smoke-test embedded bundle
-        run: |
-          set -eux
-          # rust-embed compresses so we can't grep for index.html directly,
-          # but we can check the binary got noticeably bigger.
-          SIZE=$(stat -c%s target/release/unrager)
-          echo "binary size: $SIZE"
-          test "$SIZE" -gt 16000000
-          ./target/release/unrager --version
-          ./target/release/unrager serve --help > /dev/null
-
   publish-dry-run:
     name: crates.io publish dry-run
     runs-on: ubuntu-latest
@@ -210,11 +102,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libdbus-1-dev pkg-config
-
-      - name: Stub web bundle
-        run: |
-          mkdir -p crates/unrager-app/dist
-          echo "<!doctype html><title>stub</title>" > crates/unrager-app/dist/index.html
 
       - name: Dry-run publish unrager-model
         run: cargo publish --dry-run -p unrager-model

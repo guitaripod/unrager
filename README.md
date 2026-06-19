@@ -217,7 +217,7 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 # TUI + CLI (default) — the primary product
 curl -fsSL https://unrager.com/install.sh | bash
 
-# TUI + HTTP server + embedded web client — for serving over Tailscale
+# TUI + HTTP API server — for the native iOS client over Tailscale
 UNRAGER_FLAVOR=full curl -fsSL https://unrager.com/install.sh | bash
 
 # CLI only (no TUI) — scripts, pipelines, CI
@@ -232,7 +232,7 @@ Re-run the installer with a different `UNRAGER_FLAVOR` to switch — it replaces
 # TUI + CLI (default)
 cargo install unrager
 
-# TUI + HTTP server + embedded web client
+# TUI + HTTP API server
 cargo install unrager --features server
 
 # CLI only
@@ -244,42 +244,46 @@ Approximate release-build sizes: full **23 MB**, TUI-only **15 MB**, CLI-only **
 | Feature | What it pulls | What you lose without it |
 |---|---|---|
 | `tui` (default) | ratatui, crossterm, image, termbg | bare `unrager` can't launch; `user`/`notifs`/`doctor` subcommands hidden |
-| `server` (default, implies `tui`) | axum, tower, rust-embed + the WASM bundle | `unrager serve`, web client, mobile clients |
+| `server` (default, implies `tui`) | axum, tower, tower-http | `unrager serve` — the HTTP API the native iOS client talks to |
 
 Upgrading later: `cargo install unrager --force` — no uninstall step, cargo replaces the binary in place.
 
-## Serving (web, iOS, Android)
+## Serving the API (native clients)
 
-`unrager serve` (requires the `server` feature, on by default) exposes an HTTP API and a Dioxus web client from the same binary. Pair with Tailscale and you can read every feed on any device without duplicating logic.
+`unrager serve` (requires the `server` feature, on by default) exposes the HTTP API that the native [iOS](ios/) and [macOS](macos/) apps talk to. The server does all the X work — cookie/OAuth auth, GraphQL, the rage filter, ask/brief/translate over Ollama — so the clients stay thin native UIs.
 
 ```sh
 unrager serve                          # bind 127.0.0.1:7777
-unrager serve --bind 0.0.0.0:7777      # reach across Tailscale
-unrager serve --open                   # pop the web client open on start
+unrager serve --bind 0.0.0.0:7777      # reach across Tailscale / LAN from your phone
 ```
 
-Over Tailscale, set an ACL so only your tailnet devices can hit the port. The server expects Tailscale to be the trust boundary — there is no app-level auth.
+Over Tailscale (or your LAN), set an ACL so only your own devices can hit the port. The server expects the network to be the trust boundary — there is no app-level auth. Point the app at the server's host/port in its settings.
 
-**Building the web client**:
-
-```sh
-cargo binstall dioxus-cli              # one-time: install the `dx` CLI
-just web                               # dx bundle → copy into crates/unrager-app/dist/
-cargo install --path .                 # install the binary with the bundle embedded
-```
-
-**Mobile targets** (Dioxus 0.7, one Rust codebase):
-
-```sh
-just mobile-ios                        # .app bundle, sideload via Xcode
-just mobile-android                    # .apk, `adb install`
-```
-
-Mobile builds require the platform SDKs (Xcode / Android NDK). Reqwest on Android needs `openssl = { features = ["vendored"] }` — see the Dioxus mobile docs. Native apps point at your Tailscale hostname via `UNRAGER_SERVER_URL`.
-
-Feature parity with the TUI: all seven sources, tweet detail + thread, compose/reply, like, media (photos, videos, gifs, link cards, polls, YouTube, X broadcasts), filter/ask/brief/translate streaming over SSE, session persistence, settings page, command palette (⌘K), help overlay (?).
+The API surface (`/api/*`): all seven sources, tweet detail + thread, profile + likers, compose/reply, like, media proxy (photos, videos, gifs, link cards, polls, YouTube, X broadcasts), and filter/ask/brief/translate streaming over SSE, plus session + filter-config persistence and seen-tracking — feature parity with the TUI.
 
 While `unrager serve` is running it owns the filter + seen caches; the TUI detects the lockfile (`~/.cache/unrager/server.lock`) — run one or the other.
+
+## Native apps (iOS + macOS)
+
+Native clients live under [`ios/`](ios/) (UIKit, iPhone) and [`macos/`](macos/) (AppKit, Mac), sharing the [`UnragerKit`](UnragerKit/) Swift package (models, networking, SSE, image pipeline, logging). Both target the iOS/macOS **26 Liquid Glass** design and stream the same `/api/*` contract — pair with Tailscale and read every feed from your phone.
+
+They aren't App Store apps (unrager uses *your* X session), so they're sideloaded with your own Apple Developer account:
+
+```sh
+# build the project (XcodeGen + a local Swift package; no Xcode account needed)
+cd ios && xcodegen generate          # → Unrager.xcodeproj
+
+# run in the iOS 26 simulator
+xcodebuild -scheme Unrager -destination 'generic/platform=iOS Simulator' \
+  -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+xcrun simctl install booted build/Build/Products/Debug-iphonesimulator/Unrager.app
+
+# install on your own iPhone (one-time: register the device + mint an ad-hoc profile)
+python3 scripts/provision.py --udid <UDID> --serial <DIST_CERT_SERIAL> --name "iPhone"
+UDID=<UDID> ./scripts/install-device.sh     # build → ad-hoc sign → devicectl install + launch
+```
+
+The app reads its server address from Settings (or a baked `UNRAGER_DEFAULT_SERVER` default for your tailnet). macOS builds with `cd macos && xcodegen generate && xcodebuild ...`; distribute the Mac app as a notarized DMG (Developer ID).
 
 ## More
 

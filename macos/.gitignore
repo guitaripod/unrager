@@ -1,0 +1,11 @@
+## Xcode / XcodeGen
+Unrager.xcodeproj/
+DerivedData/
+build/
+.build/
+*.xcuserstate
+xcuserdata/
+
+## SPM
+Package.resolved
+.swiftpm/

@@ -166,7 +166,7 @@ case "$FLAVOR" in
 
 Next steps:
   unrager                  launch the TUI
-  unrager serve            start the HTTP server + web client on :7777
+  unrager serve            start the HTTP API server (for the iOS app) on :7777
   unrager doctor           check cookies, Ollama, and filter setup
   ollama pull gemma4       enable the local-LLM rage filter (optional)
   unrager --help           all subcommands
@@ -187,7 +187,7 @@ Next steps:
   ollama pull gemma4       enable the local-LLM rage filter (optional)
   unrager --help           all subcommands
 
-Want the web/mobile server too? re-run with:
+Want the HTTP API server (for the native iOS app) too? re-run with:
   UNRAGER_FLAVOR=full curl -fsSL unrager.com/install.sh | bash
 
 EOF
@@ -203,7 +203,7 @@ Next steps:
 
 Want the TUI too? re-run with:
   UNRAGER_FLAVOR=tui  curl -fsSL unrager.com/install.sh | bash
-  UNRAGER_FLAVOR=full curl -fsSL unrager.com/install.sh | bash   # includes web/mobile server
+  UNRAGER_FLAVOR=full curl -fsSL unrager.com/install.sh | bash   # includes the HTTP API server
 
 EOF
         ;;

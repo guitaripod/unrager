@@ -107,6 +107,6 @@ pub enum Command {
     Update(update::Args),
 
     #[cfg(feature = "server")]
-    #[command(about = "Run the HTTP server exposing the web/mobile client API")]
+    #[command(about = "Run the HTTP API server for the native client")]
     Serve(serve::Args),
 }

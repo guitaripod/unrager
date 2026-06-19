@@ -1,4 +1,3 @@
-pub mod embed;
 pub mod error;
 pub mod llm;
 pub mod routes;
@@ -6,6 +5,8 @@ pub mod sse;
 pub mod state;
 
 use axum::Router;
+use axum::http::{StatusCode, Uri};
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use state::AppState;
 use std::net::SocketAddr;
@@ -17,15 +18,12 @@ use tower_http::trace::TraceLayer;
 
 pub use error::ApiError;
 
-pub async fn serve(addr: SocketAddr, open_browser: bool) -> crate::error::Result<()> {
+pub async fn serve(addr: SocketAddr) -> crate::error::Result<()> {
     let state = Arc::new(AppState::build().await?);
     write_lockfile(&state)?;
     let app = router(state.clone());
 
     tracing::info!("unrager server listening on http://{addr}");
-    if open_browser {
-        let _ = webbrowser_open(&format!("http://{addr}"));
-    }
 
     let listener = TcpListener::bind(addr)
         .await
@@ -89,11 +87,21 @@ fn router(state: Arc<AppState>) -> Router {
 
     Router::new()
         .nest("/api", api)
-        .fallback(embed::serve_static)
+        .fallback(fallback)
         .layer(CompressionLayer::new())
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+async fn fallback(uri: Uri) -> impl IntoResponse {
+    (
+        StatusCode::NOT_FOUND,
+        format!(
+            "unrager is an API-only server — no route for {}. The API lives under /api.",
+            uri.path()
+        ),
+    )
 }
 
 fn write_lockfile(state: &AppState) -> crate::error::Result<()> {
@@ -130,15 +138,4 @@ async fn wait_for_shutdown() {
         _ = term => {}
     }
     tracing::info!("shutdown signal received");
-}
-
-fn webbrowser_open(url: &str) -> std::io::Result<()> {
-    #[cfg(target_os = "linux")]
-    let prog = "xdg-open";
-    #[cfg(target_os = "macos")]
-    let prog = "open";
-    #[cfg(target_os = "windows")]
-    let prog = "start";
-    std::process::Command::new(prog).arg(url).spawn()?;
-    Ok(())
 }

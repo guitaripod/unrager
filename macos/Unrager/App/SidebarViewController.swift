@@ -94,6 +94,16 @@ final class SidebarViewController: NSViewController {
     func select(_ item: SidebarItem) {
         tableView.selectRowIndexes(IndexSet(integer: item.rawValue), byExtendingSelection: false)
     }
+
+    /// Rebuilds the rows so a text-size change re-resolves the row fonts,
+    /// preserving the current selection.
+    func restyle() {
+        let selected = tableView.selectedRow
+        tableView.reloadData()
+        if selected >= 0 {
+            tableView.selectRowIndexes(IndexSet(integer: selected), byExtendingSelection: false)
+        }
+    }
 }
 
 extension SidebarViewController: NSTableViewDataSource {
@@ -141,12 +151,12 @@ private final class SidebarCellView: NSTableCellView {
     private func build() {
         let imageView = NSImageView()
         let textField = NSTextField(labelWithString: "")
-        textField.font = .systemFont(ofSize: 13, weight: .medium)
+        textField.font = DesignSystem.Typography.system(13, weight: .medium)
         textField.textColor = DesignSystem.Color.label
         self.imageView = imageView
         self.textField = textField
 
-        badge.font = .systemFont(ofSize: 11, weight: .bold)
+        badge.font = DesignSystem.Typography.system(11, weight: .bold)
         badge.textColor = .white
         badge.alignment = .center
         badge.wantsLayer = true

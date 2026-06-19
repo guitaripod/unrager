@@ -28,6 +28,7 @@ final class SettingsViewController: UIViewController {
     private let serverField = UITextField()
     private let statusLabel = UILabel()
     private let appearanceControl = UISegmentedControl(items: AppearanceMode.allCases.map(\.title))
+    private let fontScaleControl = UISegmentedControl(items: FontScale.allCases.map(\.title))
     private let imagesSwitch = UISwitch()
     private let filterSwitch = UISwitch()
     private let markSeenSwitch = UISwitch()
@@ -78,6 +79,9 @@ final class SettingsViewController: UIViewController {
         appearanceControl.selectedSegmentIndex = AppSettings.appearance.rawValue
         appearanceControl.addTarget(self, action: #selector(appearanceChanged), for: .valueChanged)
 
+        fontScaleControl.selectedSegmentIndex = AppSettings.fontScale.rawValue
+        fontScaleControl.addTarget(self, action: #selector(fontScaleChanged), for: .valueChanged)
+
         imagesSwitch.isOn = AppSettings.imagesEnabled
         imagesSwitch.addTarget(self, action: #selector(imagesChanged), for: .valueChanged)
 
@@ -103,7 +107,10 @@ final class SettingsViewController: UIViewController {
             },
         ]), footnote: "Choose up to \(TabItem.maxCount) tabs and reorder them."))
 
-        stack.addArrangedSubview(section("Appearance", card: card([contentRow(appearanceControl)])))
+        stack.addArrangedSubview(section("Appearance", card: card([
+            contentRow(appearanceControl),
+            contentRow(fontScaleControl),
+        ]), footnote: "Text size scales the whole app."))
 
         stack.addArrangedSubview(section("Feed", card: card([
             toggleRow("Load images", imagesSwitch),
@@ -333,6 +340,12 @@ final class SettingsViewController: UIViewController {
         let mode = AppearanceMode(rawValue: appearanceControl.selectedSegmentIndex) ?? .system
         AppSettings.appearance = mode
         view.window?.overrideUserInterfaceStyle = UIUserInterfaceStyle(rawValue: mode.rawValue) ?? .unspecified
+    }
+
+    @objc private func fontScaleChanged() {
+        AppSettings.fontScale = FontScale(rawValue: fontScaleControl.selectedSegmentIndex) ?? .standard
+        NotificationCenter.default.post(name: AppSettings.fontScaleDidChange, object: nil)
+        Haptics.selection()
     }
 
     @objc private func imagesChanged() {

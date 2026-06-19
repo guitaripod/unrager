@@ -32,7 +32,7 @@ final class MediaCardView: UIView {
         cover.contentMode = .scaleAspectFill
 
         livePill.text = "● LIVE"
-        livePill.font = .systemFont(ofSize: 11, weight: .heavy)
+        livePill.font = DesignSystem.Typography.system(11, weight: .heavy)
         livePill.textColor = .white
         livePill.backgroundColor = DesignSystem.Color.live
         livePill.textAlignment = .center

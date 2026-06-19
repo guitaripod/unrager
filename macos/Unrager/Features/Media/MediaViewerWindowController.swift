@@ -115,7 +115,7 @@ final class MediaViewerWindowController: NSWindowController {
         pager.action = #selector(pagerChanged)
         pager.isHidden = photoIndices.count <= 1
 
-        counterLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        counterLabel.font = DesignSystem.Typography.system(12, weight: .semibold)
         counterLabel.textColor = .white
         counterLabel.alignment = .center
         counterLabel.isHidden = photoIndices.count <= 1

@@ -25,7 +25,7 @@ final class PhotoGridView: UIView {
         addManaged(column)
         column.pinEdges(to: self)
 
-        overflowLabel.font = .systemFont(ofSize: 28, weight: .bold)
+        overflowLabel.font = DesignSystem.Typography.system(28, weight: .bold)
         overflowLabel.textColor = .white
         overflowLabel.textAlignment = .center
         overflowLabel.backgroundColor = UIColor.black.withAlphaComponent(0.45)

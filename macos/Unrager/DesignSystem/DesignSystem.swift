@@ -1,4 +1,5 @@
 import AppKit
+import UnragerKit
 
 /// The single source of visual truth, mirroring the iOS `DesignSystem`. Colors
 /// are computed dynamic `NSColor`s so light/dark resolves through the effective
@@ -94,12 +95,23 @@ enum DesignSystem {
     }
 
     enum Typography {
-        static func name() -> NSFont { .systemFont(ofSize: 14, weight: .bold) }
-        static func handle() -> NSFont { .systemFont(ofSize: 14, weight: .regular) }
-        static func body() -> NSFont { .systemFont(ofSize: 14, weight: .regular) }
-        static func metric() -> NSFont { .systemFont(ofSize: 12, weight: .regular) }
-        static func caption() -> NSFont { .systemFont(ofSize: 11, weight: .regular) }
-        static func title() -> NSFont { .systemFont(ofSize: 22, weight: .heavy) }
+        /// The user's text-size multiplier. Read live so a change re-resolves on
+        /// the next font request; views re-measure on `fontScaleDidChange`.
+        static var scale: CGFloat { AppSettings.fontScale.multiplier }
+
+        /// A system font at `size` scaled by the user's text-size choice. Every
+        /// literal-size font in the app routes through here so nothing escapes
+        /// the scale (the regression guard greps for stray `systemFont(ofSize:`).
+        static func system(_ size: CGFloat, weight: NSFont.Weight) -> NSFont {
+            .systemFont(ofSize: size * scale, weight: weight)
+        }
+
+        static func name() -> NSFont { system(14, weight: .bold) }
+        static func handle() -> NSFont { system(14, weight: .regular) }
+        static func body() -> NSFont { system(14, weight: .regular) }
+        static func metric() -> NSFont { system(12, weight: .regular) }
+        static func caption() -> NSFont { system(11, weight: .regular) }
+        static func title() -> NSFont { system(22, weight: .heavy) }
     }
 
     static func icon(_ systemName: String, pointSize: CGFloat = 16, weight: NSFont.Weight = .regular) -> NSImage? {

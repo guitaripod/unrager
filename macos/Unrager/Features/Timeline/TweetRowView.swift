@@ -339,7 +339,7 @@ final class TweetRowView: NSTableCellView {
         let font = DesignSystem.Typography.handle()
         let header = NSMutableAttributedString(
             string: quoted.author.name,
-            attributes: [.font: NSFont.systemFont(ofSize: 14, weight: .semibold),
+            attributes: [.font: DesignSystem.Typography.system(14, weight: .semibold),
                          .foregroundColor: DesignSystem.Color.label])
         header.append(NSAttributedString(
             string: " @\(quoted.author.handle)",
@@ -526,7 +526,7 @@ final class TweetAnalyticsView: NSView {
         chartIcon.image = DesignSystem.icon("chart.bar.xaxis", pointSize: 11, weight: .semibold)
         chartIcon.contentTintColor = DesignSystem.Color.accent
         chartIcon.setContentHuggingPriority(.required, for: .horizontal)
-        heading.font = .systemFont(ofSize: 12, weight: .bold)
+        heading.font = DesignSystem.Typography.system(12, weight: .bold)
         heading.textColor = DesignSystem.Color.label
         let headingRow = NSStackView(views: [chartIcon, heading])
         headingRow.orientation = .horizontal
@@ -577,7 +577,7 @@ final class TweetAnalyticsView: NSView {
 
     private func metric(_ title: String, value: Int, color: NSColor) -> NSView {
         let valueField = NSTextField(labelWithString: Format.count(value))
-        valueField.font = .systemFont(ofSize: 15, weight: .bold)
+        valueField.font = DesignSystem.Typography.system(15, weight: .bold)
         valueField.textColor = DesignSystem.Color.label
         let titleField = NSTextField(labelWithString: title)
         titleField.font = DesignSystem.Typography.caption()

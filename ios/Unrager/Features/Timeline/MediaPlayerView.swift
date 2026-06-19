@@ -45,7 +45,7 @@ final class MediaPlayerView: UIView {
         addManaged(playBadge)
 
         gifBadge.text = "GIF"
-        gifBadge.font = .systemFont(ofSize: 11, weight: .bold)
+        gifBadge.font = DesignSystem.Typography.system(11, weight: .bold)
         gifBadge.textColor = .white
         gifBadge.backgroundColor = UIColor.black.withAlphaComponent(0.55)
         gifBadge.textAlignment = .center

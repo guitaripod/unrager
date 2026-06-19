@@ -149,7 +149,7 @@ private final class ImageGridView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        overflowLabel.font = .systemFont(ofSize: 22, weight: .heavy)
+        overflowLabel.font = DesignSystem.Typography.system(22, weight: .heavy)
         overflowLabel.textColor = .white
         overflowLabel.alignment = .center
         overflowLabel.isHidden = true
@@ -306,7 +306,7 @@ private final class InlineVideoView: NSView, NSGestureRecognizerDelegate {
         addManaged(poster)
         poster.pinEdges(to: self)
 
-        gifLabel.font = .systemFont(ofSize: 11, weight: .heavy)
+        gifLabel.font = DesignSystem.Typography.system(11, weight: .heavy)
         gifLabel.textColor = .white
         gifLabel.wantsLayer = true
         gifLabel.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
@@ -611,7 +611,7 @@ private final class LinkCardView: NSView {
         badge.layer?.masksToBounds = true
         badge.isHidden = true
         badgeIcon.contentTintColor = .white
-        badgeLabel.font = .systemFont(ofSize: 11, weight: .bold)
+        badgeLabel.font = DesignSystem.Typography.system(11, weight: .bold)
         badgeLabel.textColor = .white
         let badgeStack = NSStackView(views: [badgeIcon, badgeLabel])
         badgeStack.orientation = .horizontal

@@ -481,6 +481,20 @@ class FeedViewController: UIViewController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.reconfigureVisibleForEmoji() }
             .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: AppSettings.fontScaleDidChange)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.reloadForFontScale() }
+            .store(in: &cancellables)
+    }
+
+    /// Re-renders every row (on- and off-screen) after a text-size change so
+    /// fonts re-resolve and self-sizing heights re-measure.
+    private func reloadForFontScale() {
+        var snapshot = dataSource.snapshot()
+        guard snapshot.numberOfItems > 0 else { return }
+        snapshot.reconfigureItems(snapshot.itemIdentifiers)
+        dataSource.apply(snapshot, animatingDifferences: false)
     }
 
     /// Re-renders on-screen rows once Twemoji art lands so a cold-cache emoji

@@ -27,7 +27,7 @@ final class StreamSheetViewController: UIViewController {
             self?.dismiss(animated: true)
         })
 
-        textView.font = .preferredFont(forTextStyle: .body)
+        textView.font = DesignSystem.Typography.body()
         textView.isEditable = false
         textView.backgroundColor = .clear
         textView.textColor = DesignSystem.Color.label
@@ -87,7 +87,7 @@ final class StreamSheetViewController: UIViewController {
             return NSAttributedString(string: markdown)
         }
         var base = AttributeContainer()
-        base.font = .preferredFont(forTextStyle: .body)
+        base.font = DesignSystem.Typography.body()
         base.foregroundColor = DesignSystem.Color.label
         attributed.mergeAttributes(base, mergePolicy: .keepNew)
         return NSAttributedString(attributed)

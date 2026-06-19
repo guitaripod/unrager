@@ -11,6 +11,7 @@ final class SettingsViewController: NSViewController {
     private let serverField = NSTextField()
     private let statusLabel = NSTextField(labelWithString: "")
     private let appearanceControl = NSSegmentedControl()
+    private let fontScaleControl = NSSegmentedControl()
     private let imagesSwitch = NSSwitch()
     private let filterSwitch = NSSwitch()
     private let seenSwitch = NSSwitch()
@@ -55,6 +56,15 @@ final class SettingsViewController: NSViewController {
         appearanceControl.action = #selector(appearanceChanged)
         appearanceControl.segmentStyle = .rounded
 
+        fontScaleControl.segmentCount = FontScale.allCases.count
+        for scale in FontScale.allCases {
+            fontScaleControl.setLabel(scale.title, forSegment: scale.rawValue)
+        }
+        fontScaleControl.selectedSegment = AppSettings.fontScale.rawValue
+        fontScaleControl.target = self
+        fontScaleControl.action = #selector(fontScaleChanged)
+        fontScaleControl.segmentStyle = .rounded
+
         imagesSwitch.state = AppSettings.imagesEnabled ? .on : .off
         imagesSwitch.target = self
         imagesSwitch.action = #selector(imagesChanged)
@@ -80,7 +90,9 @@ final class SettingsViewController: NSViewController {
             section("Server",
                     rows: [paddedRow([serverRow]), contentRow(statusLabel)],
                     footnote: "The unrager server (`unrager serve`). Use your Mac's LAN / Tailscale address."),
-            section("Appearance", rows: [contentRow(appearanceControl)]),
+            section("Appearance",
+                    rows: [contentRow(appearanceControl), contentRow(fontScaleControl)],
+                    footnote: "Text size scales the whole app."),
             section("Media",
                     rows: [toggleRow("Load images", control: imagesSwitch),
                            toggleRow("Dim seen tweets", control: seenSwitch)],
@@ -121,6 +133,7 @@ final class SettingsViewController: NSViewController {
             column.trailingAnchor.constraint(equalTo: documentView.trailingAnchor, constant: -DesignSystem.Spacing.xl),
             column.bottomAnchor.constraint(equalTo: documentView.bottomAnchor),
             appearanceControl.widthAnchor.constraint(greaterThanOrEqualToConstant: 280),
+            fontScaleControl.widthAnchor.constraint(greaterThanOrEqualToConstant: 280),
         ])
     }
 
@@ -328,6 +341,11 @@ final class SettingsViewController: NSViewController {
         let mode = AppearanceMode(rawValue: appearanceControl.selectedSegment) ?? .system
         AppSettings.appearance = mode
         onAppearanceChange?(mode)
+    }
+
+    @objc private func fontScaleChanged() {
+        AppSettings.fontScale = FontScale(rawValue: fontScaleControl.selectedSegment) ?? .standard
+        NotificationCenter.default.post(name: AppSettings.fontScaleDidChange, object: nil)
     }
 
     @objc private func imagesChanged() {

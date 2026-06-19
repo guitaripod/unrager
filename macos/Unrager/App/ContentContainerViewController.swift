@@ -8,6 +8,13 @@ protocol ContentReappearing: AnyObject {
     func viewBecameVisible()
 }
 
+/// A view controller whose on-screen text must re-render in place when the
+/// user's text-size choice changes (the window broadcasts `fontScaleDidChange`).
+@MainActor
+protocol Restylable: AnyObject {
+    func restyle()
+}
+
 /// Hosts the main content area as a simple navigation stack: the selected
 /// source's root view controller sits at the bottom, and threads / profiles
 /// push on top. The window controller drives `setRoot` on source switches and

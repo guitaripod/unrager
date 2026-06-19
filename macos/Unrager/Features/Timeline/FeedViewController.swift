@@ -917,3 +917,14 @@ extension FeedViewController: NSMenuDelegate {
         }
     }
 }
+
+extension FeedViewController: Restylable {
+    /// Rebuilds every row so a text-size change re-resolves fonts, then
+    /// re-measures heights. `ProfileViewController` inherits this.
+    func restyle() {
+        tableView.reloadData()
+        if tableView.numberOfRows > 0 {
+            tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0 ..< tableView.numberOfRows))
+        }
+    }
+}

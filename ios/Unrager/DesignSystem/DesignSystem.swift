@@ -1,4 +1,5 @@
 import UIKit
+import UnragerKit
 
 /// The single source of visual truth. Colors are computed (so no non-Sendable
 /// global state under strict concurrency); light/dark is handled by dynamic
@@ -87,12 +88,28 @@ enum DesignSystem {
     }
 
     enum Typography {
+        /// The user's text-size multiplier, composed on top of the system's
+        /// Dynamic Type scale (a user who bumps both gets both).
+        static var scale: CGFloat { AppSettings.fontScale.multiplier }
+
         private static func scaled(_ style: UIFont.TextStyle, size: CGFloat, weight: UIFont.Weight) -> UIFont {
-            UIFontMetrics(forTextStyle: style).scaledFont(for: .systemFont(ofSize: size, weight: weight))
+            UIFontMetrics(forTextStyle: style).scaledFont(for: .systemFont(ofSize: size * scale, weight: weight))
         }
+
+        /// A system font at `size`, scaled by the user's text-size choice (no
+        /// Dynamic Type metric). Literal-size fonts route through here so nothing
+        /// escapes the scale — the regression guard greps for stray
+        /// `systemFont(ofSize:` outside this file.
+        static func system(_ size: CGFloat, weight: UIFont.Weight) -> UIFont {
+            .systemFont(ofSize: size * scale, weight: weight)
+        }
+
         static func name() -> UIFont { scaled(.subheadline, size: 15, weight: .bold) }
         static func handle() -> UIFont { scaled(.subheadline, size: 15, weight: .regular) }
-        static func body() -> UIFont { .preferredFont(forTextStyle: .body) }
+        static func body() -> UIFont {
+            let base = UIFont.preferredFont(forTextStyle: .body)
+            return base.withSize(base.pointSize * scale)
+        }
         static func metric() -> UIFont { scaled(.footnote, size: 13, weight: .regular) }
         static func caption() -> UIFont { scaled(.caption1, size: 12, weight: .regular) }
         static func title() -> UIFont { scaled(.title2, size: 22, weight: .heavy) }

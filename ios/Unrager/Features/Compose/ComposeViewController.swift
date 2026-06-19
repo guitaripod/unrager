@@ -53,13 +53,13 @@ final class ComposeViewController: UIViewController {
         navigationItem.rightBarButtonItems = [postButton, photoButton]
         postButton.isEnabled = false
 
-        textView.font = .preferredFont(forTextStyle: .title3)
+        textView.font = DesignSystem.Typography.system(20, weight: .regular)
         textView.backgroundColor = .clear
         textView.delegate = self
         textView.textColor = DesignSystem.Color.label
 
         placeholder.text = "What’s happening?"
-        placeholder.font = .preferredFont(forTextStyle: .title3)
+        placeholder.font = DesignSystem.Typography.system(20, weight: .regular)
         placeholder.textColor = DesignSystem.Color.tertiaryLabel
 
         counter.font = DesignSystem.Typography.metric()

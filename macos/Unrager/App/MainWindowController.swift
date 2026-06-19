@@ -29,6 +29,7 @@ final class MainWindowController: NSWindowController {
     private let productPopup = NSPopUpButton()
     private let progressIndicator = NSProgressIndicator()
     private var feedCancellables: [AnyCancellable] = []
+    private var fontScaleObserver: AnyCancellable?
 
     convenience init() {
         let window = NSWindow(
@@ -64,10 +65,27 @@ final class MainWindowController: NSWindowController {
         window?.contentViewController = splitViewController
         AppSettings.migrateAppearanceIfNeeded()
         applyAppearance(AppSettings.appearance)
+        observeFontScale()
         AppEnvironment.shared.prefetchWhoami()
         select(.forYou)
         restoreSession()
         handleDebugLaunch()
+    }
+
+    /// Re-renders the always-visible chrome (toolbar title, sidebar) and the
+    /// current content stack when the user changes their text size in Settings,
+    /// so the scale applies without relaunching. Source switches rebuild VCs
+    /// fresh, so only what's on screen needs the live nudge.
+    private func observeFontScale() {
+        fontScaleObserver = NotificationCenter.default.publisher(for: AppSettings.fontScaleDidChange)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.applyFontScale() }
+    }
+
+    private func applyFontScale() {
+        titleLabel.font = DesignSystem.Typography.system(15, weight: .semibold)
+        sidebar.restyle()
+        for controller in content.stack { (controller as? Restylable)?.restyle() }
     }
 
     // MARK: - Session persistence
@@ -239,7 +257,7 @@ final class MainWindowController: NSWindowController {
         searchField.action = #selector(performSearch)
         searchField.sendsSearchStringImmediately = false
         searchField.sendsWholeSearchString = true
-        titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
+        titleLabel.font = DesignSystem.Typography.system(15, weight: .semibold)
         titleLabel.textColor = DesignSystem.Color.label
 
         unreadBadge.bezelStyle = .toolbar
@@ -294,6 +312,10 @@ final class MainWindowController: NSWindowController {
         currentItem = item
         sidebar.select(item)
         let root = makeRoot(for: item)
+        if !(root is FeedViewController) {
+            feedCancellables.removeAll()
+            progressIndicator.stopAnimation(nil)
+        }
         content.setRoot(root)
         updateToolbar()
         if item == .search {

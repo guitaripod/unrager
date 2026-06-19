@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 public enum AppearanceMode: Int, Sendable, CaseIterable {
@@ -14,6 +15,37 @@ public enum AppearanceMode: Int, Sendable, CaseIterable {
     }
 }
 
+/// A stepped, user-chosen text-size multiplier applied across every font the
+/// app renders (through each platform's `DesignSystem.Typography`). `.standard`
+/// is the unscaled default; raw values double as a segmented-control index.
+public enum FontScale: Int, Sendable, CaseIterable {
+    case small = 0
+    case standard = 1
+    case large = 2
+    case xLarge = 3
+    case xxLarge = 4
+
+    public var multiplier: CGFloat {
+        switch self {
+        case .small: return 0.85
+        case .standard: return 1.0
+        case .large: return 1.15
+        case .xLarge: return 1.3
+        case .xxLarge: return 1.5
+        }
+    }
+
+    public var title: String {
+        switch self {
+        case .small: return "S"
+        case .standard: return "M"
+        case .large: return "L"
+        case .xLarge: return "XL"
+        case .xxLarge: return "XXL"
+        }
+    }
+}
+
 /// Client-side preferences (UserDefaults). The server owns the source/seen/
 /// filter *state*; this only holds what the client decides: where the server
 /// is and how the UI looks. Cross-platform.
@@ -26,7 +58,14 @@ public enum AppSettings {
         static let imagesEnabled = "unrager.imagesEnabled"
         static let filterEnabled = "unrager.filterEnabled"
         static let appearanceMigrated = "unrager.appearanceMigratedToLocal.v1"
+        static let fontScale = "unrager.fontScale"
     }
+
+    /// Posted after the user changes `fontScale` so already-visible views can
+    /// re-resolve their fonts and re-measure. The setter stays a pure store;
+    /// the Settings screens post this, mirroring how `appearance` side-effects
+    /// live in the view controllers.
+    public static let fontScaleDidChange = Notification.Name("unrager.fontScaleDidChange")
 
     /// One-time cleanup: earlier builds auto-applied the server's (dark) TUI
     /// theme to the app appearance, leaving a non-chosen `.dark` persisted.
@@ -68,6 +107,16 @@ public enum AppSettings {
     public static var appearance: AppearanceMode {
         get { AppearanceMode(rawValue: defaults.integer(forKey: Key.appearance)) ?? .system }
         set { defaults.set(newValue.rawValue, forKey: Key.appearance) }
+    }
+
+    /// The user's text-size choice. An unset key reads as `.standard` (not the
+    /// raw-`0` `.small`), so a fresh install renders unscaled.
+    public static var fontScale: FontScale {
+        get {
+            guard defaults.object(forKey: Key.fontScale) != nil else { return .standard }
+            return FontScale(rawValue: defaults.integer(forKey: Key.fontScale)) ?? .standard
+        }
+        set { defaults.set(newValue.rawValue, forKey: Key.fontScale) }
     }
 
     public static var imagesEnabled: Bool {

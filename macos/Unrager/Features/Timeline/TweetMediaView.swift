@@ -272,13 +272,20 @@ private final class ImageGridView: NSView {
 /// first frame is ready. Tapping fires `onTap`, which opens the full-window
 /// native player. `stop()` tears the player down so a recycled cell never plays
 /// the previous tweet's clip.
-private final class InlineVideoView: NSView {
+private final class InlineVideoView: NSView, NSGestureRecognizerDelegate {
     var onTap: (() -> Void)?
+
+    /// Session-wide inline-audio preference. Inline clips autoplay muted (like X);
+    /// clicking any clip's speaker unmutes them all for the session. Resets to
+    /// muted on relaunch. Mirrors the iOS `MediaPlayerView.audioEnabled`.
+    static var audioEnabled = false
 
     private let playerLayer = AVPlayerLayer()
     private let poster = AsyncImageView()
     private let gifLabel = NSTextField(labelWithString: "GIF")
+    private let muteButton = NSButton()
     private var player: AVPlayer?
+    private var isGif = false
     private var statusObservation: NSKeyValueObservation?
     private nonisolated(unsafe) var loopObserver: (any NSObjectProtocol)?
 
@@ -308,14 +315,32 @@ private final class InlineVideoView: NSView {
         gifLabel.isHidden = true
         addManaged(gifLabel)
 
+        muteButton.isBordered = false
+        muteButton.bezelStyle = .circular
+        muteButton.wantsLayer = true
+        muteButton.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.5).cgColor
+        muteButton.layer?.cornerRadius = 14
+        muteButton.contentTintColor = .white
+        muteButton.target = self
+        muteButton.action = #selector(toggleMute)
+        muteButton.isHidden = true
+        muteButton.setAccessibilityLabel("Toggle sound")
+        addManaged(muteButton)
+        updateMuteIcon()
+
         NSLayoutConstraint.activate([
             gifLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: DesignSystem.Spacing.s),
             gifLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -DesignSystem.Spacing.s),
             gifLabel.widthAnchor.constraint(equalToConstant: 34),
             gifLabel.heightAnchor.constraint(equalToConstant: 18),
+            muteButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -DesignSystem.Spacing.s),
+            muteButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -DesignSystem.Spacing.s),
+            muteButton.widthAnchor.constraint(equalToConstant: 28),
+            muteButton.heightAnchor.constraint(equalToConstant: 28),
         ])
 
         let tap = NSClickGestureRecognizer(target: self, action: #selector(tapped))
+        tap.delegate = self
         addGestureRecognizer(tap)
     }
 
@@ -326,10 +351,35 @@ private final class InlineVideoView: NSView {
         playerLayer.frame = bounds
     }
 
+    /// Keeps the open-full-screen tap from firing when the click lands on the
+    /// mute button, so toggling sound never also opens the player.
+    func gestureRecognizer(_ gestureRecognizer: NSGestureRecognizer,
+                           shouldAttemptToRecognizeWith event: NSEvent) -> Bool {
+        guard !muteButton.isHidden else { return true }
+        let point = muteButton.convert(event.locationInWindow, from: nil)
+        return !muteButton.bounds.contains(point)
+    }
+
+    /// Flips the session-wide inline-audio preference and applies it to the live
+    /// player. macOS has no audio session, so only the mute property is touched.
+    @objc private func toggleMute() {
+        Self.audioEnabled.toggle()
+        player?.isMuted = isGif || !Self.audioEnabled
+        updateMuteIcon()
+    }
+
+    private func updateMuteIcon() {
+        let symbol = Self.audioEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill"
+        muteButton.image = DesignSystem.icon(symbol, pointSize: 12, weight: .semibold)
+    }
+
     func configure(tweet: Tweet, media: Media, api: APIClient, imagesEnabled: Bool, size: CGSize) {
         stop()
         let isGif = { if case .animatedGif = media.kind { return true } else { return false } }()
+        self.isGif = isGif
         gifLabel.isHidden = !isGif
+        muteButton.isHidden = isGif
+        updateMuteIcon()
         if imagesEnabled, let url = URL(string: media.url), !media.url.isEmpty {
             poster.load(url: url, targetSize: size)
         } else {
@@ -341,7 +391,7 @@ private final class InlineVideoView: NSView {
         let videoURL = media.videoURL.flatMap(URL.init)
             ?? api.mediaURL(tweetID: tweet.restID, index: indexOfVideo(in: tweet))
         let player = AVPlayer(url: videoURL)
-        player.isMuted = true
+        player.isMuted = isGif || !Self.audioEnabled
         player.actionAtItemEnd = .none
         self.player = player
         playerLayer.player = player
@@ -380,6 +430,7 @@ private final class InlineVideoView: NSView {
         playerLayer.player = nil
         poster.cancel()
         poster.alphaValue = 1
+        muteButton.isHidden = true
     }
 
     deinit {

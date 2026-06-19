@@ -1,6 +1,13 @@
 import AppKit
 import UnragerKit
 
+/// A content root that wants to react when it becomes visible again — e.g. after
+/// a pushed thread is popped off the navigation stack — so it can refresh.
+@MainActor
+protocol ContentReappearing: AnyObject {
+    func viewBecameVisible()
+}
+
 /// Hosts the main content area as a simple navigation stack: the selected
 /// source's root view controller sits at the bottom, and threads / profiles
 /// push on top. The window controller drives `setRoot` on source switches and
@@ -38,7 +45,10 @@ final class ContentContainerViewController: NSViewController {
         guard stack.count > 1 else { return }
         let top = stack.removeLast()
         detach(top)
-        stack.last?.view.isHidden = false
+        if let revealed = stack.last {
+            revealed.view.isHidden = false
+            (revealed as? any ContentReappearing)?.viewBecameVisible()
+        }
         onStackChange?()
     }
 

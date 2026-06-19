@@ -203,11 +203,26 @@ final class ComposeViewController: NSViewController, NSTextViewDelegate {
         guard !text.isEmpty else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
-        if let url = Self.intentURL(text: text, mode: mode) {
-            NSWorkspace.shared.open(url)
-        }
+        openInX(text: text)
         onPosted?()
         dismiss(self)
+    }
+
+    /// Opens the real X app's composer (`twitter://post`) when it's installed,
+    /// prefilled with the draft; falls back to the web intent (which can anchor a
+    /// reply via `in_reply_to`) only when no app handles the scheme. Mirrors the
+    /// iOS `openInX`.
+    private func openInX(text: String) {
+        var app = URLComponents(string: "twitter://post")
+        app?.queryItems = [URLQueryItem(name: "message", value: text)]
+        if let appURL = app?.url,
+           NSWorkspace.shared.urlForApplication(toOpen: appURL) != nil {
+            NSWorkspace.shared.open(appURL)
+            return
+        }
+        if let web = Self.intentURL(text: text, mode: mode) {
+            NSWorkspace.shared.open(web)
+        }
     }
 
     /// Builds `https://x.com/intent/post?text=…(&in_reply_to=…)`.

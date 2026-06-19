@@ -5,7 +5,7 @@ import UnragerKit
 /// names + action, and the target tweet snippet. Selecting a row opens its
 /// target tweet's thread.
 @MainActor
-final class NotificationsViewController: NSViewController {
+final class NotificationsViewController: NSViewController, ContentReappearing {
     weak var navigator: (any FeedNavigator)?
 
     private let api = AppEnvironment.shared.api
@@ -18,6 +18,7 @@ final class NotificationsViewController: NSViewController {
     private var loading = false
     private var exhausted = false
     private var hasLoadedOnce = false
+    private var lastRefresh: Date?
     private var seenIDs = Set<String>()
 
     init(navigator: (any FeedNavigator)?) {
@@ -54,6 +55,21 @@ final class NotificationsViewController: NSViewController {
         load()
     }
 
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        viewBecameVisible()
+    }
+
+    /// Re-checks for new activity whenever the notifications screen comes forward
+    /// — initial appearance, or popping back from a pushed thread — so the list
+    /// is fresh without a manual refresh. Debounced so rapid navigation doesn't
+    /// hammer the endpoint, and skipped while the first load is still settling.
+    /// Mirrors the iOS `viewDidAppear` refresh guard.
+    func viewBecameVisible() {
+        guard hasLoadedOnce, !loading else { return }
+        if let last = lastRefresh, Date().timeIntervalSince(last) < 8 { return }
+        load(reset: true)
+    }
 
     private func configureTable() {
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("notif"))
@@ -91,7 +107,7 @@ final class NotificationsViewController: NSViewController {
         emptyState.isHidden = true
         if items.isEmpty { loadingIndicator.startAnimation(nil) }
         Task {
-            defer { loading = false; hasLoadedOnce = true; loadingIndicator.stopAnimation(nil) }
+            defer { loading = false; hasLoadedOnce = true; lastRefresh = Date(); loadingIndicator.stopAnimation(nil) }
             do {
                 let page = try await api.notifications(cursor: reset ? nil : cursor)
                 if reset { items.removeAll(); seenIDs.removeAll() }

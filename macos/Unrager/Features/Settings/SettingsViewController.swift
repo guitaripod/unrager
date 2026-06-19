@@ -25,8 +25,9 @@ final class SettingsViewController: NSViewController {
         build()
     }
 
+    private let scrollView = NSScrollView()
+
     private func build() {
-        let header = sectionTitle("Server")
         serverField.stringValue = AppSettings.serverURLString
         serverField.placeholderString = "http://192.168.1.10:7777"
         serverField.font = DesignSystem.Typography.body()
@@ -36,12 +37,12 @@ final class SettingsViewController: NSViewController {
 
         let testButton = NSButton(title: "Test Connection", target: self, action: #selector(testConnection))
         testButton.bezelStyle = .rounded
+        testButton.setContentHuggingPriority(.required, for: .horizontal)
 
         statusLabel.font = DesignSystem.Typography.metric()
         statusLabel.textColor = DesignSystem.Color.secondaryLabel
         statusLabel.stringValue = "Not tested"
 
-        let appearanceTitle = sectionTitle("Appearance")
         appearanceControl.segmentCount = AppearanceMode.allCases.count
         for mode in AppearanceMode.allCases {
             appearanceControl.setLabel(mode.title, forSegment: mode.rawValue)
@@ -51,67 +52,164 @@ final class SettingsViewController: NSViewController {
         appearanceControl.action = #selector(appearanceChanged)
         appearanceControl.segmentStyle = .rounded
 
-        let imagesTitle = sectionTitle("Media")
         imagesSwitch.state = AppSettings.imagesEnabled ? .on : .off
         imagesSwitch.target = self
         imagesSwitch.action = #selector(imagesChanged)
-        let imagesRow = toggleRow("Load images", control: imagesSwitch)
-
-        let filterTitle = sectionTitle("Rage filter")
-        filterSwitch.state = AppSettings.filterEnabled ? .on : .off
-        filterSwitch.target = self
-        filterSwitch.action = #selector(filterChanged)
-        let filterRow = toggleRow("Hide rage tweets", control: filterSwitch)
-        let filterCaption = caption("Runs each tweet through your local Ollama classifier; matches are removed from the feed. Refresh after toggling.")
-        let rubricButton = NSButton(title: "Edit filter rubric…", target: self, action: #selector(editRubric))
-        rubricButton.bezelStyle = .rounded
 
         seenSwitch.state = MacSettings.seenDimming ? .on : .off
         seenSwitch.target = self
         seenSwitch.action = #selector(seenChanged)
-        let seenRow = toggleRow("Dim seen tweets", control: seenSwitch)
-        let seenCaption = caption("Tweets you've scrolled past are marked read and shown dimmed.")
+
+        filterSwitch.state = AppSettings.filterEnabled ? .on : .off
+        filterSwitch.target = self
+        filterSwitch.action = #selector(filterChanged)
+
+        let rubricButton = NSButton(title: "Edit filter rubric…", target: self, action: #selector(editRubric))
+        rubricButton.bezelStyle = .rounded
 
         let serverRow = NSStackView(views: [serverField, testButton])
         serverRow.orientation = .horizontal
         serverRow.spacing = DesignSystem.Spacing.s
+        serverRow.distribution = .fill
         serverField.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
         let column = NSStackView(views: [
-            header, serverRow, statusLabel,
-            spacer(),
-            appearanceTitle, appearanceControl,
-            spacer(),
-            imagesTitle, imagesRow, seenRow, seenCaption,
-            spacer(),
-            filterTitle, filterRow, filterCaption, rubricButton,
+            section("Server",
+                    rows: [paddedRow([serverRow]), contentRow(statusLabel)],
+                    footnote: "The unrager server (`unrager serve`). Use your Mac's LAN / Tailscale address."),
+            section("Appearance", rows: [contentRow(appearanceControl)]),
+            section("Media",
+                    rows: [toggleRow("Load images", control: imagesSwitch),
+                           toggleRow("Dim seen tweets", control: seenSwitch)],
+                    footnote: "Tweets you've scrolled past are marked read and shown dimmed."),
+            section("Rage filter",
+                    rows: [toggleRow("Hide rage tweets", control: filterSwitch),
+                           buttonRow("Filter rubric", rubricButton)],
+                    footnote: "Runs each tweet through your local Ollama classifier; matches are removed from the feed. Refresh after toggling."),
         ])
         column.orientation = .vertical
         column.alignment = .leading
-        column.spacing = DesignSystem.Spacing.s
+        column.spacing = DesignSystem.Spacing.xl
 
-        view.addManaged(column)
+        let documentView = NSView()
+        documentView.addManaged(column)
+        scrollView.documentView = documentView
+        scrollView.hasVerticalScroller = true
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.contentInsets = NSEdgeInsets(top: DesignSystem.Spacing.xl, left: 0, bottom: DesignSystem.Spacing.xl, right: 0)
+        view.addManaged(scrollView)
+
         NSLayoutConstraint.activate([
-            column.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: DesignSystem.Spacing.xl),
-            column.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: DesignSystem.Spacing.xl),
-            column.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -DesignSystem.Spacing.xl),
-            serverRow.widthAnchor.constraint(equalTo: column.widthAnchor),
+            scrollView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+
+            documentView.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
+            documentView.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
+            documentView.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
+            documentView.widthAnchor.constraint(equalTo: scrollView.widthAnchor),
+
+            column.topAnchor.constraint(equalTo: documentView.topAnchor),
+            column.leadingAnchor.constraint(equalTo: documentView.leadingAnchor, constant: DesignSystem.Spacing.xl),
+            column.trailingAnchor.constraint(equalTo: documentView.trailingAnchor, constant: -DesignSystem.Spacing.xl),
+            column.bottomAnchor.constraint(equalTo: documentView.bottomAnchor),
             appearanceControl.widthAnchor.constraint(greaterThanOrEqualToConstant: 280),
-            imagesRow.widthAnchor.constraint(equalTo: column.widthAnchor),
-            seenRow.widthAnchor.constraint(equalTo: column.widthAnchor),
-            filterRow.widthAnchor.constraint(equalTo: column.widthAnchor),
-            filterCaption.widthAnchor.constraint(equalTo: column.widthAnchor),
-            seenCaption.widthAnchor.constraint(equalTo: column.widthAnchor),
         ])
     }
 
-    private func toggleRow(_ title: String, control: NSView) -> NSStackView {
+    // MARK: - Grouped sections
+
+    /// A section: an uppercased header, a rounded elevated card stacking
+    /// hairline-separated rows, and an optional footnote. The AppKit read of the
+    /// iOS grouped-settings card.
+    private func section(_ title: String, rows: [NSView], footnote: String? = nil) -> NSStackView {
+        let header = NSTextField(labelWithString: title.uppercased())
+        header.font = DesignSystem.Typography.caption()
+        header.textColor = DesignSystem.Color.secondaryLabel
+
+        let column = NSStackView(views: [header, card(rows)])
+        column.orientation = .vertical
+        column.alignment = .leading
+        column.spacing = DesignSystem.Spacing.xs
+        if let footnote {
+            column.addArrangedSubview(caption(footnote))
+        }
+        for child in column.arrangedSubviews {
+            child.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
+        }
+        return column
+    }
+
+    /// A rounded, elevated container stacking rows with hairline separators inset
+    /// to the row content — the native grouped-settings card.
+    private func card(_ rows: [NSView]) -> NSView {
+        let inner = NSStackView()
+        inner.orientation = .vertical
+        inner.alignment = .leading
+        inner.spacing = 0
+        for (index, row) in rows.enumerated() {
+            if index > 0 { inner.addArrangedSubview(separatorRow()) }
+            inner.addArrangedSubview(row)
+        }
+        let container = NSView()
+        container.wantsLayer = true
+        container.layer?.cornerRadius = 12
+        container.layer?.cornerCurve = .continuous
+        container.applyLayerBackground(DesignSystem.Color.surface)
+        container.addManaged(inner)
+        inner.pinEdges(to: container)
+        for row in inner.arrangedSubviews {
+            row.widthAnchor.constraint(equalTo: inner.widthAnchor).isActive = true
+        }
+        return container
+    }
+
+    private func separatorRow() -> NSView {
+        let line = NSBox()
+        line.boxType = .separator
+        let wrap = NSView()
+        wrap.addManaged(line)
+        NSLayoutConstraint.activate([
+            line.heightAnchor.constraint(equalToConstant: 1),
+            line.leadingAnchor.constraint(equalTo: wrap.leadingAnchor, constant: DesignSystem.Spacing.l),
+            line.trailingAnchor.constraint(equalTo: wrap.trailingAnchor),
+            line.topAnchor.constraint(equalTo: wrap.topAnchor),
+            line.bottomAnchor.constraint(equalTo: wrap.bottomAnchor),
+        ])
+        return wrap
+    }
+
+    private func toggleRow(_ title: String, control: NSView) -> NSView {
         let label = NSTextField(labelWithString: title)
         label.font = DesignSystem.Typography.body()
         label.textColor = DesignSystem.Color.label
-        let row = NSStackView(views: [label, NSView(), control])
+        label.setContentCompressionResistancePriority(.required, for: .horizontal)
+        control.setContentHuggingPriority(.required, for: .horizontal)
+        return paddedRow([label, NSView(), control])
+    }
+
+    private func buttonRow(_ title: String, _ button: NSButton) -> NSView {
+        let label = NSTextField(labelWithString: title)
+        label.font = DesignSystem.Typography.body()
+        label.textColor = DesignSystem.Color.label
+        button.setContentHuggingPriority(.required, for: .horizontal)
+        return paddedRow([label, NSView(), button])
+    }
+
+    private func contentRow(_ view: NSView) -> NSView { paddedRow([view]) }
+
+    /// One inset row inside a grouped card: leading/trailing/vertical padding so
+    /// content lines up with the section's other rows.
+    private func paddedRow(_ subviews: [NSView]) -> NSView {
+        let row = NSStackView(views: subviews)
         row.orientation = .horizontal
         row.alignment = .centerY
+        row.spacing = DesignSystem.Spacing.s
+        row.edgeInsets = NSEdgeInsets(top: DesignSystem.Spacing.m, left: DesignSystem.Spacing.l,
+                                      bottom: DesignSystem.Spacing.m, right: DesignSystem.Spacing.l)
         return row
     }
 
@@ -120,20 +218,6 @@ final class SettingsViewController: NSViewController {
         label.font = DesignSystem.Typography.metric()
         label.textColor = DesignSystem.Color.secondaryLabel
         return label
-    }
-
-    private func sectionTitle(_ text: String) -> NSTextField {
-        let label = NSTextField(labelWithString: text.uppercased())
-        label.font = DesignSystem.Typography.caption()
-        label.textColor = DesignSystem.Color.secondaryLabel
-        return label
-    }
-
-    private func spacer() -> NSView {
-        let view = NSView()
-        view.translatesAutoresizingMaskIntoConstraints = false
-        view.heightAnchor.constraint(equalToConstant: DesignSystem.Spacing.m).isActive = true
-        return view
     }
 
     @objc private func serverChanged() {

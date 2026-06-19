@@ -203,11 +203,15 @@ final class PostcardView: NSView {
         nameRow.spacing = 5
         nameRow.alignment = .centerY
 
-        let primary = NSTextField(labelWithString: options.showsDisplayName ? tweet.author.name : "@\(tweet.author.handle)")
+        let primary = NSTextField(wrappingLabelWithString: options.showsDisplayName ? tweet.author.name : "@\(tweet.author.handle)")
         primary.font = .systemFont(ofSize: 19, weight: .bold)
         primary.textColor = theme.text
-        primary.lineBreakMode = .byTruncatingTail
-        primary.maximumNumberOfLines = 1
+        primary.lineBreakMode = .byWordWrapping
+        primary.maximumNumberOfLines = 2
+        primary.isEditable = false
+        primary.isSelectable = false
+        primary.drawsBackground = false
+        primary.isBezeled = false
         primary.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         nameRow.addArrangedSubview(primary)
         if tweet.author.verified {
@@ -276,8 +280,17 @@ final class PostcardView: NSView {
 
     // MARK: - Body
 
+    /// The display body with leading reply `@mentions` stripped when the tweet is
+    /// itself a reply, mirroring iOS's `TweetText.displayText(for:stripLeadingMentions:)`
+    /// and X's clean reply rendering.
+    private func displayText(for tweet: Tweet) -> String {
+        guard tweet.inReplyToTweetID != nil else { return tweet.text }
+        return TweetTextRenderer.stripLeadingMentions(tweet.text)
+    }
+
     private func makeBody(tweet: Tweet) -> NSView? {
-        guard !tweet.text.isEmpty else { return nil }
+        let text = displayText(for: tweet)
+        guard !text.isEmpty else { return nil }
         let label = NSTextField(wrappingLabelWithString: "")
         label.isEditable = false
         label.isSelectable = false
@@ -286,7 +299,7 @@ final class PostcardView: NSView {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = 4
         let font = NSFont.systemFont(ofSize: 22, weight: .regular)
-        let body = NSMutableAttributedString(string: tweet.text, attributes: [
+        let body = NSMutableAttributedString(string: text, attributes: [
             .font: font,
             .foregroundColor: theme.text,
             .paragraphStyle: paragraph,

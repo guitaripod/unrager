@@ -132,10 +132,12 @@ final class PostcardViewController: NSViewController {
         threadToggle.state = options.showsThread ? .on : .off
         threadToggle.target = self
         threadToggle.action = #selector(toggleThread)
-        let toggleRow = NSStackView(views: [nameToggle, metricsToggle, threadToggle, NSView()])
-        toggleRow.orientation = .horizontal
-        toggleRow.spacing = DesignSystem.Spacing.l
-        toggleRow.alignment = .centerY
+        let toggleRow = NSStackView(views: [
+            toggleLine(nameToggle), toggleLine(metricsToggle), toggleLine(threadToggle),
+        ])
+        toggleRow.orientation = .vertical
+        toggleRow.spacing = DesignSystem.Spacing.s
+        toggleRow.alignment = .leading
 
         let save = NSButton(title: "Save", target: self, action: #selector(save))
         save.bezelStyle = .rounded
@@ -154,7 +156,32 @@ final class PostcardViewController: NSViewController {
         stack.spacing = DesignSystem.Spacing.m
         stack.alignment = .leading
         stack.distribution = .fill
+        NSLayoutConstraint.activate([
+            toggleRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            actionRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
+        ])
+        for line in toggleRow.arrangedSubviews {
+            line.widthAnchor.constraint(equalTo: toggleRow.widthAnchor).isActive = true
+        }
         return stack
+    }
+
+    /// One control row: the checkbox label on the left, the checkbox itself
+    /// pinned to the right edge, so labels never truncate and the control never
+    /// overlaps them — the macOS read of the iOS vertical toggle list.
+    private func toggleLine(_ checkbox: NSButton) -> NSStackView {
+        let label = NSTextField(labelWithString: checkbox.title)
+        label.font = DesignSystem.Typography.body()
+        label.textColor = DesignSystem.Color.label
+        label.lineBreakMode = .byTruncatingTail
+        label.setContentCompressionResistancePriority(.required, for: .horizontal)
+        checkbox.title = ""
+        checkbox.setContentHuggingPriority(.required, for: .horizontal)
+        let row = NSStackView(views: [label, NSView(), checkbox])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = DesignSystem.Spacing.s
+        return row
     }
 
     // MARK: - Image loading

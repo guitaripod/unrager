@@ -218,6 +218,24 @@ final class ThreadViewController: NSViewController {
     }
 
     private var focalIndex: Int? { rows.firstIndex { $0.restID == focalID } }
+
+    /// Reply depth used for the thread's indentation: a direct reply to the focal
+    /// is level 1, a reply-to-a-reply level 2, and so on, so the structure reads
+    /// at a glance. Ancestors and the focal stay flush (level 0). Mirrors iOS's
+    /// `ThreadViewController.indentLevel(for:)`, walking `inReplyToTweetID` within
+    /// the loaded reply set.
+    private func indentLevel(for tweet: Tweet, isReply: Bool) -> Int {
+        guard isReply else { return 0 }
+        let replyIDs = Set(focalIndex.map { rows.suffix(from: $0 + 1).map(\.restID) } ?? [])
+        let byID = Dictionary(rows.map { ($0.restID, $0) }, uniquingKeysWith: { a, _ in a })
+        var level = 1
+        var current = tweet.inReplyToTweetID
+        while let parent = current, parent != focalID, replyIDs.contains(parent), level < 5 {
+            level += 1
+            current = byID[parent]?.inReplyToTweetID
+        }
+        return level
+    }
 }
 
 extension ThreadViewController: NSTableViewDataSource {
@@ -233,7 +251,9 @@ extension ThreadViewController: NSTableViewDelegate {
         let isReply = focalIndex.map { row > $0 } ?? false
         let isOwn = ownHandle.map { tweet.author.handle.caseInsensitiveCompare($0) == .orderedSame } ?? false
         cell.configure(with: tweet, imagesEnabled: AppSettings.imagesEnabled, contentWidth: contentWidth(),
-                       isReply: isReply, isFocal: isFocal, showAnalytics: isFocal && isOwn)
+                       isReply: isReply, isFocal: isFocal, inThread: true,
+                       indentLevel: indentLevel(for: tweet, isReply: isReply),
+                       showAnalytics: isFocal && isOwn)
         cell.onTapAuthor = { [weak self] in self?.navigator?.openProfile(handle: tweet.author.handle) }
         cell.onLike = { [weak self] in self?.toggleLike(tweet) }
         cell.onReply = { [weak self] in self?.navigator?.compose(replyingTo: tweet) }

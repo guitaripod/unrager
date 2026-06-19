@@ -41,8 +41,14 @@ final class TweetRowView: NSTableCellView {
     private let viewsButton = TweetRowView.actionButton(symbol: "chart.bar")
 
     private let separator = NSBox()
+    private let threadSpine = NSView()
+    private var avatarLeading: NSLayoutConstraint!
+    private var spineLeading: NSLayoutConstraint!
     private var contentWidth: CGFloat = 560
     private let api = AppEnvironment.shared.api
+
+    private static let indentStep: CGFloat = 18
+    private static let maxIndent = 4
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -116,16 +122,30 @@ final class TweetRowView: NSTableCellView {
 
         addManaged(avatar)
         addManaged(column)
+        threadSpine.wantsLayer = true
+        threadSpine.applyLayerBackground(DesignSystem.Color.separator)
+        threadSpine.isHidden = true
+        addManaged(threadSpine)
         addManaged(separator)
 
         separator.boxType = .separator
+
+        let avatarLeading = avatar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: DesignSystem.Spacing.l)
+        self.avatarLeading = avatarLeading
+        let spineLeading = threadSpine.centerXAnchor.constraint(equalTo: leadingAnchor, constant: DesignSystem.Spacing.l + 22)
+        self.spineLeading = spineLeading
 
         header.setContentHuggingPriority(.defaultLow, for: .horizontal)
         NSLayoutConstraint.activate([
             avatar.widthAnchor.constraint(equalToConstant: 44),
             avatar.heightAnchor.constraint(equalToConstant: 44),
             avatar.topAnchor.constraint(equalTo: topAnchor, constant: DesignSystem.Spacing.m),
-            avatar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: DesignSystem.Spacing.l),
+            avatarLeading,
+
+            spineLeading,
+            threadSpine.widthAnchor.constraint(equalToConstant: 2),
+            threadSpine.topAnchor.constraint(equalTo: topAnchor),
+            threadSpine.bottomAnchor.constraint(equalTo: bottomAnchor),
 
             column.topAnchor.constraint(equalTo: topAnchor, constant: DesignSystem.Spacing.m),
             column.leadingAnchor.constraint(equalTo: avatar.trailingAnchor, constant: DesignSystem.Spacing.m),
@@ -204,20 +224,24 @@ final class TweetRowView: NSTableCellView {
         replyingRow.isHidden = true
     }
 
-    /// Configures the cell for a tweet. `isReply` shows the "Replying" affordance
-    /// and strips the body's leading mentions; `isFocal` switches the timestamp
-    /// to absolute; `showAnalytics` reveals the own-tweet analytics block.
+    /// Configures the cell for a tweet. `isReply` shows the "Replying" affordance;
+    /// `inThread` strips the body's leading mentions (the whole conversation reads
+    /// cleanly, like X) and applies the reply-depth `indentLevel`; `isFocal`
+    /// switches the timestamp to absolute; `showAnalytics` reveals the own-tweet
+    /// analytics block.
     func configure(with tweet: Tweet, imagesEnabled: Bool, contentWidth: CGFloat,
                    seen: Bool = false, isReply: Bool = false, isFocal: Bool = false,
+                   inThread: Bool = false, indentLevel: Int = 0,
                    showAnalytics: Bool = false) {
         self.contentWidth = contentWidth
+        setIndent(inThread ? indentLevel : 0)
         nameLabel.stringValue = tweet.author.name
         verifiedBadge.isHidden = !tweet.author.verified
         configureHandleLine(tweet, isFocal: isFocal)
-        configureReplyingRow(tweet, isReply: isReply)
+        configureReplyingRow(tweet, isReply: isReply, inThread: inThread)
         bodyLabel.attributedStringValue = TweetTextRenderer.body(
             for: tweet, font: DesignSystem.Typography.body(), color: DesignSystem.Color.label,
-            stripLeadingMentions: isReply)
+            stripLeadingMentions: inThread || isReply)
         bodyLabel.isHidden = bodyLabel.attributedStringValue.length == 0
         alphaValue = seen ? 0.55 : 1.0
 
@@ -248,9 +272,20 @@ final class TweetRowView: NSTableCellView {
         handleTimeLabel.attributedStringValue = result
     }
 
-    private func configureReplyingRow(_ tweet: Tweet, isReply: Bool) {
+    private func configureReplyingRow(_ tweet: Tweet, isReply: Bool, inThread: Bool) {
         let isAReply = tweet.inReplyToTweetID != nil
-        replyingRow.isHidden = !(isAReply && !isReply)
+        replyingRow.isHidden = inThread || !(isAReply && !isReply)
+    }
+
+    /// Indents the row by reply depth so a reply-to-a-reply sits further right
+    /// than a reply-to-the-root; level 0 (feed / focal / ancestors) is flush. A
+    /// thin gutter spine ties nested replies to the conversation. Mirrors the iOS
+    /// `TweetCell.setIndent`.
+    private func setIndent(_ level: Int) {
+        let clamped = min(max(0, level), Self.maxIndent)
+        avatarLeading.constant = DesignSystem.Spacing.l + CGFloat(clamped) * Self.indentStep
+        threadSpine.isHidden = clamped == 0
+        spineLeading.constant = DesignSystem.Spacing.l + CGFloat(max(0, clamped - 1)) * Self.indentStep + 22
     }
 
     private func configureAvatar(_ tweet: Tweet, imagesEnabled: Bool) {
@@ -360,6 +395,7 @@ final class TweetRowView: NSTableCellView {
         quotedThumb.cancel()
         replyingRow.isHidden = true
         analyticsView.isHidden = true
+        setIndent(0)
         alphaValue = 1.0
         onTapAuthor = nil
         onTapPhoto = nil
@@ -378,6 +414,7 @@ final class TweetRowView: NSTableCellView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         updateQuotedBorderColor()
+        threadSpine.applyLayerBackground(DesignSystem.Color.separator)
     }
 
     private func updateQuotedBorderColor() {

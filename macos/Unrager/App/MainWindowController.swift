@@ -538,6 +538,10 @@ extension MainWindowController: FeedNavigator {
         composer.onPosted = { [weak self] in self?.refresh() }
         content.topViewController?.presentAsSheet(composer)
     }
+
+    func presentPostcard(for tweet: Tweet) {
+        content.topViewController?.presentAsSheet(PostcardViewController(tweet: tweet))
+    }
 }
 
 extension MainWindowController: NSToolbarDelegate {

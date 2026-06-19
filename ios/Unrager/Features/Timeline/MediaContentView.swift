@@ -137,7 +137,9 @@ final class MediaContentView: UIView {
             made.setRounded(compact ? DesignSystem.Radius.control : DesignSystem.Radius.media)
             made.translatesAutoresizingMaskIntoConstraints = false
             made.isUserInteractionEnabled = true
-            made.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(playerTapped)))
+            let tap = UITapGestureRecognizer(target: self, action: #selector(playerTapped))
+            tap.delegate = self
+            made.addGestureRecognizer(tap)
             player = made
             return made
         }()
@@ -187,6 +189,14 @@ final class MediaContentView: UIView {
     }
 
     @objc private func playerTapped() { onTapPhoto?(0) }
+}
+
+extension MediaContentView: UIGestureRecognizerDelegate {
+    /// Lets the inline player's own controls (the mute button) handle their taps
+    /// instead of the open-the-viewer tap gesture swallowing them.
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        !(touch.view is UIControl)
+    }
 }
 
 private extension Media {

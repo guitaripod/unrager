@@ -34,6 +34,12 @@ final class TweetCell: UICollectionViewCell {
     private let actionBar = UIStackView()
     private let analyticsView = TweetAnalyticsView()
     private let separator = UIView()
+    private let threadSpine = UIView()
+    private var avatarLeading: NSLayoutConstraint!
+    private var spineLeading: NSLayoutConstraint!
+
+    private static let indentStep: CGFloat = 18
+    private static let maxIndent = 4
 
     private let replyButton = TweetCell.makeActionButton(symbol: "bubble.left")
     private let retweetButton = TweetCell.makeActionButton(symbol: "arrow.2.squarepath")
@@ -57,6 +63,7 @@ final class TweetCell: UICollectionViewCell {
         mediaContent.prepareForReuse()
         quotedMedia.prepareForReuse()
         contentView.alpha = 1
+        setIndent(0)
         onTapAuthor = nil
         onTapPhoto = nil
         onTapCard = nil
@@ -81,8 +88,9 @@ final class TweetCell: UICollectionViewCell {
     func configure(
         with tweet: Tweet, imagesEnabled: Bool, contentWidth: CGFloat,
         seen: Bool = false, inReplyContext: Bool = false,
-        focal: Bool = false, ownTweet: Bool = false
+        focal: Bool = false, ownTweet: Bool = false, indentLevel: Int = 0
     ) {
+        setIndent(indentLevel)
         nameLabel.text = tweet.author.name
         verifiedBadge.isHidden = !tweet.author.verified
         replyMarker.isHidden = !(tweet.inReplyToTweetID != nil && !inReplyContext)
@@ -107,6 +115,17 @@ final class TweetCell: UICollectionViewCell {
         configureActions(tweet)
         analyticsView.configure(tweet, visible: focal && ownTweet)
         configureAccessibility(tweet, seen: seen)
+    }
+
+    /// Indents the card by reply depth so a reply-to-a-reply sits further right
+    /// than a reply-to-the-root; level 0 (feed / root / focal) is flush. A thin
+    /// gutter spine ties consecutive nested replies together. Threads pass a
+    /// depth; the postcard renders flat and never calls this.
+    func setIndent(_ level: Int) {
+        let clamped = min(max(0, level), Self.maxIndent)
+        avatarLeading.constant = DesignSystem.Spacing.l + CGFloat(clamped) * Self.indentStep
+        threadSpine.isHidden = clamped == 0
+        spineLeading.constant = DesignSystem.Spacing.l + CGFloat(max(0, clamped - 1)) * Self.indentStep + 22
     }
 
     /// `@handle` color-hashed + a separator + the relative (feed) or absolute
@@ -264,14 +283,28 @@ final class TweetCell: UICollectionViewCell {
 
         contentView.addManaged(avatar)
         contentView.addManaged(column)
+        threadSpine.backgroundColor = DesignSystem.Color.separator
+        threadSpine.isHidden = true
+        contentView.addManaged(threadSpine)
         separator.backgroundColor = DesignSystem.Color.separator
         contentView.addManaged(separator)
 
+        let avatarLeading = avatar.leadingAnchor.constraint(
+            equalTo: contentView.leadingAnchor, constant: DesignSystem.Spacing.l)
+        self.avatarLeading = avatarLeading
+        let spineLeading = threadSpine.centerXAnchor.constraint(equalTo: contentView.leadingAnchor)
+        self.spineLeading = spineLeading
+
         NSLayoutConstraint.activate([
             avatar.topAnchor.constraint(equalTo: contentView.topAnchor, constant: DesignSystem.Spacing.m),
-            avatar.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: DesignSystem.Spacing.l),
+            avatarLeading,
             avatar.widthAnchor.constraint(equalToConstant: 44),
             avatar.heightAnchor.constraint(equalToConstant: 44),
+
+            spineLeading,
+            threadSpine.widthAnchor.constraint(equalToConstant: 2),
+            threadSpine.topAnchor.constraint(equalTo: contentView.topAnchor),
+            threadSpine.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
 
             column.topAnchor.constraint(equalTo: contentView.topAnchor, constant: DesignSystem.Spacing.m),
             column.leadingAnchor.constraint(equalTo: avatar.trailingAnchor, constant: DesignSystem.Spacing.m),

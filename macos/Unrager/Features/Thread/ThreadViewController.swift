@@ -99,6 +99,9 @@ final class ThreadViewController: NSViewController {
         tableView.delegate = self
         tableView.target = self
         tableView.doubleAction = #selector(rowDoubleClicked)
+        let menu = NSMenu()
+        menu.delegate = self
+        tableView.menu = menu
 
         scrollView.documentView = tableView
         scrollView.hasVerticalScroller = true
@@ -285,5 +288,67 @@ extension ThreadViewController: NSTableViewDelegate {
                 AppLogger.shared.warn("thread like failed: \(error)", category: .thread)
             }
         }
+    }
+
+    private func tweetForContextMenu() -> Tweet? {
+        let row = tableView.clickedRow
+        guard row >= 0, row < rows.count else { return nil }
+        return rows[row]
+    }
+}
+
+extension ThreadViewController: NSMenuDelegate {
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        guard let tweet = tweetForContextMenu() else { return }
+
+        if tweet.likeCount > 0 {
+            let likedBy = NSMenuItem(title: "Liked by…", action: #selector(likedByMenu(_:)), keyEquivalent: "")
+            likedBy.target = self
+            likedBy.image = DesignSystem.icon("person.2", pointSize: 14)
+            likedBy.representedObject = tweet
+            menu.addItem(likedBy)
+        }
+
+        let postcard = NSMenuItem(title: "Postcard…", action: #selector(postcardMenu(_:)), keyEquivalent: "")
+        postcard.target = self
+        postcard.image = DesignSystem.icon("photo.badge.plus", pointSize: 14)
+        postcard.representedObject = tweet
+        menu.addItem(postcard)
+
+        menu.addItem(.separator())
+
+        let open = NSMenuItem(title: "Open in X", action: #selector(openMenu(_:)), keyEquivalent: "")
+        open.target = self
+        open.image = DesignSystem.icon("safari", pointSize: 14)
+        open.representedObject = tweet.url
+        menu.addItem(open)
+
+        let copy = NSMenuItem(title: "Copy link", action: #selector(copyMenu(_:)), keyEquivalent: "")
+        copy.target = self
+        copy.image = DesignSystem.icon("link", pointSize: 14)
+        copy.representedObject = tweet.url
+        menu.addItem(copy)
+    }
+
+    @objc private func likedByMenu(_ sender: NSMenuItem) {
+        guard let tweet = sender.representedObject as? Tweet else { return }
+        navigator?.openLikers(for: tweet)
+    }
+
+    @objc private func postcardMenu(_ sender: NSMenuItem) {
+        guard let tweet = sender.representedObject as? Tweet else { return }
+        navigator?.presentPostcard(for: tweet)
+    }
+
+    @objc private func openMenu(_ sender: NSMenuItem) {
+        guard let urlString = sender.representedObject as? String, let url = URL(string: urlString) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    @objc private func copyMenu(_ sender: NSMenuItem) {
+        guard let urlString = sender.representedObject as? String else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(urlString, forType: .string)
     }
 }

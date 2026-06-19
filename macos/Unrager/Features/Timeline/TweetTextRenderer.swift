@@ -47,6 +47,7 @@ enum TweetTextRenderer {
             i = text.index(after: i)
         }
         flushWord(text.endIndex)
+        TwemojiText.substituteCachedEmoji(in: result, font: font)
         return result
     }
 

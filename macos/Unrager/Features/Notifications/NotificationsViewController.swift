@@ -12,10 +12,12 @@ final class NotificationsViewController: NSViewController {
     private let tableView = NSTableView()
     private let scrollView = NSScrollView()
     private let emptyState = EmptyStateView()
+    private let loadingIndicator = NSProgressIndicator()
     private var items: [XNotification] = []
     private var cursor: String?
     private var loading = false
     private var exhausted = false
+    private var hasLoadedOnce = false
     private var seenIDs = Set<String>()
 
     init(navigator: (any FeedNavigator)?) {
@@ -39,6 +41,16 @@ final class NotificationsViewController: NSViewController {
         emptyState.onRetry = { [weak self] in self?.load() }
         view.addManaged(emptyState)
         emptyState.pinEdges(to: view)
+
+        loadingIndicator.style = .spinning
+        loadingIndicator.controlSize = .regular
+        loadingIndicator.isDisplayedWhenStopped = false
+        view.addManaged(loadingIndicator)
+        NSLayoutConstraint.activate([
+            loadingIndicator.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            loadingIndicator.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+        ])
+
         load()
     }
 
@@ -77,8 +89,9 @@ final class NotificationsViewController: NSViewController {
         loading = true
         if reset { cursor = nil; exhausted = false }
         emptyState.isHidden = true
+        if items.isEmpty { loadingIndicator.startAnimation(nil) }
         Task {
-            defer { loading = false }
+            defer { loading = false; hasLoadedOnce = true; loadingIndicator.stopAnimation(nil) }
             do {
                 let page = try await api.notifications(cursor: reset ? nil : cursor)
                 if reset { items.removeAll(); seenIDs.removeAll() }
@@ -90,7 +103,7 @@ final class NotificationsViewController: NSViewController {
                 if page.cursor == nil { exhausted = true }
                 tableView.reloadData()
                 if items.isEmpty {
-                    emptyState.show(symbol: "bell", title: "No notifications")
+                    emptyState.show(symbol: "bell", title: "No notifications", subtitle: "You're all caught up.")
                 }
                 AppLogger.shared.info("notifications loaded: \(items.count)", category: .timeline)
             } catch {
@@ -173,23 +186,39 @@ extension NotificationsViewController: NSTableViewDelegate {
             ?? NotificationRowView(identifier: id)
         let notification = items[row]
         let style = Self.style(for: notification.type)
+        let avatarURL = AppSettings.imagesEnabled ? notification.actors.first?.avatarURL.flatMap(URL.init) : nil
+        let thumbURL = AppSettings.imagesEnabled ? notification.thumbnailURL : nil
         cell.configure(chip: NotificationRowView.badge(symbol: style.symbol, color: style.color),
+                       chipColor: style.color,
+                       avatarURL: avatarURL,
                        title: Self.title(for: notification, style: style),
                        secondary: notification.targetTweetSnippet,
                        time: Format.relativeTime(notification.timestamp),
+                       thumbnailURL: thumbURL,
+                       thumbnailIsVideo: notification.targetMedia.first?.isVideo ?? false,
                        showsDisclosure: notification.targetTweetID != nil)
         return cell
     }
 }
 
-/// A notification cell: a colored circular icon chip, bold actor names with a
-/// colored action verb, the target-tweet snippet, and a relative timestamp.
+/// A notification cell: the actor's round avatar with a small colored
+/// action-type chip in its corner, bold actor names with a colored action verb,
+/// the target-tweet snippet, a relative timestamp, and a trailing rounded media
+/// thumbnail (with a play glyph on videos) when the target carries media.
+/// Mirrors the iOS notification cell.
 private final class NotificationRowView: NSTableCellView {
+    private static let avatarSize: CGFloat = 38
+    private static let chipSize: CGFloat = 20
+    private static let thumbSize: CGFloat = 44
+
+    private let avatarView = AsyncImageView()
     private let chipView = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let secondaryLabel = NSTextField(wrappingLabelWithString: "")
     private let timeLabel = NSTextField(labelWithString: "")
     private let disclosure = NSImageView()
+    private let thumbView = AsyncImageView()
+    private let playGlyph = NSImageView()
 
     init(identifier: NSUserInterfaceItemIdentifier) {
         super.init(frame: .zero)
@@ -200,7 +229,10 @@ private final class NotificationRowView: NSTableCellView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     private func build() {
+        avatarView.setRounded(Self.avatarSize / 2)
+        avatarView.setFill()
         chipView.imageScaling = .scaleNone
+        chipView.wantsLayer = true
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.maximumNumberOfLines = 1
         secondaryLabel.font = DesignSystem.Typography.metric()
@@ -215,6 +247,12 @@ private final class NotificationRowView: NSTableCellView {
         disclosure.contentTintColor = DesignSystem.Color.tertiaryLabel
         disclosure.setContentHuggingPriority(.required, for: .horizontal)
 
+        thumbView.setRounded(8)
+        thumbView.setFill()
+        thumbView.setContentHuggingPriority(.required, for: .horizontal)
+        playGlyph.image = DesignSystem.icon("play.circle.fill", pointSize: 18, weight: .semibold)?.tinted(with: .white)
+        playGlyph.imageScaling = .scaleNone
+
         let titleRow = NSStackView(views: [titleLabel, NSView(), timeLabel])
         titleRow.orientation = .horizontal
         titleRow.alignment = .firstBaseline
@@ -223,43 +261,75 @@ private final class NotificationRowView: NSTableCellView {
         textColumn.alignment = .leading
         textColumn.spacing = DesignSystem.Spacing.xxs
 
+        addManaged(avatarView)
         addManaged(chipView)
         addManaged(textColumn)
+        addManaged(thumbView)
+        thumbView.addManaged(playGlyph)
         addManaged(disclosure)
         NSLayoutConstraint.activate([
-            chipView.widthAnchor.constraint(equalToConstant: 38),
-            chipView.heightAnchor.constraint(equalToConstant: 38),
-            chipView.topAnchor.constraint(equalTo: topAnchor, constant: DesignSystem.Spacing.m),
-            chipView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: DesignSystem.Spacing.l),
+            avatarView.widthAnchor.constraint(equalToConstant: Self.avatarSize),
+            avatarView.heightAnchor.constraint(equalToConstant: Self.avatarSize),
+            avatarView.topAnchor.constraint(equalTo: topAnchor, constant: DesignSystem.Spacing.m),
+            avatarView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: DesignSystem.Spacing.l),
+
+            chipView.widthAnchor.constraint(equalToConstant: Self.chipSize),
+            chipView.heightAnchor.constraint(equalToConstant: Self.chipSize),
+            chipView.trailingAnchor.constraint(equalTo: avatarView.trailingAnchor, constant: 3),
+            chipView.bottomAnchor.constraint(equalTo: avatarView.bottomAnchor, constant: 3),
+
             textColumn.topAnchor.constraint(equalTo: topAnchor, constant: DesignSystem.Spacing.m),
-            textColumn.leadingAnchor.constraint(equalTo: chipView.trailingAnchor, constant: DesignSystem.Spacing.m),
+            textColumn.leadingAnchor.constraint(equalTo: avatarView.trailingAnchor, constant: DesignSystem.Spacing.m),
             textColumn.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -DesignSystem.Spacing.m),
-            disclosure.leadingAnchor.constraint(equalTo: textColumn.trailingAnchor, constant: DesignSystem.Spacing.s),
+
+            thumbView.widthAnchor.constraint(equalToConstant: Self.thumbSize),
+            thumbView.heightAnchor.constraint(equalToConstant: Self.thumbSize),
+            thumbView.leadingAnchor.constraint(equalTo: textColumn.trailingAnchor, constant: DesignSystem.Spacing.s),
+            thumbView.centerYAnchor.constraint(equalTo: avatarView.centerYAnchor),
+            playGlyph.centerXAnchor.constraint(equalTo: thumbView.centerXAnchor),
+            playGlyph.centerYAnchor.constraint(equalTo: thumbView.centerYAnchor),
+
+            disclosure.leadingAnchor.constraint(equalTo: thumbView.trailingAnchor, constant: DesignSystem.Spacing.s),
             disclosure.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -DesignSystem.Spacing.l),
-            disclosure.centerYAnchor.constraint(equalTo: chipView.centerYAnchor),
+            disclosure.centerYAnchor.constraint(equalTo: avatarView.centerYAnchor),
             titleRow.widthAnchor.constraint(equalTo: textColumn.widthAnchor),
         ])
     }
 
-    func configure(chip: NSImage?, title: NSAttributedString, secondary: String?, time: String, showsDisclosure: Bool) {
+    func configure(chip: NSImage?, chipColor: NSColor, avatarURL: URL?, title: NSAttributedString,
+                   secondary: String?, time: String, thumbnailURL: URL?, thumbnailIsVideo: Bool,
+                   showsDisclosure: Bool) {
         chipView.image = chip
+        avatarView.placeholderColor = chipColor.withAlphaComponent(0.14)
+        avatarView.load(url: avatarURL, targetSize: NSSize(width: Self.avatarSize, height: Self.avatarSize))
         titleLabel.attributedStringValue = title
         secondaryLabel.stringValue = secondary ?? ""
         secondaryLabel.isHidden = (secondary ?? "").isEmpty
         timeLabel.stringValue = time
+        if let thumbnailURL {
+            thumbView.isHidden = false
+            thumbView.load(url: thumbnailURL, targetSize: NSSize(width: Self.thumbSize, height: Self.thumbSize))
+            playGlyph.isHidden = !thumbnailIsVideo
+        } else {
+            thumbView.isHidden = true
+            thumbView.cancel()
+            playGlyph.isHidden = true
+        }
         disclosure.isHidden = !showsDisclosure
     }
 
-    /// A colored circular chip with the action glyph — the splash of color the
-    /// flat list was missing.
+    /// A small colored circular chip carrying the action glyph (heart, reply, …)
+    /// so the activity type reads at a glance over the actor's avatar.
     static func badge(symbol: String, color: NSColor) -> NSImage {
-        let size = NSSize(width: 38, height: 38)
+        let size = NSSize(width: chipSize, height: chipSize)
         let image = NSImage(size: size)
         image.lockFocus()
-        color.withAlphaComponent(0.16).setFill()
+        DesignSystem.Color.windowBackground.setFill()
         NSBezierPath(ovalIn: NSRect(origin: .zero, size: size)).fill()
-        if let glyph = DesignSystem.icon(symbol, pointSize: 17, weight: .semibold)?
-            .tinted(with: color) {
+        let inset = NSRect(origin: .zero, size: size).insetBy(dx: 1, dy: 1)
+        color.setFill()
+        NSBezierPath(ovalIn: inset).fill()
+        if let glyph = DesignSystem.icon(symbol, pointSize: 10, weight: .bold)?.tinted(with: .white) {
             let glyphSize = glyph.size
             let rect = NSRect(x: (size.width - glyphSize.width) / 2,
                               y: (size.height - glyphSize.height) / 2,

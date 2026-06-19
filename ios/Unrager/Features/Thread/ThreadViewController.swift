@@ -36,9 +36,10 @@ final class ThreadViewController: UIViewController {
             - DesignSystem.Spacing.m - DesignSystem.Spacing.l
         let isFocal = id == self.focalID
         let ownTweet = self.selfHandle?.caseInsensitiveCompare(tweet.author.handle) == .orderedSame
+        let indent = self.indentLevel(for: id)
         cell.configure(with: tweet, imagesEnabled: AppSettings.imagesEnabled,
-                       contentWidth: max(120, width), inReplyContext: true,
-                       focal: isFocal, ownTweet: ownTweet)
+                       contentWidth: max(120, width - CGFloat(indent) * 18),
+                       inReplyContext: true, focal: isFocal, ownTweet: ownTweet, indentLevel: indent)
         cell.onTapAuthor = { [weak self] in self?.push(ProfileViewController(handle: tweet.author.handle)) }
         cell.onLike = { [weak self] in self?.toggleLike(tweet, cell: cell) }
         cell.onReply = { [weak self] in self?.reply(to: tweet) }
@@ -173,6 +174,20 @@ final class ThreadViewController: UIViewController {
                                 subtitle: error.localizedDescription, showRetry: true)
             }
         }
+    }
+
+    /// Reply depth used for the thread's indentation: a direct reply to the
+    /// focal is level 1, a reply-to-a-reply level 2, and so on, so the structure
+    /// reads at a glance. Ancestors and the focal stay flush (level 0).
+    private func indentLevel(for id: String) -> Int {
+        guard replyOrder.contains(id), let tweet = tweetsByID[id] else { return 0 }
+        var level = 1
+        var current = tweet.inReplyToTweetID
+        while let parent = current, parent != focalID, replyOrder.contains(parent), level < 5 {
+            level += 1
+            current = tweetsByID[parent]?.inReplyToTweetID
+        }
+        return level
     }
 
     /// Applies the full thread. When ancestors are prepended above an

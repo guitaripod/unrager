@@ -16,6 +16,7 @@ class FeedViewController: UIViewController {
     private let emptyState = EmptyStateView()
     private let loadingIndicator = UIActivityIndicatorView(style: .medium)
     private let collectingLabel = UILabel()
+    private let collectingView = MetalCollectingView(frame: .zero)
     private var lastErrorText: String?
     /// Set between drag-begin and the feed coming to rest. No inline video plays
     /// while scrolling, so `AVPlayer` allocation/decode never lands on the scroll
@@ -281,6 +282,10 @@ class FeedViewController: UIViewController {
             collectingLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             collectingLabel.topAnchor.constraint(equalTo: loadingIndicator.bottomAnchor, constant: DesignSystem.Spacing.m),
         ])
+
+        collectingView.isHidden = true
+        view.addManaged(collectingView)
+        collectingView.pinEdges(to: view)
     }
 
     /// Opens tapped media in a full-screen viewer — a zoomable photo gallery, or
@@ -453,6 +458,25 @@ class FeedViewController: UIViewController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] ids in self?.reconfigure(ids) }
             .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: TwemojiCache.imagesDidLoad)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.reconfigureVisibleForEmoji() }
+            .store(in: &cancellables)
+    }
+
+    /// Re-renders on-screen rows once Twemoji art lands so a cold-cache emoji
+    /// flips from the native glyph to the flat Twemoji image — never during a
+    /// scroll, so it stays off the hot path.
+    private func reconfigureVisibleForEmoji() {
+        guard !isScrolling else { return }
+        let visible = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
+        guard !visible.isEmpty else { return }
+        var snapshot = dataSource.snapshot()
+        let present = visible.filter { snapshot.itemIdentifiers.contains($0) }
+        guard !present.isEmpty else { return }
+        snapshot.reconfigureItems(present)
+        dataSource.apply(snapshot, animatingDifferences: false)
     }
 
     private func reconfigure(_ ids: [String]) {
@@ -522,34 +546,61 @@ class FeedViewController: UIViewController {
         guard dataSource.snapshot().numberOfItems == 0 else {
             emptyState.isHidden = true
             loadingIndicator.stopAnimating()
-            collectingLabel.isHidden = true
+            hideCollecting()
             return
         }
         if viewModel.awaitingQuery {
             loadingIndicator.stopAnimating()
-            collectingLabel.isHidden = true
+            hideCollecting()
             emptyState.isHidden = false
             emptyState.show(symbol: "magnifyingglass", title: "Search X",
                             subtitle: "Find tweets, people, and topics.", showRetry: false)
+        } else if viewModel.collectingProgress.value != nil, collectingView.isAvailable {
+            emptyState.isHidden = true
+            loadingIndicator.stopAnimating()
+            collectingLabel.isHidden = true
+            showCollecting()
         } else if viewModel.isLoading.value || !viewModel.hasLoadedOnce {
             emptyState.isHidden = true
+            hideCollecting()
             loadingIndicator.startAnimating()
             updateCollectingLabel()
         } else if let error = lastErrorText {
             loadingIndicator.stopAnimating()
-            collectingLabel.isHidden = true
+            hideCollecting()
             emptyState.isHidden = false
             emptyState.show(symbol: "exclamationmark.triangle", title: "Couldn't load", subtitle: error, showRetry: true)
         } else {
             loadingIndicator.stopAnimating()
-            collectingLabel.isHidden = true
+            hideCollecting()
             emptyState.isHidden = false
             emptyState.show(symbol: "tray", title: "Nothing here yet", subtitle: "Pull to refresh.", showRetry: true)
         }
     }
 
+    /// Reveals the full-screen Metal collecting state, driving the latest
+    /// progress into the shader and starting its display link.
+    private func showCollecting() {
+        if let progress = viewModel.collectingProgress.value {
+            collectingView.update(collected: progress, target: TimelineViewModel.targetSurvivors)
+        }
+        if collectingView.isHidden {
+            collectingView.isHidden = false
+            collectingView.start()
+        }
+    }
+
+    /// Tears down the Metal collecting state — pauses its display link so it
+    /// draws nothing while hidden.
+    private func hideCollecting() {
+        guard !collectingView.isHidden else { return }
+        collectingView.isHidden = true
+        collectingView.stop()
+    }
+
     /// While collect-then-show filtering is gathering a batch, replaces the bare
-    /// spinner caption with "collecting tweets… N/25".
+    /// spinner caption with "collecting tweets… N/25". Used only on the
+    /// fallback (no-Metal) path.
     private func updateCollectingLabel() {
         if let progress = viewModel.collectingProgress.value {
             collectingLabel.isHidden = false
@@ -714,6 +765,7 @@ extension FeedViewController: UICollectionViewDataSourcePrefetching {
             if let url = Self.previewURL(for: tweet) {
                 ImageLoader.prefetch(url, pointSize: CGSize(width: width, height: width * 9 / 16), scale: 2)
             }
+            Task { await TwemojiCache.shared.prewarm(graphemesIn: tweet.text) }
         }
     }
 

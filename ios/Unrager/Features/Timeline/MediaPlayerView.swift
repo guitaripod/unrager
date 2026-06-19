@@ -11,10 +11,16 @@ import UIKit
 final class MediaPlayerView: UIView {
     override class var layerClass: AnyClass { AVPlayerLayer.self }
 
+    /// Session-wide inline-audio preference. Inline clips autoplay muted (like
+    /// X); tapping any clip's speaker unmutes them all for the session and
+    /// switches the audio session to `.playback`. Resets to muted on relaunch.
+    static var audioEnabled = false
+
     private var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
     private let poster = AsyncImageView(frame: .zero)
     private let playBadge = UIImageView()
     private let gifBadge = UILabel()
+    private let muteButton = UIButton(type: .system)
     private var player: AVPlayer?
     private var pendingVideoURL: URL?
     private var isGIF = false
@@ -48,6 +54,17 @@ final class MediaPlayerView: UIView {
         gifBadge.isHidden = true
         addManaged(gifBadge)
 
+        var config = UIButton.Configuration.plain()
+        config.cornerStyle = .capsule
+        config.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 6, bottom: 6, trailing: 6)
+        config.background.backgroundColor = UIColor.black.withAlphaComponent(0.5)
+        config.baseForegroundColor = .white
+        muteButton.configuration = config
+        muteButton.translatesAutoresizingMaskIntoConstraints = false
+        muteButton.isHidden = true
+        muteButton.addAction(UIAction { [weak self] _ in self?.toggleMute() }, for: .touchUpInside)
+        addManaged(muteButton)
+
         NSLayoutConstraint.activate([
             playBadge.centerXAnchor.constraint(equalTo: centerXAnchor),
             playBadge.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -55,7 +72,26 @@ final class MediaPlayerView: UIView {
             gifBadge.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
             gifBadge.widthAnchor.constraint(equalToConstant: 34),
             gifBadge.heightAnchor.constraint(equalToConstant: 18),
+            muteButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            muteButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            muteButton.widthAnchor.constraint(equalToConstant: 32),
+            muteButton.heightAnchor.constraint(equalToConstant: 32),
         ])
+    }
+
+    /// Flips the session-wide inline-audio preference, applies it to the live
+    /// player, and switches the audio session to `.playback` so sound is audible
+    /// even with the ring switch on.
+    private func toggleMute() {
+        Self.audioEnabled.toggle()
+        if Self.audioEnabled { MediaAudioSession.activatePlayback() }
+        player?.isMuted = !Self.audioEnabled
+        updateMuteIcon()
+    }
+
+    private func updateMuteIcon() {
+        let symbol = Self.audioEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill"
+        muteButton.configuration?.image = DesignSystem.icon(symbol, pointSize: 13, weight: .semibold)
     }
 
     @available(*, unavailable)
@@ -91,6 +127,8 @@ final class MediaPlayerView: UIView {
         self.isGIF = isGIF
         gifBadge.isHidden = !isGIF
         playBadge.isHidden = false
+        muteButton.isHidden = isGIF
+        updateMuteIcon()
         if imagesEnabled {
             poster.load(url: posterURL, targetSize: posterSize)
         } else {
@@ -102,9 +140,10 @@ final class MediaPlayerView: UIView {
     /// forever, plays muted. Cheap to call repeatedly — resumes an existing player.
     func play() {
         guard let url = pendingVideoURL else { return }
+        if Self.audioEnabled, !isGIF { MediaAudioSession.activatePlayback() }
         if player == nil {
             let player = AVPlayer(url: url)
-            player.isMuted = true
+            player.isMuted = isGIF || !Self.audioEnabled
             player.actionAtItemEnd = .none
             self.player = player
             playerLayer.player = player
@@ -140,6 +179,7 @@ final class MediaPlayerView: UIView {
         poster.cancel()
         poster.alpha = 1
         playBadge.isHidden = false
+        muteButton.isHidden = true
     }
 
     deinit {

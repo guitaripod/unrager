@@ -181,9 +181,11 @@ final class TimelineViewModel {
                 pages += 1
                 cursor = page.cursor
                 let fresh = page.tweets.filter { seenIDs.insert($0.restID).inserted }
-                let kept = await keepVerdicts(for: fresh)
+                let hidden = await streamHidden(fresh.map(\.restID), baseCount: survivors.count)
                 if Task.isCancelled { return }
-                survivors.append(contentsOf: kept)
+                for tweet in fresh where !hidden.contains(tweet.restID) {
+                    survivors.append(tweet)
+                }
                 collectingProgress.send((survivors.count, Self.collectTarget))
                 if page.cursor == nil { exhausted = true; break }
             }
@@ -214,23 +216,30 @@ final class TimelineViewModel {
         }
     }
 
-    /// Classifies `tweets` and returns only those the model keeps, in their
-    /// original order. Drains the filter SSE stream collecting hide verdicts;
-    /// any tweet not flagged hide by stream end is a keep (so an unreachable
-    /// classifier keeps everything).
-    private func keepVerdicts(for tweets: [Tweet]) async -> [Tweet] {
-        guard !tweets.isEmpty else { return [] }
-        let ids = tweets.map(\.restID)
+    /// Streams the rage-filter rubric over the given ids and returns the set the
+    /// model flagged `hide`. Bumps `collectingProgress` as each *keep* verdict
+    /// arrives (relative to `baseCount` already-collected survivors) so the
+    /// "collecting tweets… N/25" counter climbs live instead of jumping at the
+    /// end. A stream error (e.g. the classifier being down) yields an empty set,
+    /// so anything without a verdict is treated as a keep.
+    private func streamHidden(_ ids: [String], baseCount: Int) async -> Set<String> {
+        guard !ids.isEmpty else { return [] }
         var hidden = Set<String>()
-        let stream = api.filterStream(ids: ids)
+        var keeps = 0
         do {
-            for try await verdict in stream where verdict.verdict == .hide {
-                hidden.insert(verdict.id)
+            for try await verdict in api.filterStream(ids: ids) {
+                if Task.isCancelled { return hidden }
+                if verdict.verdict == .hide {
+                    hidden.insert(verdict.id)
+                } else {
+                    keeps += 1
+                    collectingProgress.send((baseCount + keeps, Self.collectTarget))
+                }
             }
         } catch {
             AppLogger.shared.debug("filter stream ended: \(error)", category: .timeline)
         }
-        return tweets.filter { !hidden.contains($0.restID) }
+        return hidden
     }
 
     private func fetch(cursor: String?) async throws -> TimelinePage {

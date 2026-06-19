@@ -27,6 +27,7 @@ protocol FeedNavigator: AnyObject {
     func openLikers(for tweet: Tweet)
     func presentStream(title: String, makeStream: @escaping () -> AsyncThrowingStream<TokenEvent, any Error>)
     func compose(replyingTo tweet: Tweet?)
+    func presentPostcard(for tweet: Tweet)
 }
 
 /// The reusable tweet feed: an `NSTableView` driven by a `TimelineViewModel`,
@@ -44,6 +45,7 @@ class FeedViewController: NSViewController {
     private let loadingIndicator = NSProgressIndicator()
     private let collectingLabel = NSTextField(labelWithString: "")
     private let collectingStack = NSStackView()
+    private let collectingView = MetalCollectingView()
     private var collecting: (Int, Int)?
     let api = AppEnvironment.shared.api
 
@@ -160,6 +162,10 @@ class FeedViewController: NSViewController {
             collectingStack.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             collectingStack.centerYAnchor.constraint(equalTo: view.centerYAnchor),
         ])
+
+        collectingView.isHidden = true
+        view.addManaged(collectingView)
+        collectingView.pinEdges(to: view)
     }
 
     private func bind() {
@@ -260,12 +266,19 @@ class FeedViewController: NSViewController {
             emptyState.isHidden = true
             loadingIndicator.stopAnimation(nil)
             collectingStack.isHidden = true
+            hideCollecting()
             return
         }
         if viewModel.awaitingQuery {
             loadingIndicator.stopAnimation(nil)
             collectingStack.isHidden = true
+            hideCollecting()
             emptyState.show(symbol: "magnifyingglass", title: "Search X", subtitle: "Type a query to begin.")
+        } else if let collecting, collectingView.isAvailable {
+            emptyState.isHidden = true
+            loadingIndicator.stopAnimation(nil)
+            collectingStack.isHidden = true
+            showCollecting(collected: collecting.0, target: collecting.1)
         } else if let collecting {
             emptyState.isHidden = true
             loadingIndicator.stopAnimation(nil)
@@ -274,18 +287,39 @@ class FeedViewController: NSViewController {
         } else if viewModel.isLoading.value || !viewModel.hasLoadedOnce {
             emptyState.isHidden = true
             collectingStack.isHidden = true
+            hideCollecting()
             loadingIndicator.startAnimation(nil)
         } else if let error = lastErrorText {
             loadingIndicator.stopAnimation(nil)
             collectingStack.isHidden = true
+            hideCollecting()
             emptyState.show(symbol: "exclamationmark.triangle", title: "Something went wrong",
                             subtitle: error, showRetry: true)
         } else {
             loadingIndicator.stopAnimation(nil)
             collectingStack.isHidden = true
+            hideCollecting()
             emptyState.show(symbol: "tray", title: "Nothing here yet",
                             subtitle: "Pull to refresh or try again.", showRetry: true)
         }
+    }
+
+    /// Reveals the full-window Metal collecting state, driving the latest
+    /// progress into the shader and starting its display link.
+    private func showCollecting(collected: Int, target: Int) {
+        collectingView.update(collected: collected, target: target)
+        if collectingView.isHidden {
+            collectingView.isHidden = false
+            collectingView.start()
+        }
+    }
+
+    /// Pauses and hides the Metal collecting state so it draws nothing while
+    /// not visible.
+    private func hideCollecting() {
+        guard !collectingView.isHidden else { return }
+        collectingView.isHidden = true
+        collectingView.stop()
     }
 
     private func handleError(_ message: String) {
@@ -646,11 +680,7 @@ extension FeedViewController: NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        if !tweet.media.isEmpty, let first = tweet.media.first, !first.url.isEmpty {
-            let saveMedia = NSMenuItem(title: "Save Media…", action: #selector(saveMediaAction(_:)), keyEquivalent: "")
-            saveMedia.target = self
-            saveMedia.image = DesignSystem.icon("square.and.arrow.down", pointSize: 14)
-            saveMedia.representedObject = tweet
+        if let saveMedia = saveMediaItem(for: tweet) {
             menu.addItem(saveMedia)
         }
 
@@ -659,6 +689,12 @@ extension FeedViewController: NSMenuDelegate {
         share.image = DesignSystem.icon("square.and.arrow.up", pointSize: 14)
         share.representedObject = tweet.url
         menu.addItem(share)
+
+        let postcard = NSMenuItem(title: "Postcard…", action: #selector(postcardAction(_:)), keyEquivalent: "")
+        postcard.target = self
+        postcard.image = DesignSystem.icon("photo.badge.plus", pointSize: 14)
+        postcard.representedObject = tweet
+        menu.addItem(postcard)
 
         menu.addItem(.separator())
 
@@ -729,6 +765,11 @@ extension FeedViewController: NSMenuDelegate {
         navigator?.openLikers(for: tweet)
     }
 
+    @objc private func postcardAction(_ sender: NSMenuItem) {
+        guard let tweet = sender.representedObject as? Tweet else { return }
+        navigator?.presentPostcard(for: tweet)
+    }
+
     @objc private func shareAction(_ sender: NSMenuItem) {
         guard let urlString = sender.representedObject as? String, let url = URL(string: urlString) else { return }
         let row = tableView.clickedRow
@@ -738,12 +779,70 @@ extension FeedViewController: NSMenuDelegate {
         picker.show(relativeTo: rect, of: anchor, preferredEdge: .minY)
     }
 
-    @objc private func saveMediaAction(_ sender: NSMenuItem) {
-        guard let tweet = sender.representedObject as? Tweet, let first = tweet.media.first else { return }
-        let sourceURL = first.isVideo
-            ? (first.videoURL.flatMap(URL.init) ?? api.mediaURL(tweetID: tweet.restID, index: 0))
-            : (URL(string: first.url) ?? api.mediaURL(tweetID: tweet.restID, index: 0))
-        let suggestedExt = first.isVideo ? "mp4" : (sourceURL.pathExtension.isEmpty ? "jpg" : sourceURL.pathExtension)
+    /// The raw `tweet.media` offsets of saveable (photo / video / GIF)
+    /// attachments. The media proxy addresses media by this flat index, across
+    /// photos and videos alike.
+    private struct SaveTarget { let index: Int; let isVideo: Bool }
+
+    private func saveTargets(for tweet: Tweet) -> [SaveTarget] {
+        tweet.media.enumerated().compactMap { index, media in
+            switch media.kind {
+            case .photo, .video, .animatedGif: return SaveTarget(index: index, isVideo: media.isVideo)
+            default: return nil
+            }
+        }
+    }
+
+    /// One Save item for a lone attachment, or a "Save Media" submenu with
+    /// "Save all (N)" plus a per-item list when a tweet carries several. Mirrors
+    /// the iOS `saveMediaMenu`.
+    private func saveMediaItem(for tweet: Tweet) -> NSMenuItem? {
+        let targets = saveTargets(for: tweet)
+        guard !targets.isEmpty else { return nil }
+        if targets.count == 1 {
+            let only = targets[0]
+            let item = NSMenuItem(title: only.isVideo ? "Save Video…" : "Save Image…",
+                                  action: #selector(saveSingleAction(_:)), keyEquivalent: "")
+            item.target = self
+            item.image = DesignSystem.icon("square.and.arrow.down", pointSize: 14)
+            item.representedObject = SaveInvocation(tweet: tweet, targets: targets)
+            return item
+        }
+
+        let submenu = NSMenu()
+        let saveAll = NSMenuItem(title: "Save All (\(targets.count))",
+                                 action: #selector(saveAllAction(_:)), keyEquivalent: "")
+        saveAll.target = self
+        saveAll.image = DesignSystem.icon("square.and.arrow.down.on.square", pointSize: 14)
+        saveAll.representedObject = SaveInvocation(tweet: tweet, targets: targets)
+        submenu.addItem(saveAll)
+        submenu.addItem(.separator())
+        for (position, target) in targets.enumerated() {
+            let item = NSMenuItem(title: "\(target.isVideo ? "Video" : "Image") \(position + 1)…",
+                                  action: #selector(saveSingleAction(_:)), keyEquivalent: "")
+            item.target = self
+            item.image = DesignSystem.icon(target.isVideo ? "arrow.down.circle" : "square.and.arrow.down", pointSize: 14)
+            item.representedObject = SaveInvocation(tweet: tweet, targets: [target])
+            submenu.addItem(item)
+        }
+        let saveMedia = NSMenuItem(title: "Save Media", action: nil, keyEquivalent: "")
+        saveMedia.image = DesignSystem.icon("square.and.arrow.down", pointSize: 14)
+        saveMedia.submenu = submenu
+        return saveMedia
+    }
+
+    private final class SaveInvocation {
+        let tweet: Tweet
+        let targets: [SaveTarget]
+        init(tweet: Tweet, targets: [SaveTarget]) { self.tweet = tweet; self.targets = targets }
+    }
+
+    @objc private func saveSingleAction(_ sender: NSMenuItem) {
+        guard let invocation = sender.representedObject as? SaveInvocation,
+              let target = invocation.targets.first else { return }
+        let tweet = invocation.tweet
+        let sourceURL = api.mediaURL(tweetID: tweet.restID, index: target.index)
+        let suggestedExt = target.isVideo ? "mp4" : (sourceURL.pathExtension.isEmpty ? "jpg" : sourceURL.pathExtension)
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "\(tweet.author.handle)-\(tweet.restID).\(suggestedExt)"
         panel.canCreateDirectories = true
@@ -753,21 +852,44 @@ extension FeedViewController: NSMenuDelegate {
         }
     }
 
-    private func downloadMedia(from source: URL, to destination: URL) {
+    /// Saves every attachment into a user-chosen directory, named by handle, id,
+    /// and ordinal — one folder prompt rather than a panel per file.
+    @objc private func saveAllAction(_ sender: NSMenuItem) {
+        guard let invocation = sender.representedObject as? SaveInvocation else { return }
+        let tweet = invocation.tweet
+        let targets = invocation.targets
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.prompt = "Save All"
+        panel.message = "Choose a folder to save \(targets.count) attachments"
+        panel.beginSheetModal(for: view.window ?? NSApp.keyWindow ?? NSWindow()) { [weak self] response in
+            guard response == .OK, let directory = panel.url, let self else { return }
+            for (position, target) in targets.enumerated() {
+                let source = self.api.mediaURL(tweetID: tweet.restID, index: target.index)
+                let ext = target.isVideo ? "mp4" : (source.pathExtension.isEmpty ? "jpg" : source.pathExtension)
+                let destination = directory.appendingPathComponent(
+                    "\(tweet.author.handle)-\(tweet.restID)-\(position + 1).\(ext)")
+                self.downloadMedia(from: source, to: destination, reportFailure: false)
+            }
+        }
+    }
+
+    private func downloadMedia(from source: URL, to destination: URL, reportFailure: Bool = true) {
         Task {
             do {
                 let (data, _) = try await URLSession.shared.data(from: source)
                 try data.write(to: destination)
-                AppLogger.shared.info("saved media to \(destination.lastPathComponent)", category: .timeline)
+                AppLogger.shared.info("saved media to \(destination.lastPathComponent)", category: .media)
             } catch {
-                AppLogger.shared.warn("save media failed: \(error)", category: .timeline)
+                AppLogger.shared.warn("save media failed: \(error)", category: .media)
+                guard reportFailure, let window = view.window else { return }
                 let alert = NSAlert()
                 alert.messageText = "Couldn't save media"
                 alert.informativeText = error.localizedDescription
                 alert.alertStyle = .warning
-                if let window = view.window {
-                    alert.beginSheetModal(for: window, completionHandler: nil)
-                }
+                alert.beginSheetModal(for: window, completionHandler: nil)
             }
         }
     }

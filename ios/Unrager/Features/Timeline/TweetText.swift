@@ -58,6 +58,7 @@ enum TweetText {
                 result.addAttribute(.link, value: link, range: token)
             }
         }
+        TwemojiText.substituteCachedEmoji(in: result, font: font)
         return result
     }
 
@@ -143,6 +144,7 @@ enum TweetText {
                 result.addAttribute(.link, value: link, range: token)
             }
         }
+        TwemojiText.substituteCachedEmoji(in: result, font: font)
         return result
     }
 

@@ -47,6 +47,7 @@ final class PostcardView: UIView {
 
     private let theme: PostcardTheme
     private let options: Options
+    private let entries: [Entry]
 
     private let accentBar = UIView()
     private let content = UIStackView()
@@ -59,10 +60,13 @@ final class PostcardView: UIView {
     init(entries: [Entry], theme: PostcardTheme, options: Options) {
         self.theme = theme
         self.options = options
+        self.entries = entries
         super.init(frame: CGRect(x: 0, y: 0, width: Self.renderWidth, height: Self.renderWidth))
         translatesAutoresizingMaskIntoConstraints = false
         build(entries: entries)
     }
+
+    private var bodyLabels: [UILabel] = []
 
     /// Single-tweet convenience — the default, unchanged-behavior path.
     ///
@@ -273,11 +277,15 @@ final class PostcardView: UIView {
         label.textColor = theme.text
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = 4
-        label.attributedText = NSAttributedString(string: text, attributes: [
-            .font: UIFont.systemFont(ofSize: 22, weight: .regular),
+        let font = UIFont.systemFont(ofSize: 22, weight: .regular)
+        let body = NSMutableAttributedString(string: text, attributes: [
+            .font: font,
             .foregroundColor: theme.text,
             .paragraphStyle: paragraph,
         ])
+        TwemojiText.substituteCachedEmoji(in: body, font: font)
+        label.attributedText = body
+        bodyLabels.append(label)
         return label
     }
 
@@ -344,11 +352,46 @@ final class PostcardView: UIView {
         return row
     }
 
+    // MARK: - Emoji
+
+    /// Synchronously resolves every Twemoji image the bodies need (awaiting CDN
+    /// fetches via a detached task with a bounded wait), then re-substitutes so
+    /// the about-to-rasterize labels carry attachments. The postcard renders
+    /// once on a user action and is off any scroll path, so the brief wait is
+    /// acceptable here — the feed never takes this path. The `TwemojiCache`
+    /// fetch actor doesn't hop to the main actor, so blocking main on the
+    /// semaphore can't deadlock.
+    private func resolveBodyEmoji() {
+        let graphemes = Set(entries.flatMap { $0.tweet.text.emojiGraphemes() })
+        guard !graphemes.isEmpty else { return }
+        let needsFetch = graphemes.contains { TwemojiCache.shared.cachedImage(for: $0) == nil }
+        if needsFetch {
+            let semaphore = DispatchSemaphore(value: 0)
+            Task.detached {
+                for grapheme in graphemes {
+                    _ = await TwemojiCache.shared.image(for: grapheme)
+                }
+                semaphore.signal()
+            }
+            _ = semaphore.wait(timeout: .now() + 4)
+        }
+        let font = UIFont.systemFont(ofSize: 22, weight: .regular)
+        for label in bodyLabels {
+            guard let current = label.attributedText else { continue }
+            let mutable = NSMutableAttributedString(attributedString: current)
+            TwemojiText.substituteCachedEmoji(in: mutable, font: font)
+            label.attributedText = mutable
+        }
+    }
+
     // MARK: - Render
 
     /// Lays out at the fixed render width, then rasterizes to a `UIImage` at the
-    /// given scale (use 3 for crisp share output).
+    /// given scale (use 3 for crisp share output). Resolves the bodies' Twemoji
+    /// images first so the exported PNG carries flat Twemoji art (most visibly
+    /// flags) rather than the system glyphs.
     func render(scale: CGFloat) -> UIImage {
+        resolveBodyEmoji()
         let targetSize = systemLayoutSizeFitting(
             CGSize(width: Self.renderWidth, height: UIView.layoutFittingCompressedSize.height),
             withHorizontalFittingPriority: .required,

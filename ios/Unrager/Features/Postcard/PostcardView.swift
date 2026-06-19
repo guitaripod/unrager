@@ -14,6 +14,15 @@ final class PostcardView: UIView {
     struct Options {
         var showsDisplayName: Bool = true
         var showsMetrics: Bool = false
+        var showsThread: Bool = false
+    }
+
+    /// One tweet's fully-loaded content for a postcard block (root→focal in a
+    /// thread).
+    struct Entry {
+        let tweet: Tweet
+        let avatar: UIImage?
+        let photos: [UIImage]
     }
 
     /// Logical render width. At scale 3 this yields a ~1620px-wide PNG —
@@ -32,6 +41,7 @@ final class PostcardView: UIView {
         static let metricsGap: CGFloat = 20
         static let watermarkGap: CGFloat = 22
         static let mediaCorner: CGFloat = 16
+        static let blockGap: CGFloat = 22
         static let maxPhotos = 2
     }
 
@@ -43,15 +53,24 @@ final class PostcardView: UIView {
     private let gradientLayer = CAGradientLayer()
     private let watermark = UILabel()
 
-    /// - Parameters:
-    ///   - avatar: the fully-loaded author avatar, or nil to draw a placeholder.
-    ///   - photos: fully-loaded photo (or video poster) images, top-to-bottom.
-    init(tweet: Tweet, theme: PostcardTheme, options: Options, avatar: UIImage?, photos: [UIImage]) {
+    /// Renders one block per entry, stacked under a single continuous accent bar
+    /// with hairline dividers between blocks — mirroring the TUI's thread
+    /// screenshot.
+    init(entries: [Entry], theme: PostcardTheme, options: Options) {
         self.theme = theme
         self.options = options
         super.init(frame: CGRect(x: 0, y: 0, width: Self.renderWidth, height: Self.renderWidth))
         translatesAutoresizingMaskIntoConstraints = false
-        build(tweet: tweet, avatar: avatar, photos: photos)
+        build(entries: entries)
+    }
+
+    /// Single-tweet convenience — the default, unchanged-behavior path.
+    ///
+    /// - Parameters:
+    ///   - avatar: the fully-loaded author avatar, or nil to draw a placeholder.
+    ///   - photos: fully-loaded photo (or video poster) images, top-to-bottom.
+    convenience init(tweet: Tweet, theme: PostcardTheme, options: Options, avatar: UIImage?, photos: [UIImage]) {
+        self.init(entries: [Entry(tweet: tweet, avatar: avatar, photos: photos)], theme: theme, options: options)
     }
 
     @available(*, unavailable)
@@ -64,7 +83,7 @@ final class PostcardView: UIView {
 
     // MARK: - Build
 
-    private func build(tweet: Tweet, avatar: UIImage?, photos: [UIImage]) {
+    private func build(entries: [Entry]) {
         applyBackground()
 
         accentBar.backgroundColor = theme.accent
@@ -77,18 +96,14 @@ final class PostcardView: UIView {
         content.alignment = .fill
         addManaged(content)
 
-        content.addArrangedSubview(makeHeader(tweet: tweet, avatar: avatar))
-        if let body = makeBody(tweet: tweet) {
-            content.setCustomSpacing(Metrics.bodyGap, after: content.arrangedSubviews.last!)
-            content.addArrangedSubview(body)
-        }
-        if !photos.isEmpty {
-            content.setCustomSpacing(Metrics.mediaGap, after: content.arrangedSubviews.last!)
-            content.addArrangedSubview(makeMedia(photos: Array(photos.prefix(Metrics.maxPhotos))))
-        }
-        if options.showsMetrics, let metrics = makeMetrics(tweet: tweet) {
-            content.setCustomSpacing(Metrics.metricsGap, after: content.arrangedSubviews.last!)
-            content.addArrangedSubview(metrics)
+        for (index, entry) in entries.enumerated() {
+            if index > 0, let last = content.arrangedSubviews.last {
+                content.setCustomSpacing(Metrics.blockGap, after: last)
+                let divider = makeDivider()
+                content.addArrangedSubview(divider)
+                content.setCustomSpacing(Metrics.blockGap, after: divider)
+            }
+            content.addArrangedSubview(makeBlock(entry: entry))
         }
 
         watermark.text = "unrager"
@@ -124,6 +139,37 @@ final class PostcardView: UIView {
         } else {
             backgroundColor = theme.background
         }
+    }
+
+    /// One tweet's vertical column: header, body, media, optional metrics.
+    private func makeBlock(entry: Entry) -> UIView {
+        let block = UIStackView()
+        block.axis = .vertical
+        block.spacing = 0
+        block.alignment = .fill
+        block.addArrangedSubview(makeHeader(tweet: entry.tweet, avatar: entry.avatar))
+        if let body = makeBody(tweet: entry.tweet) {
+            block.setCustomSpacing(Metrics.bodyGap, after: block.arrangedSubviews.last!)
+            block.addArrangedSubview(body)
+        }
+        if !entry.photos.isEmpty {
+            block.setCustomSpacing(Metrics.mediaGap, after: block.arrangedSubviews.last!)
+            block.addArrangedSubview(makeMedia(photos: Array(entry.photos.prefix(Metrics.maxPhotos))))
+        }
+        if options.showsMetrics, let metrics = makeMetrics(tweet: entry.tweet) {
+            block.setCustomSpacing(Metrics.metricsGap, after: block.arrangedSubviews.last!)
+            block.addArrangedSubview(metrics)
+        }
+        return block
+    }
+
+    /// A hairline between thread blocks; spans only the text column (the accent
+    /// bar runs unbroken to its left), echoing the TUI's `paint_block_divider`.
+    private func makeDivider() -> UIView {
+        let divider = UIView()
+        divider.backgroundColor = theme.secondaryText.withAlphaComponent(0.3)
+        divider.heightAnchor.constraint(equalToConstant: 1).isActive = true
+        return divider
     }
 
     // MARK: - Header

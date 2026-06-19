@@ -186,7 +186,7 @@ final class ThreadViewController: UIViewController {
         snapshot.appendItems([focal], toSection: .focal)
         snapshot.appendItems(replyOrder, toSection: .replies)
         let shouldPinFocal = didRenderFocal && !ancestors.isEmpty
-        dataSource.apply(snapshot, animatingDifferences: didRenderFocal) { [weak self] in
+        dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
             guard let self, shouldPinFocal, let anchorBefore else { return }
             self.pinFocal(toScreenY: anchorBefore)
         }
@@ -250,6 +250,7 @@ final class ThreadViewController: UIViewController {
         if let video = tweet.media.enumerated().first(where: { $0.element.isVideo }) {
             let url = video.element.videoURL.flatMap(URL.init)
                 ?? AppEnvironment.shared.api.mediaURL(tweetID: tweet.restID, index: video.offset)
+            MediaAudioSession.activatePlayback()
             let player = AVPlayer(url: url)
             let controller = AVPlayerViewController()
             controller.player = player

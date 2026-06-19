@@ -15,6 +15,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         self.window = window
         window.makeKeyAndVisible()
         AppLogger.shared.info("scene connected", category: .app)
+        AppEnvironment.shared.prefetchWhoami()
         SessionSync.restore { [weak self] mode in self?.applyAppearance(mode) }
         #if DEBUG
         handleDebugLaunch(root)
@@ -73,9 +74,12 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                 }
             case "postcard" where parts.count > 1:
                 let id = parts[1]
+                let wantsThread = parts.count > 2 && parts[2] == "thread"
                 Task {
                     guard let tweet = try? await api.tweet(id: id) else { return }
-                    root.present(UINavigationController(rootViewController: PostcardViewController(tweet: tweet)), animated: false)
+                    let postcard = PostcardViewController(tweet: tweet)
+                    root.present(UINavigationController(rootViewController: postcard), animated: false)
+                    if wantsThread { postcard.debugEnableThread() }
                 }
             case "compose":
                 root.present(UINavigationController(rootViewController: ComposeViewController(mode: .new)), animated: false)

@@ -95,6 +95,7 @@ final class EditTabsViewController: UIViewController {
         snapshot.appendSections([.active, .available])
         snapshot.appendItems(active, toSection: .active)
         snapshot.appendItems(TabItem.allCases.filter { !active.contains($0) }, toSection: .available)
+        snapshot.reconfigureItems(snapshot.itemIdentifiers)
         dataSource.apply(snapshot, animatingDifferences: animated)
     }
 

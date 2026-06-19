@@ -284,12 +284,12 @@ final class TimelineViewModel {
                 cursor = page.cursor
 
                 let fresh = page.tweets.filter { seenIDs.insert($0.restID).inserted }
-                let hidden = await classifyHidden(fresh.map(\.restID))
+                let hidden = await streamHidden(fresh.map(\.restID), baseCount: survivors.count)
                 if Task.isCancelled { return }
                 for tweet in fresh where !hidden.contains(tweet.restID) {
                     survivors.append(tweet)
-                    collectingProgress.send(survivors.count)
                 }
+                collectingProgress.send(survivors.count)
                 if page.cursor == nil { exhausted = true; break }
             }
             var current = tweets.value
@@ -312,15 +312,25 @@ final class TimelineViewModel {
         }
     }
 
-    /// Runs the rage-filter rubric over the given ids and returns the set the
-    /// model flagged `hide`. A stream error (e.g. Ollama down) yields an empty
-    /// set, so every tweet is treated as a keep.
-    private func classifyHidden(_ ids: [String]) async -> Set<String> {
+    /// Streams the rage-filter rubric over the given ids and returns the set the
+    /// model flagged `hide`. Bumps `collectingProgress` as each *keep* verdict
+    /// arrives (relative to `baseCount` already-collected survivors) so the
+    /// "collecting tweets… N/25" counter climbs live instead of jumping at the
+    /// end. A stream error (e.g. Ollama down) yields an empty set, so anything
+    /// without a verdict is treated as a keep — matching the prior behavior.
+    private func streamHidden(_ ids: [String], baseCount: Int) async -> Set<String> {
         guard !ids.isEmpty else { return [] }
         var hidden = Set<String>()
+        var keeps = 0
         do {
-            for try await verdict in api.filterStream(ids: ids) where verdict.verdict == .hide {
-                hidden.insert(verdict.id)
+            for try await verdict in api.filterStream(ids: ids) {
+                if Task.isCancelled { return hidden }
+                if verdict.verdict == .hide {
+                    hidden.insert(verdict.id)
+                } else {
+                    keeps += 1
+                    collectingProgress.send(baseCount + keeps)
+                }
             }
         } catch {
             AppLogger.shared.debug("filter stream ended: \(error)", category: .timeline)

@@ -110,7 +110,7 @@ class FeedViewController: UIViewController {
         let screenshot = UIAction(title: "Postcard…", image: DesignSystem.icon("photo.badge.plus")) { [weak self] _ in
             self?.presentPostcard(tweet)
         }
-        let saveMedia = saveMediaAction(tweet)
+        let saveMedia = saveMediaMenu(tweet)
         let open = UIAction(title: "Open in X", image: DesignSystem.icon("safari")) { _ in
             if let url = URL(string: tweet.url) { UIApplication.shared.open(url) }
         }
@@ -120,10 +120,19 @@ class FeedViewController: UIViewController {
         let copyEmbed = UIAction(title: "Copy embed link", image: DesignSystem.icon("link.badge.plus")) { _ in
             UIPasteboard.general.string = Self.fixupxURL(tweet)
         }
-        var topLevel: [UIMenuElement] = [ask, translate, like, likers]
+        var topLevel: [UIMenuElement] = [ask, translate, like]
+        if isOwnTweet(tweet) { topLevel.append(likers) }
         if let saveMedia { topLevel.append(saveMedia) }
         topLevel.append(UIMenu(options: .displayInline, children: [share, screenshot, open, copy, copyEmbed]))
         return UIMenu(children: topLevel)
+    }
+
+    /// "Liked by" only makes sense on your own tweets (X hides others' likers
+    /// anyway). Read synchronously from the cached identity — a cold cache right
+    /// after launch just hides it for a moment.
+    private func isOwnTweet(_ tweet: Tweet) -> Bool {
+        guard let own = AppEnvironment.shared.currentHandle else { return false }
+        return tweet.author.handle.caseInsensitiveCompare(own) == .orderedSame
     }
 
     /// Presents the postcard composer for `tweet`, wrapped in its own
@@ -144,18 +153,39 @@ class FeedViewController: UIViewController {
         return collectionView.cellForItem(at: index) as? TweetCell
     }
 
-    private func saveMediaAction(_ tweet: Tweet) -> UIAction? {
-        let saveable = tweet.media.enumerated().first { (_, media) in
+    /// One Save action for a lone attachment, or a "Save media" submenu with
+    /// "Save all (N)" plus a per-item list when a tweet carries several. Each
+    /// item's `index` is its RAW `tweet.media` offset (the proxy addresses media
+    /// by that flat index, across photos and videos alike).
+    private func saveMediaMenu(_ tweet: Tweet) -> UIMenuElement? {
+        let saveable = tweet.media.enumerated().filter { _, media in
             switch media.kind {
             case .photo, .video, .animatedGif: return true
             default: return false
             }
         }
-        guard let (index, media) = saveable else { return nil }
-        let isVideo = media.isVideo
-        return UIAction(title: isVideo ? "Save video" : "Save image",
-                        image: DesignSystem.icon(isVideo ? "arrow.down.circle" : "square.and.arrow.down")) { [weak self] _ in
-            self?.saveMedia(tweetID: tweet.restID, index: index, isVideo: isVideo, fallbackURL: media.videoURL ?? media.url)
+        guard !saveable.isEmpty else { return nil }
+        if saveable.count == 1 {
+            let (index, media) = saveable[0]
+            return saveItemAction(tweetID: tweet.restID, index: index, isVideo: media.isVideo,
+                                  title: media.isVideo ? "Save video" : "Save image")
+        }
+        let items = saveable.map { (index: $0.offset, isVideo: $0.element.isVideo) }
+        let saveAll = UIAction(title: "Save all (\(items.count))",
+                               image: DesignSystem.icon("square.and.arrow.down.on.square")) { [weak self] _ in
+            self?.saveAllMedia(tweetID: tweet.restID, items: items)
+        }
+        let perItem = saveable.enumerated().map { position, entry in
+            saveItemAction(tweetID: tweet.restID, index: entry.offset, isVideo: entry.element.isVideo,
+                           title: "\(entry.element.isVideo ? "Video" : "Image") \(position + 1)")
+        }
+        return UIMenu(title: "Save media", image: DesignSystem.icon("square.and.arrow.down"),
+                      children: [saveAll, UIMenu(options: .displayInline, children: perItem)])
+    }
+
+    private func saveItemAction(tweetID: String, index: Int, isVideo: Bool, title: String) -> UIAction {
+        UIAction(title: title, image: DesignSystem.icon(isVideo ? "arrow.down.circle" : "square.and.arrow.down")) { [weak self] _ in
+            self?.saveMedia(tweetID: tweetID, index: index, isVideo: isVideo)
         }
     }
 
@@ -166,7 +196,7 @@ class FeedViewController: UIViewController {
         present(activity, animated: true)
     }
 
-    private func saveMedia(tweetID: String, index: Int, isVideo: Bool, fallbackURL: String) {
+    private func saveMedia(tweetID: String, index: Int, isVideo: Bool) {
         let url = AppEnvironment.shared.api.mediaURL(tweetID: tweetID, index: index)
         Task {
             do {
@@ -176,6 +206,33 @@ class FeedViewController: UIViewController {
             } catch {
                 AppLogger.shared.warn("save media failed: \(error)", category: .media)
                 self.present(AlertFactory.error(error, title: "Couldn't save"), animated: true)
+            }
+        }
+    }
+
+    /// Saves every saveable attachment sequentially — one Photos auth prompt,
+    /// no parallel proxy hammering — then reports how many landed.
+    private func saveAllMedia(tweetID: String, items: [(index: Int, isVideo: Bool)]) {
+        let api = AppEnvironment.shared.api
+        Task {
+            var saved = 0
+            for item in items {
+                do {
+                    try await MediaSaver.save(from: api.mediaURL(tweetID: tweetID, index: item.index), isVideo: item.isVideo)
+                    saved += 1
+                } catch {
+                    AppLogger.shared.warn("save-all item \(item.index) failed: \(error)", category: .media)
+                }
+            }
+            if saved == items.count {
+                Haptics.success()
+                self.toast("Saved \(saved) to Photos")
+            } else if saved > 0 {
+                Haptics.success()
+                self.toast("Saved \(saved) of \(items.count)")
+            } else {
+                Haptics.error()
+                self.toast("Couldn't save")
             }
         }
     }
@@ -232,6 +289,7 @@ class FeedViewController: UIViewController {
         if let video = tweet.media.enumerated().first(where: { $0.element.isVideo }) {
             let url = video.element.videoURL.flatMap(URL.init)
                 ?? AppEnvironment.shared.api.mediaURL(tweetID: tweet.restID, index: video.offset)
+            MediaAudioSession.activatePlayback()
             let player = AVPlayer(url: url)
             let controller = AVPlayerViewController()
             controller.player = player

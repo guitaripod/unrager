@@ -13,6 +13,8 @@ final class PostcardViewController: UIViewController {
 
     private var avatar: UIImage?
     private var photos: [UIImage] = []
+    private var threadEntries: [PostcardView.Entry]?
+    private var threadLoading = false
 
     private let scrollView = UIScrollView()
     private let previewContainer = UIView()
@@ -25,6 +27,7 @@ final class PostcardViewController: UIViewController {
     private var swatches: [PostcardTheme: PostcardSwatch] = [:]
     private let nameSwitch = UISwitch()
     private let metricsSwitch = UISwitch()
+    private let threadSwitch = UISwitch()
     private let controls = UIStackView()
 
     private static let renderScale: CGFloat = 3
@@ -135,9 +138,11 @@ final class PostcardViewController: UIViewController {
         nameSwitch.addAction(UIAction { [weak self] _ in self?.toggleName() }, for: .valueChanged)
         let metricsToggle = makeToggle(title: "Metrics", control: metricsSwitch, isOn: options.showsMetrics)
         metricsSwitch.addAction(UIAction { [weak self] _ in self?.toggleMetrics() }, for: .valueChanged)
-        let toggleRow = UIStackView(arrangedSubviews: [nameToggle, metricsToggle])
+        let threadToggle = makeToggle(title: "Thread", control: threadSwitch, isOn: options.showsThread)
+        threadSwitch.addAction(UIAction { [weak self] _ in self?.toggleThread() }, for: .valueChanged)
+        let toggleRow = UIStackView(arrangedSubviews: [nameToggle, metricsToggle, threadToggle])
         toggleRow.axis = .horizontal
-        toggleRow.spacing = DesignSystem.Spacing.xl
+        toggleRow.spacing = DesignSystem.Spacing.l
         toggleRow.distribution = .fillEqually
 
         let actions = makeActionRow()
@@ -255,9 +260,16 @@ final class PostcardViewController: UIViewController {
 
     // MARK: - Preview
 
+    /// The blocks the postcard renders: the full root→focal chain when Thread is
+    /// on and fetched, else just the focal tweet (default, unchanged behavior).
+    private var activeEntries: [PostcardView.Entry] {
+        let single = PostcardView.Entry(tweet: tweet, avatar: avatar, photos: photos)
+        return (options.showsThread ? threadEntries : nil) ?? [single]
+    }
+
     private func rebuildPreview() {
         card?.removeFromSuperview()
-        let card = PostcardView(tweet: tweet, theme: theme, options: options, avatar: avatar, photos: photos)
+        let card = PostcardView(entries: activeEntries, theme: theme, options: options)
         cardShadow.addManaged(card)
         card.pinEdges(to: cardShadow)
         card.layer.cornerRadius = DesignSystem.Radius.card
@@ -288,8 +300,76 @@ final class PostcardViewController: UIViewController {
         rebuildPreview()
     }
 
+    /// Turning Thread on stacks the root→focal chain. The chain is fetched once
+    /// and cached, so re-toggling (or changing theme/name/metrics) never refetches.
+    private func toggleThread() {
+        options.showsThread = threadSwitch.isOn
+        if options.showsThread, threadEntries == nil, !threadLoading {
+            fetchThread()
+        } else {
+            rebuildPreview()
+        }
+    }
+
+    #if DEBUG
+    /// Screenshot-QA hook: flip the Thread toggle on as if tapped.
+    func debugEnableThread() {
+        threadSwitch.isOn = true
+        toggleThread()
+    }
+    #endif
+
+    private func fetchThread() {
+        threadLoading = true
+        loadingIndicator.startAnimating()
+        Task { [weak self] in
+            guard let self else { return }
+            let entries = await Self.loadThreadEntries(focal: self.tweet)
+            self.threadLoading = false
+            self.loadingIndicator.stopAnimating()
+            guard self.options.showsThread else { return }
+            self.threadEntries = entries
+            self.rebuildPreview()
+        }
+    }
+
+    /// Fetches the thread and walks the parent chain from the focal tweet up to
+    /// the root (cap 20, mirroring the TUI), then loads each tweet's avatar and
+    /// photos. Falls back to the focal alone if the fetch fails.
+    @MainActor
+    private static func loadThreadEntries(focal: Tweet) async -> [PostcardView.Entry] {
+        let chain: [Tweet]
+        if let thread = try? await AppEnvironment.shared.api.thread(id: focal.restID) {
+            chain = ancestorChain(focal: thread.focal, ancestors: thread.ancestors)
+        } else {
+            chain = [focal]
+        }
+        var entries: [PostcardView.Entry] = []
+        for tweet in chain {
+            async let avatar = loadAvatar(tweet, scale: Self.renderScale)
+            async let photos = loadPhotos(tweet, scale: Self.renderScale)
+            entries.append(PostcardView.Entry(tweet: tweet, avatar: await avatar, photos: await photos))
+        }
+        return entries
+    }
+
+    /// Climbs `in_reply_to_tweet_id` from the focal tweet to the root, returning
+    /// root-first / focal-last. Guards against cycles and caps depth.
+    private static func ancestorChain(focal: Tweet, ancestors: [Tweet]) -> [Tweet] {
+        var byID = Dictionary(ancestors.map { ($0.restID, $0) }, uniquingKeysWith: { a, _ in a })
+        byID[focal.restID] = focal
+        var chain = [focal]
+        var visited: Set<String> = [focal.restID]
+        var current = focal.inReplyToTweetID
+        while let id = current, chain.count < 20, visited.insert(id).inserted, let parent = byID[id] {
+            chain.append(parent)
+            current = parent.inReplyToTweetID
+        }
+        return chain.reversed()
+    }
+
     private func renderedImage() -> UIImage {
-        let card = PostcardView(tweet: tweet, theme: theme, options: options, avatar: avatar, photos: photos)
+        let card = PostcardView(entries: activeEntries, theme: theme, options: options)
         return card.render(scale: Self.renderScale)
     }
 

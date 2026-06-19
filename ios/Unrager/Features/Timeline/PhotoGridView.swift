@@ -1,11 +1,12 @@
 import UIKit
 import UnragerKit
 
-/// A rounded grid of up to four photos. One photo fills the width 16:9; two
-/// sit side by side; three put a tall lead photo beside a stacked pair; four
-/// form a 2×2. A fifth-and-beyond is collapsed into a "+N" overlay on the last
-/// tile. Tapping any tile reports its index so the cell can open the viewer at
-/// that photo. Reuse-safe: `prepareForReuse()` cancels every tile's load.
+/// A rounded grid of up to four photos. A lone photo fills the width at its
+/// real aspect ratio (clamped); two sit side by side; three put a tall lead
+/// photo beside a stacked pair; four form a 2×2. A fifth-and-beyond is
+/// collapsed into a "+N" overlay on the last tile. Tapping any tile reports its
+/// index so the cell can open the viewer at that photo. Reuse-safe:
+/// `prepareForReuse()` cancels every tile's load.
 final class PhotoGridView: UIView {
     var onTapPhoto: ((Int) -> Void)?
 
@@ -43,14 +44,18 @@ final class PhotoGridView: UIView {
         column.layer.cornerRadius = radius
     }
 
-    func configure(urls: [URL], contentWidth: CGFloat, imagesEnabled: Bool) {
-        rebuild(count: min(urls.count, 4), totalAspectHeight: layoutHeight(for: urls.count, width: contentWidth))
+    func configure(urls: [URL], contentWidth: CGFloat, imagesEnabled: Bool, aspectRatio: CGFloat? = nil) {
+        let height = layoutHeight(for: urls.count, width: contentWidth, aspectRatio: aspectRatio)
+        rebuild(count: min(urls.count, 4), totalAspectHeight: height)
         guard imagesEnabled else {
             tiles.forEach { $0.cancel() }
             return
         }
-        let tileSize = CGSize(width: contentWidth / 2, height: contentWidth / 2)
+        let single = urls.count == 1
         for (index, tile) in tiles.enumerated() where index < urls.count {
+            let tileSize = single
+                ? CGSize(width: contentWidth, height: height)
+                : CGSize(width: contentWidth / 2, height: contentWidth / 2)
             tile.load(url: urls[index], targetSize: tileSize)
         }
         if urls.count > 4 {
@@ -66,10 +71,18 @@ final class PhotoGridView: UIView {
         onTapPhoto = nil
     }
 
-    private func layoutHeight(for count: Int, width: CGFloat) -> CGFloat {
+    /// A lone photo gets its true aspect, clamped between a wide-panorama floor
+    /// (2:1) and a portrait ceiling (≈3:4) so neither a thin strip nor a
+    /// screen-eating column dominates the scroll. Multiple photos keep the
+    /// fixed square grid. Falls back to 16:9 when dimensions are unknown.
+    private func layoutHeight(for count: Int, width: CGFloat, aspectRatio: CGFloat?) -> CGFloat {
         switch count {
-        case 1: return (width * 9 / 16).rounded()
-        default: return width.rounded()
+        case 1:
+            guard let aspectRatio, aspectRatio > 0 else { return (width * 9 / 16).rounded() }
+            let natural = width / aspectRatio
+            return min(max(natural, width * 0.5), width * 1.3).rounded()
+        default:
+            return width.rounded()
         }
     }
 

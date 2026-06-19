@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 public struct TweetURL: Decodable, Sendable, Hashable {
@@ -110,12 +111,18 @@ public struct Media: Decodable, Sendable, Hashable {
     public let url: String
     public let videoURL: String?
     public let altText: String?
+    /// Natural source dimensions when the server knows them (photos and
+    /// videos/GIFs). Absent for non-visual kinds.
+    public let width: Int?
+    public let height: Int?
 
     enum CodingKeys: String, CodingKey {
         case kind
         case url
         case videoURL = "video_url"
         case altText = "alt_text"
+        case width
+        case height
     }
 
     public var isVideo: Bool {
@@ -123,5 +130,13 @@ public struct Media: Decodable, Sendable, Hashable {
         case .video, .animatedGif: return true
         default: return false
         }
+    }
+
+    /// width ÷ height when both dimensions are known and positive, so the feed
+    /// can size the attachment to its true shape. `nil` when unknown — callers
+    /// fall back to a default ratio.
+    public var aspectRatio: CGFloat? {
+        guard let width, let height, width > 0, height > 0 else { return nil }
+        return CGFloat(width) / CGFloat(height)
     }
 }

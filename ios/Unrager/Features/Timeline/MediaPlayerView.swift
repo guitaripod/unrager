@@ -20,15 +20,14 @@ final class MediaPlayerView: UIView {
     private var isGIF = false
     private var statusObservation: NSKeyValueObservation?
     private nonisolated(unsafe) var loopObserver: (any NSObjectProtocol)?
+    private var aspectConstraint: NSLayoutConstraint?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         clipsToBounds = true
         backgroundColor = .black
         playerLayer.videoGravity = .resizeAspect
-        let aspect = heightAnchor.constraint(equalTo: widthAnchor, multiplier: 9.0 / 16.0)
-        aspect.priority = .defaultHigh
-        aspect.isActive = true
+        setAspectRatio(16.0 / 9.0)
 
         poster.translatesAutoresizingMaskIntoConstraints = false
         addManaged(poster)
@@ -67,12 +66,27 @@ final class MediaPlayerView: UIView {
         layer.cornerCurve = .continuous
     }
 
+    /// Sizes the player box from a width ÷ height aspect by replacing the
+    /// height-to-width constraint (cheaper than mutating a multiplier and avoids
+    /// stale priorities on reuse). The clip itself stays `.resizeAspect`, so it
+    /// fits the box without cropping.
+    func setAspectRatio(_ ratio: CGFloat) {
+        aspectConstraint?.isActive = false
+        let safe = ratio > 0 ? ratio : 16.0 / 9.0
+        let constraint = heightAnchor.constraint(equalTo: widthAnchor, multiplier: 1.0 / safe)
+        constraint.priority = .defaultHigh
+        constraint.isActive = true
+        aspectConstraint = constraint
+    }
+
     /// Shows the poster and remembers the clip, but creates NO `AVPlayer` and
     /// starts NO decode — so scrolling a video cell into view costs nothing.
     /// Playback begins only when `play()` is called (by the feed once it's at
     /// rest and this is the focused clip).
-    func configure(posterURL: URL?, videoURL: URL, isGIF: Bool, posterSize: CGSize, imagesEnabled: Bool) {
+    func configure(posterURL: URL?, videoURL: URL, isGIF: Bool, aspectRatio: CGFloat,
+                   posterSize: CGSize, imagesEnabled: Bool) {
         tearDown()
+        setAspectRatio(aspectRatio)
         pendingVideoURL = videoURL
         self.isGIF = isGIF
         gifBadge.isHidden = !isGIF

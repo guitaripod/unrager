@@ -100,10 +100,19 @@ final class MediaContentView: UIView {
         media.firstIndex(of: target) ?? 0
     }
 
+    /// Clamps a media aspect (width ÷ height) so the inline player is neither a
+    /// thin panoramic strip nor a screen-eating portrait column. Defaults to
+    /// 16:9 when the server didn't report dimensions.
+    private func clampedMediaRatio(_ ratio: CGFloat?) -> CGFloat {
+        guard let ratio, ratio > 0 else { return 16.0 / 9.0 }
+        return min(max(ratio, 1.0 / 1.3), 2.0)
+    }
+
     // MARK: - Surfaces
 
     private func showGrid(_ media: [Media], contentWidth: CGFloat, imagesEnabled: Bool) {
-        let urls = media.compactMap { if case .photo = $0.kind { return URL(string: $0.url) } else { return nil } }
+        let photos = media.filter { if case .photo = $0.kind { return true } else { return false } }
+        let urls = photos.compactMap { URL(string: $0.url) }
         guard !urls.isEmpty else { hideAll(); isHidden = true; return }
         let view = grid ?? {
             let made = PhotoGridView(frame: .zero)
@@ -112,7 +121,8 @@ final class MediaContentView: UIView {
             return made
         }()
         view.onTapPhoto = { [weak self] index in self?.onTapPhoto?(index) }
-        view.configure(urls: urls, contentWidth: contentWidth, imagesEnabled: imagesEnabled)
+        let aspect = urls.count == 1 ? photos.first?.aspectRatio : nil
+        view.configure(urls: urls, contentWidth: contentWidth, imagesEnabled: imagesEnabled, aspectRatio: aspect)
         swap(to: view)
     }
 
@@ -132,9 +142,10 @@ final class MediaContentView: UIView {
             return made
         }()
         let isGIF: Bool = { if case .animatedGif = media.kind { return true } else { return false } }()
-        let height = (contentWidth * 9 / 16).rounded()
+        let ratio = clampedMediaRatio(media.aspectRatio)
+        let height = (contentWidth / ratio).rounded()
         view.configure(posterURL: imagesEnabled ? URL(string: media.url) : nil,
-                       videoURL: videoURL, isGIF: isGIF,
+                       videoURL: videoURL, isGIF: isGIF, aspectRatio: ratio,
                        posterSize: CGSize(width: contentWidth, height: height), imagesEnabled: imagesEnabled)
         swap(to: view)
     }

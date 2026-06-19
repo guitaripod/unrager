@@ -77,7 +77,7 @@ final class TweetMediaView: NSView {
 
         case .video, .animatedGif:
             show(videoView)
-            let height = mediaHeight(for: contentWidth)
+            let height = mediaHeight(for: contentWidth, aspectRatio: first.aspectRatio)
             heightConstraint.constant = height
             videoView.configure(
                 tweet: tweet, media: first, api: api,
@@ -123,8 +123,13 @@ final class TweetMediaView: NSView {
         view.isHidden = false
     }
 
-    private func mediaHeight(for width: CGFloat) -> CGFloat {
-        max(160, (width * 9 / 16).rounded())
+    /// Sizes the inline video/GIF box to the clip's real aspect (width ÷
+    /// height), clamped so it's neither a thin strip nor a screen-eating column.
+    /// Falls back to 16:9 when the server didn't report dimensions.
+    private func mediaHeight(for width: CGFloat, aspectRatio: CGFloat?) -> CGFloat {
+        let ratio = (aspectRatio.map { $0 > 0 ? $0 : 16.0 / 9.0 }) ?? (16.0 / 9.0)
+        let clamped = min(max(ratio, 1.0 / 1.3), 2.0)
+        return max(160, (width / clamped).rounded())
     }
 }
 
@@ -136,6 +141,7 @@ private final class ImageGridView: NSView {
     var onTap: ((Int) -> Void)?
 
     private var tiles: [AsyncImageView] = []
+    private var photos: [Media] = []
     private let overflowLabel = NSTextField(labelWithString: "")
     private let gap = DesignSystem.Spacing.xxs
     private var tapRecognizer: NSClickGestureRecognizer!
@@ -157,11 +163,19 @@ private final class ImageGridView: NSView {
         tiles.forEach { $0.cancel() }
     }
 
+    /// A lone photo gets its true aspect (clamped to a wide-panorama floor and a
+    /// portrait ceiling); a grid stays 16:9. Falls back to 16:9 when dimensions
+    /// are unknown.
     func intrinsicHeight(width: CGFloat) -> CGFloat {
-        max(160, (width * 9 / 16).rounded())
+        if photos.count == 1, let ratio = photos[0].aspectRatio, ratio > 0 {
+            let natural = width / ratio
+            return min(max(natural, width * 0.5), width * 1.3).rounded()
+        }
+        return max(160, (width * 9 / 16).rounded())
     }
 
     func configure(photos: [Media], imagesEnabled: Bool, width: CGFloat) {
+        self.photos = photos
         rebuildTiles(count: min(photos.count, 4))
         let height = intrinsicHeight(width: width)
         layoutTiles(count: tiles.count, width: width, height: height)

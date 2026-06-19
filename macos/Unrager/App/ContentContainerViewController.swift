@@ -30,15 +30,43 @@ final class ContentContainerViewController: NSViewController {
         view = BackgroundView(color: DesignSystem.Color.background)
     }
 
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        enforceMinimumHeight()
+    }
+
+    /// The window's size tracks this split-item's fitting size. A scroll-backed
+    /// root (Settings) has a ~0 intrinsic height, so without a floor swapping it
+    /// in collapses the whole window to a zero-height sliver — looking like the
+    /// app "closed". A required height floor keeps the window usable.
+    private func enforceMinimumHeight() {
+        let floor = view.heightAnchor.constraint(greaterThanOrEqualToConstant: 480)
+        floor.priority = .required
+        floor.isActive = true
+    }
+
     var topViewController: NSViewController? { stack.last }
     var canGoBack: Bool { stack.count > 1 }
     var currentTitle: String { stack.last?.title ?? "" }
 
     func setRoot(_ controller: NSViewController) {
+        let savedFrame = view.window?.frame
         for child in children { detach(child) }
         stack = [controller]
         attach(controller)
         onStackChange?()
+        restoreWindowFrame(savedFrame)
+    }
+
+    /// The window's size tracks the content split-item's fitting size, so swapping
+    /// in a scroll-backed root (e.g. Settings) makes the window re-fit to that
+    /// near-zero height. Restoring the prior frame — synchronously and once more
+    /// after the layout pass — keeps a source switch from ever resizing the
+    /// window. The required height floor is the backstop if both are bypassed.
+    private func restoreWindowFrame(_ frame: NSRect?) {
+        guard let frame, let window = view.window, window.isVisible else { return }
+        window.setFrame(frame, display: true)
+        DispatchQueue.main.async { [weak window] in window?.setFrame(frame, display: true) }
     }
 
     func push(_ controller: NSViewController) {

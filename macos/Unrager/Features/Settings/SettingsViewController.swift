@@ -107,7 +107,8 @@ final class SettingsViewController: NSViewController {
         column.alignment = .leading
         column.spacing = DesignSystem.Spacing.xl
 
-        let documentView = NSView()
+        let documentView = FlippedView()
+        documentView.translatesAutoresizingMaskIntoConstraints = false
         documentView.addManaged(column)
         scrollView.documentView = documentView
         scrollView.hasVerticalScroller = true
@@ -126,7 +127,6 @@ final class SettingsViewController: NSViewController {
             documentView.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
             documentView.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
             documentView.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
-            documentView.widthAnchor.constraint(equalTo: scrollView.widthAnchor),
 
             column.topAnchor.constraint(equalTo: documentView.topAnchor),
             column.leadingAnchor.constraint(equalTo: documentView.leadingAnchor, constant: DesignSystem.Spacing.xl),
@@ -364,4 +364,10 @@ final class SettingsViewController: NSViewController {
     @objc private func editRubric() {
         presentAsSheet(FilterSettingsViewController())
     }
+}
+
+/// A top-origin document view for the settings scroll view, so the stacked
+/// cards lay out from the top and scroll naturally rather than bottom-up.
+private final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
 }

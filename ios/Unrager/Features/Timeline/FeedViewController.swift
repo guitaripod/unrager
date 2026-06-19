@@ -310,9 +310,21 @@ class FeedViewController: UIViewController {
         }
         guard !photoIndices.isEmpty else { handleSelect(tweet); return }
         let start = min(max(0, tappedIndex), photoIndices.count - 1)
-        let viewer = MediaViewerViewController(tweetID: tweet.restID, photoMediaIndices: photoIndices, startIndex: start)
-        viewer.enableZoom(from: cell(for: tweet)?.mediaSourceView)
+        let source = cell(for: tweet)?.mediaSourceView
+        // Seed the viewer's first page with the thumbnail so removing the zoom
+        // snapshot reveals the same image (no black flash) while full-res loads.
+        // Only for a lone photo — a grid snapshot would mis-seed the tile.
+        let placeholder = photoIndices.count == 1 ? source.flatMap(Self.snapshotImage) : nil
+        let viewer = MediaViewerViewController(tweetID: tweet.restID, photoMediaIndices: photoIndices,
+                                               startIndex: start, placeholder: placeholder)
+        viewer.enableZoom(from: source)
         present(viewer, animated: true)
+    }
+
+    private static func snapshotImage(of view: UIView) -> UIImage? {
+        guard view.bounds.width > 1, view.bounds.height > 1 else { return nil }
+        let renderer = UIGraphicsImageRenderer(bounds: view.bounds)
+        return renderer.image { _ in view.drawHierarchy(in: view.bounds, afterScreenUpdates: false) }
     }
 
     /// A list-configured section so rows get native swipe actions, with the

@@ -396,15 +396,29 @@ final class PostcardView: UIView {
             CGSize(width: Self.renderWidth, height: UIView.layoutFittingCompressedSize.height),
             withHorizontalFittingPriority: .required,
             verticalFittingPriority: .fittingSizeLevel)
+
+        // Host in a throwaway off-screen window so `drawHierarchy` captures only
+        // this card. Off-window, `afterScreenUpdates: true` can bleed the live
+        // screen behind the sheet (the thread) into the image — which made the
+        // export look broken. Added and torn down within this call stack, so the
+        // window never actually appears.
+        let host = UIWindow(frame: CGRect(origin: .zero, size: targetSize))
+        host.windowLevel = UIWindow.Level.normal - 1
+        host.backgroundColor = .clear
+        host.isHidden = false
         frame = CGRect(origin: .zero, size: targetSize)
+        host.addSubview(self)
+        setNeedsLayout()
         layoutIfNeeded()
 
         let format = UIGraphicsImageRendererFormat()
         format.scale = scale
         format.opaque = true
         let renderer = UIGraphicsImageRenderer(size: targetSize, format: format)
-        return renderer.image { _ in
+        let image = renderer.image { _ in
             drawHierarchy(in: CGRect(origin: .zero, size: targetSize), afterScreenUpdates: true)
         }
+        removeFromSuperview()
+        return image
     }
 }

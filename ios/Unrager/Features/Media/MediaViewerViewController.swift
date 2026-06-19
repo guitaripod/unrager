@@ -16,11 +16,16 @@ final class MediaViewerViewController: UIViewController {
     private let shareButton = UIButton(configuration: .plain())
     private let dimView = UIView()
     private var zoomTransition: MediaZoomTransition?
+    private let startPage: Int
+    private let placeholder: UIImage?
 
-    init(tweetID: String, photoMediaIndices: [Int], startIndex: Int) {
+    init(tweetID: String, photoMediaIndices: [Int], startIndex: Int, placeholder: UIImage? = nil) {
         self.tweetID = tweetID
         self.indices = photoMediaIndices
-        self.currentPage = min(max(0, startIndex), max(0, photoMediaIndices.count - 1))
+        let clamped = min(max(0, startIndex), max(0, photoMediaIndices.count - 1))
+        self.currentPage = clamped
+        self.startPage = clamped
+        self.placeholder = placeholder
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = .overFullScreen
         modalTransitionStyle = .crossDissolve
@@ -144,7 +149,8 @@ extension MediaViewerViewController: UICollectionViewDataSource, UICollectionVie
 
     func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
         let cell = collectionView.dequeueReusableCell(withReuseIdentifier: ZoomablePhotoCell.reuseID, for: indexPath) as! ZoomablePhotoCell
-        cell.load(url: AppEnvironment.shared.api.mediaURL(tweetID: tweetID, index: indices[indexPath.item]))
+        let seed = indexPath.item == startPage ? placeholder : nil
+        cell.load(url: AppEnvironment.shared.api.mediaURL(tweetID: tweetID, index: indices[indexPath.item]), placeholder: seed)
         return cell
     }
 
@@ -211,10 +217,11 @@ private final class ZoomablePhotoCell: UICollectionViewCell, UIScrollViewDelegat
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func load(url: URL) {
+    func load(url: URL, placeholder: UIImage? = nil) {
         task?.cancel()
         scrollView.setZoomScale(1, animated: false)
-        imageView.image = nil
+        imageView.image = placeholder
+        if placeholder != nil { layoutImage() }
         let bounds = self.bounds.size
         task = Task { [weak self] in
             let loaded = await Self.fullResImage(url, fitting: bounds)

@@ -82,6 +82,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                     let postcard = PostcardViewController(tweet: tweet)
                     root.present(UINavigationController(rootViewController: postcard), animated: false)
                     if wantsThread { postcard.debugEnableThread() }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 5) { postcard.debugSaveExport() }
                 }
             case "compose":
                 root.present(UINavigationController(rootViewController: ComposeViewController(mode: .new)), animated: false)

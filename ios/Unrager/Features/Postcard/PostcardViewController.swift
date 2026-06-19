@@ -324,6 +324,16 @@ final class PostcardViewController: UIViewController {
         threadSwitch.isOn = true
         toggleThread()
     }
+
+    /// Screenshot-QA hook: render the export and write it to Documents so the
+    /// rasterized result (not the live preview) can be inspected.
+    func debugSaveExport() {
+        let image = renderedImage()
+        guard let data = image.pngData(),
+              let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        try? data.write(to: dir.appendingPathComponent("postcard-export.png"))
+        AppLogger.shared.info("postcard export \(Int(image.size.width))x\(Int(image.size.height)) saved", category: .app)
+    }
     #endif
 
     private func fetchThread() {

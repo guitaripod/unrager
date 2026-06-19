@@ -148,8 +148,16 @@ final class ComposeViewController: UIViewController {
         guard hasContent else { return }
         UIPasteboard.general.string = text
         Haptics.success()
+        autoLikeIfReply()
         openInX(text: text)
         dismiss(animated: true)
+    }
+
+    /// Replying to someone auto-likes their tweet (mirroring the TUI's reply
+    /// etiquette). Best-effort and skipped when it's already liked.
+    private func autoLikeIfReply() {
+        guard case let .reply(tweet) = mode, !tweet.favorited else { return }
+        Task { _ = try? await AppEnvironment.shared.api.like(tweetID: tweet.restID) }
     }
 
     /// Hands the draft off to the real X app. A reply opens the parent tweet

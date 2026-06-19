@@ -203,9 +203,17 @@ final class ComposeViewController: NSViewController, NSTextViewDelegate {
         guard !text.isEmpty else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+        autoLikeIfReply()
         openInX(text: text)
         onPosted?()
         dismiss(self)
+    }
+
+    /// Replying to someone auto-likes their tweet (mirroring the TUI's reply
+    /// etiquette). Best-effort and skipped when it's already liked.
+    private func autoLikeIfReply() {
+        guard case let .reply(tweet) = mode, !tweet.favorited else { return }
+        Task { _ = try? await AppEnvironment.shared.api.like(tweetID: tweet.restID) }
     }
 
     /// Hands the draft to the real X app. A reply opens the parent tweet in-app

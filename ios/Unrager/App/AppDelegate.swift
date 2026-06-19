@@ -12,6 +12,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             AppSettings.serverURLString = server
         }
         #endif
+        NotificationCenterService.shared.registerLaunchHandlers()
         AppLogger.shared.info("app launched · server=\(AppSettings.serverURLString)", category: .app)
         return true
     }

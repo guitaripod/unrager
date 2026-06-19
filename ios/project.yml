@@ -64,6 +64,8 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
         ITSAppUsesNonExemptEncryption: false
         NSPhotoLibraryAddUsageDescription: Unrager saves tweet photos and videos to your photo library when you choose Save from a tweet.
+        UIBackgroundModes: [fetch]
+        BGTaskSchedulerPermittedIdentifiers: [com.guitaripod.unrager.refresh]
         LSApplicationQueriesSchemes: [twitter]
         UNRAGER_DEFAULT_SERVER: http://100.91.211.44:7777
         NSAppTransportSecurity:

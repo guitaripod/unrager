@@ -7,6 +7,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession,
                options connectionOptions: UIScene.ConnectionOptions) {
         guard let windowScene = scene as? UIWindowScene else { return }
+        AppSettings.migrateAppearanceIfNeeded()
         let window = UIWindow(windowScene: windowScene)
         window.overrideUserInterfaceStyle = UIUserInterfaceStyle(rawValue: AppSettings.appearance.rawValue) ?? .unspecified
         window.tintColor = DesignSystem.Color.accent
@@ -16,6 +17,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window.makeKeyAndVisible()
         AppLogger.shared.info("scene connected", category: .app)
         AppEnvironment.shared.prefetchWhoami()
+        NotificationCenterService.shared.attach(to: root)
         SessionSync.restore()
         #if DEBUG
         handleDebugLaunch(root)

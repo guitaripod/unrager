@@ -13,6 +13,26 @@ final class TimelineViewModel {
         case search(query: String, product: SourceProduct)
         case mentions
         case bookmarks(query: String)
+
+        /// A stable key for the display-only timeline cache, or `nil` for
+        /// ephemeral feeds that shouldn't be seeded (e.g. an empty query).
+        var cacheKey: String? {
+            switch self {
+            case let .home(following, _):
+                return following ? "home-following" : "home-foryou"
+            case let .user(handle):
+                let h = handle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                return h.isEmpty ? nil : "user-\(h)"
+            case let .search(query, product):
+                let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                return q.isEmpty ? nil : "search-\(product.rawValue)-\(q)"
+            case .mentions:
+                return "mentions"
+            case let .bookmarks(query):
+                let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                return q.isEmpty ? nil : "bookmarks-\(q)"
+            }
+        }
     }
 
     let tweets = CurrentValueSubject<[Tweet], Never>([])
@@ -60,6 +80,7 @@ final class TimelineViewModel {
         guard newSource != source else { return }
         source = newSource
         reset()
+        seedFromCache()
         refresh()
     }
 
@@ -78,7 +99,27 @@ final class TimelineViewModel {
 
     func first() {
         guard tweets.value.isEmpty else { return }
+        seedFromCache()
         refresh()
+    }
+
+    /// Paints the cached snapshot for the current source so the feed isn't empty
+    /// while the real fetch is in flight. Seeds display only: it never touches
+    /// `seenIDs`, `cursor`, `hasLoadedOnce`, or `exhausted`, so the pending fetch
+    /// still runs and fully replaces these tweets — fresh content can't be
+    /// suppressed by the seed. No-op once any tweets are loaded.
+    private func seedFromCache() {
+        guard tweets.value.isEmpty, let key = source.cacheKey else { return }
+        guard let cached = TimelineCache.shared.load(key: key), !cached.tweets.isEmpty else { return }
+        tweets.send(cached.tweets)
+        AppLogger.shared.debug("seeded \(cached.tweets.count) cached tweets for \(key)", category: .timeline)
+    }
+
+    /// Overwrites the on-disk seed with the freshly-fetched tweets after a
+    /// reset. Only primary feeds (those with a `cacheKey`) persist.
+    private func persistCache(_ tweets: [Tweet]) {
+        guard let key = source.cacheKey else { return }
+        TimelineCache.shared.save(tweets, key: key)
     }
 
     private func reset() {
@@ -138,6 +179,7 @@ final class TimelineViewModel {
                 added += 1
             }
             tweets.send(current)
+            persistCache(current)
             cursor = page.cursor
             if page.cursor == nil {
                 exhausted = true
@@ -191,9 +233,9 @@ final class TimelineViewModel {
             }
             if Task.isCancelled { return }
             var current = reset ? [] : tweets.value
-            if reset { tweets.send([]) }
             current.append(contentsOf: survivors)
             tweets.send(current)
+            persistCache(current)
             if exhausted {
                 footerState.send(current.isEmpty ? .none : .endOfFeed)
             } else if survivors.isEmpty && !reset {

@@ -14,6 +14,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         windowController = controller
+        controller.attachNotificationService()
+        NotificationCenterService.shared.start()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }

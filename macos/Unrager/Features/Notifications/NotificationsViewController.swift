@@ -66,9 +66,16 @@ final class NotificationsViewController: NSViewController, ContentReappearing {
     /// hammer the endpoint, and skipped while the first load is still settling.
     /// Mirrors the iOS `viewDidAppear` refresh guard.
     func viewBecameVisible() {
+        markSeen()
         guard hasLoadedOnce, !loading else { return }
         if let last = lastRefresh, Date().timeIntervalSince(last) < 8 { return }
         load(reset: true)
+    }
+
+    /// Advances the last-seen marker to the newest loaded notification and clears
+    /// the unread badge — the user has now actually looked at the list.
+    private func markSeen() {
+        NotificationCenterService.shared.markNotificationsSeen(newest: items.first)
     }
 
     private func configureTable() {
@@ -118,6 +125,7 @@ final class NotificationsViewController: NSViewController, ContentReappearing {
                 cursor = page.cursor
                 if page.cursor == nil { exhausted = true }
                 tableView.reloadData()
+                if reset, view.window != nil { markSeen() }
                 if items.isEmpty {
                     emptyState.show(symbol: "bell", title: "No notifications", subtitle: "You're all caught up.")
                 }
@@ -172,6 +180,16 @@ final class NotificationsViewController: NSViewController, ContentReappearing {
         default: return .init(color: DesignSystem.Color.accent, symbol: "bell.fill",
                               verb: rawType.replacingOccurrences(of: "_", with: " "))
         }
+    }
+
+    /// Plain title + body for a local banner. Shares the verb mapping with the
+    /// in-feed style chips: title = actor names + action, body = tweet snippet.
+    static func bannerCopy(for notification: XNotification) -> (title: String, body: String) {
+        let style = style(for: notification.type)
+        let names = notification.actors.prefix(2).map(\.name).joined(separator: ", ")
+        let extra = notification.actors.count > 2 ? " +\(notification.actors.count - 2)" : ""
+        let who = names.isEmpty ? "Someone" : names + extra
+        return (title: "\(who) \(style.verb)", body: notification.targetTweetSnippet ?? "")
     }
 
     /// Bold actor names followed by the colored action verb.

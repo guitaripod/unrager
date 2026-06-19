@@ -156,4 +156,127 @@ struct DecodingTests {
         #expect(Format.count(1234) == "1.2K")
         #expect(Format.count(2_500_000) == "2.5M")
     }
+
+    @Test("MediaKind encodes to the same shape it decodes from")
+    func mediaKindRoundTrip() throws {
+        let samples: [(json: String, expected: MediaKind)] = [
+            (#"{"kind":"photo","url":"p.jpg"}"#, .photo),
+            (#"{"kind":"video","url":"v.jpg","video_url":"v.mp4"}"#, .video),
+            (#"{"kind":"animated_gif","url":"g.jpg","video_url":"g.mp4"}"#, .animatedGif),
+            (#"{"kind":{"you_tube":{"video_id":"dQw4w9WgXcQ"}},"url":"y.jpg"}"#,
+             .youTube(videoID: "dQw4w9WgXcQ")),
+            (#"{"kind":{"article":{"article_id":"a1","title":"T","preview_text":"P"}},"url":"a.jpg"}"#,
+             .article(articleID: "a1", title: "T", previewText: "P")),
+            (#"{"kind":{"link_card":{"title":"T","description":"D","domain":"e.com","target_url":"https://e.com"}},"url":"c.jpg"}"#,
+             .linkCard(title: "T", description: "D", domain: "e.com", targetURL: "https://e.com")),
+            (#"{"kind":{"broadcast":{"broadcast_id":"b1","title":"Live","broadcaster_name":"X","is_live":true}},"url":"b.jpg"}"#,
+             .broadcast(broadcastID: "b1", title: "Live", broadcasterName: "X", isLive: true)),
+            (#"{"kind":{"poll":{"options":[{"label":"A","count":10}],"ends_at":"2026-06-20T00:00:00Z","counts_final":false}},"url":""}"#,
+             .poll(options: [PollOption(label: "A", count: 10)],
+                   endsAt: try? Date.ISO8601FormatStyle().parse("2026-06-20T00:00:00Z"),
+                   countsFinal: false)),
+        ]
+        for sample in samples {
+            let original = try decode(Media.self, sample.json)
+            #expect(original.kind == sample.expected)
+            let data = try UnragerJSON.encoder.encode(original)
+            let reDecoded = try UnragerJSON.decode(Media.self, from: data)
+            #expect(reDecoded == original)
+            #expect(reDecoded.kind == sample.expected)
+        }
+    }
+
+    @Test("Full tweet round-trips through encode then decode")
+    func tweetRoundTrip() throws {
+        let json = """
+        {
+          "rest_id": "1790000000000000001",
+          "author": {"rest_id":"44196397","handle":"elonmusk","name":"Elon Musk",
+                     "verified":true,"followers":200000000,"following":500,
+                     "avatar_url":"https://pbs.twimg.com/x_normal.jpg"},
+          "created_at": "2026-06-19T12:00:00Z",
+          "text": "Hello world",
+          "reply_count": 12, "retweet_count": 34, "like_count": 567, "quote_count": 8,
+          "view_count": 102345, "bookmark_count": 5,
+          "favorited": true, "retweeted": false, "bookmarked": true,
+          "lang": "en", "in_reply_to_tweet_id": "9988",
+          "quoted_tweet": {
+            "rest_id":"123","author":{"rest_id":"1","handle":"a","name":"A","verified":false,
+              "followers":0,"following":0,"avatar_url":null},
+            "created_at":"2026-06-18T12:00:00Z","text":"quoted","reply_count":0,
+            "retweet_count":0,"like_count":0,"quote_count":0,"view_count":null,
+            "media":[],"url":"https://x.com/a/status/123","urls":[]
+          },
+          "media": [
+            {"kind":"photo","url":"https://pbs.twimg.com/m.jpg","video_url":null,"alt_text":"a cat","width":1200,"height":675},
+            {"kind":{"poll":{"options":[{"label":"A","count":10},{"label":"B","count":3}],"ends_at":"2026-06-20T00:00:00Z","counts_final":false}},"url":""}
+          ],
+          "url": "https://x.com/elonmusk/status/1790000000000000001",
+          "urls": [{"expanded_url":"https://example.com/a","display_url":"example.com/a"}]
+        }
+        """
+        let original = try decode(Tweet.self, json)
+        let data = try UnragerJSON.encoder.encode(original)
+        let reDecoded = try UnragerJSON.decode(Tweet.self, from: data)
+
+        #expect(reDecoded.restID == original.restID)
+        #expect(reDecoded.createdAt == original.createdAt)
+        #expect(reDecoded.author == original.author)
+        #expect(reDecoded.text == original.text)
+        #expect(reDecoded.likeCount == original.likeCount)
+        #expect(reDecoded.viewCount == original.viewCount)
+        #expect(reDecoded.bookmarkCount == original.bookmarkCount)
+        #expect(reDecoded.favorited == original.favorited)
+        #expect(reDecoded.bookmarked == original.bookmarked)
+        #expect(reDecoded.lang == original.lang)
+        #expect(reDecoded.inReplyToTweetID == original.inReplyToTweetID)
+        #expect(reDecoded.quotedTweet?.restID == original.quotedTweet?.restID)
+        #expect(reDecoded.quotedTweet?.createdAt == original.quotedTweet?.createdAt)
+        #expect(reDecoded.media.count == 2)
+        #expect(reDecoded.media.first?.kind == .photo)
+        #expect(reDecoded.media.first?.width == 1200)
+        #expect(reDecoded.media.first?.altText == "a cat")
+        if case let .poll(options, endsAt, final) = reDecoded.media.last?.kind {
+            #expect(options.count == 2)
+            #expect(options.first?.count == 10)
+            #expect(endsAt == original.media.last.flatMap { if case let .poll(_, e, _) = $0.kind { return e } else { return nil } })
+            #expect(final == false)
+        } else {
+            Issue.record("expected poll to survive round-trip")
+        }
+        #expect(reDecoded.url == original.url)
+        #expect(reDecoded.urls == original.urls)
+    }
+
+    @Test("TimelineCache seeds then revalidation overwrites; stale/corrupt ignored")
+    func timelineCache() throws {
+        let cache = TimelineCache()
+        let key = "test-\(UUID().uuidString)"
+        defer { cache.clear(key: key) }
+
+        #expect(cache.load(key: key) == nil)
+
+        func tweet(_ id: String, _ text: String) -> Tweet {
+            let json = """
+            {"rest_id":"\(id)","author":{"rest_id":"1","handle":"a","name":"A","verified":false,
+              "followers":0,"following":0},"created_at":"2026-06-19T12:00:00Z","text":"\(text)",
+              "reply_count":0,"retweet_count":0,"like_count":0,"quote_count":0,"view_count":null,
+              "url":"https://x.com/a/status/\(id)"}
+            """
+            return try! UnragerJSON.decode(Tweet.self, from: Data(json.utf8))
+        }
+
+        let first = [tweet("1", "one"), tweet("2", "two")]
+        cache.save(first, key: key)
+        let loaded = cache.load(key: key)
+        #expect(loaded?.tweets.map(\.restID) == ["1", "2"])
+        #expect((loaded?.age ?? .greatestFiniteMagnitude) < 60)
+
+        let fresh = [tweet("3", "three"), tweet("1", "one")]
+        cache.save(fresh, key: key)
+        #expect(cache.load(key: key)?.tweets.map(\.restID) == ["3", "1"])
+
+        cache.save([], key: key)
+        #expect(cache.load(key: key) == nil)
+    }
 }

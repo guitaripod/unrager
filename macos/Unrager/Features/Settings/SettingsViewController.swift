@@ -14,6 +14,9 @@ final class SettingsViewController: NSViewController {
     private let imagesSwitch = NSSwitch()
     private let filterSwitch = NSSwitch()
     private let seenSwitch = NSSwitch()
+    private let notificationsSwitch = NSSwitch()
+    private var kindSwitches: [NotificationKind: NSSwitch] = [:]
+    private var kindRows: [NSView] = []
 
     override func loadView() {
         view = BackgroundView(color: DesignSystem.Color.windowBackground)
@@ -82,6 +85,7 @@ final class SettingsViewController: NSViewController {
                     rows: [toggleRow("Load images", control: imagesSwitch),
                            toggleRow("Dim seen tweets", control: seenSwitch)],
                     footnote: "Tweets you've scrolled past are marked read and shown dimmed."),
+            notificationsSection(),
             section("Rage filter",
                     rows: [toggleRow("Hide rage tweets", control: filterSwitch),
                            buttonRow("Filter rubric", rubricButton)],
@@ -118,6 +122,86 @@ final class SettingsViewController: NSViewController {
             column.bottomAnchor.constraint(equalTo: documentView.bottomAnchor),
             appearanceControl.widthAnchor.constraint(greaterThanOrEqualToConstant: 280),
         ])
+    }
+
+    // MARK: - Notifications
+
+    /// The notifications card: a master banner toggle, per-type toggles (enabled
+    /// only while the master is on), and a button that opens the system
+    /// notification settings. The Dock/sidebar unread badge is independent of
+    /// these toggles. NO PUSH: banners are foreground/best-effort only.
+    private func notificationsSection() -> NSStackView {
+        notificationsSwitch.state = NotificationPrefs.bannersEnabled ? .on : .off
+        notificationsSwitch.target = self
+        notificationsSwitch.action = #selector(notificationsChanged)
+
+        var rows: [NSView] = [toggleRow("Notifications", control: notificationsSwitch)]
+        kindRows = NotificationKind.allCases.map { kind in
+            let control = NSSwitch()
+            control.state = NotificationPrefs.bannerEnabled(for: kind) ? .on : .off
+            let action = KindToggleAction(kind: kind, control: control)
+            kindActions.append(action)
+            control.target = action
+            control.action = #selector(KindToggleAction.toggled)
+            kindSwitches[kind] = control
+            return toggleRow(kind.title, control: control)
+        }
+        rows.append(contentsOf: kindRows)
+        let openButton = NSButton(title: "Open…", target: self, action: #selector(openSystemNotificationSettings))
+        openButton.bezelStyle = .rounded
+        rows.append(buttonRow("System notification settings", openButton))
+
+        updateKindRowsEnabled()
+        return section("Notifications", rows: rows,
+                       footnote: "Banners are delivered by an in-app poller while Unrager is running; there is no push server, so they won't arrive when the app is quit. The Dock and sidebar unread badge always count new activity regardless of these toggles.")
+    }
+
+    private var kindActions: [KindToggleAction] = []
+
+    /// A target/action box for a per-kind switch — AppKit's `action` needs a
+    /// retained object target, so each toggle keeps one alive for the VC's life.
+    final class KindToggleAction: NSObject {
+        let kind: NotificationKind
+        weak var control: NSSwitch?
+        init(kind: NotificationKind, control: NSSwitch) {
+            self.kind = kind
+            self.control = control
+        }
+        @objc func toggled() {
+            NotificationPrefs.setBannerEnabled(control?.state == .on, for: kind)
+        }
+    }
+
+    private func updateKindRowsEnabled() {
+        let enabled = notificationsSwitch.state == .on
+        for control in kindSwitches.values { control.isEnabled = enabled }
+        for row in kindRows { row.alphaValue = enabled ? 1 : 0.4 }
+    }
+
+    @objc private func notificationsChanged() {
+        if notificationsSwitch.state == .on {
+            Task { [weak self] in
+                let granted = await NotificationCenterService.shared.requestAuthorization()
+                guard let self else { return }
+                if granted {
+                    NotificationPrefs.bannersEnabled = true
+                } else {
+                    self.notificationsSwitch.state = .off
+                    NotificationPrefs.bannersEnabled = false
+                    self.openSystemNotificationSettings()
+                }
+                self.updateKindRowsEnabled()
+            }
+        } else {
+            NotificationPrefs.bannersEnabled = false
+            updateKindRowsEnabled()
+        }
+    }
+
+    @objc private func openSystemNotificationSettings() {
+        let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications")
+            ?? URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")
+        if let url { NSWorkspace.shared.open(url) }
     }
 
     // MARK: - Grouped sections

@@ -62,6 +62,7 @@ final class MainWindowController: NSWindowController {
         sidebar.delegate = self
         content.onStackChange = { [weak self] in self?.updateToolbar() }
         window?.contentViewController = splitViewController
+        AppSettings.migrateAppearanceIfNeeded()
         applyAppearance(AppSettings.appearance)
         AppEnvironment.shared.prefetchWhoami()
         select(.forYou)
@@ -492,6 +493,19 @@ final class MainWindowController: NSWindowController {
 
     @objc func toggleSidebar() {
         splitViewController.toggleSidebar(nil)
+    }
+
+    // MARK: - Notifications
+
+    /// Wires the notification service's deep-link routing and unread-count
+    /// reporting to this window: tapped banners open the thread/profile here, and
+    /// the unread count badges the sidebar's Notifications row. The Dock-tile
+    /// badge is set by the service itself.
+    func attachNotificationService() {
+        let service = NotificationCenterService.shared
+        service.onOpenTweet = { [weak self] id in self?.openThread(id: id) }
+        service.onOpenProfile = { [weak self] handle in self?.openProfile(handle: handle) }
+        service.onUnreadCount = { [weak self] count in self?.sidebar.setNotificationsBadge(count) }
     }
 }
 

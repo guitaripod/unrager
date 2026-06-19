@@ -25,6 +25,18 @@ public enum AppSettings {
         static let appearance = "unrager.appearance"
         static let imagesEnabled = "unrager.imagesEnabled"
         static let filterEnabled = "unrager.filterEnabled"
+        static let appearanceMigrated = "unrager.appearanceMigratedToLocal.v1"
+    }
+
+    /// One-time cleanup: earlier builds auto-applied the server's (dark) TUI
+    /// theme to the app appearance, leaving a non-chosen `.dark` persisted.
+    /// Clear that once so the app honors the system default until the user
+    /// explicitly picks an appearance in Settings. Call at launch before
+    /// reading `appearance`.
+    public static func migrateAppearanceIfNeeded() {
+        guard !defaults.bool(forKey: Key.appearanceMigrated) else { return }
+        defaults.set(true, forKey: Key.appearanceMigrated)
+        defaults.removeObject(forKey: Key.appearance)
     }
 
     /// The fallback server: a build-time `UNRAGER_DEFAULT_SERVER` Info.plist key

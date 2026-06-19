@@ -32,6 +32,10 @@ final class SettingsViewController: UIViewController {
     private let filterSwitch = UISwitch()
     private let markSeenSwitch = UISwitch()
     private let profileButton = UIButton(configuration: .gray())
+    private let notificationsSwitch = UISwitch()
+    private var kindSwitches: [NotificationKind: UISwitch] = [:]
+    private var kindRows: [UIView] = []
+    private var notificationsCardStack: UIStackView?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -106,6 +110,8 @@ final class SettingsViewController: UIViewController {
             toggleRow("Track seen tweets", markSeenSwitch),
         ]), footnote: "Reports tweets you scroll past on Following and Mentions to the server's read tracker and dims them on reload."))
 
+        stack.addArrangedSubview(notificationsSection())
+
         stack.addArrangedSubview(section("Rage filter", card: card([
             toggleRow("Hide rage tweets", filterSwitch),
             navRow("Edit filter rubric", icon: "slider.horizontal.3") { [weak self] in
@@ -116,6 +122,82 @@ final class SettingsViewController: UIViewController {
         stack.addArrangedSubview(section("About", card: card([
             contentRow(captionLabel("unrager · a calm X client. The server does the X work; this app is a thin native client.")),
         ])))
+    }
+
+    // MARK: - Notifications
+
+    /// The notifications card: a master banner toggle, per-type toggles (enabled
+    /// only while the master is on), and a row that jumps to the system
+    /// notification settings. The unread badge is independent of these toggles —
+    /// they only gate local banners. NO PUSH: banners are foreground/best-effort.
+    private func notificationsSection() -> UIView {
+        notificationsSwitch.isOn = NotificationPrefs.bannersEnabled
+        notificationsSwitch.addTarget(self, action: #selector(notificationsChanged), for: .valueChanged)
+
+        var rows: [UIView] = [toggleRow("Notifications", notificationsSwitch)]
+        kindRows = NotificationKind.allCases.map { kind in
+            let control = UISwitch()
+            control.isOn = NotificationPrefs.bannerEnabled(for: kind)
+            control.addAction(UIAction { _ in
+                NotificationPrefs.setBannerEnabled(control.isOn, for: kind)
+                Haptics.selection()
+            }, for: .valueChanged)
+            kindSwitches[kind] = control
+            return toggleRow(kind.title, control)
+        }
+        rows.append(contentsOf: kindRows)
+        rows.append(navRow("System notification settings", icon: "gear") { [weak self] in
+            self?.openSystemNotificationSettings()
+        })
+
+        updateKindRowsEnabled()
+        return section("Notifications", card: card(rows),
+                       footnote: "Banners are delivered by an in-app poller while Unrager is active (best-effort in the background); there is no push server, so they won't arrive when the app is closed. The Notifications-tab badge always counts unread activity regardless of these toggles.")
+    }
+
+    private func updateKindRowsEnabled() {
+        let enabled = notificationsSwitch.isOn
+        for control in kindSwitches.values { control.isEnabled = enabled }
+        for row in kindRows { row.alpha = enabled ? 1 : 0.4 }
+    }
+
+    @objc private func notificationsChanged() {
+        Haptics.selection()
+        if notificationsSwitch.isOn {
+            Task { [weak self] in
+                let granted = await NotificationCenterService.shared.requestAuthorization()
+                guard let self else { return }
+                if granted {
+                    NotificationPrefs.bannersEnabled = true
+                } else {
+                    self.notificationsSwitch.setOn(false, animated: true)
+                    NotificationPrefs.bannersEnabled = false
+                    self.present(self.permissionDeniedAlert(), animated: true)
+                }
+                self.updateKindRowsEnabled()
+            }
+        } else {
+            NotificationPrefs.bannersEnabled = false
+            updateKindRowsEnabled()
+        }
+    }
+
+    private func permissionDeniedAlert() -> UIAlertController {
+        let alert = UIAlertController(
+            title: "Notifications are off",
+            message: "Allow notifications for Unrager in System Settings to receive banners.",
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Open Settings", style: .default) { [weak self] _ in
+            self?.openSystemNotificationSettings()
+        })
+        alert.addAction(UIAlertAction(title: "Not Now", style: .cancel))
+        return alert
+    }
+
+    private func openSystemNotificationSettings() {
+        let urlString = UIApplication.openNotificationSettingsURLString
+        guard let url = URL(string: urlString) else { return }
+        UIApplication.shared.open(url)
     }
 
     // MARK: - Grouped-card building blocks

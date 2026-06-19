@@ -1,6 +1,6 @@
 import Foundation
 
-public struct User: Decodable, Sendable, Hashable, Identifiable {
+public struct User: Codable, Sendable, Hashable, Identifiable {
     public let restID: String
     public let handle: String
     public let name: String

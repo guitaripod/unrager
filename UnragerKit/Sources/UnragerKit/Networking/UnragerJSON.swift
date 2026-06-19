@@ -23,7 +23,17 @@ public enum UnragerJSON {
         return decoder
     }()
 
-    public static let encoder = JSONEncoder()
+    /// Mirrors the decoder's ISO-8601 date handling so a value encoded here
+    /// round-trips back through `decoder` — relied on by the timeline cache,
+    /// which snapshots `Tweet` values and reloads them.
+    public static let encoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(isoPlain.format(date))
+        }
+        return encoder
+    }()
 
     public static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         do {

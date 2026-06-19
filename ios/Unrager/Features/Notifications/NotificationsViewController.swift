@@ -119,6 +119,17 @@ final class NotificationsViewController: UIViewController {
         }
     }
 
+    /// Plain title + body for a local banner. The title carries the actor names
+    /// and action verb; the body is the target tweet snippet when present. Shares
+    /// the same verb mapping as the in-feed style chips.
+    static func bannerCopy(for notif: XNotification) -> (title: String, body: String) {
+        let style = style(for: notif.type)
+        let names = notif.actors.prefix(2).map(\.name).joined(separator: ", ")
+        let extra = notif.actors.count > 2 ? " +\(notif.actors.count - 2)" : ""
+        let who = names.isEmpty ? "Someone" : names + extra
+        return (title: "\(who) \(style.verb)", body: notif.targetTweetSnippet ?? "")
+    }
+
     private static func title(for notif: XNotification, style: NotifStyle) -> NSAttributedString {
         let names = notif.actors.prefix(2).map(\.name).joined(separator: ", ")
         let extra = notif.actors.count > 2 ? " +\(notif.actors.count - 2)" : ""
@@ -193,9 +204,17 @@ final class NotificationsViewController: UIViewController {
     /// hammer the endpoint, and skipped while the first load is still settling.
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        markSeen()
         guard hasLoadedOnce, !loading else { return }
         if let last = lastRefresh, Date().timeIntervalSince(last) < 8 { return }
         load(reset: true)
+    }
+
+    /// Advances the last-seen marker to the newest loaded notification and clears
+    /// the unread badge — the user has now actually looked at the list.
+    private func markSeen() {
+        let newest = order.first.flatMap { items[$0] }
+        NotificationCenterService.shared.markNotificationsSeen(newest: newest)
     }
 
     @objc private func reload() { load(reset: true) }
@@ -220,6 +239,7 @@ final class NotificationsViewController: UIViewController {
                 snapshot.appendSections([0])
                 snapshot.appendItems(order)
                 await dataSource.apply(snapshot, animatingDifferences: true)
+                if reset, view.window != nil { markSeen() }
                 emptyState.isHidden = !order.isEmpty
                 if order.isEmpty {
                     emptyState.show(symbol: "bell", title: "No notifications", subtitle: "You're all caught up.", showRetry: true)

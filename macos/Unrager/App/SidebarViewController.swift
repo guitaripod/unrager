@@ -49,6 +49,17 @@ final class SidebarViewController: NSViewController {
     private let tableView = NSTableView()
     private let scrollView = NSScrollView()
     private let items = SidebarItem.allCases
+    private var notificationsUnread = 0
+
+    /// Sets the unread count shown as a pill on the Notifications row (cleared at
+    /// zero). Refreshes only that row so selection isn't disturbed.
+    func setNotificationsBadge(_ count: Int) {
+        guard notificationsUnread != count else { return }
+        notificationsUnread = count
+        guard let row = items.firstIndex(of: .notifications) else { return }
+        tableView.reloadData(forRowIndexes: IndexSet(integer: row),
+                             columnIndexes: IndexSet(integer: 0))
+    }
 
     override func loadView() {
         view = NSView()
@@ -92,33 +103,18 @@ extension SidebarViewController: NSTableViewDataSource {
 extension SidebarViewController: NSTableViewDelegate {
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let id = NSUserInterfaceItemIdentifier("sidebarCell")
-        let cell = tableView.makeView(withIdentifier: id, owner: self) as? NSTableCellView ?? makeCell(id: id)
+        let cell = tableView.makeView(withIdentifier: id, owner: self) as? SidebarCellView ?? makeCell(id: id)
         let item = items[row]
         cell.textField?.stringValue = item.title
         cell.imageView?.image = DesignSystem.icon(item.symbol, pointSize: 15)
         cell.imageView?.contentTintColor = DesignSystem.Color.accent
+        cell.setBadge(item == .notifications ? notificationsUnread : 0)
         return cell
     }
 
-    private func makeCell(id: NSUserInterfaceItemIdentifier) -> NSTableCellView {
-        let cell = NSTableCellView()
+    private func makeCell(id: NSUserInterfaceItemIdentifier) -> SidebarCellView {
+        let cell = SidebarCellView()
         cell.identifier = id
-        let imageView = NSImageView()
-        let textField = NSTextField(labelWithString: "")
-        textField.font = .systemFont(ofSize: 13, weight: .medium)
-        textField.textColor = DesignSystem.Color.label
-        cell.imageView = imageView
-        cell.textField = textField
-        cell.addManaged(imageView)
-        cell.addManaged(textField)
-        NSLayoutConstraint.activate([
-            imageView.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: DesignSystem.Spacing.s),
-            imageView.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-            imageView.widthAnchor.constraint(equalToConstant: 20),
-            textField.leadingAnchor.constraint(equalTo: imageView.trailingAnchor, constant: DesignSystem.Spacing.s),
-            textField.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -DesignSystem.Spacing.s),
-            textField.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-        ])
         return cell
     }
 
@@ -126,5 +122,65 @@ extension SidebarViewController: NSTableViewDelegate {
         let row = tableView.selectedRow
         guard row >= 0, row < items.count else { return }
         delegate?.sidebar(didSelect: items[row])
+    }
+}
+
+/// A sidebar row: an accent-tinted glyph, the source title, and a trailing
+/// rounded unread-count pill (shown only on the Notifications row when there's
+/// activity to surface).
+private final class SidebarCellView: NSTableCellView {
+    private let badge = NSTextField(labelWithString: "")
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        build()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private func build() {
+        let imageView = NSImageView()
+        let textField = NSTextField(labelWithString: "")
+        textField.font = .systemFont(ofSize: 13, weight: .medium)
+        textField.textColor = DesignSystem.Color.label
+        self.imageView = imageView
+        self.textField = textField
+
+        badge.font = .systemFont(ofSize: 11, weight: .bold)
+        badge.textColor = .white
+        badge.alignment = .center
+        badge.wantsLayer = true
+        badge.layer?.backgroundColor = DesignSystem.Color.accent.cgColor
+        badge.layer?.cornerRadius = 9
+        badge.isHidden = true
+        badge.setContentHuggingPriority(.required, for: .horizontal)
+        badge.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        addManaged(imageView)
+        addManaged(textField)
+        addManaged(badge)
+        NSLayoutConstraint.activate([
+            imageView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: DesignSystem.Spacing.s),
+            imageView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            imageView.widthAnchor.constraint(equalToConstant: 20),
+            textField.leadingAnchor.constraint(equalTo: imageView.trailingAnchor, constant: DesignSystem.Spacing.s),
+            textField.centerYAnchor.constraint(equalTo: centerYAnchor),
+            badge.leadingAnchor.constraint(greaterThanOrEqualTo: textField.trailingAnchor, constant: DesignSystem.Spacing.xs),
+            badge.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -DesignSystem.Spacing.s),
+            badge.centerYAnchor.constraint(equalTo: centerYAnchor),
+            badge.heightAnchor.constraint(equalToConstant: 18),
+            badge.widthAnchor.constraint(greaterThanOrEqualToConstant: 18),
+        ])
+    }
+
+    func setBadge(_ count: Int) {
+        badge.layer?.backgroundColor = DesignSystem.Color.accent.cgColor
+        if count > 0 {
+            badge.stringValue = count > 99 ? "99+" : String(count)
+            badge.isHidden = false
+        } else {
+            badge.stringValue = ""
+            badge.isHidden = true
+        }
     }
 }

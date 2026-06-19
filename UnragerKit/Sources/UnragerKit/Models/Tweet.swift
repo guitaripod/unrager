@@ -4,7 +4,7 @@ import Foundation
 /// recursive; all stored properties are immutable so it remains `Sendable`.
 /// Identity and equality are by `restID` — the diffable snapshot stores ids,
 /// and content changes are surfaced via explicit `reconfigureItems`.
-public final class Tweet: Decodable, Sendable, Identifiable, Hashable {
+public final class Tweet: Codable, Sendable, Identifiable, Hashable {
     public let restID: String
     public let author: User
     public let createdAt: Date
@@ -70,6 +70,29 @@ public final class Tweet: Decodable, Sendable, Identifiable, Hashable {
         media = try c.decodeIfPresent([Media].self, forKey: .media) ?? []
         url = try c.decode(String.self, forKey: .url)
         urls = try c.decodeIfPresent([TweetURL].self, forKey: .urls) ?? []
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(restID, forKey: .restID)
+        try c.encode(author, forKey: .author)
+        try c.encode(createdAt, forKey: .createdAt)
+        try c.encode(text, forKey: .text)
+        try c.encode(replyCount, forKey: .replyCount)
+        try c.encode(retweetCount, forKey: .retweetCount)
+        try c.encode(likeCount, forKey: .likeCount)
+        try c.encode(quoteCount, forKey: .quoteCount)
+        try c.encodeIfPresent(viewCount, forKey: .viewCount)
+        try c.encode(bookmarkCount, forKey: .bookmarkCount)
+        try c.encode(favorited, forKey: .favorited)
+        try c.encode(retweeted, forKey: .retweeted)
+        try c.encode(bookmarked, forKey: .bookmarked)
+        try c.encodeIfPresent(lang, forKey: .lang)
+        try c.encodeIfPresent(inReplyToTweetID, forKey: .inReplyToTweetID)
+        try c.encodeIfPresent(quotedTweet, forKey: .quotedTweet)
+        try c.encode(media, forKey: .media)
+        try c.encode(url, forKey: .url)
+        try c.encode(urls, forKey: .urls)
     }
 
     public static func == (lhs: Tweet, rhs: Tweet) -> Bool { lhs.restID == rhs.restID }

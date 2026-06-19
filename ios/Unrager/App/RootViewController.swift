@@ -61,6 +61,32 @@ final class RootViewController: UITabBarController {
         guard let index = selectedTabs.firstIndex(of: .search) else { return }
         selectedIndex = index
     }
+
+    // MARK: - Notifications tab
+
+    private var notificationsTabIndex: Int? {
+        selectedTabs.firstIndex(of: .notifications)
+    }
+
+    /// Sets the live unread badge on the Notifications tab item (nil clears it).
+    /// No-op when the Notifications tab isn't in the user's bar — the count is
+    /// still tracked, just nowhere to show it.
+    func setNotificationsBadge(_ value: String?) {
+        guard let index = notificationsTabIndex,
+              let item = (viewControllers?[index] as? UINavigationController)?.tabBarItem
+                ?? viewControllers?[index].tabBarItem else { return }
+        item.badgeValue = value
+    }
+
+    /// Switches to the Notifications tab (or Home as a fallback) and pushes a
+    /// view controller onto that stack — used to deep-link a tapped banner.
+    func openInNotificationsStack(_ controller: UIViewController) {
+        let index = notificationsTabIndex ?? 0
+        selectedIndex = index
+        guard let nav = viewControllers?[index] as? UINavigationController else { return }
+        nav.popToRootViewController(animated: false)
+        nav.pushViewController(controller, animated: true)
+    }
 }
 
 extension RootViewController: UITabBarControllerDelegate {

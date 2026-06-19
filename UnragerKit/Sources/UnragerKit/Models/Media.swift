@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 
-public struct TweetURL: Decodable, Sendable, Hashable {
+public struct TweetURL: Codable, Sendable, Hashable {
     public let expandedURL: String
     public let displayURL: String
 
@@ -11,7 +11,7 @@ public struct TweetURL: Decodable, Sendable, Hashable {
     }
 }
 
-public struct PollOption: Decodable, Sendable, Hashable {
+public struct PollOption: Codable, Sendable, Hashable {
     public let label: String
     public let count: Int
 }
@@ -30,7 +30,7 @@ public enum MediaKind: Sendable, Hashable {
     case poll(options: [PollOption], endsAt: Date?, countsFinal: Bool)
 }
 
-extension MediaKind: Decodable {
+extension MediaKind: Codable {
     private enum Tag: String, CodingKey {
         case youTube = "you_tube"
         case article
@@ -104,9 +104,56 @@ extension MediaKind: Decodable {
                 debugDescription: "Unknown MediaKind variant")
         }
     }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .photo, .video, .animatedGif:
+            var single = encoder.singleValueContainer()
+            try single.encode(unitTag)
+        case let .youTube(videoID):
+            var container = encoder.container(keyedBy: Tag.self)
+            var yt = container.nestedContainer(keyedBy: YouTubeKeys.self, forKey: .youTube)
+            try yt.encode(videoID, forKey: .videoID)
+        case let .article(articleID, title, previewText):
+            var container = encoder.container(keyedBy: Tag.self)
+            var article = container.nestedContainer(keyedBy: ArticleKeys.self, forKey: .article)
+            try article.encode(articleID, forKey: .articleID)
+            try article.encode(title, forKey: .title)
+            try article.encode(previewText, forKey: .previewText)
+        case let .linkCard(title, description, domain, targetURL):
+            var container = encoder.container(keyedBy: Tag.self)
+            var card = container.nestedContainer(keyedBy: LinkCardKeys.self, forKey: .linkCard)
+            try card.encode(title, forKey: .title)
+            try card.encode(description, forKey: .description)
+            try card.encode(domain, forKey: .domain)
+            try card.encode(targetURL, forKey: .targetURL)
+        case let .broadcast(broadcastID, title, broadcasterName, isLive):
+            var container = encoder.container(keyedBy: Tag.self)
+            var bc = container.nestedContainer(keyedBy: BroadcastKeys.self, forKey: .broadcast)
+            try bc.encode(broadcastID, forKey: .broadcastID)
+            try bc.encode(title, forKey: .title)
+            try bc.encode(broadcasterName, forKey: .broadcasterName)
+            try bc.encode(isLive, forKey: .isLive)
+        case let .poll(options, endsAt, countsFinal):
+            var container = encoder.container(keyedBy: Tag.self)
+            var poll = container.nestedContainer(keyedBy: PollKeys.self, forKey: .poll)
+            try poll.encode(options, forKey: .options)
+            try poll.encodeIfPresent(endsAt, forKey: .endsAt)
+            try poll.encode(countsFinal, forKey: .countsFinal)
+        }
+    }
+
+    private var unitTag: String {
+        switch self {
+        case .photo: return "photo"
+        case .video: return "video"
+        case .animatedGif: return "animated_gif"
+        default: return "photo"
+        }
+    }
 }
 
-public struct Media: Decodable, Sendable, Hashable {
+public struct Media: Codable, Sendable, Hashable {
     public let kind: MediaKind
     public let url: String
     public let videoURL: String?

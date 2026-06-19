@@ -768,7 +768,7 @@ extension FeedViewController: NSMenuDelegate {
 
     @objc private func openAction(_ sender: NSMenuItem) {
         guard let urlString = sender.representedObject as? String, let url = URL(string: urlString) else { return }
-        NSWorkspace.shared.open(url)
+        BrowserOpener.open(url)
     }
 
     @objc private func copyAction(_ sender: NSMenuItem) {

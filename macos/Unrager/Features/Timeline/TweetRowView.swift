@@ -124,7 +124,7 @@ final class TweetRowView: NSTableCellView {
         mediaView.onTapPhoto = { [weak self] index in self?.onTapPhoto?(index) }
         mediaView.onTapVideo = { [weak self] in self?.onTapVideo?() }
         mediaView.onTapPoll = { [weak self] in self?.onTapPoll?() }
-        mediaView.onOpenURL = { url in NSWorkspace.shared.open(url) }
+        mediaView.onOpenURL = { url in BrowserOpener.open(url) }
         mediaView.setContentHuggingPriority(.defaultLow, for: .vertical)
 
         buildQuoted()

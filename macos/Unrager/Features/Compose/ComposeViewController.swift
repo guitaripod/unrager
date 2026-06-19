@@ -237,7 +237,7 @@ final class ComposeViewController: NSViewController, NSTextViewDelegate {
             NSWorkspace.shared.open(appURL)
             return
         }
-        if let webURL { NSWorkspace.shared.open(webURL) }
+        if let webURL { BrowserOpener.open(webURL) }
     }
 
     /// Builds `https://x.com/intent/post?text=…(&in_reply_to=…)`.

@@ -365,7 +365,7 @@ extension ThreadViewController: NSMenuDelegate {
 
     @objc private func openMenu(_ sender: NSMenuItem) {
         guard let urlString = sender.representedObject as? String, let url = URL(string: urlString) else { return }
-        NSWorkspace.shared.open(url)
+        BrowserOpener.open(url)
     }
 
     @objc private func copyMenu(_ sender: NSMenuItem) {

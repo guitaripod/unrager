@@ -1,6 +1,37 @@
 import AppKit
 import UnragerKit
 
+/// The leading nesting guides for a thread reply: one rounded vertical rail per
+/// depth level, so a reply-to-a-reply shows two aligned rails where a
+/// reply-to-the-root shows one — consecutive same-depth replies share rail
+/// positions and read as continuous thread lines.
+final class ThreadRailView: NSView {
+    static let step: CGFloat = 16
+
+    var level = 0 {
+        didSet { if level != oldValue { needsDisplay = true } }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard level > 0 else { return }
+        DesignSystem.Color.separator.setStroke()
+        for index in 0..<level {
+            let x = CGFloat(index) * Self.step + Self.step / 2
+            let path = NSBezierPath()
+            path.lineWidth = 2
+            path.lineCapStyle = .round
+            path.move(to: NSPoint(x: x, y: 3))
+            path.line(to: NSPoint(x: x, y: bounds.height - 3))
+            path.stroke()
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+}
+
 /// A view-based table cell rendering one tweet card: avatar, header (name +
 /// verified + handle · time), body, optional rich media, an optional
 /// quoted-tweet block (avatar + body + media thumbnail), and an action row with
@@ -41,14 +72,13 @@ final class TweetRowView: NSTableCellView {
     private let viewsButton = TweetRowView.actionButton(symbol: "chart.bar")
 
     private let separator = NSBox()
-    private let threadSpine = NSView()
+    private let threadRail = ThreadRailView()
     private var avatarLeading: NSLayoutConstraint!
-    private var spineLeading: NSLayoutConstraint!
+    private var railWidth: NSLayoutConstraint!
     private var contentWidth: CGFloat = 560
     private let api = AppEnvironment.shared.api
 
-    private static let indentStep: CGFloat = 18
-    private static let maxIndent = 4
+    private static let maxIndent = 3
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -122,18 +152,16 @@ final class TweetRowView: NSTableCellView {
 
         addManaged(avatar)
         addManaged(column)
-        threadSpine.wantsLayer = true
-        threadSpine.applyLayerBackground(DesignSystem.Color.separator)
-        threadSpine.isHidden = true
-        addManaged(threadSpine)
+        threadRail.isHidden = true
+        addManaged(threadRail)
         addManaged(separator)
 
         separator.boxType = .separator
 
         let avatarLeading = avatar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: DesignSystem.Spacing.l)
         self.avatarLeading = avatarLeading
-        let spineLeading = threadSpine.centerXAnchor.constraint(equalTo: leadingAnchor, constant: DesignSystem.Spacing.l + 22)
-        self.spineLeading = spineLeading
+        let railWidth = threadRail.widthAnchor.constraint(equalToConstant: 0)
+        self.railWidth = railWidth
 
         header.setContentHuggingPriority(.defaultLow, for: .horizontal)
         NSLayoutConstraint.activate([
@@ -142,10 +170,10 @@ final class TweetRowView: NSTableCellView {
             avatar.topAnchor.constraint(equalTo: topAnchor, constant: DesignSystem.Spacing.m),
             avatarLeading,
 
-            spineLeading,
-            threadSpine.widthAnchor.constraint(equalToConstant: 2),
-            threadSpine.topAnchor.constraint(equalTo: topAnchor),
-            threadSpine.bottomAnchor.constraint(equalTo: bottomAnchor),
+            threadRail.leadingAnchor.constraint(equalTo: leadingAnchor, constant: DesignSystem.Spacing.l),
+            railWidth,
+            threadRail.topAnchor.constraint(equalTo: topAnchor),
+            threadRail.bottomAnchor.constraint(equalTo: bottomAnchor),
 
             column.topAnchor.constraint(equalTo: topAnchor, constant: DesignSystem.Spacing.m),
             column.leadingAnchor.constraint(equalTo: avatar.trailingAnchor, constant: DesignSystem.Spacing.m),
@@ -283,9 +311,10 @@ final class TweetRowView: NSTableCellView {
     /// `TweetCell.setIndent`.
     private func setIndent(_ level: Int) {
         let clamped = min(max(0, level), Self.maxIndent)
-        avatarLeading.constant = DesignSystem.Spacing.l + CGFloat(clamped) * Self.indentStep
-        threadSpine.isHidden = clamped == 0
-        spineLeading.constant = DesignSystem.Spacing.l + CGFloat(max(0, clamped - 1)) * Self.indentStep + 22
+        avatarLeading.constant = DesignSystem.Spacing.l + CGFloat(clamped) * ThreadRailView.step
+        railWidth.constant = CGFloat(clamped) * ThreadRailView.step
+        threadRail.level = clamped
+        threadRail.isHidden = clamped == 0
     }
 
     private func configureAvatar(_ tweet: Tweet, imagesEnabled: Bool) {
@@ -414,7 +443,7 @@ final class TweetRowView: NSTableCellView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         updateQuotedBorderColor()
-        threadSpine.applyLayerBackground(DesignSystem.Color.separator)
+        threadRail.needsDisplay = true
     }
 
     private func updateQuotedBorderColor() {

@@ -250,9 +250,11 @@ extension ThreadViewController: NSTableViewDelegate {
         let isFocal = tweet.restID == focalID
         let isReply = focalIndex.map { row > $0 } ?? false
         let isOwn = ownHandle.map { tweet.author.handle.caseInsensitiveCompare($0) == .orderedSame } ?? false
-        cell.configure(with: tweet, imagesEnabled: AppSettings.imagesEnabled, contentWidth: contentWidth(),
+        let indent = indentLevel(for: tweet, isReply: isReply)
+        cell.configure(with: tweet, imagesEnabled: AppSettings.imagesEnabled,
+                       contentWidth: contentWidth() - CGFloat(min(indent, 3)) * ThreadRailView.step,
                        isReply: isReply, isFocal: isFocal, inThread: true,
-                       indentLevel: indentLevel(for: tweet, isReply: isReply),
+                       indentLevel: indent,
                        showAnalytics: isFocal && isOwn)
         cell.onTapAuthor = { [weak self] in self?.navigator?.openProfile(handle: tweet.author.handle) }
         cell.onLike = { [weak self] in self?.toggleLike(tweet) }

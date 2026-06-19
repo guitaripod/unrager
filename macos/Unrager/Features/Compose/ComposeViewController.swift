@@ -208,21 +208,28 @@ final class ComposeViewController: NSViewController, NSTextViewDelegate {
         dismiss(self)
     }
 
-    /// Opens the real X app's composer (`twitter://post`) when it's installed,
-    /// prefilled with the draft; falls back to the web intent (which can anchor a
-    /// reply via `in_reply_to`) only when no app handles the scheme. Mirrors the
-    /// iOS `openInX`.
+    /// Hands the draft to the real X app. A reply opens the parent tweet in-app
+    /// so the reply lands in the right thread (matching the TUI — the X URL
+    /// scheme can't prefill a reply composer); a new tweet opens the composer
+    /// prefilled. Web URL is the fallback when no app handles the scheme.
     private func openInX(text: String) {
-        var app = URLComponents(string: "twitter://post")
-        app?.queryItems = [URLQueryItem(name: "message", value: text)]
-        if let appURL = app?.url,
-           NSWorkspace.shared.urlForApplication(toOpen: appURL) != nil {
+        let appURL: URL?
+        let webURL: URL?
+        switch mode {
+        case let .reply(tweet):
+            appURL = URL(string: "twitter://status?id=\(tweet.restID)")
+            webURL = URL(string: tweet.url)
+        default:
+            var components = URLComponents(string: "twitter://post")
+            components?.queryItems = [URLQueryItem(name: "message", value: text)]
+            appURL = components?.url
+            webURL = Self.intentURL(text: text, mode: mode)
+        }
+        if let appURL, NSWorkspace.shared.urlForApplication(toOpen: appURL) != nil {
             NSWorkspace.shared.open(appURL)
             return
         }
-        if let web = Self.intentURL(text: text, mode: mode) {
-            NSWorkspace.shared.open(web)
-        }
+        if let webURL { NSWorkspace.shared.open(webURL) }
     }
 
     /// Builds `https://x.com/intent/post?text=…(&in_reply_to=…)`.

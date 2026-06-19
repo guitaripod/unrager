@@ -30,14 +30,12 @@
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
-		<key>NSAllowsLocalNetworking</key>
-		<true/>
 	</dict>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>UNRAGER_DEFAULT_SERVER</key>
-	<string>http://localhost:7777</string>
+	<string>http://100.91.211.44:7777</string>
 </dict>
 </plist>

@@ -246,11 +246,13 @@ pub async fn notifications(
                     name: u.name,
                     rest_id: u.rest_id,
                     verified: u.verified,
+                    avatar_url: u.avatar_url,
                 })
                 .collect(),
             target_tweet_id: n.target_tweet_id,
             target_tweet_snippet: n.target_tweet_snippet,
             target_tweet_like_count: n.target_tweet_like_count,
+            target_media: n.target_media,
             timestamp: n.timestamp,
         })
         .collect();

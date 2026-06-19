@@ -1,5 +1,5 @@
 use crate::error::{Error, Result};
-use crate::model::User;
+use crate::model::{Media, User};
 use crate::parse::tweet::{decode_html_entities, parse_tweet_result};
 use crate::parse::user::parse_user_result;
 use chrono::{DateTime, Utc};
@@ -16,6 +16,7 @@ pub struct RawNotification {
     pub target_tweet_created_at: Option<DateTime<Utc>>,
     pub target_tweet_snippet: Option<String>,
     pub target_tweet_favorited: bool,
+    pub target_media: Vec<Media>,
     pub timestamp: DateTime<Utc>,
 }
 
@@ -173,6 +174,7 @@ fn build_tweet_entry(_entry_id: &str, content: &Value) -> Option<RawNotification
         target_tweet_created_at: Some(tweet.created_at),
         target_tweet_snippet: Some(tweet.text.clone()),
         target_tweet_favorited: tweet.favorited,
+        target_media: tweet.media.clone(),
         timestamp: tweet.created_at,
     })
 }
@@ -217,6 +219,7 @@ fn build_grouped_entry(entry_id: &str, content: &Value) -> Option<RawNotificatio
         target_tweet_created_at: target.as_ref().map(|t| t.created_at),
         target_tweet_snippet: target.as_ref().map(|t| t.snippet.clone()),
         target_tweet_favorited: target.as_ref().is_some_and(|t| t.favorited),
+        target_media: target.as_ref().map(|t| t.media.clone()).unwrap_or_default(),
         timestamp,
     })
 }
@@ -325,6 +328,7 @@ struct TargetTweet {
     created_at: DateTime<Utc>,
     snippet: String,
     favorited: bool,
+    media: Vec<Media>,
 }
 
 fn extract_target_tweet(item: &Value) -> Option<TargetTweet> {
@@ -348,6 +352,7 @@ fn extract_target_tweet(item: &Value) -> Option<TargetTweet> {
             created_at: tweet.created_at,
             snippet: decode_html_entities(&tweet.text),
             favorited: tweet.favorited,
+            media: tweet.media,
         });
     }
 

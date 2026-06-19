@@ -93,6 +93,8 @@ pub struct NotificationActor {
     pub rest_id: String,
     #[serde(default)]
     pub verified: bool,
+    #[serde(default)]
+    pub avatar_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -108,6 +110,10 @@ pub struct Notification {
     pub target_tweet_snippet: Option<String>,
     #[serde(default)]
     pub target_tweet_like_count: Option<u64>,
+    /// Media on the target tweet (when the notification is about a post with
+    /// attachments), so clients can show a thumbnail. Empty otherwise.
+    #[serde(default)]
+    pub target_media: Vec<crate::Media>,
     pub timestamp: DateTime<Utc>,
 }
 

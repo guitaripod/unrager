@@ -136,14 +136,18 @@ struct DecodingTests {
     @Test("Notification renames `type` and defaults actors")
     func notification() throws {
         let json = """
-        {"id":"n1","type":"like","actors":[{"handle":"a","name":"A","rest_id":"9","verified":false}],
+        {"id":"n1","type":"like","actors":[{"handle":"a","name":"A","rest_id":"9","verified":false,"avatar_url":"https://pbs.twimg.com/a.jpg"}],
          "target_tweet_id":"1","target_tweet_snippet":"hi","target_tweet_like_count":5,
+         "target_media":[{"kind":"photo","url":"https://pbs.twimg.com/media/x.jpg","video_url":null,"alt_text":null,"width":1200,"height":675}],
          "timestamp":"2026-06-19T12:30:00Z"}
         """
         let notif = try decode(XNotification.self, json)
         #expect(notif.type == "like")
         #expect(notif.actors.first?.handle == "a")
+        #expect(notif.actors.first?.avatarURL == "https://pbs.twimg.com/a.jpg")
         #expect(notif.targetTweetLikeCount == 5)
+        #expect(notif.targetMedia.first?.kind == .photo)
+        #expect(notif.thumbnailURL?.absoluteString == "https://pbs.twimg.com/media/x.jpg")
     }
 
     @Test("Compact count formatting")

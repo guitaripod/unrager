@@ -75,7 +75,7 @@ final class NotificationsViewController: NSViewController, ContentReappearing {
     /// Advances the last-seen marker to the newest loaded notification and clears
     /// the unread badge — the user has now actually looked at the list.
     private func markSeen() {
-        NotificationCenterService.shared.markNotificationsSeen(newest: items.first)
+        NotificationCenterService.shared.markNotificationsSeen(in: items)
     }
 
     private func configureTable() {

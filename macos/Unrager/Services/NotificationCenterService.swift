@@ -71,8 +71,8 @@ final class NotificationCenterService: NSObject {
 
     /// Advances the last-seen marker to the newest of the supplied notifications
     /// and clears the badge. Called when the Notifications source is viewed.
-    func markNotificationsSeen(newest: XNotification?) {
-        NotificationPrefs.markSeen(upTo: newest)
+    func markNotificationsSeen(in notifications: [XNotification]) {
+        NotificationPrefs.markSeen(in: notifications)
         setUnreadCount(0)
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
     }

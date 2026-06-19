@@ -213,8 +213,7 @@ final class NotificationsViewController: UIViewController {
     /// Advances the last-seen marker to the newest loaded notification and clears
     /// the unread badge — the user has now actually looked at the list.
     private func markSeen() {
-        let newest = order.first.flatMap { items[$0] }
-        NotificationCenterService.shared.markNotificationsSeen(newest: newest)
+        NotificationCenterService.shared.markNotificationsSeen(in: order.compactMap { items[$0] })
     }
 
     @objc private func reload() { load(reset: true) }

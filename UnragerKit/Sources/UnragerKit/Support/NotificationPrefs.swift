@@ -116,6 +116,16 @@ public enum NotificationPrefs {
         return true
     }
 
+    /// Advances the marker to the newest notification *by timestamp* in a loaded
+    /// page. X doesn't return notifications in strict time order, so the first
+    /// item isn't reliably the newest — marking only it leaves a deeper,
+    /// higher-timestamp item counting as unread on every poll (a badge that
+    /// clears on view then reappears). Taking the max keeps it cleared.
+    @discardableResult
+    public static func markSeen(in notifications: [XNotification]) -> Bool {
+        markSeen(upTo: notifications.max { $0.timestamp < $1.timestamp })
+    }
+
     /// The unread count for a page: notifications strictly newer than the
     /// last-seen marker. With no marker yet (fresh install), nothing is unread —
     /// the first view establishes the baseline rather than flooding the badge.

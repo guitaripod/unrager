@@ -15,6 +15,7 @@ final class MediaViewerViewController: UIViewController {
     private let closeButton = UIButton(configuration: .plain())
     private let shareButton = UIButton(configuration: .plain())
     private let dimView = UIView()
+    private var zoomTransition: MediaZoomTransition?
 
     init(tweetID: String, photoMediaIndices: [Int], startIndex: Int) {
         self.tweetID = tweetID
@@ -23,6 +24,15 @@ final class MediaViewerViewController: UIViewController {
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = .overFullScreen
         modalTransitionStyle = .crossDissolve
+    }
+
+    /// Opt into the App Store–style zoom from a feed thumbnail. Retains the
+    /// transition (the controller's `transitioningDelegate` is weak) and grows
+    /// the media out of `sourceView`, retracting to it on dismiss.
+    func enableZoom(from sourceView: UIView?) {
+        let transition = MediaZoomTransition(sourceView: sourceView)
+        zoomTransition = transition
+        transitioningDelegate = transition
     }
 
     @available(*, unavailable)

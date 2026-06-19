@@ -77,6 +77,9 @@ final class TweetCell: UICollectionViewCell {
     /// Inline-video playback control, driven by the feed so only the most-visible
     /// clip plays while at rest (and nothing plays mid-scroll).
     var hasVideo: Bool { mediaContent.hasVideo }
+    /// The media surface, used as the source for the App Store–style zoom into
+    /// the full-screen viewer.
+    var mediaSourceView: UIView { mediaContent }
     func playVideo() { mediaContent.playVideo() }
     func pauseVideo() { mediaContent.pauseVideo() }
 

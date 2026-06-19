@@ -306,7 +306,9 @@ class FeedViewController: UIViewController {
         }
         guard !photoIndices.isEmpty else { handleSelect(tweet); return }
         let start = min(max(0, tappedIndex), photoIndices.count - 1)
-        present(MediaViewerViewController(tweetID: tweet.restID, photoMediaIndices: photoIndices, startIndex: start), animated: true)
+        let viewer = MediaViewerViewController(tweetID: tweet.restID, photoMediaIndices: photoIndices, startIndex: start)
+        viewer.enableZoom(from: cell(for: tweet)?.mediaSourceView)
+        present(viewer, animated: true)
     }
 
     /// A list-configured section so rows get native swipe actions, with the

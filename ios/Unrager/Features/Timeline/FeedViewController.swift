@@ -428,7 +428,7 @@ class FeedViewController: UIViewController {
         if viewModel.isExhausted {
             footer.show(text: "You're all caught up", showsRetry: false)
         } else if viewModel.isLoading.value {
-            footer.setHidden()
+            footer.showLoading()
         } else {
             footer.show(text: "Scroll to retry", showsRetry: true)
             footer.onRetry = { [weak self] in self?.viewModel.loadMoreIfNeeded(currentIndex: count - 1) }

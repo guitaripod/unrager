@@ -10,6 +10,7 @@ final class FeedFooterView: UICollectionReusableView {
 
     private let label = UILabel()
     private let button = UIButton(configuration: .plain())
+    private let spinner = UIActivityIndicatorView(style: .medium)
     private let stack = UIStackView()
 
     override init(frame: CGRect) {
@@ -25,9 +26,13 @@ final class FeedFooterView: UICollectionReusableView {
         button.isHidden = true
         button.addAction(UIAction { [weak self] _ in self?.onRetry?() }, for: .touchUpInside)
 
+        spinner.hidesWhenStopped = true
+        spinner.color = DesignSystem.Color.tertiaryLabel
+
         stack.axis = .horizontal
         stack.spacing = DesignSystem.Spacing.xs
         stack.alignment = .center
+        stack.addArrangedSubview(spinner)
         stack.addArrangedSubview(label)
         stack.addArrangedSubview(button)
         addManaged(stack)
@@ -48,12 +53,23 @@ final class FeedFooterView: UICollectionReusableView {
 
     func show(text: String, showsRetry: Bool) {
         isHidden = false
+        spinner.stopAnimating()
         label.text = text
         button.isHidden = !showsRetry
     }
 
+    /// A spinner + "Loading more…" while the next page is in flight, so reaching
+    /// the bottom of the feed clearly shows fresh tweets are on the way.
+    func showLoading() {
+        isHidden = false
+        button.isHidden = true
+        spinner.startAnimating()
+        label.text = "Loading more…"
+    }
+
     func setHidden() {
         isHidden = true
+        spinner.stopAnimating()
         label.text = nil
     }
 }

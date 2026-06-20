@@ -92,11 +92,20 @@ class FeedViewController: NSViewController {
         viewModel.first()
     }
 
+    /// The table width at the last full re-measure. Row heights only change with
+    /// width (text rewraps, media height tracks the content width), so the
+    /// re-measure must run on resize — but NOT on every layout pass: doing so on
+    /// each async media load triggers another layout, which re-measures again, a
+    /// loop that makes the feed jump around on its own. Gate it on a real width
+    /// change so it runs once per resize and then settles.
+    private var lastMeasuredWidth: CGFloat = 0
+
     override func viewDidLayout() {
         super.viewDidLayout()
-        if tableView.numberOfRows > 0 {
-            tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<tableView.numberOfRows))
-        }
+        let width = tableView.bounds.width
+        guard width > 0, width != lastMeasuredWidth, tableView.numberOfRows > 0 else { return }
+        lastMeasuredWidth = width
+        tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0 ..< tableView.numberOfRows))
     }
 
     private func configureTable() {

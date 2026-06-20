@@ -42,6 +42,12 @@ final class MediaContentView: UIView {
     func playVideo() { if hasVideo { player?.play() } }
     func pauseVideo() { player?.pause() }
 
+    /// The view to zoom from for the photo at `index` — the exact grid tile, so a
+    /// multi-photo tweet grows from the tapped image rather than the whole grid.
+    func photoSourceView(at index: Int) -> UIView? {
+        grid.flatMap { $0.tileView(at: index) } ?? activeView
+    }
+
     /// Configures (and shows) whichever surface the tweet's media calls for, or
     /// hides itself entirely when there is nothing to render. Returns whether
     /// any media was shown so the cell can collapse the slot.

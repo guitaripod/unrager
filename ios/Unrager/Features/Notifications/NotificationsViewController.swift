@@ -34,12 +34,14 @@ final class NotificationsViewController: UIViewController {
         var accessories: [UICellAccessory] = [
             .customView(configuration: .init(
                 customView: Self.typeChip(symbol: style.symbol, color: style.color),
-                placement: .leading(displayed: .always))),
+                placement: .leading(displayed: .always),
+                maintainsFixedSize: true)),
         ]
         if AppSettings.imagesEnabled, let thumb = notif.thumbnailURL {
             accessories.append(.customView(configuration: .init(
                 customView: Self.makeThumb(url: thumb, isVideo: notif.targetMedia.first?.isVideo ?? false),
-                placement: .trailing(displayed: .always))))
+                placement: .trailing(displayed: .always),
+                maintainsFixedSize: true)))
         }
         if notif.targetTweetID != nil { accessories.append(.disclosureIndicator()) }
         cell.accessories = accessories

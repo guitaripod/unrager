@@ -10,6 +10,15 @@ enum ClientSettings {
         static let tabs = "unrager.ios.tabs"
         static let homeFollowing = "unrager.ios.homeFollowing"
         static let homeOriginals = "unrager.ios.homeOriginals"
+        static let followingChronological = "unrager.ios.followingChronological"
+    }
+
+    /// Whether the Following feed is sorted strictly newest-first. X's
+    /// HomeLatestTimeline interleaves; this re-sorts the displayed tweets by
+    /// timestamp. Persisted; only applied on the Following feed.
+    static var followingChronological: Bool {
+        get { defaults.bool(forKey: Key.followingChronological) }
+        set { defaults.set(newValue, forKey: Key.followingChronological) }
     }
 
     /// When on, tweets scrolled past on Following / Mentions are reported to

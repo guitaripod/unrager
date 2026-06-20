@@ -44,6 +44,12 @@ final class PhotoGridView: UIView {
         column.layer.cornerRadius = radius
     }
 
+    /// The image view for a given photo position, so the viewer zooms from the
+    /// exact tapped tile rather than the whole grid.
+    func tileView(at index: Int) -> UIView? {
+        index >= 0 && index < tiles.count ? tiles[index] : nil
+    }
+
     func configure(urls: [URL], contentWidth: CGFloat, imagesEnabled: Bool, aspectRatio: CGFloat? = nil) {
         let height = layoutHeight(for: urls.count, width: contentWidth, aspectRatio: aspectRatio)
         rebuild(count: min(urls.count, 4), totalAspectHeight: height)

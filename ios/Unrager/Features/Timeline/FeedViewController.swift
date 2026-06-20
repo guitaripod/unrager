@@ -264,6 +264,7 @@ class FeedViewController: UIViewController {
         collectionView.pinEdges(to: view)
 
         let refresh = UIRefreshControl()
+        refresh.tintColor = DesignSystem.Color.secondaryLabel
         refresh.addTarget(self, action: #selector(pullToRefresh), for: .valueChanged)
         collectionView.refreshControl = refresh
 
@@ -310,11 +311,12 @@ class FeedViewController: UIViewController {
         }
         guard !photoIndices.isEmpty else { handleSelect(tweet); return }
         let start = min(max(0, tappedIndex), photoIndices.count - 1)
-        let source = cell(for: tweet)?.mediaSourceView
-        // Seed the viewer's first page with the thumbnail so removing the zoom
-        // snapshot reveals the same image (no black flash) while full-res loads.
-        // Only for a lone photo — a grid snapshot would mis-seed the tile.
-        let placeholder = photoIndices.count == 1 ? source.flatMap(Self.snapshotImage) : nil
+        let sourceCell = cell(for: tweet)
+        // Zoom from — and seed the first page with a snapshot of — the exact
+        // tapped tile. Using the whole grid grew the entire collection before
+        // settling onto one image; per-tile keeps the App Store–style zoom clean.
+        let source = sourceCell?.mediaSourceView(at: start) ?? sourceCell?.mediaSourceView
+        let placeholder = source.flatMap(Self.snapshotImage)
         let viewer = MediaViewerViewController(tweetID: tweet.restID, photoMediaIndices: photoIndices,
                                                startIndex: start, placeholder: placeholder)
         viewer.enableZoom(from: source)
@@ -453,7 +455,15 @@ class FeedViewController: UIViewController {
         viewModel.isRefreshing
             .receive(on: DispatchQueue.main)
             .sink { [weak self] refreshing in
-                if !refreshing { self?.collectionView.refreshControl?.endRefreshing() }
+                guard let rc = self?.collectionView.refreshControl else { return }
+                if refreshing {
+                    rc.attributedTitle = NSAttributedString(
+                        string: "Loading new tweets…",
+                        attributes: [.foregroundColor: DesignSystem.Color.secondaryLabel,
+                                     .font: DesignSystem.Typography.caption()])
+                } else {
+                    rc.endRefreshing()
+                }
             }
             .store(in: &cancellables)
 
@@ -521,7 +531,19 @@ class FeedViewController: UIViewController {
         updateUnreadCount()
     }
 
-    private func apply(_ tweets: [Tweet]) {
+    /// Display the feed strictly newest-first. Used by the Following feed's
+    /// chronological toggle; re-sorts whatever's already loaded without a
+    /// refetch, and orders every later page on arrival.
+    private(set) var chronologicalSort = false
+
+    func setChronologicalSort(_ on: Bool) {
+        guard on != chronologicalSort else { return }
+        chronologicalSort = on
+        apply(viewModel.tweets.value)
+    }
+
+    private func apply(_ incoming: [Tweet]) {
+        let tweets = chronologicalSort ? incoming.sorted { $0.createdAt > $1.createdAt } : incoming
         // Replacing the list mid-scroll (network result landing over the cache
         // seed) reflows tweets under the user. While they're actively scrolling,
         // stash it and apply when the scroll settles; a pure pagination append

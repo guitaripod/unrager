@@ -30,6 +30,12 @@ final class MediaCardView: UIView {
 
         cover.translatesAutoresizingMaskIntoConstraints = false
         cover.contentMode = .scaleAspectFill
+        // The cover height is driven by its constraint (contentWidth*0.52), not by
+        // the loaded image. Without these, the image view's intrinsic height ties
+        // with the height constraint and wins after an async/prefetched load,
+        // over-reserving space and leaving a gap above the labels in the feed.
+        cover.setContentHuggingPriority(.defaultLow, for: .vertical)
+        cover.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
 
         livePill.text = "● LIVE"
         livePill.font = DesignSystem.Typography.system(11, weight: .heavy)

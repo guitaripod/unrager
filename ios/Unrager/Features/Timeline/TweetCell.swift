@@ -117,6 +117,9 @@ final class TweetCell: UICollectionViewCell {
     /// The media surface, used as the source for the App Store–style zoom into
     /// the full-screen viewer.
     var mediaSourceView: UIView { mediaContent }
+    /// The exact tapped photo tile, so the zoom grows from that image (not the
+    /// whole grid) when a tweet has several pictures.
+    func mediaSourceView(at index: Int) -> UIView? { mediaContent.photoSourceView(at: index) }
     func playVideo() { mediaContent.playVideo() }
     func pauseVideo() { mediaContent.pauseVideo() }
 

@@ -6,6 +6,7 @@ import UnragerKit
 final class HomeViewController: FeedViewController {
     private var following = false
     private var originals = false
+    private var chronological = false
     private let titleButton = UIButton(type: .system)
 
     /// The dedicated Following tab pins Following; the For You / Home tab reopens
@@ -17,6 +18,7 @@ final class HomeViewController: FeedViewController {
         let restoredOriginals = ClientSettings.homeOriginals
         following = restoredFollowing
         originals = restoredOriginals
+        chronological = ClientSettings.followingChronological
         super.init(viewModel: TimelineViewModel(source: .home(following: restoredFollowing, originals: restoredOriginals)))
     }
 
@@ -29,6 +31,7 @@ final class HomeViewController: FeedViewController {
         configureNavItems()
         configureComposeButton()
         updateTabBarItem()
+        setChronologicalSort(chronological && following)
     }
 
     private func configureTitleMenu() {
@@ -40,13 +43,19 @@ final class HomeViewController: FeedViewController {
         image: DesignSystem.icon("line.3.horizontal.decrease.circle"),
         primaryAction: UIAction { [weak self] _ in self?.toggleOriginals() })
 
+    private lazy var chronologicalButton = UIBarButtonItem(
+        image: DesignSystem.icon("clock"),
+        primaryAction: UIAction { [weak self] _ in self?.toggleChronological() })
+
     private func configureNavItems() {
         refreshRightBarItems()
         updateOriginalsBadge()
+        updateChronologicalBadge()
     }
 
     private func refreshRightBarItems() {
-        navigationItem.rightBarButtonItems = [originalsButton, unreadBarButton].compactMap { $0 }
+        let chrono = following ? chronologicalButton : nil
+        navigationItem.rightBarButtonItems = [originalsButton, chrono, unreadBarButton].compactMap { $0 }
     }
 
     private func updateTitle() {
@@ -117,6 +126,7 @@ final class HomeViewController: FeedViewController {
         self.following = following
         ClientSettings.homeFollowing = following
         viewModel.updateSource(.home(following: following, originals: originals))
+        setChronologicalSort(chronological && following)
         updateTabBarItem()
         afterSwitch()
     }
@@ -145,6 +155,19 @@ final class HomeViewController: FeedViewController {
     private func updateOriginalsBadge() {
         originalsButton.image = DesignSystem.icon(
             originals ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+    }
+
+    /// Toggles strict newest-first ordering of the Following feed.
+    private func toggleChronological() {
+        chronological.toggle()
+        ClientSettings.followingChronological = chronological
+        Haptics.selection()
+        setChronologicalSort(chronological && following)
+        updateChronologicalBadge()
+    }
+
+    private func updateChronologicalBadge() {
+        chronologicalButton.image = DesignSystem.icon(chronological ? "clock.fill" : "clock")
     }
 
     /// Mirrors the live feed mode onto the tab bar so the Home tab reads

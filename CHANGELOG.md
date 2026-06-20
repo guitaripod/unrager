@@ -6,6 +6,13 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+## [0.19.1] — 2026-06-20
+
+- **The iOS app no longer pauses your music or podcasts.** The audio session used `.playback` without mixing, so unmuting a clip (and inline autoplay) captured the output and interrupted whatever was already playing. Inline muted autoplay now runs under a mixable ambient session, and unmuting switches to a playback session with `.mixWithOthers` — audible even with the ring/silent switch on (like X/YouTube), but other apps keep playing instead of being paused.
+- **The iOS feed now shows when it's fetching more.** Reaching the bottom shows a spinner with "Loading more…" instead of collapsing to nothing, and pulling to refresh the Following tab shows a tinted spinner with a "Loading new tweets…" title through the entire fetch and filter pass.
+- **A batch of iOS feed and rendering fixes.** Opening a multi-photo tweet zooms from the exact tapped tile into the viewer instead of inflating the whole grid first; YouTube and link cards no longer leave a gap between the cover image and the labels in the feed; the post-preview thumbnail in Notifications keeps its square slot and scales to fit; and the Following feed gained a chronological-sort toggle (a clock button, Following only) that orders it strictly newest-first on top of X's interleaved latest timeline.
+- **The macOS feed no longer drifts and jumps on its own.** Every async media load triggered a full row-height re-measure, which triggered another layout pass, which re-measured again — a loop that made the feed creep while idle. Row heights are reserved up front from each attachment's aspect ratio, so the re-measure now runs only on a real window-width change and then settles.
+
 ## [0.19.0] — 2026-06-20
 
 - **Notifications now carry the actor's avatar and a media thumbnail.** The API's notification payload gained the actor `avatar_url` and the target tweet's media, so the native clients show each actor's face beside the action chip and a rounded thumbnail (with a play glyph on videos) when a notification is about a post with attachments — no longer a flat, faceless list.
@@ -147,7 +154,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.19.0...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.19.1...HEAD
+[0.19.1]: https://github.com/guitaripod/unrager/releases/tag/0.19.1
 [0.19.0]: https://github.com/guitaripod/unrager/releases/tag/0.19.0
 [0.18.1]: https://github.com/guitaripod/unrager/releases/tag/0.18.1
 [0.18.0]: https://github.com/guitaripod/unrager/releases/tag/0.18.0

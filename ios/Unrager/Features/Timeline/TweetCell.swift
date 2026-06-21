@@ -52,6 +52,10 @@ final class TweetCell: UICollectionViewCell {
     var onTapCard: ((URL) -> Void)?
     var onLike: (() -> Void)?
     var onReply: (() -> Void)?
+    /// Fired by a press-and-hold on the like button. Enabled per-config via
+    /// `enableLikers(_:)` — only where the viewer can actually see the likers
+    /// (their own tweets), so a long-hold elsewhere leaves the tap-to-like intact.
+    var onShowLikers: (() -> Void)?
     var onTapQuoted: (() -> Void)?
     /// Routes a tapped `@mention` to a profile, or `#hashtag` to search.
     var onTapMention: ((String) -> Void)?
@@ -82,6 +86,7 @@ final class TweetCell: UICollectionViewCell {
     private let retweetButton = TweetCell.makeActionButton(symbol: "arrow.2.squarepath")
     private let likeButton = TweetCell.makeActionButton(symbol: "heart")
     private let viewsButton = TweetCell.makeActionButton(symbol: "chart.bar")
+    private let likeLongPress = UILongPressGestureRecognizer()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -106,6 +111,8 @@ final class TweetCell: UICollectionViewCell {
         onTapCard = nil
         onLike = nil
         onReply = nil
+        onShowLikers = nil
+        likeLongPress.isEnabled = false
         onTapQuoted = nil
         onTapMention = nil
         onTapHashtag = nil
@@ -316,6 +323,9 @@ final class TweetCell: UICollectionViewCell {
         actionBar.addArrangedSubview(likeButton)
         actionBar.addArrangedSubview(viewsButton)
         likeButton.addTarget(self, action: #selector(likeTapped), for: .touchUpInside)
+        likeLongPress.addTarget(self, action: #selector(likeLongPressed))
+        likeLongPress.isEnabled = false
+        likeButton.addGestureRecognizer(likeLongPress)
         replyButton.addTarget(self, action: #selector(replyTapped), for: .touchUpInside)
         replyButton.accessibilityHint = "Reply to this tweet"
         retweetButton.isUserInteractionEnabled = false
@@ -422,6 +432,19 @@ final class TweetCell: UICollectionViewCell {
     @objc private func likeTapped() {
         Haptics.tap()
         onLike?()
+    }
+    @objc private func likeLongPressed(_ recognizer: UILongPressGestureRecognizer) {
+        guard recognizer.state == .began else { return }
+        Haptics.tap()
+        onShowLikers?()
+    }
+
+    /// Turns on the press-and-hold-for-likers gesture and installs its handler.
+    /// Left off otherwise, so the like button's tap-to-like is untouched on
+    /// tweets whose likers can't be shown.
+    func enableLikers(_ handler: @escaping () -> Void) {
+        onShowLikers = handler
+        likeLongPress.isEnabled = true
     }
 
     override func traitCollectionDidChange(_ previous: UITraitCollection?) {

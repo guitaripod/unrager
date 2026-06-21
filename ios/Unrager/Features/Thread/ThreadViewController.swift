@@ -43,6 +43,9 @@ final class ThreadViewController: UIViewController {
         cell.onTapAuthor = { [weak self] in self?.push(ProfileViewController(handle: tweet.author.handle)) }
         cell.onLike = { [weak self] in self?.toggleLike(tweet, cell: cell) }
         cell.onReply = { [weak self] in self?.reply(to: tweet) }
+        if ownTweet {
+            cell.enableLikers { [weak self] in self?.push(LikersViewController(tweetID: tweet.restID)) }
+        }
         cell.onTapPhoto = { [weak self] _ in self?.openMedia(tweet) }
         cell.onTapCard = { url in UIApplication.shared.open(url) }
         cell.onTapQuoted = { [weak self] in

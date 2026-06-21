@@ -53,6 +53,11 @@ class FeedViewController: UIViewController {
         cell.onLike = { [weak self] in self?.toggleLike(tweet, cell: cell) }
         cell.onTapMention = { [weak self] handle in self?.handleProfile(handle) }
         cell.onTapHashtag = { [weak self] query in self?.openHashtag(query) }
+        if self.isOwnTweet(tweet) {
+            cell.enableLikers { [weak self] in
+                self?.navigationController?.pushViewController(LikersViewController(tweetID: tweet.restID), animated: true)
+            }
+        }
     }
 
     init(viewModel: TimelineViewModel) {

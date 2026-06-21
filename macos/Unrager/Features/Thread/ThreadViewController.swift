@@ -259,6 +259,7 @@ extension ThreadViewController: NSTableViewDelegate {
         cell.onTapAuthor = { [weak self] in self?.navigator?.openProfile(handle: tweet.author.handle) }
         cell.onLike = { [weak self] in self?.toggleLike(tweet) }
         cell.onReply = { [weak self] in self?.navigator?.compose(replyingTo: tweet) }
+        cell.onShowLikers = { [weak self] in self?.navigator?.openLikers(for: tweet) }
         cell.onTapQuoted = { [weak self] in
             if let quoted = tweet.quotedTweet { self?.navigator?.openThread(for: quoted) }
         }

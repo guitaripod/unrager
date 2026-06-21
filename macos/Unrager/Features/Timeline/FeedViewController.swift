@@ -562,6 +562,7 @@ extension FeedViewController: NSTableViewDelegate {
         cell.onTapPoll = { [weak self] in self?.navigator?.openThread(for: tweet) }
         cell.onLike = { [weak self] in self?.toggleLike(tweet) }
         cell.onReply = { [weak self] in self?.navigator?.compose(replyingTo: tweet) }
+        cell.onShowLikers = { [weak self] in self?.navigator?.openLikers(for: tweet) }
         return cell
     }
 

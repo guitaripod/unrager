@@ -46,6 +46,7 @@ final class TweetRowView: NSTableCellView {
     var onTapQuoted: (() -> Void)?
     var onLike: (() -> Void)?
     var onReply: (() -> Void)?
+    var onShowLikers: (() -> Void)?
 
     private let avatar = AsyncImageView()
     private let nameLabel = TweetRowView.label(font: DesignSystem.Typography.name(), color: DesignSystem.Color.label)
@@ -135,6 +136,7 @@ final class TweetRowView: NSTableCellView {
         actionBar.alignment = .centerY
         likeButton.target = self
         likeButton.action = #selector(likeTapped)
+        likeButton.onLongPress = { [weak self] in self?.onShowLikers?() }
         likeButton.setAccessibilityLabel("Like")
         replyButton.target = self
         replyButton.action = #selector(replyTapped)
@@ -391,6 +393,7 @@ final class TweetRowView: NSTableCellView {
         likeButton.image = DesignSystem.icon(likeSymbol, pointSize: 13)
         likeButton.contentTintColor = likeColor
         likeButton.setAccessibilityLabel(tweet.favorited ? "Unlike" : "Like")
+        likeButton.longPressEnabled = tweet.likeCount > 0
     }
 
     /// Flips the like button's filled/colored state and adjusts the count
@@ -404,6 +407,7 @@ final class TweetRowView: NSTableCellView {
         likeButton.contentTintColor = color
         likeButton.setAccessibilityLabel(liked ? "Unlike" : "Like")
         setTitle(likeButton, countLabel(count), color: color)
+        likeButton.longPressEnabled = count > 0
     }
 
     private func setTitle(_ button: NSButton, _ text: String, color: NSColor) {
@@ -433,6 +437,8 @@ final class TweetRowView: NSTableCellView {
         onTapQuoted = nil
         onLike = nil
         onReply = nil
+        onShowLikers = nil
+        likeButton.longPressEnabled = false
     }
 
     override func layout() {
@@ -484,8 +490,8 @@ final class TweetRowView: NSTableCellView {
         return field
     }
 
-    private static func actionButton(symbol: String) -> NSButton {
-        let button = NSButton(title: "", target: nil, action: nil)
+    private static func actionButton(symbol: String) -> LongPressButton {
+        let button = LongPressButton(title: "", target: nil, action: nil)
         button.bezelStyle = .inline
         button.isBordered = false
         button.image = DesignSystem.icon(symbol, pointSize: 13)

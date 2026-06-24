@@ -6,6 +6,10 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-06-24
+
+- **A native GNOME desktop client for Linux.** unrager now has a fourth native face — a GTK4 / libadwaita desktop app (`linux/`, built with relm4) beside the iPhone and Mac apps. Like them it's a thin client over `unrager serve`: it auto-spawns or reuses a local server, or points at one over Tailscale. It carries every source, threads, profiles, compose/reply, optimistic like, a paging media viewer, notifications with desktop banners, and the rage-filter / ask / brief / translate features — all in a real Adwaita window. Inline photos fill the tweet column at their true aspect (with a Compact/Standard/Large media-size preference); video and GIFs show a poster with a play badge; every screen has proper loading/empty/error states; and a right-click menu copies or saves any image. Adjustable text size, light/dark/system appearance, and circular `adw::Avatar`s throughout. Build it with `cd linux && cargo run -p unrager-gtk` (needs the GTK4 + libadwaita dev packages). It's a separate GUI workspace and isn't published to crates.io; see `linux/README.md`.
+
 ## [0.19.2] — 2026-06-21
 
 - **Press and hold the like button to see who liked a post.** On iOS a long-press on a tweet's heart — and on macOS a click-and-hold — opens the paginated "Liked by" list directly, the same screen the context menu reaches, without opening a menu first. A quick tap still toggles the like exactly as before. The gesture is offered only where the likers are actually visible — on iOS your own tweets (in the feed and in threads), on macOS any post with at least one like — because X only exposes the likers of your own posts.
@@ -158,7 +162,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.19.2...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.20.0...HEAD
+[0.20.0]: https://github.com/guitaripod/unrager/releases/tag/0.20.0
 [0.19.2]: https://github.com/guitaripod/unrager/releases/tag/0.19.2
 [0.19.1]: https://github.com/guitaripod/unrager/releases/tag/0.19.1
 [0.19.0]: https://github.com/guitaripod/unrager/releases/tag/0.19.0

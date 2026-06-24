@@ -19,6 +19,6 @@ pub use models::{
     ServerError, ServerHealth, Whoami,
 };
 pub use serve::{ServeError, ServeManager, ServeOutcome};
-pub use settings::{AppSettings, AppearanceMode, FontScale};
+pub use settings::{AppSettings, AppearanceMode, FontScale, MediaSize};
 
 pub use unrager_model as model;

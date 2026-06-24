@@ -1,6 +1,8 @@
 mod app;
+mod aspect;
 mod card;
 mod compose;
+mod desktop;
 mod feed;
 mod image;
 mod media_viewer;
@@ -15,12 +17,14 @@ use app::App;
 use relm4::prelude::*;
 use unrager_gtk_core::{AppSettings, logger};
 
-const APP_ID: &str = "ml.rawdog.unrager";
-
 fn main() {
     logger::init();
     tracing::info!(target: "ui", "starting unrager-gtk");
+    if let Some(path) = logger::log_file_path() {
+        tracing::info!(target: "ui", "log file: {}", path.display());
+    }
+    desktop::install();
     let settings = AppSettings::load();
-    let app = RelmApp::new(APP_ID);
+    let app = RelmApp::new(desktop::APP_ID);
     app.run::<App>(settings);
 }

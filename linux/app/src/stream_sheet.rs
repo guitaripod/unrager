@@ -35,7 +35,8 @@ pub struct StreamInit {
 
 pub struct StreamSheet {
     buffer: gtk::TextBuffer,
-    spinner: gtk::Spinner,
+    spinner: adw::Spinner,
+    banner: adw::Banner,
 }
 
 #[derive(Debug)]
@@ -69,10 +70,15 @@ impl Component for StreamSheet {
                         set_orientation: gtk::Orientation::Vertical,
 
                         #[local_ref]
-                        spinner -> gtk::Spinner {
+                        banner -> adw::Banner {
+                            set_revealed: false,
+                        },
+
+                        #[local_ref]
+                        spinner -> adw::Spinner {
                             set_halign: gtk::Align::Center,
                             set_margin_top: 24,
-                            set_size_request: (28, 28),
+                            set_size_request: (32, 32),
                         },
 
                         gtk::TextView {
@@ -100,14 +106,16 @@ impl Component for StreamSheet {
         root.set_title(&init.request.title());
 
         let buffer = gtk::TextBuffer::new(None);
-        let spinner = gtk::Spinner::new();
-        spinner.start();
+        let spinner = adw::Spinner::new();
+        let banner = adw::Banner::new("");
 
         let model = StreamSheet {
             buffer,
             spinner: spinner.clone(),
+            banner: banner.clone(),
         };
         let spinner = &model.spinner;
+        let banner = &model.banner;
         let widgets = view_output!();
 
         let api = init.ctx.api.clone();
@@ -137,10 +145,14 @@ impl Component for StreamSheet {
             }
             StreamCmd::Done => {
                 self.spinner.set_visible(false);
+                if self.buffer.char_count() == 0 {
+                    self.buffer.set_text("No response.");
+                }
             }
             StreamCmd::Error(message) => {
                 self.spinner.set_visible(false);
-                self.buffer.set_text(&message);
+                self.banner.set_title(&message);
+                self.banner.set_revealed(true);
             }
         }
     }

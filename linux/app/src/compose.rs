@@ -50,8 +50,10 @@ impl Component for Compose {
             set_child = &adw::ToolbarView {
                 add_top_bar = &adw::HeaderBar {
                     pack_end = &gtk::Button {
-                        set_label: "Post on X",
+                        set_label: "Tweet",
                         add_css_class: "suggested-action",
+                        #[watch]
+                        set_sensitive: model.is_valid(),
                         connect_clicked => ComposeInput::Post,
                     },
                 },
@@ -97,6 +99,8 @@ impl Component for Compose {
         let changed_sender = sender.clone();
         buffer.connect_changed(move |_| changed_sender.input(ComposeInput::TextChanged));
 
+        install_submit_shortcut(&root, &sender);
+
         let model = Compose {
             ctx: init.ctx,
             mode: init.mode,
@@ -120,6 +124,9 @@ impl Component for Compose {
                 }
             }
             ComposeInput::Post => {
+                if !self.is_valid() {
+                    return;
+                }
                 let text = self
                     .buffer
                     .text(&self.buffer.start_iter(), &self.buffer.end_iter(), false)
@@ -148,6 +155,33 @@ impl Component for Compose {
             }
         }
     }
+}
+
+impl Compose {
+    /// A draft is postable only when it's non-empty and within the limit — the
+    /// Post button and the Ctrl+Return shortcut both gate on this.
+    fn is_valid(&self) -> bool {
+        let count = self.buffer.char_count();
+        count > 0 && count <= LIMIT
+    }
+}
+
+/// Ctrl+Return / Ctrl+KP_Enter submits the draft (plain Enter stays a newline),
+/// matching the keyboard-submit affordance of the sibling search dialog.
+fn install_submit_shortcut(window: &adw::Dialog, sender: &ComponentSender<Compose>) {
+    let controller = gtk::EventControllerKey::new();
+    let sender = sender.clone();
+    controller.connect_key_pressed(move |_, keyval, _, modifiers| {
+        if modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK)
+            && matches!(keyval, gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter)
+        {
+            sender.input(ComposeInput::Post);
+            gtk::glib::Propagation::Stop
+        } else {
+            gtk::glib::Propagation::Proceed
+        }
+    });
+    window.add_controller(controller);
 }
 
 fn title(mode: &ComposeMode) -> &'static str {

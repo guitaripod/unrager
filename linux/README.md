@@ -67,8 +67,14 @@ cargo test -p unrager-gtk-core
 ## Configuration
 
 - `~/.config/unrager-gtk/config.toml` — client settings (server URL, appearance,
-  text size, image/seen/filter toggles). Distinct from the TUI's config.
+  text size, media size, image/seen/filter toggles). Distinct from the TUI's
+  config.
 - `~/.cache/unrager-gtk/unrager.log` — rolling diagnostics (2 MB + one backup).
+- On launch it installs the bundled unrager icon into
+  `~/.local/share/icons/hicolor/<size>/apps/ml.rawdog.unrager.png` and a launcher
+  at `~/.local/share/applications/ml.rawdog.unrager.desktop`, so the compositor
+  shows the app icon (matched to the window's `ml.rawdog.unrager` app id).
+  Idempotent — only rewrites when the bytes change.
 - `UNRAGER_BIN` — explicit path to the `unrager` binary if it isn't on `$PATH`
   or `~/.cargo/bin`.
 - `UNRAGER_DEFAULT_SERVER` — default server URL (e.g. a Tailscale address) for a
@@ -80,14 +86,26 @@ Feature-complete against the Apple apps within the server's API ceiling:
 
 - For You / Following / Notifications / Search / Mentions / Bookmarks, with
   thread and profile (header + Brief) drilldown.
-- Optimistic like, async avatar/media images, multi-image grids, a media viewer
-  with paging, and an Originals toggle on home feeds.
-- Compose / reply (copies the draft and opens the X intent, like the Apple apps),
-  and the Ask / Brief / Translate streaming LLM sheet.
-- Appearance + text size, the rage-filter toggle, a background notifications
+- Optimistic like, circular `adw::Avatar`s (with initials fallback), inline
+  photos shown whole, multi-image grids, video/GIF as a poster + play badge, and
+  a media viewer (`gtk::Video` playback where the GTK GStreamer backend is
+  present, Left/Right/Escape keys, "Open on X") with paging. Right-click any
+  image for a native menu: open, copy/save the image, open/copy the image and
+  tweet URLs.
+- Loading / empty / error discipline on every data screen — an `adw::Spinner`
+  while fetching, an `adw::StatusPage` (with a Try Again button) on failure
+  instead of a vanishing toast — and a content-width clamp so feeds stay
+  readable on wide windows.
+- Compose / reply (copies the draft and opens the X intent, like the Apple apps;
+  Post disables until valid, Ctrl+Return submits), and the Ask / Brief /
+  Translate streaming LLM sheet.
+- Appearance, text size, and media size (Large fills the tweet column at the
+  image's true aspect; Compact/Standard show a smaller centered image), the
+  rage-filter toggle, a background notifications
   poller with desktop notifications, and keyboard shortcuts (Ctrl+1/2/3/5/6,
   Ctrl+F search, Ctrl+N compose, Ctrl+R refresh, Ctrl+, settings).
 
-Not yet done: inline video playback (needs GStreamer), a shortcuts help window,
-and real on-device verification on Linux (the app is currently compile-verified
-on macOS; run it on Arch/GNOME for visual QA).
+Verified on Arch / KDE Wayland. Still to do: a shortcuts help window, inline
+(in-feed) video autoplay, and richer quoted-tweet media. In-app video playback
+needs the GTK4 GStreamer media backend installed; without it, the viewer's
+"Open on X" button plays the clip in the browser.

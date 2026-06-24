@@ -6,7 +6,7 @@
 use crate::shared::Ctx;
 use adw::prelude::*;
 use relm4::prelude::*;
-use unrager_gtk_core::{AppSettings, AppearanceMode, FontScale};
+use unrager_gtk_core::{AppSettings, AppearanceMode, FontScale, MediaSize};
 
 pub struct SettingsInit {
     pub ctx: Ctx,
@@ -17,6 +17,8 @@ pub struct Settings {
     ctx: Ctx,
     settings: AppSettings,
     status_row: adw::ActionRow,
+    test_button: gtk::Button,
+    test_spinner: adw::Spinner,
 }
 
 #[derive(Debug)]
@@ -25,6 +27,7 @@ pub enum SettingsInput {
     TestConnection,
     Appearance(u32),
     FontScale(u32),
+    MediaSize(u32),
     Images(bool),
     TrackSeen(bool),
     Filter(bool),
@@ -58,24 +61,14 @@ impl Component for Settings {
                     adw::EntryRow {
                         set_title: "Server URL",
                         set_text: &model.settings.server_url,
-                        connect_changed[sender] => move |row| {
+                        set_show_apply_button: true,
+                        connect_apply[sender] => move |row| {
                             sender.input(SettingsInput::ServerUrl(row.text().to_string()));
                         },
                     },
 
                     #[local_ref]
-                    status_row -> adw::ActionRow {
-                        set_title: "Connection",
-                        set_subtitle: "Not tested",
-                        add_suffix = &gtk::Button {
-                            set_label: "Test",
-                            set_valign: gtk::Align::Center,
-                            add_css_class: "flat",
-                            connect_clicked[sender] => move |_| {
-                                sender.input(SettingsInput::TestConnection);
-                            },
-                        },
-                    },
+                    status_row -> adw::ActionRow {},
                 },
 
                 add = &adw::PreferencesGroup {
@@ -98,6 +91,16 @@ impl Component for Settings {
                             sender.input(SettingsInput::FontScale(row.selected()));
                         },
                     },
+
+                    adw::ComboRow {
+                        set_title: "Media size",
+                        set_subtitle: "How large inline images and video appear",
+                        set_model: Some(&gtk::StringList::new(&["Compact", "Standard", "Large"])),
+                        set_selected: mediasize_index(model.settings.media_size),
+                        connect_selected_notify[sender] => move |row| {
+                            sender.input(SettingsInput::MediaSize(row.selected()));
+                        },
+                    },
                 },
 
                 add = &adw::PreferencesGroup {
@@ -112,7 +115,7 @@ impl Component for Settings {
                     },
 
                     adw::SwitchRow {
-                        set_title: "Track seen posts",
+                        set_title: "Track seen tweets",
                         set_active: model.settings.track_seen,
                         connect_active_notify[sender] => move |row| {
                             sender.input(SettingsInput::TrackSeen(row.is_active()));
@@ -138,10 +141,30 @@ impl Component for Settings {
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let status_row = adw::ActionRow::new();
+        status_row.set_title("Connection");
+        status_row.set_subtitle("Not tested");
+        status_row.set_subtitle_lines(0);
+        status_row.set_subtitle_selectable(true);
+
+        let test_spinner = adw::Spinner::new();
+        test_spinner.set_valign(gtk::Align::Center);
+        test_spinner.set_visible(false);
+
+        let test_button = gtk::Button::with_label("Test");
+        test_button.set_valign(gtk::Align::Center);
+        test_button.add_css_class("flat");
+        let test_sender = sender.clone();
+        test_button.connect_clicked(move |_| test_sender.input(SettingsInput::TestConnection));
+
+        status_row.add_suffix(&test_spinner);
+        status_row.add_suffix(&test_button);
+
         let model = Settings {
             ctx: init.ctx,
             settings: init.settings,
             status_row: status_row.clone(),
+            test_button: test_button.clone(),
+            test_spinner: test_spinner.clone(),
         };
         let status_row = &model.status_row;
         let widgets = view_output!();
@@ -162,6 +185,10 @@ impl Component for Settings {
                 self.settings.font_scale = fontscale_from(index);
                 self.emit(&sender);
             }
+            SettingsInput::MediaSize(index) => {
+                self.settings.media_size = mediasize_from(index);
+                self.emit(&sender);
+            }
             SettingsInput::Images(value) => {
                 self.settings.images_enabled = value;
                 self.emit(&sender);
@@ -180,6 +207,8 @@ impl Component for Settings {
             }
             SettingsInput::TestConnection => {
                 self.status_row.set_subtitle("Testing…");
+                self.test_spinner.set_visible(true);
+                self.test_button.set_sensitive(false);
                 let api = self.ctx.api.clone();
                 sender.oneshot_command(async move {
                     SettingsCmd::Tested(
@@ -200,6 +229,8 @@ impl Component for Settings {
         _root: &Self::Root,
     ) {
         let SettingsCmd::Tested(result) = message;
+        self.test_spinner.set_visible(false);
+        self.test_button.set_sensitive(true);
         match result {
             Ok(message) => self.status_row.set_subtitle(&message),
             Err(message) => self.status_row.set_subtitle(&message),
@@ -248,5 +279,21 @@ fn fontscale_from(index: u32) -> FontScale {
         3 => FontScale::XLarge,
         4 => FontScale::XxLarge,
         _ => FontScale::Standard,
+    }
+}
+
+fn mediasize_index(size: MediaSize) -> u32 {
+    match size {
+        MediaSize::Compact => 0,
+        MediaSize::Standard => 1,
+        MediaSize::Large => 2,
+    }
+}
+
+fn mediasize_from(index: u32) -> MediaSize {
+    match index {
+        0 => MediaSize::Compact,
+        2 => MediaSize::Large,
+        _ => MediaSize::Standard,
     }
 }

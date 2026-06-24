@@ -1,7 +1,7 @@
 //! Notifications feed: actor avatar + "who did what" + snippet + thumbnail.
 //! Tapping a row opens the target thread (or the actor's profile for follows).
 
-use crate::shared::{Ctx, Route, empty_placeholder};
+use crate::shared::{Ctx, Route, empty_state, error_state, loading_state};
 use adw::prelude::*;
 use relm4::prelude::*;
 use unrager_gtk_core::ApiError;
@@ -65,11 +65,16 @@ impl Component for Notifications {
                     }
                 },
 
-                #[local_ref]
-                list_box -> gtk::ListBox {
-                    connect_row_activated[sender] => move |_, row| {
-                        sender.input(NotificationsInput::RowActivated(row.index()));
-                    },
+                adw::Clamp {
+                    set_maximum_size: 640,
+                    set_tightening_threshold: 560,
+
+                    #[local_ref]
+                    list_box -> gtk::ListBox {
+                        connect_row_activated[sender] => move |_, row| {
+                            sender.input(NotificationsInput::RowActivated(row.index()));
+                        },
+                    }
                 }
             }
         }
@@ -83,7 +88,7 @@ impl Component for Notifications {
         let list = gtk::ListBox::new();
         list.set_selection_mode(gtk::SelectionMode::None);
         list.add_css_class("feed-list");
-        list.set_placeholder(Some(&empty_placeholder("No notifications.")));
+        list.set_placeholder(Some(&loading_state()));
 
         let model = Notifications {
             ctx: init.ctx,
@@ -115,6 +120,7 @@ impl Component for Notifications {
                 self.cursor = None;
                 self.exhausted = false;
                 self.loading = true;
+                self.list.set_placeholder(Some(&loading_state()));
                 let api = self.ctx.api.clone();
                 sender.oneshot_command(async move {
                     NotificationsCmd::Loaded(api.notifications(None).await)
@@ -152,18 +158,33 @@ impl Component for Notifications {
         match result {
             Ok(page) => {
                 for notif in &page.notifications {
+                    let index = self.targets.len() as i32;
                     self.list.append(&build_notification_row(notif, &self.ctx));
+                    if let Some(row) = self.list.row_at_index(index) {
+                        row.set_activatable(true);
+                    }
                     self.targets.push(target_of(notif));
                 }
                 self.cursor = page.cursor;
                 self.exhausted = self.cursor.is_none();
+                if self.targets.is_empty() {
+                    self.list
+                        .set_placeholder(Some(&empty_state("bell-symbolic", "No notifications")));
+                }
             }
             Err(error) => {
-                sender
-                    .output(NotificationsOutput::Open(Route::Toast(
-                        error.user_message(),
-                    )))
-                    .ok();
+                let message = error.user_message();
+                if self.targets.is_empty() {
+                    let retry = sender.clone();
+                    self.list
+                        .set_placeholder(Some(&error_state(&message, move || {
+                            retry.input(NotificationsInput::Refresh)
+                        })));
+                } else {
+                    sender
+                        .output(NotificationsOutput::Open(Route::Toast(message)))
+                        .ok();
+                }
             }
         }
     }
@@ -173,18 +194,16 @@ fn build_notification_row(notif: &Notification, ctx: &Ctx) -> gtk::Widget {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     row.add_css_class("tweet-card");
 
-    let avatar = gtk::Picture::new();
-    avatar.set_size_request(40, 40);
-    avatar.set_content_fit(gtk::ContentFit::Cover);
+    let actor_name = notif.actors.first().map(|a| a.name.as_str());
+    let avatar = adw::Avatar::new(40, actor_name, true);
     avatar.set_valign(gtk::Align::Start);
-    avatar.add_css_class("avatar");
     if let Some(url) = notif
         .actors
         .first()
         .and_then(|a| a.avatar_url.as_deref())
         .and_then(|u| Url::parse(u).ok())
     {
-        ctx.images.load(&avatar, ctx.api.clone(), url);
+        ctx.images.load_avatar(&avatar, ctx.api.clone(), url);
     }
     row.append(&avatar);
 
@@ -214,13 +233,13 @@ fn build_notification_row(notif: &Notification, ctx: &Ctx) -> gtk::Widget {
         notif.target_tweet_id.as_deref(),
         !notif.target_media.is_empty(),
     ) {
-        let thumb = gtk::Picture::new();
-        thumb.set_size_request(52, 52);
-        thumb.set_content_fit(gtk::ContentFit::Cover);
+        let thumb = gtk::Image::new();
+        thumb.set_pixel_size(52);
         thumb.set_valign(gtk::Align::Start);
-        thumb.add_css_class("tweet-media");
+        thumb.set_overflow(gtk::Overflow::Hidden);
+        thumb.add_css_class("notif-thumb");
         ctx.images
-            .load(&thumb, ctx.api.clone(), ctx.api.media_url(tweet_id, 0));
+            .load_image(&thumb, ctx.api.clone(), ctx.api.media_url(tweet_id, 0));
         row.append(&thumb);
     }
 
@@ -229,14 +248,14 @@ fn build_notification_row(notif: &Notification, ctx: &Ctx) -> gtk::Widget {
 
 pub(crate) fn summary_title(notif: &Notification) -> String {
     let who = actor_names(notif);
-    let verb = match notif.kind.as_str() {
-        "like" | "favorite" => "liked your post",
-        "retweet" | "repost" => "reposted your post",
+    let verb = match notif.kind.to_ascii_lowercase().as_str() {
+        "like" | "favorite" => "liked your tweet",
+        "retweet" | "repost" => "reposted your tweet",
         "reply" => "replied to you",
-        "quote" => "quoted your post",
+        "quote" => "quoted your tweet",
         "follow" => "followed you",
         "mention" => "mentioned you",
-        other => other,
+        _ => "interacted with you",
     };
     format!("{who} {verb}")
 }

@@ -4,6 +4,13 @@
 //! (2 MB current + one `.previous.log` backup) so diagnostics survive without a
 //! debugger attached. Categories map to `tracing` targets
 //! (`api`, `serve`, `media`, `timeline`, `poller`, `ui`, …).
+//!
+//! The file is **plain text, no ANSI** so an agent can grep it directly. Both
+//! layers disable ANSI on purpose: a span's fields are formatted once and
+//! cached in a `FormattedFields` extension shared by every `fmt` layer using
+//! the default field formatter, so if the stderr layer kept colour on it would
+//! be the one to populate that cache — and the file would inherit the escape
+//! codes regardless of its own `with_ansi(false)`. Keep both ANSI-free.
 
 use directories::ProjectDirs;
 use std::fs::{File, OpenOptions};
@@ -41,6 +48,7 @@ pub fn init() {
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let stderr_layer = tracing_subscriber::fmt::layer()
         .with_writer(io::stderr)
+        .with_ansi(false)
         .with_target(true)
         .with_filter(stderr_filter);
 

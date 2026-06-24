@@ -76,6 +76,44 @@ impl FontScale {
     }
 }
 
+/// How large inline feed media appears. The whole attachment is always shown
+/// (scaled to fit, never cropped); this caps the width it's scaled to. The two
+/// smaller steps stay narrower than a normal column so the choice is always
+/// visible (centered with margins); `Large` fills the column edge-to-edge and
+/// is the default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaSize {
+    Compact,
+    Standard,
+    #[default]
+    Large,
+}
+
+impl MediaSize {
+    pub const ALL: [MediaSize; 3] = [Self::Compact, Self::Standard, Self::Large];
+
+    /// The maximum inline media width, in logical pixels. `Large` is
+    /// effectively unbounded so media fills whatever column it's in; `Compact`
+    /// and `Standard` stay below a typical column so they read as distinctly
+    /// smaller.
+    pub fn max_width(self) -> i32 {
+        match self {
+            Self::Compact => 340,
+            Self::Standard => 480,
+            Self::Large => 100_000,
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Compact => "Compact",
+            Self::Standard => "Standard",
+            Self::Large => "Large",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NotificationSettings {
@@ -100,6 +138,7 @@ pub struct AppSettings {
     pub server_url: String,
     pub appearance: AppearanceMode,
     pub font_scale: FontScale,
+    pub media_size: MediaSize,
     pub images_enabled: bool,
     pub filter_enabled: bool,
     pub track_seen: bool,
@@ -112,6 +151,7 @@ impl Default for AppSettings {
             server_url: default_server_url().to_string(),
             appearance: AppearanceMode::System,
             font_scale: FontScale::Standard,
+            media_size: MediaSize::Large,
             images_enabled: true,
             filter_enabled: false,
             track_seen: true,
@@ -208,6 +248,7 @@ mod tests {
         assert!(s.track_seen);
         assert_eq!(s.appearance, AppearanceMode::System);
         assert_eq!(s.font_scale, FontScale::Standard);
+        assert_eq!(s.media_size, MediaSize::Large);
         assert!(s.server_url().has_host());
     }
 
@@ -236,6 +277,27 @@ mod tests {
         assert_eq!(s.server_url().as_str(), "http://host:1234/");
         assert!(s.images_enabled);
         assert_eq!(s.font_scale, FontScale::Standard);
+        assert_eq!(s.media_size, MediaSize::Large);
+    }
+
+    #[test]
+    fn media_size_widths_increase() {
+        assert!(MediaSize::Compact.max_width() < MediaSize::Standard.max_width());
+        assert!(MediaSize::Standard.max_width() < MediaSize::Large.max_width());
+    }
+
+    #[test]
+    fn media_size_serializes_snake_case() {
+        let toml = toml::to_string(&MediaSizeHolder {
+            size: MediaSize::Compact,
+        })
+        .unwrap();
+        assert!(toml.contains("\"compact\""), "got: {toml}");
+    }
+
+    #[derive(Serialize)]
+    struct MediaSizeHolder {
+        size: MediaSize,
     }
 
     #[test]

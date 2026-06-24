@@ -3,6 +3,12 @@
   background: transparent;
 }
 
+/* Give the headerbar enough height that the KDE/Breeze-GTK window-control
+   buttons fit without clipping at the top edge. */
+headerbar {
+  min-height: 46px;
+}
+
 .feed-list > row {
   background: transparent;
   padding: 0;
@@ -55,6 +61,22 @@
   border-radius: 14px;
   min-height: 120px;
   background: alpha(@window_fg_color, 0.06);
+}
+
+.media-grid {
+  border-radius: 14px;
+}
+
+.notif-thumb {
+  border-radius: 10px;
+  background: alpha(@window_fg_color, 0.06);
+}
+
+.play-badge {
+  color: #ffffff;
+  background: alpha(#000000, 0.5);
+  border-radius: 99px;
+  padding: 10px;
 }
 
 .quoted-tweet {

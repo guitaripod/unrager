@@ -2,9 +2,9 @@
 //! user's recent tweets. `GET /api/profile/{handle}` for the first page, then
 //! `GET /api/sources/user/{handle}` for pagination.
 
-use crate::card::{CardCallbacks, build_tweet_card};
-use crate::shared::{Ctx, Route};
-use gtk::prelude::*;
+use crate::card::{CardCallbacks, build_tweet_card, verified_mark};
+use crate::shared::{Ctx, Route, empty_state, error_state, loading_state};
+use adw::prelude::*;
 use relm4::prelude::*;
 use std::rc::Rc;
 use unrager_gtk_core::ApiError;
@@ -30,6 +30,7 @@ pub struct Profile {
 
 #[derive(Debug)]
 pub enum ProfileInput {
+    Reload,
     LoadMore,
     RowActivated(i32),
     Brief,
@@ -58,7 +59,7 @@ impl Component for Profile {
             add_top_bar = &adw::HeaderBar {
                 pack_end = &gtk::Button {
                     set_label: "Brief",
-                    set_tooltip_text: Some("AI summary of recent posts"),
+                    set_tooltip_text: Some("AI summary of recent tweets"),
                     connect_clicked => ProfileInput::Brief,
                 },
             },
@@ -72,19 +73,24 @@ impl Component for Profile {
                     }
                 },
 
-                gtk::Box {
-                    set_orientation: gtk::Orientation::Vertical,
+                adw::Clamp {
+                    set_maximum_size: 640,
+                    set_tightening_threshold: 560,
 
-                    #[local_ref]
-                    header -> gtk::Box {
-                        set_orientation: gtk::Orientation::Horizontal,
-                    },
+                    gtk::Box {
+                        set_orientation: gtk::Orientation::Vertical,
 
-                    #[local_ref]
-                    list_box -> gtk::ListBox {
-                        connect_row_activated[sender] => move |_, row| {
-                            sender.input(ProfileInput::RowActivated(row.index()));
+                        #[local_ref]
+                        header -> gtk::Box {
+                            set_orientation: gtk::Orientation::Horizontal,
                         },
+
+                        #[local_ref]
+                        list_box -> gtk::ListBox {
+                            connect_row_activated[sender] => move |_, row| {
+                                sender.input(ProfileInput::RowActivated(row.index()));
+                            },
+                        }
                     }
                 }
             }
@@ -100,6 +106,7 @@ impl Component for Profile {
         let list = gtk::ListBox::new();
         list.set_selection_mode(gtk::SelectionMode::None);
         list.add_css_class("feed-list");
+        list.set_placeholder(Some(&loading_state()));
 
         let model = Profile {
             ctx: init.ctx,
@@ -127,6 +134,24 @@ impl Component for Profile {
 
     fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>, _root: &Self::Root) {
         match message {
+            ProfileInput::Reload => {
+                if self.loading {
+                    return;
+                }
+                self.loading = true;
+                while let Some(child) = self.list.first_child() {
+                    self.list.remove(&child);
+                }
+                self.ids.clear();
+                self.cursor = None;
+                self.exhausted = false;
+                self.list.set_placeholder(Some(&loading_state()));
+                let api = self.ctx.api.clone();
+                let handle = self.handle.clone();
+                sender.oneshot_command(async move {
+                    ProfileCmd::Loaded(Box::new(api.profile(&handle, false).await))
+                });
+            }
             ProfileInput::LoadMore => {
                 if self.loading || self.exhausted {
                     return;
@@ -177,11 +202,19 @@ impl Component for Profile {
                         }
                         self.cursor = view.cursor;
                         self.exhausted = self.cursor.is_none();
+                        if self.ids.is_empty() {
+                            self.list.set_placeholder(Some(&empty_state(
+                                "user-info-symbolic",
+                                "No tweets yet",
+                            )));
+                        }
                     }
                     Err(error) => {
-                        sender
-                            .output(ProfileOutput::Open(Route::Toast(error.user_message())))
-                            .ok();
+                        let retry = sender.clone();
+                        self.list.set_placeholder(Some(&error_state(
+                            &error.user_message(),
+                            move || retry.input(ProfileInput::Reload),
+                        )));
                     }
                 }
             }
@@ -224,11 +257,11 @@ impl Profile {
                     .output(ProfileOutput::Open(Route::Profile(handle)))
                     .ok();
             }),
-            open_media: Rc::new(move |tweet_id, indices, start| {
+            open_media: Rc::new(move |tweet_id, items, start| {
                 media_sender
                     .output(ProfileOutput::Open(Route::Media {
                         tweet_id,
-                        indices,
+                        items,
                         start,
                     }))
                     .ok();
@@ -249,13 +282,10 @@ fn fill_header(header: &gtk::Box, user: &User, ctx: &Ctx) {
     header.set_spacing(14);
     header.add_css_class("profile-header");
 
-    let avatar = gtk::Picture::new();
-    avatar.set_size_request(72, 72);
-    avatar.set_content_fit(gtk::ContentFit::Cover);
+    let avatar = adw::Avatar::new(72, Some(&user.name), true);
     avatar.set_valign(gtk::Align::Start);
-    avatar.add_css_class("avatar-large");
     if let Some(url) = user.avatar_url.as_deref().and_then(|u| Url::parse(u).ok()) {
-        ctx.images.load(&avatar, ctx.api.clone(), url);
+        ctx.images.load_avatar(&avatar, ctx.api.clone(), url);
     }
     header.append(&avatar);
 
@@ -268,9 +298,7 @@ fn fill_header(header: &gtk::Box, user: &User, ctx: &Ctx) {
     name.add_css_class("profile-name");
     name_line.append(&name);
     if user.verified {
-        let mark = gtk::Label::new(Some("✓"));
-        mark.add_css_class("verified");
-        name_line.append(&mark);
+        name_line.append(&verified_mark());
     }
     column.append(&name_line);
 

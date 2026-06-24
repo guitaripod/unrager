@@ -47,13 +47,45 @@ impl ImagePipeline {
     /// Loads `url` into `picture`. Returns immediately; the paintable is set when
     /// the bytes arrive and decode.
     pub fn load(&self, picture: &gtk::Picture, api: Arc<ApiClient>, url: Url) {
+        let picture = picture.clone();
+        self.load_with(api, url, move |texture| {
+            picture.set_paintable(Some(texture));
+        });
+    }
+
+    /// Loads `url` as an `adw::Avatar`'s custom image — the dedicated avatar
+    /// widget keeps a fixed, circular frame no matter the source dimensions,
+    /// which a bare `gtk::Picture` does not.
+    pub fn load_avatar(&self, avatar: &adw::Avatar, api: Arc<ApiClient>, url: Url) {
+        let avatar = avatar.clone();
+        self.load_with(api, url, move |texture| {
+            avatar.set_custom_image(Some(texture));
+        });
+    }
+
+    /// Loads `url` into a `gtk::Image` (a fixed-`pixel_size` square slot that
+    /// scales the picture to fit). Unlike `gtk::Picture`, a `gtk::Image` never
+    /// grows to the source's natural size, so it's the right fit for the small
+    /// fixed thumbnails in notifications.
+    pub fn load_image(&self, image: &gtk::Image, api: Arc<ApiClient>, url: Url) {
+        let image = image.clone();
+        self.load_with(api, url, move |texture| {
+            image.set_paintable(Some(texture));
+        });
+    }
+
+    /// Shared fetch+decode core: serve from cache or fetch the bytes off-main,
+    /// decode on the main thread, cache, and hand the texture to `apply`.
+    fn load_with<F>(&self, api: Arc<ApiClient>, url: Url, apply: F)
+    where
+        F: Fn(&gdk::Texture) + 'static,
+    {
         let key = url.as_str().to_string();
         if let Some(texture) = self.cached(&key) {
-            picture.set_paintable(Some(&texture));
+            apply(&texture);
             return;
         }
 
-        let picture = picture.clone();
         let images = self.clone();
         let (tx, rx) = tokio::sync::oneshot::channel::<Option<Vec<u8>>>();
 
@@ -67,7 +99,7 @@ impl ImagePipeline {
                 && let Some(texture) = decode(&bytes)
             {
                 images.insert(key, texture.clone());
-                picture.set_paintable(Some(&texture));
+                apply(&texture);
             }
         });
     }

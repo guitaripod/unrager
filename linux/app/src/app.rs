@@ -9,11 +9,13 @@ use crate::media_viewer::{MediaViewer, MediaViewerInit};
 use crate::notifications::{Notifications, NotificationsInit, NotificationsOutput, summary_title};
 use crate::profile::{Profile, ProfileInit, ProfileOutput};
 use crate::settings_page::{Settings, SettingsInit, SettingsOutput};
-use crate::shared::{Ctx, Route};
+use crate::shared::{Ctx, MediaRef, Route};
 use crate::stream_sheet::{StreamInit, StreamRequest, StreamSheet};
 use crate::thread::{Thread, ThreadInit, ThreadOutput};
 use adw::prelude::*;
 use relm4::prelude::*;
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 use unrager_gtk_core::model::SearchProduct;
 use unrager_gtk_core::{
@@ -56,6 +58,7 @@ pub enum AppInput {
     Route(Route),
     OpenSearch(String),
     RefreshCurrent,
+    Reconnect,
     SettingsChanged(AppSettings),
 }
 
@@ -75,12 +78,13 @@ impl Component for App {
     view! {
         adw::ApplicationWindow {
             set_title: Some("Unrager"),
-            set_default_size: (560, 880),
+            set_default_size: (820, 900),
 
             #[local_ref]
             toasts -> adw::ToastOverlay {
+                #[name = "split_view"]
                 adw::NavigationSplitView {
-                    set_max_sidebar_width: 260.0,
+                    set_max_sidebar_width: 230.0,
 
                     #[wrap(Some)]
                     set_sidebar = &adw::NavigationPage {
@@ -124,11 +128,20 @@ impl Component for App {
     ) -> ComponentParts<Self> {
         apply_css(settings.font_scale);
         apply_appearance(settings.appearance);
+        gtk::Window::set_default_icon_name(crate::desktop::APP_ID);
+        // The desktop default (`icon:minimize,maximize,close`) puts the window
+        // icon on the left of the headerbar, where the KDE/Breeze-GTK CSD theme
+        // renders it clipped. The app icon lives in the taskbar/launcher, so
+        // drop it from the titlebar and keep just the window controls.
+        if let Some(gtk_settings) = gtk::Settings::default() {
+            gtk_settings.set_gtk_decoration_layout(Some(":minimize,maximize,close"));
+        }
 
         let api = Arc::new(ApiClient::new(settings.server_url()));
         let ctx = Ctx {
             api,
             images: ImagePipeline::new(),
+            media_size: Rc::new(Cell::new(settings.media_size)),
         };
 
         let nav = adw::NavigationView::new();
@@ -165,6 +178,7 @@ impl Component for App {
         }
 
         install_shortcuts(&sender);
+        install_breakpoint(&root, &widgets.split_view);
         maybe_schedule_screenshot(root.clone());
 
         let configured = Some(model.settings.server_url());
@@ -195,12 +209,30 @@ impl Component for App {
                     let _ = feed.sender().send(FeedInput::Reload);
                 }
             }
+            AppInput::Reconnect => {
+                self.status.set_title("Connecting…");
+                self.status.set_description(Some("Starting unrager serve."));
+                self.status
+                    .set_icon_name(Some("network-transmit-receive-symbolic"));
+                let spin = adw::Spinner::new();
+                spin.set_size_request(32, 32);
+                self.status.set_child(Some(&spin));
+                let configured = Some(self.settings.server_url());
+                sender.oneshot_command(async move {
+                    AppCmd::Serve(Box::new(ServeManager::start(configured).await))
+                });
+            }
             AppInput::SettingsChanged(settings) => {
                 apply_appearance(settings.appearance);
                 apply_css(settings.font_scale);
+                let media_size_changed = settings.media_size != self.settings.media_size;
+                self.ctx.media_size.set(settings.media_size);
                 self.settings = settings;
                 if let Err(error) = self.settings.save() {
                     tracing::warn!(target: "ui", "failed to save settings: {error}");
+                }
+                if media_size_changed && let Some(feed) = &self.feed {
+                    let _ = feed.sender().send(FeedInput::Rebuild);
                 }
             }
         }
@@ -210,7 +242,7 @@ impl Component for App {
         &mut self,
         message: Self::CommandOutput,
         sender: ComponentSender<Self>,
-        _root: &Self::Root,
+        root: &Self::Root,
     ) {
         match message {
             AppCmd::Serve(result) => match *result {
@@ -223,14 +255,21 @@ impl Component for App {
                     }
                     self.show_source(FeedSource::HomeForYou, "For You", &sender);
                     start_poller(self.ctx.api.clone(), &sender);
+                    if let Ok(screen) = std::env::var("UNRAGER_SCREEN") {
+                        self.route_to_screen(&screen, &sender, root);
+                    }
                 }
                 Err(error) => {
                     self.status.set_title("Couldn't reach a server");
                     self.status.set_description(Some(&error.to_string()));
                     self.status.set_icon_name(Some("network-error-symbolic"));
-                    if let Some(child) = self.status.child() {
-                        child.set_visible(false);
-                    }
+                    let button = gtk::Button::with_label("Try Again");
+                    button.add_css_class("pill");
+                    button.add_css_class("suggested-action");
+                    button.set_halign(gtk::Align::Center);
+                    let retry = sender.clone();
+                    button.connect_clicked(move |_| retry.input(AppInput::Reconnect));
+                    self.status.set_child(Some(&button));
                 }
             },
             AppCmd::NewNotifications(items) => {
@@ -239,9 +278,10 @@ impl Component for App {
                 }
                 let count = items.len();
                 let plural = if count == 1 { "" } else { "s" };
-                self.toasts.add_toast(adw::Toast::new(&format!(
-                    "{count} new notification{plural}"
-                )));
+                let toast = adw::Toast::new(&format!("{count} new notification{plural}"));
+                toast.set_button_label(Some("View"));
+                toast.set_action_name(Some("app.notifications"));
+                self.toasts.add_toast(toast);
             }
         }
     }
@@ -355,18 +395,18 @@ impl App {
             }
             Route::Media {
                 tweet_id,
-                indices,
+                items,
                 start,
-            } => self.open_media(tweet_id, indices, start),
+            } => self.open_media(tweet_id, items, start),
         }
     }
 
-    fn open_media(&mut self, tweet_id: String, indices: Vec<usize>, start: usize) {
+    fn open_media(&mut self, tweet_id: String, items: Vec<MediaRef>, start: usize) {
         let controller = MediaViewer::builder()
             .launch(MediaViewerInit {
                 ctx: self.ctx.clone(),
                 tweet_id,
-                indices,
+                items,
                 start,
             })
             .detach();
@@ -394,6 +434,60 @@ impl App {
             .detach();
         controller.widget().present(Some(root));
         self.stream = Some(controller);
+    }
+
+    /// Debug/QA deep-link: navigates to a named view at startup so any screen
+    /// can be rendered for screenshots without driving the UI. Forms:
+    /// `foryou`/`following`/`notifications`/`mentions`/`bookmarks`/`settings`/
+    /// `compose`, or `search:<query>` / `profile:<handle>` / `thread:<id>` /
+    /// `brief:<handle>` / `media:<id>`.
+    fn route_to_screen(
+        &mut self,
+        screen: &str,
+        sender: &ComponentSender<Self>,
+        root: &adw::ApplicationWindow,
+    ) {
+        let (kind, arg) = match screen.split_once(':') {
+            Some((kind, arg)) => (kind, Some(arg)),
+            None => (screen, None),
+        };
+        match (kind, arg) {
+            ("foryou", _) => self.sidebar_action(0, sender, root),
+            ("following", _) => self.sidebar_action(1, sender, root),
+            ("notifications", _) => self.sidebar_action(2, sender, root),
+            ("mentions", _) => self.sidebar_action(4, sender, root),
+            ("bookmarks", _) => self.sidebar_action(5, sender, root),
+            ("settings", _) => self.open_settings(sender, root),
+            ("compose", _) => self.open_compose(ComposeMode::New, root),
+            ("search", Some(query)) => self.show_source(
+                FeedSource::Search {
+                    query: query.to_string(),
+                    product: SearchProduct::Top,
+                },
+                &format!("Search: {query}"),
+                sender,
+            ),
+            ("profile", Some(handle)) => {
+                self.handle_route(Route::Profile(handle.to_string()), sender, root)
+            }
+            ("thread", Some(id)) => self.handle_route(Route::Thread(id.to_string()), sender, root),
+            ("brief", Some(handle)) => {
+                self.handle_route(Route::Brief(handle.to_string()), sender, root)
+            }
+            ("media", Some(id)) => self.handle_route(
+                Route::Media {
+                    tweet_id: id.to_string(),
+                    items: vec![MediaRef {
+                        index: 0,
+                        video: false,
+                    }],
+                    start: 0,
+                },
+                sender,
+                root,
+            ),
+            (other, _) => tracing::warn!(target: "ui", "unknown UNRAGER_SCREEN: {other}"),
+        }
     }
 }
 
@@ -526,16 +620,24 @@ fn install_shortcuts(sender: &ComponentSender<App>) {
     bind("refresh", &["<primary>r"], || AppInput::RefreshCurrent);
 }
 
-fn sidebar_row(label: &str, icon: &str) -> gtk::ListBoxRow {
-    let row = gtk::ListBoxRow::new();
-    let content = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    content.set_margin_top(10);
-    content.set_margin_bottom(10);
-    content.set_margin_start(12);
-    content.set_margin_end(12);
-    content.append(&gtk::Image::from_icon_name(icon));
-    content.append(&gtk::Label::new(Some(label)));
-    row.set_child(Some(&content));
+/// Collapses the sidebar into the content pane on a narrow window so the split
+/// view works on small screens instead of clipping a fixed two-pane layout.
+fn install_breakpoint(window: &adw::ApplicationWindow, split: &adw::NavigationSplitView) {
+    let condition = adw::BreakpointCondition::new_length(
+        adw::BreakpointConditionLengthType::MaxWidth,
+        500.0,
+        adw::LengthUnit::Sp,
+    );
+    let breakpoint = adw::Breakpoint::new(condition);
+    breakpoint.add_setter(split, "collapsed", Some(&true.to_value()));
+    window.add_breakpoint(breakpoint);
+}
+
+fn sidebar_row(label: &str, icon: &str) -> adw::ActionRow {
+    let row = adw::ActionRow::new();
+    row.set_title(label);
+    row.set_activatable(true);
+    row.add_prefix(&gtk::Image::from_icon_name(icon));
     row
 }
 
@@ -545,8 +647,7 @@ fn build_status(title: &str, description: &str, spinner: bool) -> adw::StatusPag
     status.set_description(Some(description));
     status.set_icon_name(Some("network-transmit-receive-symbolic"));
     if spinner {
-        let spin = gtk::Spinner::new();
-        spin.start();
+        let spin = adw::Spinner::new();
         spin.set_size_request(32, 32);
         status.set_child(Some(&spin));
     }
@@ -577,7 +678,13 @@ fn apply_appearance(mode: AppearanceMode) {
     adw::StyleManager::default().set_color_scheme(scheme);
 }
 
+/// Scales every font by setting the size once on the root `window` node.
+/// `font-size` is inherited, so descendants pick it up a single time and the
+/// `em`-based rules in the stylesheet scale off it. Targeting `*` instead would
+/// re-apply the percentage at every nesting level, compounding it
+/// exponentially (XL at depth 6 ≈ 4.8×) and forcing the window past a size it
+/// can no longer shrink below.
 fn apply_css(scale: FontScale) {
     let percent = (scale.multiplier() * 100.0).round() as i32;
-    relm4::set_global_css(&format!("* {{ font-size: {percent}%; }}\n{BASE_CSS}"));
+    relm4::set_global_css(&format!("window {{ font-size: {percent}%; }}\n{BASE_CSS}"));
 }

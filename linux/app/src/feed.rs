@@ -3,12 +3,12 @@
 //! and loads more on scroll-to-bottom.
 
 use crate::card::{CardCallbacks, build_tweet_card};
-use crate::shared::{Ctx, Route, empty_placeholder};
+use crate::shared::{Ctx, Route, empty_state, error_state, loading_state};
 use adw::prelude::*;
 use relm4::prelude::*;
 use std::rc::Rc;
 use std::sync::Arc;
-use unrager_gtk_core::model::{SearchProduct, TimelinePage};
+use unrager_gtk_core::model::{SearchProduct, TimelinePage, Tweet};
 use unrager_gtk_core::{ApiClient, ApiError};
 
 #[derive(Debug, Clone)]
@@ -33,7 +33,7 @@ pub struct Feed {
     source: FeedSource,
     originals: bool,
     list: gtk::ListBox,
-    ids: Vec<String>,
+    tweets: Vec<Tweet>,
     cursor: Option<String>,
     loading: bool,
     exhausted: bool,
@@ -42,6 +42,10 @@ pub struct Feed {
 #[derive(Debug)]
 pub enum FeedInput {
     Reload,
+    /// Rebuild the cards from the already-loaded tweets without refetching —
+    /// used when a display preference (e.g. media size) changes, so the feed
+    /// updates instantly and doesn't reorder.
+    Rebuild,
     LoadMore,
     RowActivated(i32),
     ToggleOriginals(bool),
@@ -102,11 +106,16 @@ impl Component for Feed {
                     }
                 },
 
-                #[local_ref]
-                list_box -> gtk::ListBox {
-                    connect_row_activated[sender] => move |_, row| {
-                        sender.input(FeedInput::RowActivated(row.index()));
-                    },
+                adw::Clamp {
+                    set_maximum_size: 640,
+                    set_tightening_threshold: 560,
+
+                    #[local_ref]
+                    list_box -> gtk::ListBox {
+                        connect_row_activated[sender] => move |_, row| {
+                            sender.input(FeedInput::RowActivated(row.index()));
+                        },
+                    }
                 }
             }
         }
@@ -120,7 +129,7 @@ impl Component for Feed {
         let list = gtk::ListBox::new();
         list.set_selection_mode(gtk::SelectionMode::None);
         list.add_css_class("feed-list");
-        list.set_placeholder(Some(&empty_placeholder("Nothing to show yet.")));
+        list.set_placeholder(Some(&loading_state()));
 
         let is_home = matches!(init.source, FeedSource::HomeForYou | FeedSource::Following);
 
@@ -129,7 +138,7 @@ impl Component for Feed {
             source: init.source,
             originals: false,
             list: list.clone(),
-            ids: Vec::new(),
+            tweets: Vec::new(),
             cursor: None,
             loading: false,
             exhausted: false,
@@ -149,6 +158,7 @@ impl Component for Feed {
                     return;
                 }
                 self.loading = true;
+                self.list.set_placeholder(Some(&loading_state()));
                 let api = self.ctx.api.clone();
                 let source = self.source.clone();
                 let originals = self.originals;
@@ -158,6 +168,14 @@ impl Component for Feed {
                         page: fetch(api, source, originals, None).await,
                     }
                 });
+            }
+            FeedInput::Rebuild => {
+                clear(&self.list);
+                let callbacks = self.callbacks(&sender);
+                for tweet in &self.tweets {
+                    self.list
+                        .append(&build_tweet_card(tweet, &self.ctx, &callbacks));
+                }
             }
             FeedInput::LoadMore => {
                 if self.loading || self.exhausted {
@@ -178,9 +196,9 @@ impl Component for Feed {
                 });
             }
             FeedInput::RowActivated(index) => {
-                if let Some(id) = self.ids.get(index as usize) {
+                if let Some(tweet) = self.tweets.get(index as usize) {
                     sender
-                        .output(FeedOutput::Open(Route::Thread(id.clone())))
+                        .output(FeedOutput::Open(Route::Thread(tweet.rest_id.clone())))
                         .ok();
                 }
             }
@@ -205,21 +223,32 @@ impl Component for Feed {
             Ok(page) => {
                 if !append {
                     clear(&self.list);
-                    self.ids.clear();
+                    self.tweets.clear();
                 }
                 let callbacks = self.callbacks(&sender);
                 for tweet in &page.tweets {
                     let card = build_tweet_card(tweet, &self.ctx, &callbacks);
                     self.list.append(&card);
-                    self.ids.push(tweet.rest_id.clone());
+                    self.tweets.push(tweet.clone());
                 }
                 self.cursor = page.cursor;
                 self.exhausted = self.cursor.is_none();
+                if self.tweets.is_empty() {
+                    self.list
+                        .set_placeholder(Some(&empty_state("feed-symbolic", "Nothing to show")));
+                }
             }
             Err(error) => {
-                sender
-                    .output(FeedOutput::Open(Route::Toast(error.user_message())))
-                    .ok();
+                let message = error.user_message();
+                if self.tweets.is_empty() {
+                    let retry = sender.clone();
+                    self.list
+                        .set_placeholder(Some(&error_state(&message, move || {
+                            retry.input(FeedInput::Reload)
+                        })));
+                } else {
+                    sender.output(FeedOutput::Open(Route::Toast(message))).ok();
+                }
             }
         }
     }
@@ -236,11 +265,11 @@ impl Feed {
                     .output(FeedOutput::Open(Route::Profile(handle)))
                     .ok();
             }),
-            open_media: Rc::new(move |tweet_id, indices, start| {
+            open_media: Rc::new(move |tweet_id, items, start| {
                 media_sender
                     .output(FeedOutput::Open(Route::Media {
                         tweet_id,
-                        indices,
+                        items,
                         start,
                     }))
                     .ok();

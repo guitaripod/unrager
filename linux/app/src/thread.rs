@@ -2,8 +2,9 @@
 //! `GET /api/thread/{id}`.
 
 use crate::card::{CardCallbacks, build_tweet_card};
-use crate::shared::{Ctx, Route};
+use crate::shared::{Ctx, Route, error_state, loading_state};
 use adw::prelude::*;
+use gtk::glib;
 use relm4::prelude::*;
 use std::rc::Rc;
 use unrager_gtk_core::ApiError;
@@ -48,6 +49,10 @@ impl Component for Thread {
     view! {
         adw::ToolbarView {
             add_top_bar = &adw::HeaderBar {
+                #[wrap(Some)]
+                set_title_widget = &adw::WindowTitle {
+                    set_title: "Tweet",
+                },
                 pack_start = &gtk::Button {
                     set_icon_name: "mail-reply-sender-symbolic",
                     set_tooltip_text: Some("Reply"),
@@ -101,9 +106,14 @@ impl Component for Thread {
                 set_vexpand: true,
                 set_hexpand: true,
 
-                #[local_ref]
-                container -> gtk::Box {
-                    set_orientation: gtk::Orientation::Vertical,
+                adw::Clamp {
+                    set_maximum_size: 640,
+                    set_tightening_threshold: 560,
+
+                    #[local_ref]
+                    container -> gtk::Box {
+                        set_orientation: gtk::Orientation::Vertical,
+                    }
                 }
             }
         }
@@ -132,6 +142,8 @@ impl Component for Thread {
     fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>, _root: &Self::Root) {
         match message {
             ThreadInput::Reload => {
+                clear(&self.container);
+                self.container.append(&loading_state());
                 let api = self.ctx.api.clone();
                 let id = self.id.clone();
                 sender
@@ -180,17 +192,42 @@ impl Component for Thread {
                     self.container
                         .append(&build_tweet_card(reply, &self.ctx, &callbacks));
                 }
+                if !view.ancestors.is_empty() {
+                    self.scroll_to_focal(&focal);
+                }
             }
             Err(error) => {
-                sender
-                    .output(ThreadOutput::Open(Route::Toast(error.user_message())))
-                    .ok();
+                let retry = sender.clone();
+                clear(&self.container);
+                self.container
+                    .append(&error_state(&error.user_message(), move || {
+                        retry.input(ThreadInput::Reload)
+                    }));
             }
         }
     }
 }
 
 impl Thread {
+    /// Anchors the view on the focal post once layout settles, so a thread with
+    /// ancestors doesn't open scrolled to the top showing a parent tweet. Runs
+    /// on idle because the cards aren't allocated yet at the end of `update_cmd`.
+    fn scroll_to_focal(&self, focal: &gtk::Widget) {
+        let focal = focal.clone();
+        let container = self.container.clone();
+        glib::idle_add_local_once(move || {
+            let Some(scroller) = container
+                .ancestor(gtk::ScrolledWindow::static_type())
+                .and_downcast::<gtk::ScrolledWindow>()
+            else {
+                return;
+            };
+            if let Some(bounds) = focal.compute_bounds(&container) {
+                scroller.vadjustment().set_value(bounds.y() as f64);
+            }
+        });
+    }
+
     fn callbacks(&self, sender: &ComponentSender<Self>) -> CardCallbacks {
         let profile_sender = sender.clone();
         let media_sender = sender.clone();
@@ -201,11 +238,11 @@ impl Thread {
                     .output(ThreadOutput::Open(Route::Profile(handle)))
                     .ok();
             }),
-            open_media: Rc::new(move |tweet_id, indices, start| {
+            open_media: Rc::new(move |tweet_id, items, start| {
                 media_sender
                     .output(ThreadOutput::Open(Route::Media {
                         tweet_id,
-                        indices,
+                        items,
                         start,
                     }))
                     .ok();

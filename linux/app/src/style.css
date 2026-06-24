@@ -1,0 +1,131 @@
+.feed-list,
+.thread-list {
+  background: transparent;
+}
+
+.feed-list > row {
+  background: transparent;
+  padding: 0;
+}
+
+.feed-list > row:hover {
+  background: alpha(@window_fg_color, 0.03);
+}
+
+.tweet-card {
+  padding: 12px 16px;
+  border-bottom: 1px solid alpha(@borders, 0.7);
+}
+
+.avatar {
+  border-radius: 22px;
+  min-width: 44px;
+  min-height: 44px;
+  background: alpha(@window_fg_color, 0.1);
+}
+
+.avatar-button {
+  padding: 0;
+  min-height: 0;
+  min-width: 0;
+  border-radius: 22px;
+  background: none;
+}
+
+.tweet-name {
+  font-weight: 700;
+}
+
+.verified {
+  color: #1d9bf0;
+  font-weight: 700;
+}
+
+.tweet-meta {
+  color: alpha(@window_fg_color, 0.55);
+  font-size: 0.9em;
+}
+
+.tweet-body {
+  font-size: 1.02em;
+  line-height: 1.35;
+}
+
+.tweet-media {
+  border-radius: 14px;
+  min-height: 120px;
+  background: alpha(@window_fg_color, 0.06);
+}
+
+.quoted-tweet {
+  border: 1px solid alpha(@borders, 0.9);
+  border-radius: 14px;
+  padding: 8px 12px;
+}
+
+.quoted-head {
+  font-weight: 600;
+  font-size: 0.92em;
+  color: alpha(@window_fg_color, 0.7);
+}
+
+.quoted-body {
+  font-size: 0.95em;
+}
+
+.tweet-actions {
+  margin-top: 4px;
+  color: alpha(@window_fg_color, 0.55);
+}
+
+.metric,
+.tweet-actions button.metric {
+  color: alpha(@window_fg_color, 0.55);
+  padding: 2px 6px;
+  min-height: 0;
+}
+
+.metric-count {
+  font-size: 0.88em;
+}
+
+.tweet-actions button.like.liked {
+  color: #f91880;
+}
+
+.tweet-card.focal {
+  background: alpha(@accent_bg_color, 0.06);
+}
+
+.tweet-card.focal .tweet-body {
+  font-size: 1.18em;
+  line-height: 1.4;
+}
+
+.profile-header {
+  padding: 18px 16px;
+  border-bottom: 1px solid alpha(@borders, 0.7);
+}
+
+.avatar-large {
+  border-radius: 36px;
+  min-width: 72px;
+  min-height: 72px;
+  background: alpha(@window_fg_color, 0.1);
+}
+
+.profile-name {
+  font-size: 1.35em;
+  font-weight: 800;
+}
+
+.stream-text {
+  font-size: 1.02em;
+  line-height: 1.4;
+  background: transparent;
+}
+
+.compose-text {
+  font-size: 1.1em;
+  background: transparent;
+}

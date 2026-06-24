@@ -1,0 +1,32 @@
+[package]
+name = "unrager-gtk"
+description = "Native GNOME (GTK4/libadwaita) desktop client for unrager."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "unrager-gtk"
+path = "src/main.rs"
+
+[dependencies]
+unrager-gtk-core = { path = "../core" }
+unrager-model = { workspace = true }
+relm4 = { version = "0.11", features = ["libadwaita"] }
+relm4-components = "0.11"
+gtk = { package = "gtk4", version = "0.11", features = ["v4_12"] }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+futures = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+chrono = { workspace = true }
+directories = { workspace = true }
+lru = "0.12"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+notify-rust = "4"

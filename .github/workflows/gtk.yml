@@ -1,0 +1,64 @@
+name: gtk
+
+# The GTK/libadwaita Linux client is a separate cargo workspace under `linux/`
+# (it pulls in heavy GTK system deps and is Linux-GUI-only), so it has its own
+# CI rather than being part of the root `--workspace` matrix.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'linux/**'
+      - 'crates/unrager-model/**'
+      - '.github/workflows/gtk.yml'
+  pull_request:
+    paths:
+      - 'linux/**'
+      - 'crates/unrager-model/**'
+      - '.github/workflows/gtk.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: gtk linux client
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: linux
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install GTK4 + libadwaita dev packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev pkg-config
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry + build
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            linux/target
+          key: ${{ runner.os }}-gtk-${{ hashFiles('linux/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-gtk-
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test
+
+      - name: cargo build (release)
+        run: cargo build --release

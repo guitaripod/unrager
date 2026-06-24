@@ -61,9 +61,9 @@ The crates.io step reads `CARGO_REGISTRY_TOKEN` from repo secrets. Each publish 
 - `src/model.rs` — Tweet, User, Media, MediaKind
 - `src/util.rs` — shared utilities (short_count, parse_tweet_ref)
 
-## Native apps (iOS + macOS)
+## Native apps (iOS + macOS + Linux)
 
-The native clients are Apple-platform apps that talk to `unrager serve` over HTTP/SSE (pair with Tailscale). They live in the repo alongside the Rust crates:
+The native clients talk to `unrager serve` over HTTP/SSE (pair with Tailscale). They live in the repo alongside the Rust crates:
 
 - `UnragerKit/` — shared Swift package (XcodeGen-independent), Foundation/CoreGraphics only, no UIKit/AppKit. Holds the byte-exact `Codable` models (matching the `/api/*` JSON, incl. the externally-tagged `MediaKind` and recursive `Tweet`), the typed `APIClient` (async/await + `AsyncThrowingStream` SSE), `URLSessionTransport`, `AppLogger` (file-based, `Library/Logs/unrager.log`), `AppSettings` (server URL + appearance), `Format`, and `ImagePipeline` (off-main ImageIO downsampling → `CGImage`). `swift build && swift test` from `UnragerKit/` verifies it standalone.
 - `ios/` — UIKit iPhone app (iOS 26, Liquid Glass). XcodeGen `project.yml` depending on `../UnragerKit`. MVVM + Combine, programmatic Auto Layout, `DesignSystem`/`Glass` tokens, compositional-layout + diffable feed (`FeedViewController`/`TweetCell`), Thread/Profile/Search/Notifications/Settings/Compose/StreamSheet. A `#if DEBUG` `UNRAGER_SCREEN` env router in `SceneDelegate` deep-navigates for screenshot QA; `UNRAGER_SERVER` env / `UNRAGER_DEFAULT_SERVER` Info.plist key sets the server.
@@ -71,7 +71,9 @@ The native clients are Apple-platform apps that talk to `unrager serve` over HTT
 
 Build/run: `cd ios && xcodegen generate && xcodebuild -scheme Unrager -destination 'generic/platform=iOS Simulator' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build`, then `xcrun simctl install booted …`. Screenshot QA via `xcrun simctl io <udid> screenshot` driving the `UNRAGER_SCREEN` router. **Not App Store apps** (uses the user's X session) — sideload: `ios/scripts/provision.py` mints an ad-hoc profile (Midgar dist cert + device UDID via the ASC API), `ios/scripts/install-device.sh` builds + ad-hoc-signs + installs via `devicectl`. The iPhone Air's UDID is `00008150-00096C392208401C`; the Mac's Tailscale addr is `100.127.250.64` / `macbook.taila1a09.ts.net`.
 
-When changing the server's `/api/*` contract, update the matching `UnragerKit` model/`APIClient` and the decoding tests in `UnragerKit/Tests/`.
+- `linux/` — native GNOME desktop client (GTK4 + libadwaita via relm4), the Linux peer of the Apple apps. A **separate cargo workspace** (heavy GTK system deps, Linux-GUI-only, so it stays out of the root `--workspace`/CI; depends on `unrager-model` by path). `linux/core` (`unrager-gtk-core`) is the GTK-free, unit-tested port of `UnragerKit`: typed HTTP/SSE `ApiClient` over `unrager-model`, a `ServeManager` that auto-spawns/reuses a local `unrager serve`, `AppSettings` (XDG TOML), a size-rotated file logger (`~/.cache/unrager-gtk/unrager.log`), and byte-parity `Format` helpers. `linux/app` (`unrager-gtk`) is the relm4 UI (shell + feed/thread/profile/search/settings). Build/run: `cd linux && cargo run -p unrager-gtk` (needs `gtk4`+`libadwaita` dev packages); headless tests: `cargo test -p unrager-gtk-core`. Its own CI is `.github/workflows/gtk.yml`. Has its own `linux/README.md`.
+
+When changing the server's `/api/*` contract, update the matching `UnragerKit` model/`APIClient` and the decoding tests in `UnragerKit/Tests/`, **and** the `linux/core` client + its `linux/core/tests/conformance.rs` (the Rust side reuses `unrager-model`, so most shapes track automatically — but the gap structs in `linux/core/src/models.rs` and the SSE/error handling must stay in sync).
 
 ## Key patterns
 

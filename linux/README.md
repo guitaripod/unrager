@@ -92,10 +92,10 @@ Feature-complete against the Apple apps within the server's API ceiling:
   present, Left/Right/Escape keys, "Open on X") with paging. Right-click any
   image for a native menu: open, copy/save the image, open/copy the image and
   tweet URLs.
-- Loading / empty / error discipline on every data screen — an `adw::Spinner`
-  while fetching, an `adw::StatusPage` (with a Try Again button) on failure
-  instead of a vanishing toast — and a content-width clamp so feeds stay
-  readable on wide windows.
+- Loading / empty / error discipline on every data screen — a spinner while
+  fetching, an `adw::StatusPage` (with a Try Again button) on failure instead of
+  a vanishing toast — and a content-width clamp so feeds stay readable on wide
+  windows.
 - Compose / reply (copies the draft and opens the X intent, like the Apple apps;
   Post disables until valid, Ctrl+Return submits), and the Ask / Brief /
   Translate streaming LLM sheet.

@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">unrager</h1>
   <p align="center">
-    A calm Twitter/X client for the terminal.<br>
+    A calm Twitter/X client for the terminal — with native iOS, macOS, and Linux apps.<br>
     Local LLM drops rage-bait before it reaches your eyes.
   </p>
   <p align="center">
@@ -34,6 +34,8 @@ unrager               # TUI
 unrager home -n 20    # one-shot CLI
 unrager tweet "..."   # post via official API
 ```
+
+And it's not just the terminal: `unrager serve` exposes the same feeds over an HTTP/SSE API that **native iOS, macOS, and Linux apps** read — the server does all the X work, the clients stay thin. Pair over Tailscale and read your filtered feed from your phone or desktop. See [Native apps](#native-apps-ios--macos--linux).
 
 ## How auth works
 
@@ -217,7 +219,7 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 # TUI + CLI (default) — the primary product
 curl -fsSL https://unrager.com/install.sh | bash
 
-# TUI + HTTP API server — for the native iOS client over Tailscale
+# TUI + HTTP API server — for the native iOS / macOS / Linux apps over Tailscale
 UNRAGER_FLAVOR=full curl -fsSL https://unrager.com/install.sh | bash
 
 # CLI only (no TUI) — scripts, pipelines, CI
@@ -244,13 +246,13 @@ Approximate release-build sizes: full **23 MB**, TUI-only **15 MB**, CLI-only **
 | Feature | What it pulls | What you lose without it |
 |---|---|---|
 | `tui` (default) | ratatui, crossterm, image, termbg | bare `unrager` can't launch; `user`/`notifs`/`doctor` subcommands hidden |
-| `server` (default, implies `tui`) | axum, tower, tower-http | `unrager serve` — the HTTP API the native iOS client talks to |
+| `server` (default, implies `tui`) | axum, tower, tower-http | `unrager serve` — the HTTP API the native iOS / macOS / Linux apps talk to |
 
 Upgrading later: `cargo install unrager --force` — no uninstall step, cargo replaces the binary in place.
 
 ## Serving the API (native clients)
 
-`unrager serve` (requires the `server` feature, on by default) exposes the HTTP API that the native [iOS](ios/) and [macOS](macos/) apps talk to. The server does all the X work — cookie/OAuth auth, GraphQL, the rage filter, ask/brief/translate over Ollama — so the clients stay thin native UIs.
+`unrager serve` (requires the `server` feature, on by default) exposes the HTTP API that the native [iOS](ios/), [macOS](macos/), and [Linux](linux/) apps talk to. The server does all the X work — cookie/OAuth auth, GraphQL, the rage filter, ask/brief/translate over Ollama — so the clients stay thin native UIs.
 
 ```sh
 unrager serve                          # bind 127.0.0.1:7777
@@ -263,11 +265,19 @@ The API surface (`/api/*`): all seven sources, tweet detail + thread, profile + 
 
 While `unrager serve` is running it owns the filter + seen caches; the TUI detects the lockfile (`~/.cache/unrager/server.lock`) — run one or the other.
 
-## Native apps (iOS + macOS)
+## Native apps (iOS + macOS + Linux)
 
-Native clients live under [`ios/`](ios/) (UIKit, iPhone) and [`macos/`](macos/) (AppKit, Mac), sharing the [`UnragerKit`](UnragerKit/) Swift package (models, networking, SSE, image pipeline, logging). Both target the iOS/macOS **26 Liquid Glass** design and stream the same `/api/*` contract — pair with Tailscale and read every feed from your phone.
+Three native clients ship in the repo — all thin UIs over the same `/api/*` contract `unrager serve` exposes. None is an App Store / store-published app (unrager uses *your* X session): you build and run them yourself. Point each at your server in its settings (or bake a `UNRAGER_DEFAULT_SERVER` default for your tailnet) and read every feed, thread, and profile — with the rage filter, ask, brief, and translate intact.
 
-They aren't App Store apps (unrager uses *your* X session), so they're sideloaded with your own Apple Developer account:
+| Client | Stack | Lives in |
+|---|---|---|
+| iPhone | UIKit, iOS 26 Liquid Glass | [`ios/`](ios/) |
+| Mac | AppKit, macOS 26 | [`macos/`](macos/) |
+| Linux desktop | GTK4 + libadwaita (relm4) | [`linux/`](linux/) |
+
+### iOS + macOS
+
+The Apple apps share the [`UnragerKit`](UnragerKit/) Swift package (Codable models, the typed async/await `APIClient` with SSE, image pipeline, logging). Sideload with your own Apple Developer account:
 
 ```sh
 # build the project (XcodeGen + a local Swift package; no Xcode account needed)
@@ -283,7 +293,19 @@ python3 scripts/provision.py --udid <UDID> --serial <DIST_CERT_SERIAL> --name "i
 UDID=<UDID> ./scripts/install-device.sh     # build → ad-hoc sign → devicectl install + launch
 ```
 
-The app reads its server address from Settings (or a baked `UNRAGER_DEFAULT_SERVER` default for your tailnet). macOS builds with `cd macos && xcodegen generate && xcodebuild ...`; distribute the Mac app as a notarized DMG (Developer ID).
+macOS builds with `cd macos && xcodegen generate && xcodebuild ...`; distribute the Mac app as a notarized DMG (Developer ID).
+
+### Linux
+
+A native GNOME desktop client — GTK4 / libadwaita via [relm4](https://relm4.org), the Linux peer of the Apple apps. It's a separate cargo workspace ([`linux/`](linux/), kept out of the root build since it pulls heavy GTK system deps) that reuses the byte-exact [`unrager-model`](crates/unrager-model) wire types. On launch it reuses a running local `unrager serve` or spawns its own, so a single command gets you a window:
+
+```sh
+# system deps — Arch:  sudo pacman -S gtk4 libadwaita
+#                Debian/Ubuntu:  sudo apt install libgtk-4-dev libadwaita-1-dev build-essential
+cd linux && cargo run -p unrager-gtk
+```
+
+Inline photos fill the tweet column at their true aspect (Compact/Standard/Large media setting), video and GIFs show a poster with a play badge, every screen has loading/empty/error states, and right-clicking any image opens a native copy/save menu. See [`linux/README.md`](linux/README.md) for the full rundown.
 
 ## More
 

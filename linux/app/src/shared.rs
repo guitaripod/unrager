@@ -8,10 +8,12 @@ use std::sync::Arc;
 use unrager_gtk_core::model::AskPreset;
 use unrager_gtk_core::{ApiClient, MediaSize};
 
-/// A centered spinner for the in-flight state of a data screen, using the
-/// self-animating `adw::Spinner` (no manual start/stop).
-pub fn loading_state() -> adw::Spinner {
-    let spinner = adw::Spinner::new();
+/// A centered spinner for the in-flight state of a data screen. Uses
+/// `gtk::Spinner` (not `adw::Spinner`) so the client still builds against
+/// libadwaita 1.5 — the version on Ubuntu 24.04 LTS, Debian stable and CI.
+pub fn loading_state() -> gtk::Spinner {
+    let spinner = gtk::Spinner::new();
+    spinner.start();
     spinner.set_size_request(32, 32);
     spinner.set_halign(gtk::Align::Center);
     spinner.set_valign(gtk::Align::Center);

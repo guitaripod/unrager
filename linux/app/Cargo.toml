@@ -18,7 +18,7 @@ unrager-model = { workspace = true }
 relm4 = { version = "0.11", features = ["libadwaita"] }
 relm4-components = "0.11"
 gtk = { package = "gtk4", version = "0.11", features = ["v4_12"] }
-adw = { package = "libadwaita", version = "0.9", features = ["v1_6"] }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
 tokio = { workspace = true }
 reqwest = { workspace = true }
 futures = { workspace = true }

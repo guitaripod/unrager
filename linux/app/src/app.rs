@@ -214,7 +214,8 @@ impl Component for App {
                 self.status.set_description(Some("Starting unrager serve."));
                 self.status
                     .set_icon_name(Some("network-transmit-receive-symbolic"));
-                let spin = adw::Spinner::new();
+                let spin = gtk::Spinner::new();
+                spin.start();
                 spin.set_size_request(32, 32);
                 self.status.set_child(Some(&spin));
                 let configured = Some(self.settings.server_url());
@@ -647,7 +648,8 @@ fn build_status(title: &str, description: &str, spinner: bool) -> adw::StatusPag
     status.set_description(Some(description));
     status.set_icon_name(Some("network-transmit-receive-symbolic"));
     if spinner {
-        let spin = adw::Spinner::new();
+        let spin = gtk::Spinner::new();
+        spin.start();
         spin.set_size_request(32, 32);
         status.set_child(Some(&spin));
     }

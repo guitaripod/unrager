@@ -18,7 +18,7 @@ pub struct Settings {
     settings: AppSettings,
     status_row: adw::ActionRow,
     test_button: gtk::Button,
-    test_spinner: adw::Spinner,
+    test_spinner: gtk::Spinner,
 }
 
 #[derive(Debug)]
@@ -146,7 +146,8 @@ impl Component for Settings {
         status_row.set_subtitle_lines(0);
         status_row.set_subtitle_selectable(true);
 
-        let test_spinner = adw::Spinner::new();
+        let test_spinner = gtk::Spinner::new();
+        test_spinner.start();
         test_spinner.set_valign(gtk::Align::Center);
         test_spinner.set_visible(false);
 

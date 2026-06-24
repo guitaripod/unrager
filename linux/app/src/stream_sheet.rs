@@ -35,7 +35,7 @@ pub struct StreamInit {
 
 pub struct StreamSheet {
     buffer: gtk::TextBuffer,
-    spinner: adw::Spinner,
+    spinner: gtk::Spinner,
     banner: adw::Banner,
 }
 
@@ -75,7 +75,7 @@ impl Component for StreamSheet {
                         },
 
                         #[local_ref]
-                        spinner -> adw::Spinner {
+                        spinner -> gtk::Spinner {
                             set_halign: gtk::Align::Center,
                             set_margin_top: 24,
                             set_size_request: (32, 32),
@@ -106,7 +106,8 @@ impl Component for StreamSheet {
         root.set_title(&init.request.title());
 
         let buffer = gtk::TextBuffer::new(None);
-        let spinner = adw::Spinner::new();
+        let spinner = gtk::Spinner::new();
+        spinner.start();
         let banner = adw::Banner::new("");
 
         let model = StreamSheet {

@@ -6,6 +6,7 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **The TUI no longer shows "0y" for posts just under a year old.** A timestamp 360–364 days old briefly read "0y" — months hit 12 (so the "Nmo" branch was skipped) but `days / 365` rounded to 0. Years are now derived from months, so it reads "1y".
 - **Linux notification rows now show their time.** Each row gained the relative timestamp ("5m") the macOS and iOS clients already showed, so recent and weeks-old activity are no longer indistinguishable.
 - **Liking inside a macOS thread no longer re-fetches the whole conversation.** The heart now flips instantly on the row (rolling back only if the request fails), instead of firing the like and then reloading every reply — matching the feed and the iOS app.
 - **macOS polls now show the real time remaining instead of "ends 0s".** Every open poll read "N votes · ends 0s" because a future end date was handed to the elapsed-time formatter (which clamps a negative interval to 0s); it now shows a proper "5h left" / "3d left" countdown, and reads "final" / "ended" to match the TUI and iOS.

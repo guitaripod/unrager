@@ -4571,7 +4571,9 @@ fn relative_time(dt: DateTime<Utc>) -> String {
     if months < 12 {
         return format!("{months}mo");
     }
-    let years = days / 365;
+    // Derive years from months so 360–364-day posts (months == 12, but
+    // days / 365 == 0) read "1y" instead of "0y".
+    let years = months / 12;
     format!("{years}y")
 }
 

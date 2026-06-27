@@ -218,15 +218,15 @@ final class NotificationsViewController: UIViewController {
         reload()
     }
 
-    /// Re-checks for new activity whenever the tab comes forward, so the list is
-    /// fresh without a manual pull — debounced so rapid tab-switching doesn't
-    /// hammer the endpoint, and skipped while the first load is still settling.
+    /// Refreshes whenever the tab comes forward so the list is fresh without a
+    /// manual pull, and marks everything seen (the user is now looking). The
+    /// fresh load re-marks seen on completion, so the last-seen marker tracks the
+    /// newest item and the badge doesn't reappear on the next poll. Skipped only
+    /// while a load is already in flight.
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         markSeen()
-        guard hasLoadedOnce, !loading else { return }
-        if let last = lastRefresh, Date().timeIntervalSince(last) < 8 { return }
-        load(reset: true)
+        if !loading { load(reset: true) }
     }
 
     /// Advances the last-seen marker to the newest loaded notification and clears

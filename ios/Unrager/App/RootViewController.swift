@@ -77,6 +77,10 @@ final class RootViewController: UITabBarController {
               let item = (viewControllers?[index] as? UINavigationController)?.tabBarItem
                 ?? viewControllers?[index].tabBarItem else { return }
         item.badgeValue = value
+        // Keep the bar — and its unread badge — from minimizing away while there's
+        // unread activity, so the indicator stays visible as you scroll the feed.
+        // Minimize-on-scroll resumes once the badge clears.
+        tabBarMinimizeBehavior = value == nil ? .onScrollDown : .never
     }
 
     private weak var activeToast: NotificationToast?

@@ -8,6 +8,7 @@ use adw::prelude::*;
 use relm4::prelude::*;
 use std::rc::Rc;
 use std::sync::Arc;
+use chrono::{DateTime, Duration, Utc};
 use unrager_gtk_core::model::{FeedStatusResponse, SearchProduct, TimelinePage, Tweet};
 use unrager_gtk_core::{ApiClient, ApiError, format};
 
@@ -39,6 +40,9 @@ pub struct Feed {
     exhausted: bool,
     /// "updated Nm ago" for store-backed Home feeds; empty hides the label.
     freshness: String,
+    /// Buffer ingest instant; re-deriving from it ticks the freshness label
+    /// without re-fetching. `None` hides the label.
+    freshness_anchor: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug)]
@@ -51,6 +55,9 @@ pub enum FeedInput {
     LoadMore,
     RowActivated(i32),
     ToggleOriginals(bool),
+    /// Re-derive the "updated Nm ago" label from `freshness_anchor` so it climbs
+    /// live; fired by a 20s glib timer.
+    TickFreshness,
 }
 
 #[derive(Debug)]
@@ -155,11 +162,22 @@ impl Component for Feed {
             loading: false,
             exhausted: false,
             freshness: String::new(),
+            freshness_anchor: None,
         };
 
         let list_box = &list;
         let widgets = view_output!();
         widgets.originals_toggle.set_visible(is_home);
+        if is_home {
+            let tick = sender.input_sender().clone();
+            gtk::glib::timeout_add_seconds_local(20, move || {
+                if tick.send(FeedInput::TickFreshness).is_err() {
+                    gtk::glib::ControlFlow::Break
+                } else {
+                    gtk::glib::ControlFlow::Continue
+                }
+            });
+        }
         sender.input(FeedInput::Reload);
         ComponentParts { model, widgets }
     }
@@ -221,6 +239,7 @@ impl Component for Feed {
                     sender.input(FeedInput::Reload);
                 }
             }
+            FeedInput::TickFreshness => self.refresh_freshness_label(),
         }
     }
 
@@ -277,21 +296,34 @@ impl Component for Feed {
                 }
             }
             FeedCmd::Status(result) => {
-                self.freshness = match (result, self.variant_key()) {
+                self.freshness_anchor = match (&result, self.variant_key()) {
                     (Ok(status), Some(key)) => status
                         .feeds
                         .iter()
                         .find(|f| f.variant == key)
-                        .and_then(|f| format::freshness_label(f.age_secs))
-                        .unwrap_or_default(),
-                    _ => String::new(),
+                        .filter(|f| f.age_secs >= 0)
+                        .map(|f| Utc::now() - Duration::seconds(f.age_secs)),
+                    _ => None,
                 };
+                self.refresh_freshness_label();
             }
         }
     }
 }
 
 impl Feed {
+    /// Re-derives "updated Nm ago" from the buffer's ingest instant so the label
+    /// climbs live between loads; empty (hidden) when there's no anchor.
+    fn refresh_freshness_label(&mut self) {
+        self.freshness = match self.freshness_anchor {
+            Some(anchor) => {
+                let age = (Utc::now() - anchor).num_seconds().max(0);
+                format::freshness_label(age).unwrap_or_default()
+            }
+            None => String::new(),
+        };
+    }
+
     /// The `feed.db` source key for this feed's freshness, or `None` for
     /// non-Home sources (which have no materialized buffer).
     fn variant_key(&self) -> Option<&'static str> {

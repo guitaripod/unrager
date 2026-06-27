@@ -58,6 +58,9 @@ class FeedViewController: NSViewController {
     private var footerState: TimelineViewModel.FooterState = .none
     private var lastErrorText: String?
     private var cancellables = Set<AnyCancellable>()
+    /// Re-derives the "updated Nm ago" caption while the feed is on screen, so it
+    /// climbs live instead of freezing at the value from the last load.
+    private var freshnessTimer: Timer?
 
     /// Tweet ids the server has confirmed as already-seen — those rows render
     /// dimmed. Gated on `MacSettings.seenDimming`.
@@ -96,6 +99,25 @@ class FeedViewController: NSViewController {
         configureFreshness()
         bind()
         viewModel.first()
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        startFreshnessTimer()
+    }
+
+    override func viewWillDisappear() {
+        super.viewWillDisappear()
+        freshnessTimer?.invalidate()
+        freshnessTimer = nil
+    }
+
+    /// Ticks the freshness caption every 20s while visible; torn down off screen.
+    private func startFreshnessTimer() {
+        freshnessTimer?.invalidate()
+        freshnessTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
+            self?.viewModel.tickFreshness()
+        }
     }
 
     /// The table width at the last full re-measure. Row heights only change with

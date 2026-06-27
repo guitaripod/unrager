@@ -70,6 +70,9 @@ final class TimelineViewModel {
     private var loadTask: Task<Void, Never>?
     private var filterTask: Task<Void, Never>?
     private var freshnessTask: Task<Void, Never>?
+    /// Local-clock instant the buffer was last ingested; re-deriving from it lets
+    /// "updated Nm ago" climb live without re-fetching. nil hides the label.
+    private var freshnessAnchor: Date?
 
     /// How many keep-verdict tweets a collect batch aims to gather before
     /// publishing, and the hard cap on pages fetched per batch (so a feed that's
@@ -135,6 +138,7 @@ final class TimelineViewModel {
         seenIDs.removeAll()
         collectingProgress.send(nil)
         footerState.send(.none)
+        freshnessAnchor = nil
         freshness.send(nil)
         tweets.send([])
     }
@@ -316,20 +320,34 @@ final class TimelineViewModel {
     /// the current Home variant. Publishes `nil` for non-Home feeds, a cold
     /// buffer (`ageSecs < 0`), a missing variant, or any fetch error.
     func updateFreshness() async {
-        guard let variant = homeVariant else { freshness.send(nil); return }
+        guard let variant = homeVariant else { freshnessAnchor = nil; freshness.send(nil); return }
         do {
             let status = try await api.feedStatus()
             if Task.isCancelled { return }
-            guard let feed = status.feeds.first(where: { $0.variant == variant }) else {
-                freshness.send(nil)
-                return
+            if let age = status.feeds.first(where: { $0.variant == variant })?.ageSecs, age >= 0 {
+                freshnessAnchor = Date().addingTimeInterval(-Double(age))
+            } else {
+                freshnessAnchor = nil
             }
-            freshness.send(Self.freshnessBand(feed.ageSecs))
+            freshness.send(currentFreshnessLabel())
         } catch {
             if Task.isCancelled { return }
             AppLogger.shared.debug("feed status fetch failed: \(error)", category: .timeline)
+            freshnessAnchor = nil
             freshness.send(nil)
         }
+    }
+
+    /// Re-derives "updated Nm ago" from the stored ingest instant so the label
+    /// climbs over time without re-fetching. Driven by a timer in the feed view.
+    func tickFreshness() {
+        guard freshnessAnchor != nil else { return }
+        freshness.send(currentFreshnessLabel())
+    }
+
+    private func currentFreshnessLabel() -> String? {
+        guard let anchor = freshnessAnchor else { return nil }
+        return Self.freshnessBand(max(0, Int(Date().timeIntervalSince(anchor))))
     }
 
     /// Bands an age in seconds into an "updated Ns/Nm/Nh/Nd ago" string, or

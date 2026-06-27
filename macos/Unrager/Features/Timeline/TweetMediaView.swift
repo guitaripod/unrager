@@ -496,11 +496,22 @@ private final class PollView: NSView {
         let totalVotes = options.reduce(0) { $0 + $1.count }
         var parts = ["\(Format.count(totalVotes)) vote\(totalVotes == 1 ? "" : "s")"]
         if countsFinal {
-            parts.append("Final results")
+            parts.append("final")
         } else if let endsAt {
-            parts.append(endsAt <= Date() ? "Final results" : "ends \(Format.relativeTime(endsAt))")
+            let remaining = endsAt.timeIntervalSinceNow
+            parts.append(remaining <= 0 ? "ended" : "\(Self.countdown(remaining)) left")
         }
         footer.stringValue = parts.joined(separator: " · ")
+    }
+
+    /// Minute-granularity countdown capped at days, matching the TUI / iOS poll
+    /// footer. `Format.relativeTime` measures elapsed-since and so returns "0s"
+    /// for a future end date — never reuse it for a countdown.
+    private static func countdown(_ remaining: TimeInterval) -> String {
+        let mins = max(0, Int(remaining / 60))
+        if mins >= 24 * 60 { return "\(mins / (24 * 60))d" }
+        if mins >= 60 { return "\(mins / 60)h" }
+        return "\(mins)m"
     }
 
     @objc private func tapped() { onTap?() }

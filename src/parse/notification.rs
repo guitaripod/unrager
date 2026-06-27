@@ -193,8 +193,6 @@ fn build_grouped_entry(entry_id: &str, content: &Value) -> Option<RawNotificatio
         .unwrap_or("");
     let notification_type = classify_type(icon, element);
 
-    let timestamp = parse_notification_timestamp(item).unwrap_or_else(Utc::now);
-
     let actors = extract_actors(item);
     let others_count = item
         .pointer("/rich_message/text")
@@ -204,6 +202,14 @@ fn build_grouped_entry(entry_id: &str, content: &Value) -> Option<RawNotificatio
 
     let target = extract_target_tweet(item);
     let target_tweet_id = target.as_ref().map(|t| t.id.clone());
+
+    // The timestamp must be a pure function of the notification, never the fetch
+    // time: a drifting `Utc::now()` makes already-seen items re-count as unread on
+    // every poll, so the unread badge reappears right after you've checked it.
+    // Prefer the parsed time, then the target tweet's time, then a fixed epoch.
+    let timestamp = parse_notification_timestamp(item)
+        .or_else(|| target.as_ref().map(|t| t.created_at))
+        .unwrap_or_else(|| DateTime::from_timestamp(0, 0).expect("unix epoch is valid"));
 
     let stable_id =
         composite_grouped_id(&notification_type, &actors, &target_tweet_id, others_count)
@@ -244,7 +250,11 @@ fn composite_grouped_id(
 }
 
 fn parse_notification_timestamp(item: &Value) -> Option<DateTime<Utc>> {
-    let v = item.get("timestamp_ms")?;
+    // X sends this as snake_case on some payloads and camelCase on others; miss
+    // either and the timestamp would drift to `now()` (see `build_grouped_entry`).
+    let v = item
+        .get("timestamp_ms")
+        .or_else(|| item.get("timestampMs"))?;
     if let Some(s) = v.as_str() {
         if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
             return Some(dt.with_timezone(&Utc));
@@ -441,6 +451,37 @@ mod tests {
         assert_eq!(page.notifications.len(), 1);
         assert_eq!(page.notifications[0].notification_type, "Reply");
         assert_eq!(page.notifications[0].actors[0].handle, "alice");
+    }
+
+    #[test]
+    fn grouped_timestamp_is_deterministic_without_timestamp_ms() {
+        // A grouped entry lacking a timestamp must get a stable, fetch-time-
+        // independent value — never Utc::now() — so an already-seen notification
+        // doesn't re-count as unread on the next poll (the red-dot reappears bug).
+        let content = json!({
+            "clientEventInfo": { "element": "users_followed_you" },
+            "itemContent": { "notification_icon": "person_icon" }
+        });
+        let a = build_grouped_entry("g-1", &content).unwrap();
+        let b = build_grouped_entry("g-1", &content).unwrap();
+        assert_eq!(
+            a.timestamp, b.timestamp,
+            "timestamp must not depend on fetch time"
+        );
+        assert_eq!(
+            a.timestamp,
+            DateTime::from_timestamp(0, 0).unwrap(),
+            "no timestamp + no target falls back to a fixed epoch"
+        );
+    }
+
+    #[test]
+    fn parses_camelcase_timestamp_ms() {
+        let item = json!({ "timestampMs": "1700000000000" });
+        assert_eq!(
+            parse_notification_timestamp(&item),
+            DateTime::from_timestamp_millis(1_700_000_000_000)
+        );
     }
 
     #[test]

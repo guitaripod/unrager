@@ -3,12 +3,27 @@
 //! emits — the same fixtures the Apple client tests against.
 
 use unrager_gtk_core::model::{
-    FilterVerdictEvent, Media, MediaKind, Notification, SearchProduct, SessionState, SourceKind,
-    TokenEvent, Tweet, Verdict,
+    FeedStatusResponse, FilterVerdictEvent, Media, MediaKind, Notification, SearchProduct,
+    SessionState, SourceKind, TokenEvent, Tweet, Verdict,
 };
 
 fn decode<T: serde::de::DeserializeOwned>(json: &str) -> T {
     serde_json::from_str(json).expect("decode")
+}
+
+#[test]
+fn feed_status_decodes() {
+    let json = r#"
+    {"feeds":[
+      {"variant":"home_foryou","last_ingest_at":1782549081,"last_ingest_count":39,"age_secs":12},
+      {"variant":"home_following","last_ingest_at":0,"last_ingest_count":0,"age_secs":-1}
+    ]}
+    "#;
+    let resp: FeedStatusResponse = decode(json);
+    assert_eq!(resp.feeds.len(), 2);
+    assert_eq!(resp.feeds[0].variant, "home_foryou");
+    assert_eq!(resp.feeds[0].last_ingest_count, 39);
+    assert_eq!(resp.feeds[1].age_secs, -1, "a cold variant reports age -1");
 }
 
 #[test]

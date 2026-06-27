@@ -8,8 +8,8 @@ use adw::prelude::*;
 use relm4::prelude::*;
 use std::rc::Rc;
 use std::sync::Arc;
-use unrager_gtk_core::model::{SearchProduct, TimelinePage, Tweet};
-use unrager_gtk_core::{ApiClient, ApiError};
+use unrager_gtk_core::model::{FeedStatusResponse, SearchProduct, TimelinePage, Tweet};
+use unrager_gtk_core::{ApiClient, ApiError, format};
 
 #[derive(Debug, Clone)]
 pub enum FeedSource {
@@ -37,6 +37,8 @@ pub struct Feed {
     cursor: Option<String>,
     loading: bool,
     exhausted: bool,
+    /// "updated Nm ago" for store-backed Home feeds; empty hides the label.
+    freshness: String,
 }
 
 #[derive(Debug)]
@@ -62,6 +64,7 @@ pub enum FeedCmd {
         append: bool,
         page: Result<TimelinePage, ApiError>,
     },
+    Status(Result<FeedStatusResponse, ApiError>),
 }
 
 #[relm4::component(pub)]
@@ -93,6 +96,15 @@ impl Component for Feed {
                     connect_toggled[sender] => move |toggle| {
                         sender.input(FeedInput::ToggleOriginals(toggle.is_active()));
                     },
+                },
+                pack_start = &gtk::Label {
+                    add_css_class: "dim-label",
+                    add_css_class: "caption",
+                    set_margin_start: 4,
+                    #[watch]
+                    set_label: &model.freshness,
+                    #[watch]
+                    set_visible: !model.freshness.is_empty(),
                 },
             },
 
@@ -142,6 +154,7 @@ impl Component for Feed {
             cursor: None,
             loading: false,
             exhausted: false,
+            freshness: String::new(),
         };
 
         let list_box = &list;
@@ -217,44 +230,78 @@ impl Component for Feed {
         sender: ComponentSender<Self>,
         _root: &Self::Root,
     ) {
-        let FeedCmd::Loaded { append, page } = message;
-        self.loading = false;
-        match page {
-            Ok(page) => {
-                if !append {
-                    clear(&self.list);
-                    self.tweets.clear();
-                }
-                let callbacks = self.callbacks(&sender);
-                for tweet in &page.tweets {
-                    let card = build_tweet_card(tweet, &self.ctx, &callbacks);
-                    self.list.append(&card);
-                    self.tweets.push(tweet.clone());
-                }
-                self.cursor = page.cursor;
-                self.exhausted = self.cursor.is_none();
-                if self.tweets.is_empty() {
-                    self.list
-                        .set_placeholder(Some(&empty_state("feed-symbolic", "Nothing to show")));
+        match message {
+            FeedCmd::Loaded { append, page } => {
+                self.loading = false;
+                match page {
+                    Ok(page) => {
+                        if !append {
+                            clear(&self.list);
+                            self.tweets.clear();
+                        }
+                        let callbacks = self.callbacks(&sender);
+                        for tweet in &page.tweets {
+                            let card = build_tweet_card(tweet, &self.ctx, &callbacks);
+                            self.list.append(&card);
+                            self.tweets.push(tweet.clone());
+                        }
+                        self.cursor = page.cursor;
+                        self.exhausted = self.cursor.is_none();
+                        if self.tweets.is_empty() {
+                            self.list.set_placeholder(Some(&empty_state(
+                                "feed-symbolic",
+                                "Nothing to show",
+                            )));
+                        }
+                        // After a fresh load of a store-backed Home feed, fetch
+                        // how stale the buffer is for the "updated Nm ago" label.
+                        if !append && self.variant_key().is_some() {
+                            let api = self.ctx.api.clone();
+                            sender.oneshot_command(async move {
+                                FeedCmd::Status(api.feed_status().await)
+                            });
+                        }
+                    }
+                    Err(error) => {
+                        let message = error.user_message();
+                        if self.tweets.is_empty() {
+                            let retry = sender.clone();
+                            self.list
+                                .set_placeholder(Some(&error_state(&message, move || {
+                                    retry.input(FeedInput::Reload)
+                                })));
+                        } else {
+                            sender.output(FeedOutput::Open(Route::Toast(message))).ok();
+                        }
+                    }
                 }
             }
-            Err(error) => {
-                let message = error.user_message();
-                if self.tweets.is_empty() {
-                    let retry = sender.clone();
-                    self.list
-                        .set_placeholder(Some(&error_state(&message, move || {
-                            retry.input(FeedInput::Reload)
-                        })));
-                } else {
-                    sender.output(FeedOutput::Open(Route::Toast(message))).ok();
-                }
+            FeedCmd::Status(result) => {
+                self.freshness = match (result, self.variant_key()) {
+                    (Ok(status), Some(key)) => status
+                        .feeds
+                        .iter()
+                        .find(|f| f.variant == key)
+                        .and_then(|f| format::freshness_label(f.age_secs))
+                        .unwrap_or_default(),
+                    _ => String::new(),
+                };
             }
         }
     }
 }
 
 impl Feed {
+    /// The `feed.db` source key for this feed's freshness, or `None` for
+    /// non-Home sources (which have no materialized buffer).
+    fn variant_key(&self) -> Option<&'static str> {
+        match self.source {
+            FeedSource::HomeForYou => Some("home_foryou"),
+            FeedSource::Following => Some("home_following"),
+            _ => None,
+        }
+    }
+
     fn callbacks(&self, sender: &ComponentSender<Self>) -> CardCallbacks {
         let profile_sender = sender.clone();
         let media_sender = sender.clone();

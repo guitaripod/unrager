@@ -40,6 +40,25 @@ pub fn absolute_time(date: DateTime<Utc>) -> String {
     absolute_time_in(date, &Local)
 }
 
+/// "updated Nm ago" for a materialized-feed age in seconds, or `None` when the
+/// buffer has never been ingested (`age_secs < 0`). Used for the freshness
+/// indicator on Home feeds.
+pub fn freshness_label(age_secs: i64) -> Option<String> {
+    if age_secs < 0 {
+        return None;
+    }
+    let unit = if age_secs < 60 {
+        format!("{age_secs}s")
+    } else if age_secs < 3_600 {
+        format!("{}m", age_secs / 60)
+    } else if age_secs < 86_400 {
+        format!("{}h", age_secs / 3_600)
+    } else {
+        format!("{}d", age_secs / 86_400)
+    };
+    Some(format!("updated {unit} ago"))
+}
+
 fn relative_time_in<Tz: TimeZone>(date: DateTime<Utc>, now: DateTime<Utc>, tz: &Tz) -> String
 where
     Tz::Offset: std::fmt::Display,
@@ -142,5 +161,15 @@ mod tests {
             absolute_time_in(utc("2026-01-02T09:05:00Z"), &Utc),
             "9:05 AM · Jan 2, 2026"
         );
+    }
+
+    #[test]
+    fn freshness_label_bands() {
+        assert_eq!(freshness_label(-1), None);
+        assert_eq!(freshness_label(0).as_deref(), Some("updated 0s ago"));
+        assert_eq!(freshness_label(45).as_deref(), Some("updated 45s ago"));
+        assert_eq!(freshness_label(120).as_deref(), Some("updated 2m ago"));
+        assert_eq!(freshness_label(7_200).as_deref(), Some("updated 2h ago"));
+        assert_eq!(freshness_label(172_800).as_deref(), Some("updated 2d ago"));
     }
 }

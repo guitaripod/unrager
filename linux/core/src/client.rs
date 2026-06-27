@@ -14,9 +14,10 @@ pub use crate::models::ServerErrorKind;
 pub use error::ApiError;
 
 use crate::models::{
-    AskPreset, ComposeMedia, ComposeResult, EngageResult, FilterConfig, FilterVerdictEvent,
-    LikersPage, MarkSeenResult, NotificationsPage, ProfileView, SearchProduct, SeenCheck,
-    ServerError, ServerHealth, SessionState, ThreadView, TimelinePage, TokenEvent, Tweet, Whoami,
+    AskPreset, ComposeMedia, ComposeResult, EngageResult, FeedStatusResponse, FilterConfig,
+    FilterVerdictEvent, LikersPage, MarkSeenResult, NotificationsPage, ProfileView, SearchProduct,
+    SeenCheck, ServerError, ServerHealth, SessionState, ThreadView, TimelinePage, TokenEvent,
+    Tweet, Whoami,
 };
 use futures::{Stream, StreamExt};
 use reqwest::Client;
@@ -146,6 +147,12 @@ impl ApiClient {
         }
         self.get(self.build(&["api", "sources", "notifications"], &query)?)
             .await
+    }
+
+    /// Freshness of the materialized Home buffer (per variant), for the
+    /// "updated Nm ago" indicator.
+    pub async fn feed_status(&self) -> Result<FeedStatusResponse, ApiError> {
+        self.get(self.build(&["api", "feed", "status"], &[])?).await
     }
 
     // MARK: - Tweets / Threads

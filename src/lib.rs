@@ -10,6 +10,8 @@ pub mod parse;
 pub mod render;
 #[cfg(feature = "server")]
 pub mod server;
+#[cfg(any(feature = "tui", feature = "server"))]
+pub mod store;
 #[cfg(feature = "tui")]
 pub mod tui;
 pub mod update;

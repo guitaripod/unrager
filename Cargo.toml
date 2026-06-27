@@ -44,6 +44,7 @@ tui = [
     "dep:emojis",
     "dep:ab_glyph",
     "dep:arboard",
+    "dep:fs2",
 ]
 # HTTP API server for native clients (e.g. the iOS app). Pulls in axum.
 # Implies `tui` because the server reuses filter/seen/fetch helpers that live there.

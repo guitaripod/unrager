@@ -24,6 +24,56 @@ pub struct AppConfig {
     pub sound: SoundConfig,
     #[serde(default)]
     pub oauth: OAuthConfig,
+    #[serde(default)]
+    pub feed: FeedConfig,
+}
+
+/// Controls the materialized Home-feed buffer (`feed.db`) and how aggressively
+/// the background ingest worker polls X. Kept small and activity-gated so the
+/// GPU does no classification work when the app is idle.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FeedConfig {
+    /// Maximum rows kept per Home variant (For You / Following). The buffer is a
+    /// ring — older rows are trimmed once the cap is exceeded.
+    #[serde(default = "default_buffer_cap")]
+    pub buffer_cap: usize,
+    /// Poll interval (seconds) while a client has been active very recently.
+    #[serde(default = "default_active_poll_secs")]
+    pub active_poll_secs: u64,
+    /// Poll interval (seconds) while a client was active within `idle_after_secs`.
+    #[serde(default = "default_recent_poll_secs")]
+    pub recent_poll_secs: u64,
+    /// After this many seconds with no client activity the worker parks until a
+    /// request wakes it — no polling, no classification, no GPU.
+    #[serde(default = "default_idle_after_secs")]
+    pub idle_after_secs: u64,
+}
+
+impl Default for FeedConfig {
+    fn default() -> Self {
+        Self {
+            buffer_cap: default_buffer_cap(),
+            active_poll_secs: default_active_poll_secs(),
+            recent_poll_secs: default_recent_poll_secs(),
+            idle_after_secs: default_idle_after_secs(),
+        }
+    }
+}
+
+fn default_buffer_cap() -> usize {
+    200
+}
+
+fn default_active_poll_secs() -> u64 {
+    180
+}
+
+fn default_recent_poll_secs() -> u64 {
+    1200
+}
+
+fn default_idle_after_secs() -> u64 {
+    10_800
 }
 
 /// OAuth client identity used only by the write path (`unrager auth login`,
@@ -173,8 +223,14 @@ impl AppConfig {
         let Ok(raw) = std::fs::read_to_string(&path) else {
             return Self::default();
         };
-        match toml::from_str(&raw) {
-            Ok(cfg) => cfg,
+        match toml::from_str::<Self>(&raw) {
+            Ok(mut cfg) => {
+                if cfg.feed.buffer_cap == 0 {
+                    tracing::warn!("[feed] buffer_cap = 0 is invalid; using 1");
+                    cfg.feed.buffer_cap = 1;
+                }
+                cfg
+            }
             Err(e) => {
                 tracing::warn!("failed to parse config.toml: {e} — using defaults");
                 Self::default()

@@ -6,6 +6,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowController: MainWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if let server = ProcessInfo.processInfo.environment["UNRAGER_SERVER"], !server.isEmpty {
+            AppSettings.serverURLString = server
+        }
         AppLogger.shared.info("macOS app launched, server=\(AppSettings.serverURL.absoluteString)", category: .app)
         NSApp.setActivationPolicy(.regular)
         buildMenu()
@@ -16,9 +19,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         windowController = controller
         controller.attachNotificationService()
         NotificationCenterService.shared.start()
+        #if DEBUG
+        scheduleSelfShotIfRequested(controller)
+        #endif
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    #if DEBUG
+    /// Agent QA: render the whole window to a PNG in-process once the feed has
+    /// settled, so an agent can capture the Mac app without the permission-gated
+    /// Screen Recording API. Set `UNRAGER_SELFSHOT` to the output path. The peer
+    /// of the iOS `UNRAGER_SCREEN` hook; pairs with `UNRAGER_SERVER`.
+    private func scheduleSelfShotIfRequested(_ controller: MainWindowController) {
+        guard let path = ProcessInfo.processInfo.environment["UNRAGER_SELFSHOT"], !path.isEmpty
+        else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 9) {
+            guard let frame = controller.window?.contentView?.superview,
+                  let rep = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { return }
+            frame.cacheDisplay(in: frame.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+            AppLogger.shared.info("selfshot written to \(path)", category: .app)
+        }
+    }
+    #endif
 
     // MARK: - Menu bar
 

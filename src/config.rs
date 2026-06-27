@@ -61,7 +61,7 @@ impl Default for FeedConfig {
 }
 
 fn default_buffer_cap() -> usize {
-    200
+    500
 }
 
 fn default_active_poll_secs() -> u64 {

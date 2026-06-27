@@ -397,7 +397,7 @@ Home (For You + Following) is served from a small local SQLite buffer that a bac
 
 ```toml
 [feed]
-buffer_cap = 200        # tweets kept per feed (For You / Following)
+buffer_cap = 500        # tweets kept per feed (For You / Following)
 active_poll_secs = 180  # poll cadence while a client is active
 recent_poll_secs = 1200 # cadence after a lull
 idle_after_secs = 10800 # park after this long with no activity (3h)

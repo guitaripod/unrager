@@ -302,15 +302,24 @@ extension ThreadViewController: NSTableViewDelegate {
     }
 
     private func toggleLike(_ tweet: Tweet) {
+        let liking = !tweet.favorited
+        cell(for: tweet)?.applyOptimisticLike(liking, baseCount: tweet.likeCount)
         Task {
             do {
-                _ = tweet.favorited ? try await api.unlike(tweetID: tweet.restID)
-                                    : try await api.like(tweetID: tweet.restID)
-                load()
+                _ = liking ? try await api.like(tweetID: tweet.restID)
+                           : try await api.unlike(tweetID: tweet.restID)
             } catch {
+                cell(for: tweet)?.applyOptimisticLike(!liking, baseCount: tweet.likeCount)
                 AppLogger.shared.warn("thread like failed: \(error)", category: .thread)
             }
         }
+    }
+
+    /// The displayed row view for a tweet, or nil if it's offscreen — lets a like
+    /// flip the heart in place instead of re-fetching the whole conversation.
+    private func cell(for tweet: Tweet) -> TweetRowView? {
+        guard let index = rows.firstIndex(where: { $0.restID == tweet.restID }) else { return nil }
+        return tableView.view(atColumn: 0, row: index, makeIfNecessary: false) as? TweetRowView
     }
 
     private func tweetForContextMenu() -> Tweet? {

@@ -69,11 +69,12 @@ final class NotificationCenterService: NSObject {
         onUnreadCount?(count)
     }
 
-    /// Advances the last-seen marker to the newest of the supplied notifications
-    /// and clears the badge. Called when the Notifications source is viewed.
-    func markNotificationsSeen(in notifications: [XNotification]) {
-        NotificationPrefs.markSeen(in: notifications)
-        setUnreadCount(0)
+    /// Marks all fetched activity seen — up to the newest the poller has pulled,
+    /// the authoritative head of feed, rather than whatever page a view happened
+    /// to load — and clears the badge. Called when the Notifications source is
+    /// viewed.
+    func markNotificationsSeen() {
+        poller.markCurrentSeen()
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
     }
 

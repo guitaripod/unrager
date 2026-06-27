@@ -225,14 +225,19 @@ final class NotificationsViewController: UIViewController {
     /// while a load is already in flight.
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        markSeen()
+        NotificationCenterService.shared.setViewingNotifications(true)
         if !loading { load(reset: true) }
     }
 
-    /// Advances the last-seen marker to the newest loaded notification and clears
-    /// the unread badge — the user has now actually looked at the list.
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        NotificationCenterService.shared.setViewingNotifications(false)
+    }
+
+    /// Clears the unread badge and marks everything fetched as seen — the user has
+    /// now looked at the list.
     private func markSeen() {
-        NotificationCenterService.shared.markNotificationsSeen(in: order.compactMap { items[$0] })
+        NotificationCenterService.shared.markNotificationsSeen()
     }
 
     @objc private func reload() { load(reset: true) }

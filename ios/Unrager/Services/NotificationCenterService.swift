@@ -81,17 +81,39 @@ final class NotificationCenterService: NSObject {
 
     // MARK: - Badge
 
+    /// True while the Notifications tab is the front-most view. The badge is
+    /// hard-pinned to zero the whole time it's up — the user is looking at the
+    /// list, so nothing is "unread".
+    private var isViewingNotifications = false
+
     private func setUnreadCount(_ count: Int) {
+        // While the user is looking at the list, pin the badge to zero and keep
+        // advancing the seen marker to the newest the poller has fetched, so
+        // activity arriving mid-view is baselined and doesn't pop the badge when
+        // they leave.
+        if isViewingNotifications {
+            NotificationPrefs.markSeen(upTo: poller.latestFetched)
+            unreadCount = 0
+            root?.setNotificationsBadge(nil)
+            return
+        }
         unreadCount = count
         root?.setNotificationsBadge(count > 0 ? String(count) : nil)
     }
 
-    /// Advances the last-seen marker to the newest of the supplied notifications
-    /// and clears the badge. Called when the Notifications tab is actually viewed.
-    func markNotificationsSeen(in notifications: [XNotification]) {
-        NotificationPrefs.markSeen(in: notifications)
-        setUnreadCount(0)
+    /// Marks all fetched activity seen — up to the newest the poller has pulled,
+    /// the authoritative head of feed, rather than whatever page a view happened
+    /// to load — and clears the badge.
+    func markNotificationsSeen() {
+        poller.markCurrentSeen()
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+    }
+
+    /// Driven by the Notifications view as it comes forward / goes away. On
+    /// becoming visible it marks everything seen; while visible the badge stays 0.
+    func setViewingNotifications(_ viewing: Bool) {
+        isViewingNotifications = viewing
+        if viewing { markNotificationsSeen() }
     }
 
     // MARK: - Permission

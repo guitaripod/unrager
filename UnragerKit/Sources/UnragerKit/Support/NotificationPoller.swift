@@ -33,6 +33,10 @@ public final class NotificationPoller {
     /// poll seeds `knownIDs` without firing `onNewNotifications`, so the host
     /// isn't flooded with banners for the existing backlog on launch.
     private var primed = false
+    /// The newest notification (by timestamp) the poller has fetched — the
+    /// authoritative "newest the app has seen", used to mark seen so the badge
+    /// can't be re-lit by a head-of-feed item the viewer never loaded.
+    public private(set) var latestFetched: XNotification?
 
     public init(api: APIClient, cadence: TimeInterval = 15) {
         self.api = api
@@ -71,6 +75,15 @@ public final class NotificationPoller {
         knownIDs.removeAll()
     }
 
+    /// Marks everything fetched so far as seen — up to the newest notification the
+    /// poller has pulled (the authoritative head of feed) — and reports a cleared
+    /// badge. Called when the user views the Notifications tab; robust against the
+    /// viewer and the poller having loaded slightly different pages.
+    public func markCurrentSeen() {
+        NotificationPrefs.markSeen(upTo: latestFetched)
+        onUnreadCount?(0)
+    }
+
     /// Fetches one page now and reports results. Skipped if a fetch is already
     /// in flight (no overlap, no pile-up). Safe to call directly for a one-shot
     /// background poll without scheduling the timer.
@@ -92,6 +105,7 @@ public final class NotificationPoller {
             return
         }
         let notifications = page.notifications
+        latestFetched = notifications.max { $0.timestamp < $1.timestamp }
         let unread = NotificationPrefs.unreadCount(in: notifications)
         onUnreadCount?(unread)
 

@@ -54,9 +54,19 @@ final class PollView: UIView {
         if let endsAt {
             let remaining = endsAt.timeIntervalSinceNow
             if remaining <= 0 { return "\(votes) · ended" }
-            return "\(votes) · \(Format.relativeTime(Date(), now: endsAt)) left"
+            return "\(votes) · \(Self.countdown(remaining)) left"
         }
         return votes
+    }
+
+    /// Minute-granularity countdown capped at days ("5h", "3d", "12m"), matching
+    /// the TUI's `poll_footer` — never overflows into an absolute date the way
+    /// the date-capable `Format.relativeTime` does past a week out.
+    private static func countdown(_ remaining: TimeInterval) -> String {
+        let mins = max(0, Int(remaining / 60))
+        if mins >= 24 * 60 { return "\(mins / (24 * 60))d" }
+        if mins >= 60 { return "\(mins / 60)h" }
+        return "\(mins)m"
     }
 }
 

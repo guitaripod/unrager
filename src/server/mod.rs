@@ -21,6 +21,8 @@ pub use error::ApiError;
 pub async fn serve(addr: SocketAddr) -> crate::error::Result<()> {
     let state = Arc::new(AppState::build().await?);
     write_lockfile(&state)?;
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    spawn_ingest(&state, shutdown_rx).await;
     let app = router(state.clone());
 
     tracing::info!("unrager server listening on http://{addr}");
@@ -32,6 +34,7 @@ pub async fn serve(addr: SocketAddr) -> crate::error::Result<()> {
     let cleanup_state = state.clone();
     let shutdown = async move {
         wait_for_shutdown().await;
+        let _ = shutdown_tx.send(true);
         remove_lockfile(&cleanup_state);
     };
 
@@ -41,6 +44,31 @@ pub async fn serve(addr: SocketAddr) -> crate::error::Result<()> {
         .map_err(|e| crate::error::Error::Config(format!("serve: {e}")))?;
 
     Ok(())
+}
+
+/// Take the feed-writer lock and launch the background ingest worker. If
+/// another process (a second serve, or a TUI) already owns the lock, this
+/// process just serves read-only from the shared `feed.db`.
+async fn spawn_ingest(state: &Arc<AppState>, shutdown_rx: tokio::sync::watch::Receiver<bool>) {
+    match crate::store::feed::FeedStore::open_writer(&state.feed_db_path) {
+        Ok(Some(store)) => {
+            let classifier = state.classifier.lock().await.handle();
+            tokio::spawn(crate::store::ingest::run(
+                state.gql.clone(),
+                classifier,
+                state.filter_cache.clone(),
+                store,
+                state.feed_cfg.clone(),
+                state.activity.clone(),
+                shutdown_rx,
+            ));
+            tracing::info!("feed ingest worker owns the writer lock");
+        }
+        Ok(None) => {
+            tracing::info!("feed writer lock held elsewhere; serving read-only from feed.db");
+        }
+        Err(e) => tracing::warn!("failed to open feed store for writing: {e}"),
+    }
 }
 
 fn router(state: Arc<AppState>) -> Router {
@@ -56,6 +84,7 @@ fn router(state: Arc<AppState>) -> Router {
             "/sources/notifications",
             get(routes::timeline::notifications),
         )
+        .route("/feed/status", get(routes::feed::status))
         .route("/tweet/{id}", get(routes::tweet::single))
         .route("/thread/{id}", get(routes::tweet::thread))
         .route("/profile/{handle}", get(routes::profile::profile))

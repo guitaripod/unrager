@@ -1,7 +1,9 @@
 use crate::auth::chromium;
-use crate::config;
+use crate::config::{self, FeedConfig};
 use crate::error::Result;
 use crate::gql::{GqlClient, QueryIdStore};
+use crate::store::feed::FeedStore;
+use crate::store::ingest::Activity;
 use crate::tui::filter::{Classifier, FilterCache, FilterConfig};
 use crate::tui::seen::SeenStore;
 use std::path::PathBuf;
@@ -12,10 +14,19 @@ use unrager_model::SessionState;
 pub struct AppState {
     pub gql: Arc<GqlClient>,
     pub filter_config: Mutex<FilterConfig>,
-    pub filter_cache: Mutex<FilterCache>,
+    /// `Arc` so the background ingest worker can share the exact same cache
+    /// instance — verdicts it computes warm the cache the SSE filter reads.
+    pub filter_cache: Arc<Mutex<FilterCache>>,
     pub classifier: Mutex<Classifier>,
     pub seen: Mutex<SeenStore>,
     pub session: Mutex<SessionState>,
+    /// Read handle on the materialized Home buffer (`feed.db`). The ingest
+    /// worker holds a separate write handle behind the single-writer lock.
+    pub feed: Mutex<FeedStore>,
+    /// Bumped on every feed read; the ingest worker uses it to gate polling.
+    pub activity: Arc<Activity>,
+    pub feed_cfg: FeedConfig,
+    pub feed_db_path: PathBuf,
     pub lock_path: PathBuf,
     pub session_path: PathBuf,
     pub filter_toml_path: PathBuf,
@@ -43,16 +54,23 @@ impl AppState {
         let seen_db = cache_dir.join("seen.db");
         let seen = SeenStore::open(&seen_db)?;
 
+        let feed_db_path = cache_dir.join("feed.db");
+        let feed = FeedStore::open_reader(&feed_db_path)?;
+
         let session_path = config_dir.join("server-session.json");
         let state: SessionState = load_session_state(&session_path).unwrap_or_default();
 
         Ok(Self {
             gql,
             filter_config: Mutex::new(filter_config),
-            filter_cache: Mutex::new(filter_cache),
+            filter_cache: Arc::new(Mutex::new(filter_cache)),
             classifier: Mutex::new(classifier),
             seen: Mutex::new(seen),
             session: Mutex::new(state),
+            feed: Mutex::new(feed),
+            activity: Arc::new(Activity::idle()),
+            feed_cfg: app_config.feed.clone(),
+            feed_db_path,
             lock_path: cache_dir.join("server.lock"),
             session_path,
             filter_toml_path: filter_toml,

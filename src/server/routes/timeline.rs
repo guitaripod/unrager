@@ -4,6 +4,7 @@ use crate::gql::query_ids::Operation;
 use crate::parse::timeline;
 use crate::server::error::ApiError;
 use crate::server::state::AppState;
+use crate::store::feed::FeedVariant;
 use crate::tui::source;
 use crate::tui::whisper;
 use axum::Json;
@@ -38,8 +39,42 @@ pub async fn home(
     State(state): State<Arc<AppState>>,
     Query(q): Query<HomeQuery>,
 ) -> std::result::Result<Json<TimelinePage>, ApiError> {
+    state.activity.touch();
     let count = q.count.unwrap_or(DEFAULT_COUNT);
-    let op = if q.following {
+    let variant = FeedVariant::from_following(q.following);
+
+    let stored = {
+        let store = state.feed.lock().await;
+        let cold = store.count(variant).map(|n| n == 0).unwrap_or(true);
+        if cold && q.cursor.is_none() {
+            None
+        } else {
+            Some(store.read_page(variant, q.cursor.as_deref(), count as usize)?)
+        }
+    };
+
+    let page = match stored {
+        Some(page) => {
+            let tweets: Vec<Tweet> = page.items.into_iter().map(|s| s.tweet).collect();
+            TimelinePage {
+                tweets: apply_mode(tweets, q.mode.as_deref()),
+                cursor: page.next_cursor,
+            }
+        }
+        None => home_live(&state, q.following, count, q.mode.as_deref()).await?,
+    };
+    Ok(Json(page))
+}
+
+/// Live fetch used only when the materialized buffer is still cold (e.g. the
+/// very first launch before the ingest worker has filled it).
+async fn home_live(
+    state: &Arc<AppState>,
+    following: bool,
+    count: u32,
+    mode: Option<&str>,
+) -> std::result::Result<TimelinePage, ApiError> {
+    let op = if following {
         Operation::HomeLatestTimeline
     } else {
         Operation::HomeTimeline
@@ -48,22 +83,25 @@ pub async fn home(
         .gql
         .post(
             op,
-            &endpoints::home_timeline_variables(count, q.cursor.as_deref(), &[]),
+            &endpoints::home_timeline_variables(count, None, &[]),
             &endpoints::home_timeline_features(),
         )
         .await?;
     let instructions =
         timeline::extract_instructions(&response, "/data/home/home_timeline_urt/instructions")?;
     let page = timeline::walk(instructions);
-    let tweets = if q.mode.as_deref() == Some("originals") {
-        filter_originals(page.tweets)
-    } else {
-        page.tweets
-    };
-    Ok(Json(TimelinePage {
-        tweets,
+    Ok(TimelinePage {
+        tweets: apply_mode(page.tweets, mode),
         cursor: page.next_cursor,
-    }))
+    })
+}
+
+fn apply_mode(tweets: Vec<Tweet>, mode: Option<&str>) -> Vec<Tweet> {
+    if mode == Some("originals") {
+        filter_originals(tweets)
+    } else {
+        tweets
+    }
 }
 
 fn filter_originals(v: Vec<Tweet>) -> Vec<Tweet> {

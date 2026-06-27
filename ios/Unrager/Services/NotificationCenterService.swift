@@ -111,11 +111,19 @@ final class NotificationCenterService: NSObject {
 
     // MARK: - Delivery
 
-    /// Posts local banners for new activity, honoring the master + per-type
-    /// toggles. Coalesces into a single summary when several arrive at once so
-    /// the user isn't buried under a stack of banners.
+    /// Surfaces new activity. While the app is foregrounded this is an in-app
+    /// Liquid Glass toast (no notification permission needed); backgrounded it
+    /// falls back to a system banner, honoring the master + per-type toggles and
+    /// coalescing into a summary when several arrive at once.
     private func deliver(_ notifications: [XNotification]) {
-        guard NotificationPrefs.bannersEnabled, !notifications.isEmpty else { return }
+        guard !notifications.isEmpty else { return }
+
+        if UIApplication.shared.applicationState == .active {
+            root?.showNotificationToast(notifications)
+            return
+        }
+
+        guard NotificationPrefs.bannersEnabled else { return }
         let allowed = notifications.filter { NotificationPrefs.shouldBanner(rawType: $0.type) }
         guard !allowed.isEmpty else { return }
 

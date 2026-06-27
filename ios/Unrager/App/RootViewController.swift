@@ -1,4 +1,5 @@
 import UIKit
+import UnragerKit
 
 /// Root tab bar built from the user's chosen tabs (up to five, ordered, edited
 /// in Settings → Edit Tabs). Each tab is its own navigation stack; bars keep
@@ -76,6 +77,38 @@ final class RootViewController: UITabBarController {
               let item = (viewControllers?[index] as? UINavigationController)?.tabBarItem
                 ?? viewControllers?[index].tabBarItem else { return }
         item.badgeValue = value
+    }
+
+    private weak var activeToast: NotificationToast?
+
+    /// Drops an in-app Liquid Glass toast for freshly-arrived notifications while
+    /// the app is foregrounded. A single item shows who-did-what + the snippet; a
+    /// batch coalesces into a count. Tapping deep-links into the activity.
+    func showNotificationToast(_ notifications: [XNotification]) {
+        guard let first = notifications.first else { return }
+        activeToast?.dismiss()
+        let content = notifications.count > 1
+            ? NotificationsViewController.toastSummary(count: notifications.count)
+            : NotificationsViewController.toastContent(for: first)
+        let toast = NotificationToast(badge: content.badge, title: content.title, subtitle: content.subtitle) {
+            [weak self] in self?.handleToastTap(notifications)
+        }
+        activeToast = toast
+        toast.present(in: view)
+    }
+
+    private func handleToastTap(_ notifications: [XNotification]) {
+        guard notifications.count == 1, let notif = notifications.first else {
+            if let index = notificationsTabIndex { selectedIndex = index }
+            return
+        }
+        if let tweetID = notif.targetTweetID {
+            openInNotificationsStack(ThreadViewController(tweetID: tweetID))
+        } else if let handle = notif.actors.first?.handle {
+            openInNotificationsStack(ProfileViewController(handle: handle))
+        } else if let index = notificationsTabIndex {
+            selectedIndex = index
+        }
     }
 
     /// Switches to the Notifications tab (or Home as a fallback) and pushes a

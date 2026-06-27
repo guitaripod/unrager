@@ -132,6 +132,19 @@ final class NotificationsViewController: UIViewController {
         return (title: "\(who) \(style.verb)", body: notif.targetTweetSnippet ?? "")
     }
 
+    /// Badge image + title + optional subtitle for the in-app notification toast,
+    /// reusing the row's action styling.
+    static func toastContent(for notif: XNotification) -> (badge: UIImage, title: String, subtitle: String?) {
+        let s = style(for: notif.type)
+        let copy = bannerCopy(for: notif)
+        return (badge(symbol: s.symbol, color: s.color), copy.title, copy.body.isEmpty ? nil : copy.body)
+    }
+
+    /// Coalesced toast content when several notifications land in one poll.
+    static func toastSummary(count: Int) -> (badge: UIImage, title: String, subtitle: String?) {
+        (badge(symbol: "bell.fill", color: DesignSystem.Color.accent), "\(count) new notifications", "Tap to view")
+    }
+
     private static func title(for notif: XNotification, style: NotifStyle) -> NSAttributedString {
         let names = notif.actors.prefix(2).map(\.name).joined(separator: ", ")
         let extra = notif.actors.count > 2 ? " +\(notif.actors.count - 2)" : ""
@@ -143,6 +156,10 @@ final class NotificationsViewController: UIViewController {
         result.append(NSAttributedString(string: " " + style.verb, attributes: [
             .font: DesignSystem.Typography.handle(),
             .foregroundColor: style.color,
+        ]))
+        result.append(NSAttributedString(string: " · " + Format.relativeTime(notif.timestamp), attributes: [
+            .font: DesignSystem.Typography.handle(),
+            .foregroundColor: DesignSystem.Color.secondaryLabel,
         ]))
         return result
     }

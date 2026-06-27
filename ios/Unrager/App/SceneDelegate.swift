@@ -38,6 +38,14 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                 root.selectedIndex = 0
                 (homeNav()?.viewControllers.first as? HomeViewController)?.debugSwitchToFollowing()
             case "search": root.selectedIndex = 1
+            case "toast":
+                let json = """
+                {"id":"demo","type":"reply","actors":[{"handle":"jack","name":"jack","rest_id":"1","verified":true}],
+                 "target_tweet_snippet":"this is the post they replied to — nice work on the materialized feed","timestamp":"2026-06-27T12:00:00Z"}
+                """
+                if let n = try? UnragerJSON.decode(XNotification.self, from: Data(json.utf8)) {
+                    root.showNotificationToast([n])
+                }
             case "notifications": root.selectedIndex = 2
             case "settings": root.selectedIndex = 3
             case "filter":

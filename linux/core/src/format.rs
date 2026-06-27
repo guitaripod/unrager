@@ -6,9 +6,11 @@ use chrono::{DateTime, Datelike, Local, TimeZone, Utc};
 /// Compact engagement count, e.g. `1234 → "1.2K"`, `2_500_000 → "2.5M"`.
 pub fn count(value: i64) -> String {
     let n = value as f64;
+    // Thresholds sit just below each power so a value that would round up to
+    // "1000K" / "1000M" rolls over to "1M" / "1B" instead.
     match value.unsigned_abs() {
-        1_000_000_000.. => trim(n / 1_000_000_000.0, false) + "B",
-        1_000_000.. => trim(n / 1_000_000.0, false) + "M",
+        999_500_000.. => trim(n / 1_000_000_000.0, false) + "B",
+        999_500.. => trim(n / 1_000_000.0, false) + "M",
         10_000.. => trim(n / 1_000.0, true) + "K",
         1_000.. => trim(n / 1_000.0, false) + "K",
         _ => value.to_string(),
@@ -117,6 +119,8 @@ mod tests {
         assert_eq!(count(10_000), "10K");
         assert_eq!(count(12_500), "13K");
         assert_eq!(count(100_000), "100K");
+        assert_eq!(count(999_499), "999K");
+        assert_eq!(count(999_999), "1M");
         assert_eq!(count(1_000_000), "1M");
         assert_eq!(count(1_500_000), "1.5M");
         assert_eq!(count(1_000_000_000), "1B");

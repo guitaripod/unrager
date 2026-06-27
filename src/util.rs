@@ -8,7 +8,8 @@ fn status_id_re() -> &'static regex::Regex {
 }
 
 pub fn short_count(n: u64) -> String {
-    if n >= 1_000_000 {
+    // 999_950+ would render as "1000.0K"; promote it so it reads "1.0M".
+    if n >= 999_950 {
         format!("{:.1}M", n as f64 / 1_000_000.0)
     } else if n >= 1_000 {
         format!("{:.1}K", n as f64 / 1_000.0)
@@ -84,7 +85,7 @@ mod tests {
     fn short_count_thousands() {
         assert_eq!(short_count(1000), "1.0K");
         assert_eq!(short_count(1500), "1.5K");
-        assert_eq!(short_count(999_999), "1000.0K");
+        assert_eq!(short_count(999_499), "999.5K");
     }
 
     #[test]
@@ -92,5 +93,6 @@ mod tests {
         assert_eq!(short_count(1_000_000), "1.0M");
         assert_eq!(short_count(1_500_000), "1.5M");
         assert_eq!(short_count(42_300_000), "42.3M");
+        assert_eq!(short_count(999_999), "1.0M");
     }
 }

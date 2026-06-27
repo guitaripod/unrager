@@ -170,6 +170,8 @@ struct DecodingTests {
         #expect(Format.count(950) == "950")
         #expect(Format.count(1234) == "1.2K")
         #expect(Format.count(2_500_000) == "2.5M")
+        #expect(Format.count(999_499) == "999K")
+        #expect(Format.count(999_999) == "1M")
     }
 
     @Test("MediaKind encodes to the same shape it decodes from")

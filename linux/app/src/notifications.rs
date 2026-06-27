@@ -227,6 +227,16 @@ fn build_notification_row(notif: &Notification, ctx: &Ctx) -> gtk::Widget {
         body.add_css_class("tweet-meta");
         column.append(&body);
     }
+
+    let time = gtk::Label::new(Some(&unrager_gtk_core::format::relative_time(
+        notif.timestamp,
+        chrono::Utc::now(),
+    )));
+    time.set_xalign(0.0);
+    time.add_css_class("dim-label");
+    time.add_css_class("caption");
+    column.append(&time);
+
     row.append(&column);
 
     if let (Some(tweet_id), true) = (

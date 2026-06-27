@@ -4575,6 +4575,24 @@ fn relative_time(dt: DateTime<Utc>) -> String {
     format!("{years}y")
 }
 
+/// "updated Nm ago" for a store-backed Home feed, from `feed.db`'s last ingest
+/// stamp — so the TUI shows how fresh the materialized buffer is. `None` for
+/// non-Home sources, a cold buffer, or when no store is attached.
+fn store_freshness_suffix(app: &App) -> Option<String> {
+    let following = match app.source.kind {
+        Some(SourceKind::Home { following }) => following,
+        _ => return None,
+    };
+    let store = app.feed_store.as_ref()?;
+    let variant = crate::store::feed::FeedVariant::from_following(following);
+    let meta = store.meta(variant)?;
+    if meta.last_poll_at <= 0 {
+        return None;
+    }
+    let dt = DateTime::from_timestamp(meta.last_poll_at, 0)?;
+    Some(format!("updated {} ago", relative_time(dt)))
+}
+
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     let clock_cfg = &app.app_config.clock;
     let clock_w = if matches!(clock_cfg.position, crate::config::ClockPosition::Footer) {
@@ -4639,6 +4657,12 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             app.status.clone(),
             Style::default().fg(t.text_muted),
         ));
+        if let Some(freshness) = store_freshness_suffix(app) {
+            spans.push(Span::styled(
+                format!("   · {freshness}"),
+                Style::default().fg(t.text_muted),
+            ));
+        }
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), left);
     if clock_w > 0 {
@@ -4707,7 +4731,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         Line::from("  U              mark all loaded as read"),
         Line::from(""),
         Line::from(Span::styled("ACTIONS", heading)),
-        Line::from("  Ctrl-r         reload source / refresh thread replies"),
+        Line::from("  Ctrl-r         reload (Home reads the local buffer; live for other feeds)"),
         Line::from("  y              yank fixupx URL to clipboard"),
         Line::from("  Y              yank selected tweet JSON"),
         Line::from("  n              open notifications as detail pane"),

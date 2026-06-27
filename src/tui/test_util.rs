@@ -109,6 +109,8 @@ pub fn dummy_app() -> (App, mpsc::UnboundedReceiver<Event>, TempDir) {
         compose: None,
         tweet_compose_bar: None,
         tweet_compose_draft: None,
+        feed_store: None,
+        self_ingest: None,
     };
     (app, rx, tmp)
 }

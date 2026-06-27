@@ -3,6 +3,8 @@ use crate::config::{self, AppConfig};
 use crate::error::Result;
 use crate::gql::GqlClient;
 use crate::model::Tweet;
+use crate::store::feed::FeedStore;
+use crate::store::ingest::Activity;
 use crate::tui::about_fetch::AboutFetcher;
 use crate::tui::about_store::AboutStore;
 use crate::tui::ask;
@@ -21,7 +23,7 @@ use crate::tui::youtube::YoutubeRegistry;
 use ratatui::DefaultTerminal;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -211,6 +213,74 @@ pub struct App {
     pub compose: Option<crate::tui::app_screenshot::ComposeState>,
     pub tweet_compose_bar: Option<crate::tui::compose::TweetComposeBar>,
     pub tweet_compose_draft: Option<String>,
+    /// Read handle on the shared materialized Home buffer (`feed.db`). When
+    /// present and warm, standing Home feeds are served from it instantly
+    /// instead of fetching X live on open.
+    pub(super) feed_store: Option<FeedStore>,
+    /// In-process ingest worker, spawned only when this TUI won the feed
+    /// writer lock (i.e. no `unrager serve` is already keeping the buffer
+    /// fresh). Holds the worker's shutdown sender and activity signal.
+    pub(super) self_ingest: Option<SelfIngest>,
+}
+
+/// Handle to the TUI's own ingest worker. Keeping `shutdown` alive holds the
+/// worker open; dropping it (on app exit) stops the worker. `activity` is
+/// touched on every store read so the worker parks when the user goes idle.
+pub(super) struct SelfIngest {
+    #[allow(dead_code)]
+    pub shutdown: tokio::sync::watch::Sender<bool>,
+    pub activity: Arc<Activity>,
+}
+
+/// Win the feed writer lock and launch an in-process ingest worker, so a
+/// standalone TUI (no `unrager serve` running) still gets an instant,
+/// pre-classified Home buffer. Returns `None` — and the TUI reads the shared
+/// store read-only or falls back to live fetches — when another process owns
+/// the lock, when there's no classifier/config, or in demo mode.
+fn spawn_self_ingest(
+    feed_db_path: &Path,
+    cache_dir: &Path,
+    app_config: &AppConfig,
+    filter_cfg: Option<&FilterConfig>,
+    classifier: Option<&Classifier>,
+    client: Arc<GqlClient>,
+) -> Option<SelfIngest> {
+    if crate::tui::demo::is_demo_mode() {
+        return None;
+    }
+    let cfg = filter_cfg?;
+    let classifier = classifier?;
+    let store = match FeedStore::open_writer(feed_db_path) {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            tracing::info!("feed writer lock held elsewhere; TUI reads the shared store read-only");
+            return None;
+        }
+        Err(e) => {
+            tracing::warn!("TUI feed writer open failed: {e}");
+            return None;
+        }
+    };
+    let worker_cache = match FilterCache::open(&cache_dir.join("filter.db"), cfg.rubric_hash()) {
+        Ok(c) => Arc::new(tokio::sync::Mutex::new(c)),
+        Err(e) => {
+            tracing::warn!("TUI ingest filter cache open failed: {e}");
+            return None;
+        }
+    };
+    let activity = Arc::new(Activity::active());
+    let (shutdown, rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(crate::store::ingest::run(
+        client,
+        classifier.handle(),
+        worker_cache,
+        store,
+        app_config.feed.clone(),
+        activity.clone(),
+        rx,
+    ));
+    tracing::info!("TUI feed self-ingest worker started (no serve detected)");
+    Some(SelfIngest { shutdown, activity })
 }
 
 pub const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -261,6 +331,17 @@ impl App {
             },
             None => None,
         };
+
+        let feed_db_path = cache_dir.join("feed.db");
+        let feed_store = FeedStore::open_reader(&feed_db_path).ok();
+        let self_ingest = spawn_self_ingest(
+            &feed_db_path,
+            &cache_dir,
+            &app_config,
+            filter_cfg.as_ref(),
+            filter_classifier.as_ref(),
+            client.clone(),
+        );
 
         let loaded = session::load(&session_path);
         let initial_kind = loaded
@@ -414,6 +495,8 @@ impl App {
             compose: None,
             tweet_compose_bar: None,
             tweet_compose_draft: None,
+            feed_store,
+            self_ingest,
         };
         app.apply_effective_theme();
         Ok(app)

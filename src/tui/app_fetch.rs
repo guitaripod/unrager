@@ -2,6 +2,7 @@ use super::app::*;
 use crate::error::Result;
 use crate::model::Tweet;
 use crate::parse::timeline::TimelinePage;
+use crate::store::feed::{self, FeedVariant};
 use crate::tui::event::{self, Event, EventTx};
 use crate::tui::filter::{FilterCache, FilterDecision, FilterMode};
 use crate::tui::focus::{self, FocusEntry, TweetDetail};
@@ -55,11 +56,77 @@ impl App {
         self.fetch_source(false, false);
     }
 
+    /// Serve a standing Home feed from the materialized `feed.db` buffer when
+    /// it's warm, bypassing the live X fetch and the Ollama classification gate
+    /// (rows arrive pre-classified). Returns `false` — and the caller falls
+    /// back to a live fetch — for non-Home sources, a cold buffer, or a
+    /// live (non-store) pagination cursor. Synchronous: SQLite keyset reads are
+    /// sub-millisecond, so this routes straight through `handle_timeline_loaded`
+    /// with no spawn.
+    fn try_fetch_from_store(&mut self, kind: &SourceKind, append: bool, silent: bool) -> bool {
+        const STORE_PAGE_SIZE: usize = 40;
+        let variant = match kind {
+            SourceKind::Home { following } => FeedVariant::from_following(*following),
+            _ => return false,
+        };
+        let Some(store) = self.feed_store.as_ref() else {
+            return false;
+        };
+        let cursor = if append {
+            match self.source.cursor.as_deref() {
+                Some(c) if feed::is_store_cursor(c) => Some(c.to_string()),
+                _ => return false,
+            }
+        } else {
+            match store.count(variant) {
+                Ok(0) | Err(_) => return false,
+                Ok(_) => None,
+            }
+        };
+        let page = match store.read_page(variant, cursor.as_deref(), STORE_PAGE_SIZE) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(?kind, error = %e, "feed store read failed; falling back to live");
+                return false;
+            }
+        };
+        if let Some(sig) = self.self_ingest.as_ref() {
+            sig.activity.touch();
+        }
+        if let Some(cache) = self.filter_cache.as_mut() {
+            for item in &page.items {
+                if let Some(v) = item.verdict {
+                    cache.put(&item.tweet.rest_id, v);
+                }
+            }
+        }
+        let tweets: Vec<Tweet> = page.items.into_iter().map(|s| s.tweet).collect();
+        let count = tweets.len();
+        let tl = TimelinePage {
+            tweets,
+            next_cursor: page.next_cursor,
+            top_cursor: None,
+            profile_user: None,
+        };
+        tracing::info!(
+            ?kind,
+            append,
+            silent,
+            count,
+            "timeline served from feed store"
+        );
+        self.handle_timeline_loaded(kind.clone(), Ok(tl), append, silent);
+        true
+    }
+
     pub(super) fn fetch_source(&mut self, append: bool, silent: bool) {
         let Some(kind) = self.source.kind.clone() else {
             return;
         };
         if self.source.loading || self.source.silent_refreshing {
+            return;
+        }
+        if self.try_fetch_from_store(&kind, append, silent) {
             return;
         }
         if silent {
@@ -1163,4 +1230,173 @@ pub fn spawn_update_check(tx: EventTx) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod store_tests {
+    use super::*;
+    use crate::store::feed::FeedStore;
+    use crate::tui::filter::{Classifier, FilterConfig, OllamaConfig};
+    use crate::tui::source::Source;
+    use crate::tui::test_util::{dummy_app, make_tweet};
+
+    fn dummy_cfg() -> FilterConfig {
+        FilterConfig {
+            drop_topics: vec![],
+            extra_guidance: String::new(),
+            ollama: OllamaConfig {
+                model: "test".into(),
+                host: "http://127.0.0.1:1".into(),
+                timeout_seconds: 1,
+                keep_alive: "10s".into(),
+            },
+        }
+    }
+
+    fn at(id: &str, ts: i64) -> Tweet {
+        let mut t = make_tweet(id, "x");
+        t.created_at = chrono::DateTime::from_timestamp(ts, 0).unwrap();
+        t
+    }
+
+    #[tokio::test]
+    async fn store_serves_following_newest_first() {
+        let (mut app, _rx, tmp) = dummy_app();
+        let mut store = FeedStore::open_writer(&tmp.path().join("feed.db"))
+            .unwrap()
+            .unwrap();
+        for (id, ts) in [("a", 100), ("b", 300), ("c", 200)] {
+            store.upsert(FeedVariant::Following, &at(id, ts)).unwrap();
+        }
+        app.feed_store = Some(store);
+        app.filter_mode = FilterMode::Off;
+        app.source = Source::new(SourceKind::Home { following: true });
+        app.fetch_source(false, false);
+        let ids: Vec<&str> = app
+            .source
+            .tweets
+            .iter()
+            .map(|t| t.rest_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["b", "c", "a"], "chronological, newest first");
+        assert!(!app.source.loading, "store read finishes synchronously");
+    }
+
+    #[tokio::test]
+    async fn store_drops_hide_keeps_keep_without_ollama() {
+        let (mut app, _rx, tmp) = dummy_app();
+        let mut store = FeedStore::open_writer(&tmp.path().join("feed.db"))
+            .unwrap()
+            .unwrap();
+        // For You orders by ingest order DESC, so insert 3,2,1 → reads 1,2,3.
+        for (id, v) in [
+            ("3", FilterDecision::Keep),
+            ("2", FilterDecision::Hide),
+            ("1", FilterDecision::Keep),
+        ] {
+            store
+                .upsert(FeedVariant::ForYou, &make_tweet(id, "x"))
+                .unwrap();
+            store.update_verdict(FeedVariant::ForYou, id, v).unwrap();
+        }
+        app.feed_store = Some(store);
+        app.filter_cache = Some(FilterCache::open(&tmp.path().join("fc.db"), "h".into()).unwrap());
+        app.filter_classifier = Some(Classifier::new(&dummy_cfg()));
+        app.filter_mode = FilterMode::On;
+        app.source = Source::new(SourceKind::Home { following: false });
+        app.fetch_source(false, false);
+        let ids: Vec<&str> = app
+            .source
+            .tweets
+            .iter()
+            .map(|t| t.rest_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["1", "3"], "Hide dropped, Keep shown");
+        assert!(
+            app.filter_inflight.is_empty(),
+            "pre-classified rows make no Ollama calls"
+        );
+        assert!(app.pending_classification.is_empty());
+    }
+
+    #[tokio::test]
+    async fn store_following_cold_start_makes_no_ollama_calls() {
+        // Regression guard: a cold-start Following load from the store routes
+        // every row through the cold_start_following held/drain path, but the
+        // seeded verdicts make each a cache hit — so zero classification spawns.
+        let (mut app, _rx, tmp) = dummy_app();
+        let mut store = FeedStore::open_writer(&tmp.path().join("feed.db"))
+            .unwrap()
+            .unwrap();
+        for (id, ts) in [("a", 300), ("b", 200), ("c", 100)] {
+            store.upsert(FeedVariant::Following, &at(id, ts)).unwrap();
+            store
+                .update_verdict(FeedVariant::Following, id, FilterDecision::Keep)
+                .unwrap();
+        }
+        app.feed_store = Some(store);
+        app.filter_cache = Some(FilterCache::open(&tmp.path().join("fc.db"), "h".into()).unwrap());
+        app.filter_classifier = Some(Classifier::new(&dummy_cfg()));
+        app.filter_mode = FilterMode::On;
+        app.source = Source::new(SourceKind::Home { following: true });
+        app.fetch_source(false, false);
+        assert!(
+            app.filter_inflight.is_empty(),
+            "pre-classified cold-start Following must not spawn Ollama"
+        );
+        assert!(app.pending_classification.is_empty());
+        let ids: Vec<&str> = app
+            .source
+            .tweets
+            .iter()
+            .map(|t| t.rest_id.as_str())
+            .collect();
+        assert_eq!(
+            ids,
+            vec!["a", "b", "c"],
+            "all Keep rows shown, newest first"
+        );
+    }
+
+    #[tokio::test]
+    async fn cold_store_falls_back_to_live() {
+        let (mut app, _rx, tmp) = dummy_app();
+        let store = FeedStore::open_writer(&tmp.path().join("feed.db"))
+            .unwrap()
+            .unwrap();
+        app.feed_store = Some(store);
+        app.filter_mode = FilterMode::Off;
+        app.source = Source::new(SourceKind::Home { following: false });
+        app.fetch_source(false, false);
+        assert!(
+            app.source.loading,
+            "an empty buffer falls through to the live fetch path"
+        );
+    }
+
+    #[tokio::test]
+    async fn store_pagination_appends_next_keyset_page() {
+        let (mut app, _rx, tmp) = dummy_app();
+        let mut store = FeedStore::open_writer(&tmp.path().join("feed.db"))
+            .unwrap()
+            .unwrap();
+        for i in 0..60 {
+            store
+                .upsert(FeedVariant::Following, &at(&format!("{i:02}"), 1000 - i))
+                .unwrap();
+        }
+        app.feed_store = Some(store);
+        app.filter_mode = FilterMode::Off;
+        app.source = Source::new(SourceKind::Home { following: true });
+        app.fetch_source(false, false);
+        let first = app.source.tweets.len();
+        assert_eq!(first, 40, "first store page is one keyset window");
+        assert!(app.source.cursor.is_some(), "a store cursor enables paging");
+        app.fetch_source(true, false);
+        assert_eq!(
+            app.source.tweets.len(),
+            60,
+            "append pulled the rest of the buffer"
+        );
+    }
 }

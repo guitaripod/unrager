@@ -5,10 +5,10 @@
 use crate::card::{CardCallbacks, build_tweet_card};
 use crate::shared::{Ctx, Route, empty_state, error_state, loading_state};
 use adw::prelude::*;
+use chrono::{DateTime, Duration, Utc};
 use relm4::prelude::*;
 use std::rc::Rc;
 use std::sync::Arc;
-use chrono::{DateTime, Duration, Utc};
 use unrager_gtk_core::model::{FeedStatusResponse, SearchProduct, TimelinePage, Tweet};
 use unrager_gtk_core::{ApiClient, ApiError, format};
 

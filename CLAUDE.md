@@ -58,6 +58,9 @@ The crates.io step reads `CARGO_REGISTRY_TOKEN` from repo secrets. Each publish 
 - `src/auth/` — chromium cookie extraction + OAuth 2.0 PKCE
 - `src/gql/` — GraphQL client, query ID scraper, endpoint builders
 - `src/parse/` — response → Tweet/User structs
+- `src/store/` — materialized Home buffer (gated `any(tui, server)`)
+  - `feed.rs` — `FeedStore` over `feed.db`: capped per-variant ring buffer (For You = `ingest_seq DESC`, Following = `created_at DESC`), keyset pagination, `fs2` flock writer lock (`open_writer`/`open_reader`), verdict column, freshness `feed_meta`
+  - `ingest.rs` — background worker (`run`) + `Activity` gate: poll → parse → classify (reusing `FilterCache`/`ClassifierHandle`) → upsert → trim. Activity-gated so an idle app does zero work
 - `src/model.rs` — Tweet, User, Media, MediaKind
 - `src/util.rs` — shared utilities (short_count, parse_tweet_ref)
 
@@ -85,6 +88,8 @@ When changing the server's `/api/*` contract, update the matching `UnragerKit` m
 
 **Render-time overrides**: the `p` (profile) key doesn't mutate global toggles. `is_own_profile()` is checked when building `RenderOpts` so metrics/names are forced visible only for that source.
 
+**Materialized Home feed**: standing Home feeds (For You + Following) are served from `feed.db` instead of fetched live. The ingest worker (`src/store/ingest.rs`) runs in whichever process holds `feed.db.writer.lock` — `unrager serve` (spawned in `serve()`) or the TUI when no serve is up (`spawn_self_ingest` in `app.rs`); everyone else reads. The TUI fast-path is `App::try_fetch_from_store` in `app_fetch.rs`: it reads a keyset page, **seeds the in-memory `FilterCache` with each row's stored verdict**, and routes the page through the normal `handle_timeline_loaded` — so the existing classification gate treats every row as a cache hit (no Ollama) and shows it instantly, dropping Hide rows and only live-classifying genuinely-unclassified ones. On-demand sources (search/profile/thread/etc.) and a cold buffer fall back to the live path. Background ingest reads go through `GqlClient::post_background`, whose 429s land in a dedicated `ingest_rate_limit_until` bucket (mirroring `about_rate_limit_until`) so they never freeze interactive reads/writes. Freshness is exposed via `GET /api/feed/status` (`src/server/routes/feed.rs` → `unrager_model::FeedStatus`); every client renders an "updated Nm ago" indicator from it (the TUI reads `FeedStore::meta` in-process instead). `buffer_cap` is floored at 1 in both `FeedConfig::load` and `trim_to_cap` so it can never wipe the buffer.
+
 ## Logging
 
 Daily rolling log file at `~/.cache/unrager/unrager.log.YYYY-MM-DD` via `tracing-appender`. Default level is `info` for the file (captures notification fetch lifecycle, filter decisions, milestone crossings); `--debug` upgrades file output to `debug`. Stderr stays at `warn`.
@@ -100,6 +105,7 @@ When debugging a silent failure — a fetch that seems stuck, missing data, a TU
 - `~/.cache/unrager/unrager.log.YYYY-MM-DD` — rolling log file
 - `~/.cache/unrager/seen.db` — read tracking (auto-pruned to 2 days)
 - `~/.cache/unrager/filter.db` — filter verdict cache (auto-pruned to 7 days; rubric-hash invalidates the rest)
+- `~/.cache/unrager/feed.db` — materialized Home buffer (capped ring, `[feed] buffer_cap` default 200/variant); `feed.db.writer.lock` is the `fs2` flock for the single ingest writer
 - `~/.cache/unrager/query-ids.json` — scraped GraphQL query ID cache
 - `~/.cache/unrager/media/<tweet_id>/` — downloaded attachments for external viewer (`m` key); one subdir per tweet so Linux image viewers can arrow through siblings
 - `~/.cache/unrager/avatars/<sha256(url)>.bin` — author-avatar disk cache; LRU-pruned to 50 MB on startup; URL-keyed so X's per-upload URL rotation self-invalidates

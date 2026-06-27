@@ -383,12 +383,25 @@ Config paths are platform-native: Linux uses `~/.config/unrager/` + `~/.cache/un
 | `~/.config/unrager/filter.toml` | Rage filter rubric (auto-created) |
 | `~/.cache/unrager/seen.db` | Read-tracking SQLite |
 | `~/.cache/unrager/filter.db` | Filter verdict cache |
+| `~/.cache/unrager/feed.db` | Materialized Home buffer — pre-fetched, pre-classified For You + Following (capped ring; `feed.db.writer.lock` guards the single writer) |
 | `~/.cache/unrager/about.db` | `AboutAccountQuery` cache (country flag + about_profile, keyed by rest_id; negative entries TTL 30d) |
 | `~/.cache/unrager/media/<tweet_id>/` | Downloaded attachments for `m` (external viewer) |
 | `~/.cache/unrager/screenshots/` | PNG screenshots written by `S` |
 | `~/.cache/unrager/avatars/<sha256>.bin` | Author-avatar disk cache (LRU-pruned to 50 MB) |
 | `~/.cache/unrager/emoji/<stem>.png` | Color emoji PNGs (Twemoji) composited into screenshots |
 | `~/.cache/unrager/mordor-user-<hash>.opus` | Sliced Mordor loop (generated from `[sound] source`) |
+
+### Feed buffer
+
+Home (For You + Following) is served from a small local SQLite buffer that a background worker keeps fresh and pre-classified, so the app opens instantly instead of fetching X live on every launch. The worker runs inside `unrager serve` (so the iOS / macOS / Linux clients get it for free) or, when no server is running, inside the TUI itself; whichever process wins `feed.db.writer.lock` does the ingest and the rest read the shared buffer. It's activity-gated — it parks (no fetching, no GPU classification) when nothing has touched the feed for a while, and wakes on the next request — so an idle app costs nothing. The buffer is a capped ring; reaching its bottom is the end of what's cached. Every client shows an **"updated Nm ago"** freshness indicator (TUI footer, iOS pull-to-refresh title, macOS/Linux caption), backed by `GET /api/feed/status`. Defaults are sane; override in `config.toml`:
+
+```toml
+[feed]
+buffer_cap = 200        # tweets kept per feed (For You / Following)
+active_poll_secs = 180  # poll cadence while a client is active
+recent_poll_secs = 1200 # cadence after a lull
+idle_after_secs = 10800 # park after this long with no activity (3h)
+```
 
 ### Theme
 

@@ -18,9 +18,16 @@ class FeedViewController: UIViewController {
     private let collectingLabel = UILabel()
     private let collectingView = MetalCollectingView(frame: .zero)
     private var lastErrorText: String?
-    /// Latest "updated Nm ago" freshness for Home feeds, surfaced in the
-    /// pull-to-refresh title when idle; nil on non-Home / cold / error.
-    private var latestFreshness: String?
+    /// A subtle "updated Nm ago" pill floated over the top of Home feeds,
+    /// surfacing the materialized buffer's freshness. It sits in a reserved
+    /// strip above the first tweet (so it never overlaps a row at rest) and is
+    /// non-interactive, so taps and scrolls pass straight through to the feed.
+    /// Hidden on non-Home feeds and while the buffer is cold.
+    private let freshnessPill = UIView()
+    private let freshnessLabel = UILabel()
+    /// The pill's top pin. Its constant is offset against `additionalSafeAreaInsets`
+    /// so the pill stays in the reserved top strip rather than riding the inset down.
+    private var freshnessTopConstraint: NSLayoutConstraint!
     /// Set between drag-begin and the feed coming to rest. No inline video plays
     /// while scrolling, so `AVPlayer` allocation/decode never lands on the scroll
     /// path — the source of the start-of-scroll frame spike.
@@ -75,6 +82,7 @@ class FeedViewController: UIViewController {
         super.viewDidLoad()
         view.backgroundColor = DesignSystem.Color.background
         configureCollectionView()
+        configureFreshness()
         configureDataSource()
         configureNavigationDefaults()
         configureUnreadButton()
@@ -301,6 +309,32 @@ class FeedViewController: UIViewController {
         collectingView.pinEdges(to: view)
     }
 
+    /// Builds the freshness pill: a dim caption on a subtle capsule, pinned
+    /// top-centre over the feed and non-interactive. `applyFreshness` reserves a
+    /// matching top strip (`additionalSafeAreaInsets`) when it's shown, so the
+    /// first tweet clears it at rest and the pill never overlaps a row.
+    private func configureFreshness() {
+        freshnessLabel.font = DesignSystem.Typography.caption()
+        freshnessLabel.textColor = DesignSystem.Color.secondaryLabel
+        freshnessLabel.textAlignment = .center
+        freshnessPill.backgroundColor = DesignSystem.Color.elevatedBackground
+        freshnessPill.clipsToBounds = true
+        freshnessPill.isUserInteractionEnabled = false
+        freshnessPill.isHidden = true
+        freshnessPill.addManaged(freshnessLabel)
+        view.addManaged(freshnessPill)
+        freshnessTopConstraint = freshnessPill.topAnchor.constraint(
+            equalTo: view.safeAreaLayoutGuide.topAnchor, constant: DesignSystem.Spacing.xs)
+        NSLayoutConstraint.activate([
+            freshnessPill.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            freshnessTopConstraint,
+            freshnessLabel.topAnchor.constraint(equalTo: freshnessPill.topAnchor, constant: DesignSystem.Spacing.xxs),
+            freshnessLabel.bottomAnchor.constraint(equalTo: freshnessPill.bottomAnchor, constant: -DesignSystem.Spacing.xxs),
+            freshnessLabel.leadingAnchor.constraint(equalTo: freshnessPill.leadingAnchor, constant: DesignSystem.Spacing.m),
+            freshnessLabel.trailingAnchor.constraint(equalTo: freshnessPill.trailingAnchor, constant: -DesignSystem.Spacing.m),
+        ])
+    }
+
     /// Opens tapped media in a full-screen viewer — a zoomable photo gallery, or
     /// the native player for video/GIF — instead of navigating into the thread.
     private func openMedia(_ tweet: Tweet, at tappedIndex: Int) {
@@ -468,17 +502,13 @@ class FeedViewController: UIViewController {
                     rc.attributedTitle = self.refreshTitle("Loading new tweets…")
                 } else {
                     rc.endRefreshing()
-                    self.updateFreshnessTitle()
                 }
             }
             .store(in: &cancellables)
 
         viewModel.freshness
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] freshness in
-                self?.latestFreshness = freshness
-                self?.updateFreshnessTitle()
-            }
+            .sink { [weak self] freshness in self?.applyFreshness(freshness) }
             .store(in: &cancellables)
 
         viewModel.isLoading
@@ -752,8 +782,8 @@ class FeedViewController: UIViewController {
 
     @objc private func pullToRefresh() { viewModel.refresh() }
 
-    /// A dim, caption-sized pull-to-refresh title — the shared style for both the
-    /// "Loading new tweets…" state and the idle "updated Nm ago" freshness.
+    /// A dim, caption-sized pull-to-refresh title for the "Loading new tweets…"
+    /// state.
     private func refreshTitle(_ text: String) -> NSAttributedString {
         NSAttributedString(
             string: text,
@@ -761,12 +791,30 @@ class FeedViewController: UIViewController {
                          .font: DesignSystem.Typography.caption()])
     }
 
-    /// Shows the latest freshness in the pull-to-refresh title while idle, or
-    /// clears it when there's none (non-Home / cold / error). Skipped mid-refresh
-    /// so it never overwrites the "Loading new tweets…" state.
-    private func updateFreshnessTitle() {
-        guard let rc = collectionView.refreshControl, !viewModel.isRefreshing.value else { return }
-        rc.attributedTitle = latestFreshness.map { refreshTitle($0) }
+    /// Shows or hides the freshness pill and reserves a matching top strip so
+    /// the first tweet clears it. The pill floats over the feed and never
+    /// mutates a row.
+    private func applyFreshness(_ text: String?) {
+        guard let text, !text.isEmpty else {
+            freshnessPill.isHidden = true
+            setFreshnessInset(0)
+            return
+        }
+        freshnessLabel.text = text
+        freshnessPill.isHidden = false
+        view.layoutIfNeeded()
+        freshnessPill.layer.cornerRadius = freshnessPill.bounds.height / 2
+        setFreshnessInset(freshnessPill.frame.height + DesignSystem.Spacing.s * 2)
+    }
+
+    /// Reserves a `top`-point strip for the freshness pill via
+    /// `additionalSafeAreaInsets` — which `UIRefreshControl` never clobbers,
+    /// unlike `contentInset` — and counter-shifts the pill's pin so it sits in
+    /// that strip instead of riding the inset down onto the first row.
+    private func setFreshnessInset(_ top: CGFloat) {
+        additionalSafeAreaInsets.top = top
+        freshnessTopConstraint.constant = DesignSystem.Spacing.xs - top
+        view.layoutIfNeeded()
     }
 
     private func handleSelect(_ tweet: Tweet) {

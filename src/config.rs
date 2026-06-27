@@ -37,16 +37,14 @@ pub struct FeedConfig {
     /// ring — older rows are trimmed once the cap is exceeded.
     #[serde(default = "default_buffer_cap")]
     pub buffer_cap: usize,
-    /// Poll interval (seconds) while a client has been active very recently.
+    /// Poll interval (seconds) while a client has touched the feed recently — the
+    /// brisk cadence that keeps an open app fresh.
     #[serde(default = "default_active_poll_secs")]
     pub active_poll_secs: u64,
-    /// Poll interval (seconds) while a client was active within `idle_after_secs`.
+    /// Poll interval (seconds) while no client is active but the buffer is still
+    /// filling toward the cap in the background.
     #[serde(default = "default_recent_poll_secs")]
     pub recent_poll_secs: u64,
-    /// After this many seconds with no client activity the worker parks until a
-    /// request wakes it — no polling, no classification, no GPU.
-    #[serde(default = "default_idle_after_secs")]
-    pub idle_after_secs: u64,
 }
 
 impl Default for FeedConfig {
@@ -55,7 +53,6 @@ impl Default for FeedConfig {
             buffer_cap: default_buffer_cap(),
             active_poll_secs: default_active_poll_secs(),
             recent_poll_secs: default_recent_poll_secs(),
-            idle_after_secs: default_idle_after_secs(),
         }
     }
 }
@@ -70,10 +67,6 @@ fn default_active_poll_secs() -> u64 {
 
 fn default_recent_poll_secs() -> u64 {
     1200
-}
-
-fn default_idle_after_secs() -> u64 {
-    10_800
 }
 
 /// OAuth client identity used only by the write path (`unrager auth login`,

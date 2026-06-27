@@ -6,6 +6,7 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **The Home buffer now pre-fills in the background and parks when it's full — not after a fixed idle timeout.** The ingest worker used to stop after 3 hours with no activity; it now keeps topping the buffer up toward the cap in the background (even when the app is closed) and only parks once it's as full as it can get — For You at the cap, Following caught up with what's actually been posted. So the buffer is already large when you open the app and "you're all caught up" comes much later. It still polls briskly while you're actively using the feed. The `[feed] idle_after_secs` setting is removed (the worker no longer parks on time).
 - **The TUI no longer shows "0y" for posts just under a year old.** A timestamp 360–364 days old briefly read "0y" — months hit 12 (so the "Nmo" branch was skipped) but `days / 365` rounded to 0. Years are now derived from months, so it reads "1y".
 - **Linux notification rows now show their time.** Each row gained the relative timestamp ("5m") the macOS and iOS clients already showed, so recent and weeks-old activity are no longer indistinguishable.
 - **Liking inside a macOS thread no longer re-fetches the whole conversation.** The heart now flips instantly on the row (rolling back only if the request fails), instead of firing the like and then reloading every reply — matching the feed and the iOS app.

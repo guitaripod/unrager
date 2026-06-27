@@ -393,14 +393,13 @@ Config paths are platform-native: Linux uses `~/.config/unrager/` + `~/.cache/un
 
 ### Feed buffer
 
-Home (For You + Following) is served from a small local SQLite buffer that a background worker keeps fresh and pre-classified, so the app opens instantly instead of fetching X live on every launch. The worker runs inside `unrager serve` (so the iOS / macOS / Linux clients get it for free) or, when no server is running, inside the TUI itself; whichever process wins `feed.db.writer.lock` does the ingest and the rest read the shared buffer. It's activity-gated — it parks (no fetching, no GPU classification) when nothing has touched the feed for a while, and wakes on the next request — so an idle app costs nothing. The buffer is a capped ring; reaching its bottom is the end of what's cached. Every client shows an **"updated Nm ago"** freshness indicator (TUI footer, iOS pull-to-refresh title, macOS/Linux caption), backed by `GET /api/feed/status`. Defaults are sane; override in `config.toml`:
+Home (For You + Following) is served from a small local SQLite buffer that a background worker keeps fresh and pre-classified, so the app opens instantly instead of fetching X live on every launch. The worker runs inside `unrager serve` (so the iOS / macOS / Linux clients get it for free) or, when no server is running, inside the TUI itself; whichever process wins `feed.db.writer.lock` does the ingest and the rest read the shared buffer. It tops the buffer up toward the cap in the background and then parks (no fetching, no GPU classification) until the app is opened — polling briskly only while a client is actively using the feed — so the buffer is already large when you open the app, and a full, idle buffer costs nothing. The buffer is a capped ring; reaching its bottom is the end of what's cached. Every client shows an **"updated Nm ago"** freshness indicator (TUI footer; a pinned caption on iOS / macOS / Linux that ticks live), backed by `GET /api/feed/status`. Defaults are sane; override in `config.toml`:
 
 ```toml
 [feed]
 buffer_cap = 500        # tweets kept per feed (For You / Following)
-active_poll_secs = 180  # poll cadence while a client is active
-recent_poll_secs = 1200 # cadence after a lull
-idle_after_secs = 10800 # park after this long with no activity (3h)
+active_poll_secs = 180  # poll cadence while the app is open
+recent_poll_secs = 1200 # cadence while filling the buffer in the background
 ```
 
 ### Theme

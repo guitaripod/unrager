@@ -81,13 +81,21 @@ pub async fn run(
     mut shutdown: watch::Receiver<bool>,
 ) {
     tracing::info!(buffer_cap = cfg.buffer_cap, "feed ingest worker started");
+    // Whether the last Following poll surfaced anything new — a Following feed
+    // that's caught up (but below the cap) still counts as "full enough" to park.
+    let mut following_dry = false;
     loop {
         if *shutdown.borrow() {
             break;
         }
         let idle = activity.idle_secs();
-        if idle >= cfg.idle_after_secs as i64 {
-            tracing::debug!(idle_secs = idle, "feed ingest parked (idle)");
+        let active = idle < ACTIVE_WINDOW_SECS;
+        // Park on buffer fullness, not idle time: keep topping the buffer up in
+        // the background until it's as full as it can get, then park (no polling)
+        // until a client wakes us — so the buffer is already large when the app
+        // is opened.
+        if !active && buffer_saturated(&store, cfg.buffer_cap, following_dry) {
+            tracing::debug!(idle_secs = idle, "feed ingest parked (buffer full)");
             tokio::select! {
                 _ = activity.woken() => {}
                 _ = tokio::time::sleep(PARK_CEILING) => {}
@@ -101,6 +109,7 @@ pub async fn run(
             tracing::debug!("ollama unreachable; ingesting without classification this cycle");
         }
         let mut total = 0usize;
+        let mut following_new = 0usize;
         for variant in [FeedVariant::ForYou, FeedVariant::Following] {
             if *shutdown.borrow() {
                 break;
@@ -116,14 +125,20 @@ pub async fn run(
             )
             .await
             {
-                Ok(n) => total += n,
+                Ok(n) => {
+                    total += n;
+                    if matches!(variant, FeedVariant::Following) {
+                        following_new = n;
+                    }
+                }
                 Err(e) => {
                     tracing::warn!(variant = variant.as_source(), error = %e, "feed ingest cycle failed")
                 }
             }
         }
+        following_dry = following_new == 0;
 
-        let interval = if idle < ACTIVE_WINDOW_SECS {
+        let interval = if active {
             cfg.active_poll_secs
         } else {
             cfg.recent_poll_secs
@@ -142,6 +157,17 @@ pub async fn run(
         }
     }
     tracing::info!("feed ingest worker stopped");
+}
+
+/// True once the buffer is as full as it can usefully get, so there's no point
+/// polling X: For You at the cap, and Following at the cap or "dry" (its last
+/// poll surfaced nothing new — i.e. caught up with what's actually been posted,
+/// which for Following is usually well below the cap).
+fn buffer_saturated(store: &FeedStore, cap: usize, following_dry: bool) -> bool {
+    let cap = cap as i64;
+    let foryou = store.count(FeedVariant::ForYou).unwrap_or(0);
+    let following = store.count(FeedVariant::Following).unwrap_or(0);
+    foryou >= cap && (following >= cap || following_dry)
 }
 
 async fn run_cycle(

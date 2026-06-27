@@ -28,6 +28,9 @@ class FeedViewController: UIViewController {
     /// The pill's top pin. Its constant is offset against `additionalSafeAreaInsets`
     /// so the pill stays in the reserved top strip rather than riding the inset down.
     private var freshnessTopConstraint: NSLayoutConstraint!
+    /// Re-derives the "updated Nm ago" pill while the feed is on screen, so it
+    /// climbs live instead of freezing at the value from the last load.
+    private var freshnessTimer: Timer?
     /// Set between drag-begin and the feed coming to rest. No inline video plays
     /// while scrolling, so `AVPlayer` allocation/decode never lands on the scroll
     /// path — the source of the start-of-scroll frame spike.
@@ -93,6 +96,22 @@ class FeedViewController: UIViewController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         settleVideoPlayback()
+        startFreshnessTimer()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        freshnessTimer?.invalidate()
+        freshnessTimer = nil
+    }
+
+    /// Ticks the freshness pill every 20s while visible so "updated Nm ago"
+    /// stays current; torn down off screen.
+    private func startFreshnessTimer() {
+        freshnessTimer?.invalidate()
+        freshnessTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
+            self?.viewModel.tickFreshness()
+        }
     }
 
     private func configureNavigationDefaults() {

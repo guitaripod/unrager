@@ -163,6 +163,7 @@ final class TimelineViewModel {
         hasLoadedOnce = false
         seenIDs.removeAll()
         readIDs.removeAll()
+        freshnessAnchor = nil
         freshness.send(nil)
         tweets.send([])
     }
@@ -243,6 +244,11 @@ final class TimelineViewModel {
 
     // MARK: - Freshness
 
+    /// The local-clock instant the materialized buffer was last ingested
+    /// (`now - ageSecs` captured at fetch). Re-deriving the label from this lets
+    /// "updated Nm ago" climb live without re-fetching; nil hides the label.
+    private var freshnessAnchor: Date?
+
     /// The `/api/feed/status` variant key for the current Home source, or nil on
     /// non-Home sources (search/profile/mentions/bookmarks have no buffer).
     private var homeVariant: String? {
@@ -252,23 +258,40 @@ final class TimelineViewModel {
         }
     }
 
-    /// Fetches the materialized-buffer status and publishes "updated Nm ago" for
+    /// Fetches the materialized-buffer status and anchors "updated Nm ago" for
     /// the current Home variant. Publishes nil for non-Home sources, a cold
     /// buffer (`ageSecs < 0`), or any error — so the caption simply hides.
     private func updateFreshness() async {
         guard let variant = homeVariant else {
+            freshnessAnchor = nil
             freshness.send(nil)
             return
         }
         do {
             let status = try await api.feedStatus()
-            let label = status.feeds.first { $0.variant == variant }
-                .flatMap { Self.freshnessLabel(ageSecs: $0.ageSecs) }
-            freshness.send(label)
+            if let age = status.feeds.first(where: { $0.variant == variant })?.ageSecs, age >= 0 {
+                freshnessAnchor = Date().addingTimeInterval(-Double(age))
+            } else {
+                freshnessAnchor = nil
+            }
+            freshness.send(currentFreshnessLabel())
         } catch {
             AppLogger.shared.debug("feed status failed: \(error)", category: .timeline)
+            freshnessAnchor = nil
             freshness.send(nil)
         }
+    }
+
+    /// Re-derives "updated Nm ago" from the stored ingest instant so the label
+    /// climbs over time without re-fetching. Driven by a timer in the feed view.
+    func tickFreshness() {
+        guard freshnessAnchor != nil else { return }
+        freshness.send(currentFreshnessLabel())
+    }
+
+    private func currentFreshnessLabel() -> String? {
+        guard let anchor = freshnessAnchor else { return nil }
+        return Self.freshnessLabel(ageSecs: max(0, Int(Date().timeIntervalSince(anchor))))
     }
 
     /// "updated Nm ago" for a buffer age in seconds, or nil when the buffer has

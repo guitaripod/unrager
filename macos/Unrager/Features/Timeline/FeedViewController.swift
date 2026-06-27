@@ -47,6 +47,11 @@ class FeedViewController: NSViewController {
     private let collectingStack = NSStackView()
     private let collectingView = MetalCollectingView()
     private var collecting: (Int, Int)?
+    /// A subtle "updated Nm ago" caption pinned to the top of Home feeds,
+    /// surfacing the materialized buffer's freshness. Hidden (and ignored) on
+    /// non-Home feeds and while the buffer is cold. Click-through so it never
+    /// swallows clicks or scrolls on the topmost tweet row beneath it.
+    private let freshnessLabel = ClickThroughTextField(labelWithString: "")
     let api = AppEnvironment.shared.api
 
     private var tweets: [Tweet] = []
@@ -88,6 +93,7 @@ class FeedViewController: NSViewController {
         super.viewDidLoad()
         configureTable()
         configureEmptyState()
+        configureFreshness()
         bind()
         viewModel.first()
     }
@@ -177,6 +183,22 @@ class FeedViewController: NSViewController {
         collectingView.pinEdges(to: view)
     }
 
+    /// A small, dim, non-interactive freshness caption floated over the top of
+    /// the feed. It overlays the scroll view rather than occupying a row, so it
+    /// never triggers a row-height re-measure. Hidden until a Home load reports a
+    /// value. Mirrors the dim styling of the collecting / footer labels.
+    private func configureFreshness() {
+        freshnessLabel.font = DesignSystem.Typography.caption()
+        freshnessLabel.textColor = DesignSystem.Color.secondaryLabel
+        freshnessLabel.alignment = .center
+        freshnessLabel.isHidden = true
+        view.addManaged(freshnessLabel)
+        NSLayoutConstraint.activate([
+            freshnessLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            freshnessLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: DesignSystem.Spacing.s),
+        ])
+    }
+
     private func bind() {
         viewModel.tweets
             .receive(on: DispatchQueue.main)
@@ -209,6 +231,23 @@ class FeedViewController: NSViewController {
                 self.tableView.reloadData()
             }
             .store(in: &cancellables)
+
+        viewModel.freshness
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] text in self?.applyFreshness(text) }
+            .store(in: &cancellables)
+    }
+
+    /// Shows or hides the freshness caption. Label-only — never touches the
+    /// table, so it can't trigger a row-height re-measure loop.
+    private func applyFreshness(_ text: String?) {
+        if let text, !text.isEmpty {
+            freshnessLabel.stringValue = text
+            freshnessLabel.isHidden = false
+        } else {
+            freshnessLabel.stringValue = ""
+            freshnessLabel.isHidden = true
+        }
     }
 
     /// Reports the unread count (tweets not yet server-confirmed seen) so the
@@ -665,6 +704,12 @@ final class SelectableRowView: NSTableRowView {
         DesignSystem.Color.accent.withAlphaComponent(0.9).setFill()
         NSRect(x: 0, y: 0, width: 3, height: bounds.height).fill()
     }
+}
+
+/// A label that never intercepts the mouse, so it can float over the feed (e.g.
+/// the freshness caption) without stealing clicks or scrolls from the row below.
+final class ClickThroughTextField: NSTextField {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 extension FeedViewController: NSMenuDelegate {

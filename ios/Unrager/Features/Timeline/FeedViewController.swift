@@ -18,6 +18,9 @@ class FeedViewController: UIViewController {
     private let collectingLabel = UILabel()
     private let collectingView = MetalCollectingView(frame: .zero)
     private var lastErrorText: String?
+    /// Latest "updated Nm ago" freshness for Home feeds, surfaced in the
+    /// pull-to-refresh title when idle; nil on non-Home / cold / error.
+    private var latestFreshness: String?
     /// Set between drag-begin and the feed coming to rest. No inline video plays
     /// while scrolling, so `AVPlayer` allocation/decode never lands on the scroll
     /// path — the source of the start-of-scroll frame spike.
@@ -460,15 +463,21 @@ class FeedViewController: UIViewController {
         viewModel.isRefreshing
             .receive(on: DispatchQueue.main)
             .sink { [weak self] refreshing in
-                guard let rc = self?.collectionView.refreshControl else { return }
+                guard let self, let rc = self.collectionView.refreshControl else { return }
                 if refreshing {
-                    rc.attributedTitle = NSAttributedString(
-                        string: "Loading new tweets…",
-                        attributes: [.foregroundColor: DesignSystem.Color.secondaryLabel,
-                                     .font: DesignSystem.Typography.caption()])
+                    rc.attributedTitle = self.refreshTitle("Loading new tweets…")
                 } else {
                     rc.endRefreshing()
+                    self.updateFreshnessTitle()
                 }
+            }
+            .store(in: &cancellables)
+
+        viewModel.freshness
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] freshness in
+                self?.latestFreshness = freshness
+                self?.updateFreshnessTitle()
             }
             .store(in: &cancellables)
 
@@ -742,6 +751,23 @@ class FeedViewController: UIViewController {
     }
 
     @objc private func pullToRefresh() { viewModel.refresh() }
+
+    /// A dim, caption-sized pull-to-refresh title — the shared style for both the
+    /// "Loading new tweets…" state and the idle "updated Nm ago" freshness.
+    private func refreshTitle(_ text: String) -> NSAttributedString {
+        NSAttributedString(
+            string: text,
+            attributes: [.foregroundColor: DesignSystem.Color.secondaryLabel,
+                         .font: DesignSystem.Typography.caption()])
+    }
+
+    /// Shows the latest freshness in the pull-to-refresh title while idle, or
+    /// clears it when there's none (non-Home / cold / error). Skipped mid-refresh
+    /// so it never overwrites the "Loading new tweets…" state.
+    private func updateFreshnessTitle() {
+        guard let rc = collectionView.refreshControl, !viewModel.isRefreshing.value else { return }
+        rc.attributedTitle = latestFreshness.map { refreshTitle($0) }
+    }
 
     private func handleSelect(_ tweet: Tweet) {
         if let openTweet {

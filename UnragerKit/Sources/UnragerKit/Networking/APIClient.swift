@@ -87,6 +87,12 @@ public final class APIClient: Sendable {
         return try await get("api/sources/notifications", query: query, as: NotificationsPage.self)
     }
 
+    /// Freshness of the materialized Home buffer (per variant), for the
+    /// "updated Nm ago" indicator.
+    public func feedStatus() async throws -> FeedStatusResponse {
+        try await get("api/feed/status", as: FeedStatusResponse.self)
+    }
+
     // MARK: - Tweets / Threads
 
     public func tweet(id: String) async throws -> Tweet {

@@ -8,6 +8,21 @@ struct DecodingTests {
         try UnragerJSON.decode(type, from: Data(json.utf8))
     }
 
+    @Test("Feed status (freshness) decodes, including a cold variant")
+    func feedStatus() throws {
+        let json = """
+        {"feeds":[
+          {"variant":"home_foryou","last_ingest_at":1782549081,"last_ingest_count":39,"age_secs":12},
+          {"variant":"home_following","last_ingest_at":0,"last_ingest_count":0,"age_secs":-1}
+        ]}
+        """
+        let resp = try decode(FeedStatusResponse.self, json)
+        #expect(resp.feeds.count == 2)
+        #expect(resp.feeds[0].variant == "home_foryou")
+        #expect(resp.feeds[0].lastIngestCount == 39)
+        #expect(resp.feeds[1].ageSecs == -1)
+    }
+
     @Test("Full tweet with nested quote, media and counts")
     func tweet() throws {
         let json = """

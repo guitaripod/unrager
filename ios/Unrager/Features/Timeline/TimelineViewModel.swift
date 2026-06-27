@@ -39,6 +39,10 @@ final class TimelineViewModel {
     let isLoading = CurrentValueSubject<Bool, Never>(false)
     let isRefreshing = CurrentValueSubject<Bool, Never>(false)
     let errorMessage = PassthroughSubject<String, Never>()
+    /// "updated Nm ago" freshness of the materialized Home buffer, or nil on
+    /// non-Home sources / a cold buffer / a status error. Drives the subtle
+    /// freshness caption.
+    let freshness = CurrentValueSubject<String?, Never>(nil)
     /// Survivor count while collect-then-show filtering is gathering a batch, or
     /// nil when not collecting. Drives the "collecting tweets… N/25" affordance.
     let collectingProgress = CurrentValueSubject<Int?, Never>(nil)
@@ -159,6 +163,7 @@ final class TimelineViewModel {
         hasLoadedOnce = false
         seenIDs.removeAll()
         readIDs.removeAll()
+        freshness.send(nil)
         tweets.send([])
     }
 
@@ -236,6 +241,53 @@ final class TimelineViewModel {
         }
     }
 
+    // MARK: - Freshness
+
+    /// The `/api/feed/status` variant key for the current Home source, or nil on
+    /// non-Home sources (search/profile/mentions/bookmarks have no buffer).
+    private var homeVariant: String? {
+        switch source {
+        case let .home(following, _): return following ? "home_following" : "home_foryou"
+        default: return nil
+        }
+    }
+
+    /// Fetches the materialized-buffer status and publishes "updated Nm ago" for
+    /// the current Home variant. Publishes nil for non-Home sources, a cold
+    /// buffer (`ageSecs < 0`), or any error — so the caption simply hides.
+    private func updateFreshness() async {
+        guard let variant = homeVariant else {
+            freshness.send(nil)
+            return
+        }
+        do {
+            let status = try await api.feedStatus()
+            let label = status.feeds.first { $0.variant == variant }
+                .flatMap { Self.freshnessLabel(ageSecs: $0.ageSecs) }
+            freshness.send(label)
+        } catch {
+            AppLogger.shared.debug("feed status failed: \(error)", category: .timeline)
+            freshness.send(nil)
+        }
+    }
+
+    /// "updated Nm ago" for a buffer age in seconds, or nil when the buffer has
+    /// never been ingested (`ageSecs < 0`).
+    private static func freshnessLabel(ageSecs: Int) -> String? {
+        guard ageSecs >= 0 else { return nil }
+        let unit: String
+        if ageSecs < 60 {
+            unit = "\(ageSecs)s"
+        } else if ageSecs < 3_600 {
+            unit = "\(ageSecs / 60)m"
+        } else if ageSecs < 86_400 {
+            unit = "\(ageSecs / 3_600)h"
+        } else {
+            unit = "\(ageSecs / 86_400)d"
+        }
+        return "updated \(unit) ago"
+    }
+
     /// Sources that need a query show nothing (not an error) until one is set.
     private var isAwaitingQuery: Bool {
         switch source {
@@ -293,6 +345,7 @@ final class TimelineViewModel {
             }
             AppLogger.shared.info("feed loaded +\(newIDs.count) (\(current.count) total)", category: .timeline)
             hasLoadedOnce = true
+            await updateFreshness()
         } catch is CancellationError {
             return
         } catch let error as APIError {
@@ -343,6 +396,7 @@ final class TimelineViewModel {
                 "filter batch +\(survivors.count) survivors over \(pages) page(s) (\(current.count) total)",
                 category: .timeline)
             hasLoadedOnce = true
+            await updateFreshness()
         } catch is CancellationError {
             return
         } catch let error as APIError {

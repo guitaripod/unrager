@@ -5,6 +5,26 @@ public struct TimelinePage: Decodable, Sendable {
     public let cursor: String?
 }
 
+/// Freshness of one materialized Home variant from `GET /api/feed/status`.
+/// `ageSecs == -1` means that variant has never been ingested (cold buffer).
+public struct FeedStatus: Decodable, Sendable {
+    public let variant: String
+    public let lastIngestAt: Int
+    public let lastIngestCount: Int
+    public let ageSecs: Int
+
+    enum CodingKeys: String, CodingKey {
+        case variant
+        case lastIngestAt = "last_ingest_at"
+        case lastIngestCount = "last_ingest_count"
+        case ageSecs = "age_secs"
+    }
+}
+
+public struct FeedStatusResponse: Decodable, Sendable {
+    public let feeds: [FeedStatus]
+}
+
 public struct ThreadView: Decodable, Sendable {
     public let focal: Tweet
     public let ancestors: [Tweet]

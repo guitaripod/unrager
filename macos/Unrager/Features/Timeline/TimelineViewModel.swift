@@ -52,6 +52,11 @@ final class TimelineViewModel {
     enum FooterState: Equatable { case none, endOfFeed, caughtUp }
     let footerState = CurrentValueSubject<FooterState, Never>(.none)
 
+    /// "updated Nm ago" freshness of the materialized Home buffer, or `nil` for
+    /// non-Home feeds, a cold buffer, or a status fetch error — the feed hides
+    /// the label when nil. Refreshed after each successful Home load/refresh.
+    let freshness = CurrentValueSubject<String?, Never>(nil)
+
     private(set) var source: Source
     var awaitingQuery: Bool { isAwaitingQuery }
     /// True once a load for the current source has settled (success or error).
@@ -64,6 +69,7 @@ final class TimelineViewModel {
     private var seenIDs = Set<String>()
     private var loadTask: Task<Void, Never>?
     private var filterTask: Task<Void, Never>?
+    private var freshnessTask: Task<Void, Never>?
 
     /// How many keep-verdict tweets a collect batch aims to gather before
     /// publishing, and the hard cap on pages fetched per batch (so a feed that's
@@ -129,6 +135,7 @@ final class TimelineViewModel {
         seenIDs.removeAll()
         collectingProgress.send(nil)
         footerState.send(.none)
+        freshness.send(nil)
         tweets.send([])
     }
 
@@ -191,6 +198,7 @@ final class TimelineViewModel {
             }
             AppLogger.shared.info("feed loaded +\(added) (\(current.count) total)", category: .timeline)
             hasLoadedOnce = true
+            scheduleFreshness()
         } catch is CancellationError {
             return
         } catch let error as APIError {
@@ -245,6 +253,7 @@ final class TimelineViewModel {
             }
             AppLogger.shared.info("feed collected +\(survivors.count) over \(pages) page(s) (\(current.count) total)", category: .timeline)
             hasLoadedOnce = true
+            scheduleFreshness()
         } catch is CancellationError {
             return
         } catch let error as APIError {
@@ -282,6 +291,59 @@ final class TimelineViewModel {
             AppLogger.shared.debug("filter stream ended: \(error)", category: .timeline)
         }
         return hidden
+    }
+
+    /// The `variant` string the Home buffer reports for the current source, or
+    /// `nil` for non-Home feeds (which have no materialized buffer to age).
+    private var homeVariant: String? {
+        if case let .home(following, _) = source {
+            return following ? "home_following" : "home_foryou"
+        }
+        return nil
+    }
+
+    /// Refreshes the freshness label off the back of a successful Home load. A
+    /// no-op (clearing any stale value) for non-Home feeds. Runs detached so it
+    /// never blocks the load's spinner teardown; a stale in-flight fetch is
+    /// cancelled first so the latest load wins.
+    private func scheduleFreshness() {
+        guard homeVariant != nil else { freshness.send(nil); return }
+        freshnessTask?.cancel()
+        freshnessTask = Task { [weak self] in await self?.updateFreshness() }
+    }
+
+    /// Fetches the materialized-buffer status and publishes "updated Nm ago" for
+    /// the current Home variant. Publishes `nil` for non-Home feeds, a cold
+    /// buffer (`ageSecs < 0`), a missing variant, or any fetch error.
+    func updateFreshness() async {
+        guard let variant = homeVariant else { freshness.send(nil); return }
+        do {
+            let status = try await api.feedStatus()
+            if Task.isCancelled { return }
+            guard let feed = status.feeds.first(where: { $0.variant == variant }) else {
+                freshness.send(nil)
+                return
+            }
+            freshness.send(Self.freshnessBand(feed.ageSecs))
+        } catch {
+            if Task.isCancelled { return }
+            AppLogger.shared.debug("feed status fetch failed: \(error)", category: .timeline)
+            freshness.send(nil)
+        }
+    }
+
+    /// Bands an age in seconds into an "updated Ns/Nm/Nh/Nd ago" string, or
+    /// `nil` for a cold buffer (`ageSecs < 0`). Mirrors the TUI / Linux client.
+    private static func freshnessBand(_ ageSecs: Int) -> String? {
+        guard ageSecs >= 0 else { return nil }
+        let unit: String
+        switch ageSecs {
+        case ..<60: unit = "\(ageSecs)s"
+        case ..<3_600: unit = "\(ageSecs / 60)m"
+        case ..<86_400: unit = "\(ageSecs / 3_600)h"
+        default: unit = "\(ageSecs / 86_400)d"
+        }
+        return "updated \(unit) ago"
     }
 
     private func fetch(cursor: String?) async throws -> TimelinePage {

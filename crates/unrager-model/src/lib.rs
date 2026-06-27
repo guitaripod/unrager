@@ -5,7 +5,7 @@ pub mod wire;
 pub use source::{FeedMode, SearchProduct, SourceKind};
 pub use tweet::{AboutProfile, Media, MediaKind, PollOption, Tweet, User};
 pub use wire::{
-    AskPreset, BriefChunk, ComposeResult, FilterTopic, FilterVerdictEvent, Notification,
-    NotificationActor, NotificationsPage, ProfileView, SessionState, ThreadView, TimelinePage,
-    TokenEvent, Verdict,
+    AskPreset, BriefChunk, ComposeResult, FeedStatus, FeedStatusResponse, FilterTopic,
+    FilterVerdictEvent, Notification, NotificationActor, NotificationsPage, ProfileView,
+    SessionState, ThreadView, TimelinePage, TokenEvent, Verdict,
 };

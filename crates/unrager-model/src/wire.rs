@@ -8,6 +8,22 @@ pub struct TimelinePage {
     pub cursor: Option<String>,
 }
 
+/// Freshness of one materialized Home variant, reported by `GET /api/feed/status`
+/// so clients can show "updated Nm ago". `age_secs` is `-1` when the variant has
+/// never been ingested (cold buffer).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeedStatus {
+    pub variant: String,
+    pub last_ingest_at: i64,
+    pub last_ingest_count: i64,
+    pub age_secs: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeedStatusResponse {
+    pub feeds: Vec<FeedStatus>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ThreadView {
     pub focal: Tweet,

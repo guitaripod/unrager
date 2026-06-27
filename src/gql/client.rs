@@ -32,6 +32,14 @@ pub struct GqlClient {
     /// `read_rate_limit_until` — otherwise a flag-fetch failure would
     /// freeze the main feed and surface a misleading "X cooldown" banner.
     about_rate_limit_until: Mutex<Option<std::time::Instant>>,
+    /// Dedicated bucket for background ingest polls. A 429 triggered by the
+    /// feed-materialization worker lands here and NEVER in the shared
+    /// read/write buckets, so interactive requests (open a thread, like a
+    /// tweet) are never frozen by background work. Interactive calls ignore
+    /// this bucket; background calls respect both this and the interactive
+    /// bucket for their method, so a genuine account-wide limit still pauses
+    /// them.
+    ingest_rate_limit_until: Mutex<Option<std::time::Instant>>,
     transaction_key: Mutex<Option<TransactionKeyMaterial>>,
 }
 
@@ -73,16 +81,29 @@ impl GqlClient {
             read_rate_limit_until: Mutex::new(None),
             write_rate_limit_until: Mutex::new(None),
             about_rate_limit_until: Mutex::new(None),
+            ingest_rate_limit_until: Mutex::new(None),
             transaction_key: Mutex::new(None),
         })
     }
 
     pub async fn get(&self, op: Operation, variables: &Value, features: &Value) -> Result<Value> {
-        self.call(Method::Get, op, variables, features).await
+        self.call(Method::Get, op, variables, features, false).await
     }
 
     pub async fn post(&self, op: Operation, variables: &Value, features: &Value) -> Result<Value> {
-        self.call(Method::Post, op, variables, features).await
+        self.call(Method::Post, op, variables, features, false)
+            .await
+    }
+
+    /// A POST issued by the background ingest worker. Its 429s are isolated to
+    /// the ingest rate-limit bucket so they never freeze interactive requests.
+    pub async fn post_background(
+        &self,
+        op: Operation,
+        variables: &Value,
+        features: &Value,
+    ) -> Result<Value> {
+        self.call(Method::Post, op, variables, features, true).await
     }
 
     async fn call(
@@ -91,14 +112,19 @@ impl GqlClient {
         op: Operation,
         variables: &Value,
         features: &Value,
+        background: bool,
     ) -> Result<Value> {
-        match self.call_once(&method, op, variables, features).await {
+        match self
+            .call_once(&method, op, variables, features, background)
+            .await
+        {
             Ok(v) => Ok(v),
             Err(Error::GraphqlStatus { status: 404, .. })
             | Err(Error::GraphqlStatus { status: 400, .. }) => {
                 tracing::warn!("{} returned stale query id, refreshing", op.name());
                 self.refresh_query_ids().await?;
-                self.call_once(&method, op, variables, features).await
+                self.call_once(&method, op, variables, features, background)
+                    .await
             }
             Err(e) => Err(e),
         }
@@ -110,6 +136,7 @@ impl GqlClient {
         op: Operation,
         variables: &Value,
         features: &Value,
+        background: bool,
     ) -> Result<Value> {
         if matches!(op, Operation::AboutAccountQuery) {
             if let Some(remaining) = self.about_rate_limit_remaining() {
@@ -117,7 +144,7 @@ impl GqlClient {
                     remaining_secs: remaining.as_secs().max(1),
                 });
             }
-        } else if let Some(remaining) = self.rate_limit_remaining_for(method.kind()) {
+        } else if let Some(remaining) = self.precheck_cooldown(method.kind(), background) {
             return Err(Error::RateLimited {
                 remaining_secs: remaining.as_secs().max(1),
             });
@@ -170,7 +197,7 @@ impl GqlClient {
         };
 
         let res = req.send().await?;
-        self.parse(res, method.kind(), op).await
+        self.parse(res, method.kind(), op, background).await
     }
 
     fn lookup_qid(&self, op: Operation) -> Option<QueryId> {
@@ -305,6 +332,7 @@ impl GqlClient {
         res: reqwest::Response,
         kind: RateLimitKind,
         op: Operation,
+        background: bool,
     ) -> Result<Value> {
         let status = res.status();
         let reset_hdr = res
@@ -323,6 +351,8 @@ impl GqlClient {
             let cooldown = compute_rate_limit_remaining(reset_hdr);
             if is_about {
                 self.record_about_cooldown(cooldown);
+            } else if background {
+                self.record_ingest_cooldown(cooldown);
             } else {
                 self.record_rate_limit(kind, cooldown);
             }
@@ -427,6 +457,36 @@ impl GqlClient {
         let until = until?;
         let now = std::time::Instant::now();
         if until > now { Some(until - now) } else { None }
+    }
+
+    fn record_ingest_cooldown(&self, remaining: Duration) {
+        if let Ok(mut guard) = self.ingest_rate_limit_until.lock() {
+            *guard = Some(std::time::Instant::now() + remaining);
+        }
+    }
+
+    pub fn ingest_rate_limit_remaining(&self) -> Option<Duration> {
+        let until = *self.ingest_rate_limit_until.lock().ok()?;
+        let until = until?;
+        let now = std::time::Instant::now();
+        if until > now { Some(until - now) } else { None }
+    }
+
+    /// Cooldown a call must respect before firing. Interactive calls see only
+    /// their method's bucket; background calls additionally respect the ingest
+    /// bucket, so a background 429 pauses background work without ever touching
+    /// the interactive path.
+    fn precheck_cooldown(&self, kind: RateLimitKind, background: bool) -> Option<Duration> {
+        let interactive = self.rate_limit_remaining_for(kind);
+        if !background {
+            return interactive;
+        }
+        match (interactive, self.ingest_rate_limit_remaining()) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        }
     }
 }
 

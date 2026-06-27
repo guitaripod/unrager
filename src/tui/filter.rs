@@ -456,62 +456,109 @@ impl Classifier {
         let system_prompt = self.system_prompt.clone();
         tokio::spawn(async move {
             let _permit = sem.acquire_owned().await.ok();
-            let started = std::time::Instant::now();
-            let url = ollama.chat_url();
-            let body = serde_json::json!({
-                "model": ollama.model,
-                "messages": [
-                    { "role": "system", "content": *system_prompt },
-                    { "role": "user", "content": payload.text },
-                ],
-                "stream": false,
-                "think": false,
-                "keep_alive": ollama.keep_alive,
-                "options": { "temperature": 0, "num_predict": 3 },
-            });
-            debug!(
-                rest_id = %payload.rest_id,
-                text_len = payload.text.len(),
-                "filter dispatch",
-            );
-            let verdict = match http.post(&url).json(&body).send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    match resp.json::<OllamaChatResponse>().await {
-                        Ok(r) => {
-                            let parsed = parse_verdict(&r.message.content);
-                            debug!(
-                                rest_id = %payload.rest_id,
-                                raw = %r.message.content,
-                                parsed = ?parsed,
-                                elapsed_ms = started.elapsed().as_millis() as u64,
-                                "filter verdict",
-                            );
-                            parsed
-                        }
-                        Err(e) => {
-                            warn!("filter parse failed for {}: {e}", payload.rest_id);
-                            FilterDecision::Keep
-                        }
-                    }
-                }
-                Ok(resp) => {
-                    warn!(
-                        "filter http status {} for {}",
-                        resp.status(),
-                        payload.rest_id
-                    );
-                    FilterDecision::Keep
-                }
-                Err(e) => {
-                    warn!("filter http error for {}: {e}", payload.rest_id);
-                    FilterDecision::Keep
-                }
-            };
+            let verdict = classify_once(
+                &http,
+                &ollama,
+                &system_prompt,
+                &payload.rest_id,
+                &payload.text,
+            )
+            .await;
             let _ = tx.send(Event::TweetClassified {
                 rest_id: payload.rest_id,
                 verdict,
             });
         });
+    }
+
+    /// A cheaply-cloneable classification handle. The background ingest worker
+    /// takes one (a brief lock, then released) so it can classify tweets
+    /// awaitably without holding the shared `Classifier` mutex across requests —
+    /// which would otherwise serialize and stall the interactive SSE filter.
+    pub fn handle(&self) -> ClassifierHandle {
+        ClassifierHandle {
+            http: self.http.clone(),
+            ollama: self.ollama.clone(),
+            sem: self.sem.clone(),
+            system_prompt: self.system_prompt.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct ClassifierHandle {
+    http: reqwest::Client,
+    ollama: OllamaConfig,
+    sem: Arc<Semaphore>,
+    system_prompt: Arc<String>,
+}
+
+impl ClassifierHandle {
+    /// Classify one tweet and return the verdict directly (no event channel).
+    /// Shares the concurrency semaphore so it never overwhelms Ollama.
+    pub async fn classify(&self, rest_id: &str, text: &str) -> FilterDecision {
+        let _permit = self.sem.acquire().await.ok();
+        classify_once(&self.http, &self.ollama, &self.system_prompt, rest_id, text).await
+    }
+
+    /// Quick liveness probe so the ingest worker skips classification entirely
+    /// (rather than eating a full timeout per tweet) when Ollama is unreachable.
+    pub async fn is_alive(&self) -> bool {
+        let url = format!("{}/api/tags", self.ollama.host.trim_end_matches('/'));
+        matches!(
+            self.http.get(&url).timeout(Duration::from_secs(2)).send().await,
+            Ok(r) if r.status().is_success()
+        )
+    }
+}
+
+async fn classify_once(
+    http: &reqwest::Client,
+    ollama: &OllamaConfig,
+    system_prompt: &str,
+    rest_id: &str,
+    text: &str,
+) -> FilterDecision {
+    let started = std::time::Instant::now();
+    let url = ollama.chat_url();
+    let body = serde_json::json!({
+        "model": ollama.model,
+        "messages": [
+            { "role": "system", "content": system_prompt },
+            { "role": "user", "content": text },
+        ],
+        "stream": false,
+        "think": false,
+        "keep_alive": ollama.keep_alive,
+        "options": { "temperature": 0, "num_predict": 3 },
+    });
+    debug!(rest_id, text_len = text.len(), "filter dispatch");
+    match http.post(&url).json(&body).send().await {
+        Ok(resp) if resp.status().is_success() => match resp.json::<OllamaChatResponse>().await {
+            Ok(r) => {
+                let parsed = parse_verdict(&r.message.content);
+                debug!(
+                    rest_id,
+                    raw = %r.message.content,
+                    parsed = ?parsed,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "filter verdict",
+                );
+                parsed
+            }
+            Err(e) => {
+                warn!("filter parse failed for {rest_id}: {e}");
+                FilterDecision::Keep
+            }
+        },
+        Ok(resp) => {
+            warn!("filter http status {} for {rest_id}", resp.status());
+            FilterDecision::Keep
+        }
+        Err(e) => {
+            warn!("filter http error for {rest_id}: {e}");
+            FilterDecision::Keep
+        }
     }
 }
 

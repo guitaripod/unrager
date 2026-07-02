@@ -210,6 +210,10 @@ public final class APIClient: Sendable {
 
     // MARK: - Request plumbing
 
+    /// Builds a request URL. `URLComponents` leaves a literal `+` unescaped in
+    /// query values, but the server decodes queries with form-urlencoded
+    /// semantics (`+` → space), so pluses are re-encoded as `%2B` — otherwise a
+    /// search for "c++" (or a cursor containing `+`) silently corrupts.
     private func url(_ path: String, query: [URLQueryItem] = []) -> URL {
         let base = baseURL().appendingPathComponent(path)
         guard !query.isEmpty,
@@ -217,6 +221,8 @@ public final class APIClient: Sendable {
             return base
         }
         comps.queryItems = query
+        comps.percentEncodedQuery = comps.percentEncodedQuery?
+            .replacingOccurrences(of: "+", with: "%2B")
         return comps.url ?? base
     }
 

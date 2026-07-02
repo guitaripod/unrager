@@ -3,19 +3,41 @@ import Foundation
 /// `HTTPTransport` over `URLSession`. Cross-platform (Foundation only), so both
 /// the iOS and macOS apps share it.
 public final class URLSessionTransport: HTTPTransport {
-    private let session: URLSession
+    let session: URLSession
+    let streamSession: URLSession
 
     public init(session: URLSession? = nil) {
         if let session {
             self.session = session
+            self.streamSession = session
         } else {
-            let configuration = URLSessionConfiguration.default
-            configuration.timeoutIntervalForRequest = 20
-            configuration.timeoutIntervalForResource = 60
-            configuration.waitsForConnectivity = false
-            configuration.httpAdditionalHeaders = ["Accept-Encoding": "gzip, br"]
-            self.session = URLSession(configuration: configuration)
+            self.session = URLSession(configuration: Self.requestConfiguration())
+            self.streamSession = URLSession(configuration: Self.streamConfiguration())
         }
+    }
+
+    private static func requestConfiguration() -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 20
+        configuration.timeoutIntervalForResource = 60
+        configuration.waitsForConnectivity = false
+        configuration.httpAdditionalHeaders = ["Accept-Encoding": "gzip, br"]
+        return configuration
+    }
+
+    /// Configuration for the SSE session. `timeoutIntervalForResource` is a
+    /// session-wide cap on a task's *total* lifetime that no per-request setting
+    /// can raise, so sharing the plain-request session (60 s cap) would kill any
+    /// LLM stream — ask / brief / translate / filter — at exactly 60 s
+    /// mid-generation. Streams get their own session: a generous idle timeout
+    /// (fed by the server's keep-alive comments) and a resource timeout far
+    /// beyond any plausible generation.
+    private static func streamConfiguration() -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 300
+        configuration.timeoutIntervalForResource = 24 * 60 * 60
+        configuration.waitsForConnectivity = false
+        return configuration
     }
 
     public func send(_ request: HTTPRequest) async throws -> HTTPResponse {
@@ -37,10 +59,9 @@ public final class URLSessionTransport: HTTPTransport {
     public func stream(_ request: HTTPRequest) async throws -> (Int, AsyncThrowingStream<String, Error>) {
         var urlRequest = urlRequest(from: request)
         urlRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-        urlRequest.timeoutInterval = 300
 
         do {
-            let (bytes, response) = try await session.bytes(for: urlRequest)
+            let (bytes, response) = try await streamSession.bytes(for: urlRequest)
             guard let http = response as? HTTPURLResponse else {
                 throw APIError.network("Non-HTTP response")
             }

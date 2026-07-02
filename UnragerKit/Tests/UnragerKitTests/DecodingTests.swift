@@ -79,6 +79,28 @@ struct DecodingTests {
         #expect(tweet.author.avatarURL == nil)
     }
 
+    @Test("ThreadView first page carries focal; continuation pages omit it")
+    func threadViewPages() throws {
+        let tweetJSON = """
+        {"rest_id":"7","author":{"rest_id":"2","handle":"a","name":"A","verified":false,
+          "followers":0,"following":0},"created_at":"2026-06-19T12:00:00Z","text":"hi",
+          "reply_count":0,"retweet_count":0,"like_count":0,"quote_count":0,"view_count":null,
+          "url":"https://x.com/a/status/7"}
+        """
+        let first = try decode(ThreadView.self,
+            #"{"focal":\#(tweetJSON),"ancestors":[],"replies":[\#(tweetJSON)],"cursor":"c1"}"#)
+        #expect(first.focal?.restID == "7")
+        #expect(first.replies.count == 1)
+        #expect(first.cursor == "c1")
+
+        let continuation = try decode(ThreadView.self,
+            #"{"replies":[\#(tweetJSON)],"cursor":null}"#)
+        #expect(continuation.focal == nil)
+        #expect(continuation.ancestors.isEmpty)
+        #expect(continuation.replies.count == 1)
+        #expect(continuation.cursor == nil)
+    }
+
     @Test("MediaKind unit and struct variants")
     func mediaKinds() throws {
         let video = try decode(Media.self, #"{"kind":"video","url":"p.jpg","video_url":"v.mp4","alt_text":null}"#)

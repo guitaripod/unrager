@@ -2,6 +2,37 @@ import Foundation
 import Combine
 import UnragerKit
 
+/// Decides when a feed has genuinely run out of content. Live Home feeds mint
+/// a fresh bottom cursor on every page, so cursor comparison alone never fires
+/// there — a nil cursor or an echoed-back cursor latches immediately, and a
+/// run of `emptyAppendLimit` consecutive non-reset pages yielding zero new
+/// tweets latches too (mirroring the TUI's `EMPTY_APPEND_LIMIT` design). Any
+/// page that adds tweets, and any reset, clears the run.
+struct FeedExhaustion {
+    static let emptyAppendLimit = 3
+
+    private(set) var isExhausted = false
+    private var emptyAppends = 0
+
+    mutating func reset() {
+        isExhausted = false
+        emptyAppends = 0
+    }
+
+    mutating func registerPage(added: Int, pageCursor: String?, requestCursor: String?, isReset: Bool) {
+        if isReset || added > 0 {
+            emptyAppends = 0
+        } else {
+            emptyAppends += 1
+        }
+        if pageCursor == nil
+            || (!isReset && added == 0 && pageCursor == requestCursor)
+            || emptyAppends >= Self.emptyAppendLimit {
+            isExhausted = true
+        }
+    }
+}
+
 /// Drives any tweet feed: fetches a page, paginates on demand, dedupes by id,
 /// and publishes the accumulated tweets. Presentation-agnostic so the same
 /// model backs Home, Search, profile timelines, bookmarks and mentions.
@@ -52,14 +83,17 @@ final class TimelineViewModel {
 
     private(set) var source: Source
     var awaitingQuery: Bool { isAwaitingQuery }
-    /// True once the cursor is exhausted — the feed shows an "all caught up"
+    /// True once the feed is exhausted — the feed shows an "all caught up"
     /// footer rather than a "scroll to retry" one.
-    var isExhausted: Bool { exhausted }
+    var isExhausted: Bool { exhaustion.isExhausted }
     private let api = AppEnvironment.shared.api
     private var cursor: String?
-    private var exhausted = false
+    private var exhaustion = FeedExhaustion()
     private var seenIDs = Set<String>()
     private var loadTask: Task<Void, Never>?
+    /// Monotonic id of the newest load; a superseded load must not clear the
+    /// loading flags that the current load now owns.
+    private var loadGeneration = 0
 
     /// Collect-then-show targets: gather this many keep-verdict tweets before
     /// publishing a batch (matching the TUI), bounded by a page cap so a feed
@@ -124,12 +158,26 @@ final class TimelineViewModel {
     func refresh() {
         loadTask?.cancel()
         isRefreshing.send(true)
-        loadTask = Task { await load(reset: true) }
+        loadTask = startLoad(reset: true)
     }
 
+    /// Triggers pagination near the end of the list. `isLoading` flips
+    /// synchronously in `startLoad`, so two cells hitting the trigger zone in
+    /// the same layout pass can't both spawn a load — a duplicate fetch of the
+    /// same cursor would yield zero new ids and falsely mark the feed exhausted.
     func loadMoreIfNeeded(currentIndex: Int) {
-        guard !exhausted, !isLoading.value, currentIndex >= tweets.value.count - 5 else { return }
-        loadTask = Task { await load(reset: false) }
+        guard !exhaustion.isExhausted, !isLoading.value, currentIndex >= tweets.value.count - 5 else { return }
+        loadTask = startLoad(reset: false)
+    }
+
+    /// Marks the loading state before the task ever runs (the guard in
+    /// `loadMoreIfNeeded` reads it synchronously) and stamps the load with a
+    /// generation so a superseded load can't clear the flags of its successor.
+    private func startLoad(reset: Bool) -> Task<Void, Never> {
+        isLoading.send(true)
+        loadGeneration += 1
+        let generation = loadGeneration
+        return Task { await load(reset: reset, generation: generation) }
     }
 
     func first() {
@@ -159,13 +207,48 @@ final class TimelineViewModel {
 
     private func reset() {
         cursor = nil
-        exhausted = false
+        exhaustion.reset()
         hasLoadedOnce = false
         seenIDs.removeAll()
         readIDs.removeAll()
+        persistTask?.cancel()
+        persistTask = nil
         freshnessAnchor = nil
         freshness.send(nil)
         tweets.send([])
+    }
+
+    // MARK: - Engagement
+
+    /// Writes a confirmed like/unlike back into the published tweets (and the
+    /// on-disk seed), so cell reconfigures, context menus and swipe actions all
+    /// see the new state — without this, a second heart tap re-sends "like"
+    /// forever and any reuse repaints the stale, unliked model.
+    func applyLike(id: String, favorited: Bool) {
+        var changed = false
+        let updated = tweets.value.map { tweet -> Tweet in
+            guard tweet.restID == id, let toggled = tweet.togglingLike(to: favorited) else { return tweet }
+            changed = true
+            return toggled
+        }
+        guard changed else { return }
+        tweets.send(updated)
+        schedulePersist()
+    }
+
+    private var persistTask: Task<Void, Never>?
+
+    /// Coalesces a burst of engagement write-backs into one disk write: each
+    /// call pushes the pending save out another 500 ms, and the latest
+    /// published snapshot wins when it fires.
+    private func schedulePersist() {
+        persistTask?.cancel()
+        persistTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard let self, !Task.isCancelled else { return }
+            self.persistTask = nil
+            self.persistCache(self.tweets.value)
+        }
     }
 
     // MARK: - Read tracking
@@ -320,21 +403,21 @@ final class TimelineViewModel {
         }
     }
 
-    private func load(reset: Bool) async {
+    private func load(reset: Bool, generation: Int) async {
+        defer {
+            if generation == loadGeneration {
+                isLoading.send(false)
+                isRefreshing.send(false)
+                collectingProgress.send(nil)
+            }
+        }
         if isAwaitingQuery {
             tweets.send([])
-            isRefreshing.send(false)
             return
         }
         if reset {
             cursor = nil
-            exhausted = false
-        }
-        isLoading.send(true)
-        defer {
-            isLoading.send(false)
-            isRefreshing.send(false)
-            collectingProgress.send(nil)
+            exhaustion.reset()
         }
         if AppSettings.filterEnabled {
             await collectBatch(reset: reset)
@@ -343,10 +426,14 @@ final class TimelineViewModel {
         }
     }
 
-    /// Filter-off path: fetch one page and publish it immediately.
+    /// Filter-off path: fetch one page and publish it immediately. A nil or
+    /// echoed-back cursor exhausts the feed at once; live feeds that mint a
+    /// fresh cursor per page only exhaust after `FeedExhaustion.emptyAppendLimit`
+    /// consecutive pages yield nothing new.
     private func fetchPage(reset: Bool) async {
         do {
-            let page = try await fetch(cursor: reset ? nil : cursor)
+            let requestCursor = reset ? nil : cursor
+            let page = try await fetch(cursor: requestCursor)
             if Task.isCancelled { return }
             if reset {
                 seenIDs.removeAll()
@@ -363,9 +450,8 @@ final class TimelineViewModel {
             persistCache(current)
             reconcileSeen(newIDs)
             cursor = page.cursor
-            if page.cursor == nil || (newIDs.isEmpty && !reset) {
-                exhausted = true
-            }
+            exhaustion.registerPage(added: newIDs.count, pageCursor: page.cursor,
+                                    requestCursor: requestCursor, isReset: reset)
             AppLogger.shared.info("feed loaded +\(newIDs.count) (\(current.count) total)", category: .timeline)
             hasLoadedOnce = true
             await updateFreshness()
@@ -395,7 +481,9 @@ final class TimelineViewModel {
         var pages = 0
         do {
             while survivors.count < Self.targetSurvivors, pages < Self.pageCap {
-                let page = try await fetch(cursor: reset && pages == 0 ? nil : cursor)
+                let isResetPage = reset && pages == 0
+                let requestCursor = isResetPage ? nil : cursor
+                let page = try await fetch(cursor: requestCursor)
                 if Task.isCancelled { return }
                 pages += 1
                 cursor = page.cursor
@@ -407,14 +495,15 @@ final class TimelineViewModel {
                     survivors.append(tweet)
                 }
                 collectingProgress.send(survivors.count)
-                if page.cursor == nil { exhausted = true; break }
+                exhaustion.registerPage(added: fresh.count, pageCursor: page.cursor,
+                                        requestCursor: requestCursor, isReset: isResetPage)
+                if exhaustion.isExhausted { break }
             }
             var current = reset ? [] : tweets.value
             current.append(contentsOf: survivors)
             tweets.send(current)
             persistCache(current)
             reconcileSeen(survivors.map(\.restID))
-            if survivors.isEmpty, cursor == nil { exhausted = true }
             AppLogger.shared.info(
                 "filter batch +\(survivors.count) survivors over \(pages) page(s) (\(current.count) total)",
                 category: .timeline)

@@ -46,27 +46,44 @@ final class StreamSheetViewController: UIViewController {
 
     private var raw = ""
 
+    /// The stream task captures `self` weakly: a strong capture would keep the
+    /// sheet (and the live SSE connection, and the server's Ollama generation)
+    /// alive until the stream ran to completion, making the deinit cancel
+    /// unreachable mid-stream.
     private func start() {
         let stream = makeStream()
-        task = Task {
+        task = Task { [weak self] in
             do {
                 for try await event in stream {
-                    if Task.isCancelled { return }
+                    guard let self, !Task.isCancelled else { return }
                     if !event.token.isEmpty {
-                        spinner.stopAnimating()
-                        raw.append(event.token)
-                        textView.attributedText = Self.render(raw)
+                        self.spinner.stopAnimating()
+                        self.raw.append(event.token)
+                        self.textView.attributedText = Self.render(self.raw)
                     }
                     if event.done { break }
                 }
-                spinner.stopAnimating()
-                if raw.isEmpty { textView.text = "(no response)" }
+                guard let self else { return }
+                self.spinner.stopAnimating()
+                if self.raw.isEmpty { self.textView.text = "(no response)" }
             } catch {
-                spinner.stopAnimating()
-                textView.textColor = .systemRed
-                textView.text = error.localizedDescription
+                guard let self else { return }
+                self.spinner.stopAnimating()
+                self.textView.textColor = .systemRed
+                self.textView.text = error.localizedDescription
             }
         }
+    }
+
+    /// Tears the stream down the moment the sheet goes away (Done, swipe-down,
+    /// or a pop) so the server stops generating immediately instead of when
+    /// deinit eventually runs.
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        guard isBeingDismissed || isMovingFromParent
+            || navigationController?.isBeingDismissed == true else { return }
+        task?.cancel()
+        task = nil
     }
 
     /// Renders the LLM's markdown (bold + bullets) while preserving newlines.

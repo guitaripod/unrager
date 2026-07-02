@@ -153,10 +153,17 @@ final class ThreadViewController: UIViewController {
             defer { collectionView.refreshControl?.endRefreshing() }
             do {
                 let thread = try await AppEnvironment.shared.api.thread(id: tweetID)
+                guard let focal = thread.focal ?? knownFocal else {
+                    loadingIndicator.stopAnimating()
+                    emptyState.isHidden = false
+                    emptyState.show(symbol: "exclamationmark.triangle", title: "Couldn't load thread",
+                                    subtitle: "The conversation is unavailable.", showRetry: true)
+                    return
+                }
                 loadingIndicator.stopAnimating()
-                focalID = thread.focal.restID
+                focalID = focal.restID
                 replyOrder = []
-                for tweet in thread.ancestors + [thread.focal] {
+                for tweet in thread.ancestors + [focal] {
                     tweetsByID[tweet.restID] = tweet
                 }
                 for reply in thread.replies where !replyOrder.contains(reply.restID) {
@@ -165,7 +172,7 @@ final class ThreadViewController: UIViewController {
                 }
                 cursor = thread.cursor
                 exhausted = thread.cursor == nil
-                applyThread(ancestors: thread.ancestors.map(\.restID), focal: thread.focal.restID)
+                applyThread(ancestors: thread.ancestors.map(\.restID), focal: focal.restID)
             } catch {
                 guard !didRenderFocal else {
                     AppLogger.shared.warn("thread load failed (focal already shown): \(error)", category: .thread)
@@ -177,6 +184,13 @@ final class ThreadViewController: UIViewController {
                                 subtitle: error.localizedDescription, showRetry: true)
             }
         }
+    }
+
+    /// The focal tweet already in hand (instant render from the feed, or a
+    /// previous page), used when a response omits `focal` — continuation pages
+    /// carry only replies and a cursor.
+    private var knownFocal: Tweet? {
+        focalID.flatMap { tweetsByID[$0] }
     }
 
     /// Reply depth used for the thread's indentation: a direct reply to the
@@ -293,11 +307,24 @@ final class ThreadViewController: UIViewController {
                 _ = target
                     ? try await AppEnvironment.shared.api.like(tweetID: tweet.restID)
                     : try await AppEnvironment.shared.api.unlike(tweetID: tweet.restID)
+                confirmLike(id: tweet.restID, favorited: target)
             } catch {
                 cell.applyLike(favorited: tweet.favorited, count: tweet.likeCount)
                 Haptics.error()
             }
         }
+    }
+
+    /// Writes a confirmed like/unlike back into the thread's model and
+    /// reconfigures the row so its handlers capture the fresh state — otherwise
+    /// a second tap re-sends "like" and any reuse repaints the stale heart.
+    private func confirmLike(id: String, favorited: Bool) {
+        guard let toggled = tweetsByID[id]?.togglingLike(to: favorited) else { return }
+        tweetsByID[id] = toggled
+        var snapshot = dataSource.snapshot()
+        guard snapshot.indexOfItem(id) != nil else { return }
+        snapshot.reconfigureItems([id])
+        dataSource.apply(snapshot, animatingDifferences: false)
     }
 
     private func push(_ vc: UIViewController) {

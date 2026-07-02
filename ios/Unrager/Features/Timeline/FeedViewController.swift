@@ -860,7 +860,9 @@ class FeedViewController: UIViewController {
     }
 
     /// Optimistic like: flip the heart and count on the visible cell now, fire
-    /// the request, and only roll the cell back if the network rejects it.
+    /// the request, and on success write the new state back into the view model
+    /// (so a second tap can unlike and reconfigures don't revert the heart);
+    /// only roll the cell back if the network rejects it.
     private func toggleLike(_ tweet: Tweet, cell: TweetCell?) {
         let target = !tweet.favorited
         let optimisticCount = max(0, tweet.likeCount + (target ? 1 : -1))
@@ -870,6 +872,7 @@ class FeedViewController: UIViewController {
                 _ = target
                     ? try await AppEnvironment.shared.api.like(tweetID: tweet.restID)
                     : try await AppEnvironment.shared.api.unlike(tweetID: tweet.restID)
+                viewModel.applyLike(id: tweet.restID, favorited: target)
             } catch {
                 cell?.applyLike(favorited: tweet.favorited, count: tweet.likeCount)
                 Haptics.error()
@@ -987,7 +990,7 @@ extension FeedViewController: UICollectionViewDataSourcePrefetching {
     func collectionView(_ collectionView: UICollectionView, cancelPrefetchingForItemsAt indexPaths: [IndexPath]) {
         for indexPath in indexPaths {
             guard let id = dataSource.itemIdentifier(for: indexPath), let tweet = tweetsByID[id] else { continue }
-            if let url = Self.previewURL(for: tweet) { ImageLoader.cancel(url) }
+            if let url = Self.previewURL(for: tweet) { ImageLoader.cancelPrefetch(url) }
         }
     }
 

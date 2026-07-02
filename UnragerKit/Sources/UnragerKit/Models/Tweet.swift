@@ -95,6 +95,44 @@ public final class Tweet: Codable, Sendable, Identifiable, Hashable {
         try c.encode(urls, forKey: .urls)
     }
 
+    private init(copying other: Tweet, favorited: Bool, likeCount: Int) {
+        restID = other.restID
+        author = other.author
+        createdAt = other.createdAt
+        text = other.text
+        replyCount = other.replyCount
+        retweetCount = other.retweetCount
+        self.likeCount = likeCount
+        quoteCount = other.quoteCount
+        viewCount = other.viewCount
+        bookmarkCount = other.bookmarkCount
+        self.favorited = favorited
+        retweeted = other.retweeted
+        bookmarked = other.bookmarked
+        lang = other.lang
+        inReplyToTweetID = other.inReplyToTweetID
+        quotedTweet = other.quotedTweet
+        media = other.media
+        url = other.url
+        urls = other.urls
+    }
+
+    /// A copy with the viewer's like state and like count replaced — the
+    /// write-back after a confirmed like/unlike, so a stored model (and any
+    /// cell reconfigured from it) reflects the engagement instead of reverting.
+    public func withLike(favorited: Bool, likeCount: Int) -> Tweet {
+        Tweet(copying: self, favorited: favorited, likeCount: max(0, likeCount))
+    }
+
+    /// A copy toggled to the given like state with the count adjusted by one
+    /// (never below zero), or `nil` when the tweet is already in that state —
+    /// the single guard + count delta shared by every confirmed-like
+    /// write-back, so a duplicate confirmation can't double-count.
+    public func togglingLike(to favorited: Bool) -> Tweet? {
+        guard self.favorited != favorited else { return nil }
+        return withLike(favorited: favorited, likeCount: likeCount + (favorited ? 1 : -1))
+    }
+
     public static func == (lhs: Tweet, rhs: Tweet) -> Bool { lhs.restID == rhs.restID }
     public func hash(into hasher: inout Hasher) { hasher.combine(restID) }
 

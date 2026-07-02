@@ -23,7 +23,7 @@ enum ImageLoader {
         Task { await ImagePipeline.shared.prefetch(url, maxPixel: maxPixel) }
     }
 
-    static func cancel(_ url: URL) {
-        Task { await ImagePipeline.shared.cancel(url) }
+    static func cancelPrefetch(_ url: URL) {
+        Task { await ImagePipeline.shared.cancelPrefetch(url) }
     }
 }

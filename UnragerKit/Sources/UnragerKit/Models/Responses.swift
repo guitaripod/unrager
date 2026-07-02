@@ -25,8 +25,12 @@ public struct FeedStatusResponse: Decodable, Sendable {
     public let feeds: [FeedStatus]
 }
 
+/// A conversation page. First pages always carry `focal`; continuation pages
+/// (fetched with a cursor) carry only `replies` + `cursor` and omit `focal`
+/// entirely, so it is optional here and callers fall back to the copy already
+/// in hand.
 public struct ThreadView: Decodable, Sendable {
-    public let focal: Tweet
+    public let focal: Tweet?
     public let ancestors: [Tweet]
     public let replies: [Tweet]
     public let cursor: String?
@@ -37,7 +41,7 @@ public struct ThreadView: Decodable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        focal = try c.decode(Tweet.self, forKey: .focal)
+        focal = try c.decodeIfPresent(Tweet.self, forKey: .focal)
         ancestors = try c.decodeIfPresent([Tweet].self, forKey: .ancestors) ?? []
         replies = try c.decodeIfPresent([Tweet].self, forKey: .replies) ?? []
         cursor = try c.decodeIfPresent(String.self, forKey: .cursor)

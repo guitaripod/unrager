@@ -6,7 +6,7 @@ use crate::gql::transaction::TransactionKeyMaterial;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError, RwLock};
 use std::time::Duration;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::{Instant, sleep_until};
@@ -17,10 +17,32 @@ const GQL_BASE: &str = "https://x.com/i/api/graphql";
 const MIN_INTERVAL_LOW_MS: u64 = 300;
 const MIN_INTERVAL_HIGH_MS: u64 = 700;
 const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0";
+const SESSION_REFRESH_COOLDOWN: Duration = Duration::from_secs(5 * 60);
+
+/// The live session plus a generation counter bumped on every rotation, so a
+/// request can prove which session its headers were signed with and the retry
+/// decision after a 401/403 can compare against what is current *now*.
+struct SessionSlot {
+    session: XSession,
+    generation: u64,
+}
+
+/// An error from a single request attempt, tagged with the session generation
+/// the request's headers were built from. `call` needs the tag to decide
+/// whether a concurrent session rotation already fixed the failure.
+struct SignedError {
+    error: Error,
+    generation: u64,
+}
 
 pub struct GqlClient {
     http: reqwest::Client,
-    session: XSession,
+    session: RwLock<SessionSlot>,
+    /// Serializes browser re-extraction after an auth failure so concurrent
+    /// 401s don't stampede the cookie store, and memoizes the instant of the
+    /// last failed/no-op attempt so a persistent non-cookie 403 doesn't
+    /// re-copy and re-decrypt the cookie DB on every poll.
+    session_refresh: AsyncMutex<Option<Instant>>,
     store: Mutex<QueryIdStore>,
     cache_path: PathBuf,
     next_allowed: AsyncMutex<Instant>,
@@ -73,7 +95,11 @@ impl GqlClient {
         let client_uuid = random_uuid_v4();
         Ok(Self {
             http,
-            session,
+            session: RwLock::new(SessionSlot {
+                session,
+                generation: 0,
+            }),
+            session_refresh: AsyncMutex::new(None),
             store: Mutex::new(store),
             cache_path,
             next_allowed: AsyncMutex::new(Instant::now()),
@@ -119,19 +145,58 @@ impl GqlClient {
             .await
         {
             Ok(v) => Ok(v),
-            Err(Error::GraphqlStatus { status: 404, .. })
-            | Err(Error::GraphqlStatus { status: 400, .. }) => {
-                tracing::warn!("{} returned stale query id, refreshing", op.name());
-                self.refresh_query_ids().await?;
-                self.call_once(&method, op, variables, features, background)
-                    .await
+            Err(signed) if needs_query_id_refresh(&signed.error) => {
+                tracing::warn!(
+                    "{}: {} — refreshing query ids and retrying",
+                    op.name(),
+                    signed.error
+                );
+                match self.refresh_query_ids().await {
+                    Ok(()) => self
+                        .call_once(&method, op, variables, features, background)
+                        .await
+                        .map_err(|retry| retry.error),
+                    Err(refresh_err) => {
+                        tracing::warn!("query id refresh failed: {refresh_err}");
+                        Err(signed.error)
+                    }
+                }
             }
-            Err(e) => Err(e),
+            Err(signed) if is_auth_failure(&signed.error) => {
+                tracing::warn!(
+                    "{}: {} — re-extracting browser session and retrying",
+                    op.name(),
+                    signed.error
+                );
+                if self.try_refresh_session(signed.generation).await {
+                    self.call_once(&method, op, variables, features, background)
+                        .await
+                        .map_err(|retry| retry.error)
+                } else {
+                    Err(signed.error)
+                }
+            }
+            Err(signed) => Err(signed.error),
         }
     }
 
     async fn call_once(
         &self,
+        method: &Method,
+        op: Operation,
+        variables: &Value,
+        features: &Value,
+        background: bool,
+    ) -> std::result::Result<Value, SignedError> {
+        let (session, generation) = self.session_snapshot();
+        self.call_signed(&session, method, op, variables, features, background)
+            .await
+            .map_err(|error| SignedError { error, generation })
+    }
+
+    async fn call_signed(
+        &self,
+        session: &XSession,
         method: &Method,
         op: Operation,
         variables: &Value,
@@ -149,8 +214,8 @@ impl GqlClient {
                 remaining_secs: remaining.as_secs().max(1),
             });
         }
-        let qid = self.lookup_qid(op).ok_or_else(|| {
-            Error::GraphqlShape(format!("no query id for operation {}", op.name()))
+        let qid = self.lookup_qid(op).ok_or(Error::MissingQueryId {
+            operation: op.name(),
         })?;
         let url = format!("{GQL_BASE}/{}/{}", qid.id, op.name());
 
@@ -180,7 +245,7 @@ impl GqlClient {
                 ];
                 self.http
                     .get(&url)
-                    .headers(self.headers(method_str, &path)?)
+                    .headers(self.headers(session, method_str, &path)?)
                     .query(&query)
             }
             Method::Post => {
@@ -191,7 +256,7 @@ impl GqlClient {
                 });
                 self.http
                     .post(&url)
-                    .headers(self.headers(method_str, &path)?)
+                    .headers(self.headers(session, method_str, &path)?)
                     .json(&body)
             }
         };
@@ -202,6 +267,66 @@ impl GqlClient {
 
     fn lookup_qid(&self, op: Operation) -> Option<QueryId> {
         self.store.lock().ok()?.get(op).cloned()
+    }
+
+    fn session_snapshot(&self) -> (XSession, u64) {
+        let slot = self.session.read().unwrap_or_else(PoisonError::into_inner);
+        (slot.session.clone(), slot.generation)
+    }
+
+    fn replace_session(&self, fresh: XSession) {
+        let mut slot = self.session.write().unwrap_or_else(PoisonError::into_inner);
+        slot.session = fresh;
+        slot.generation += 1;
+    }
+
+    /// After a 401/403, re-extract cookies from the browser and swap them in
+    /// for a single retry. Returns whether the request should be retried —
+    /// true only when the live session differs from the one the failing
+    /// request was actually signed with (`request_generation`), either because
+    /// a concurrent racer already rotated it or because re-extraction here
+    /// produced fresh cookies; unchanged cookies never cause a doomed second
+    /// request. Failed and no-op attempts are memoized for
+    /// [`SESSION_REFRESH_COOLDOWN`] so a persistent non-cookie 403 doesn't
+    /// re-copy and re-decrypt the browser's cookie DB on every call.
+    async fn try_refresh_session(&self, request_generation: u64) -> bool {
+        if std::env::var_os("UNRAGER_DEMO").is_some() {
+            return false;
+        }
+        let mut last_failed_attempt = self.session_refresh.lock().await;
+        let (stale, generation) = self.session_snapshot();
+        if generation != request_generation {
+            return true;
+        }
+        if let Some(failed_at) = *last_failed_attempt {
+            let elapsed = failed_at.elapsed();
+            if elapsed < SESSION_REFRESH_COOLDOWN {
+                tracing::warn!(
+                    elapsed_secs = elapsed.as_secs(),
+                    cooldown_secs = SESSION_REFRESH_COOLDOWN.as_secs(),
+                    "browser re-extraction recently failed; cooling down instead of retrying"
+                );
+                return false;
+            }
+        }
+        match crate::auth::chromium::refresh_session().await {
+            Ok(fresh) if fresh != stale => {
+                tracing::info!("browser session re-extracted after auth failure");
+                *last_failed_attempt = None;
+                self.replace_session(fresh);
+                true
+            }
+            Ok(_) => {
+                tracing::warn!("browser cookies unchanged after auth failure; not retrying");
+                *last_failed_attempt = Some(Instant::now());
+                false
+            }
+            Err(e) => {
+                tracing::warn!("browser session re-extraction after auth failure failed: {e}");
+                *last_failed_attempt = Some(Instant::now());
+                false
+            }
+        }
     }
 
     pub async fn warm_transaction_key(&self) {
@@ -262,11 +387,11 @@ impl GqlClient {
         sleep_until(wait_until).await;
     }
 
-    fn headers(&self, method: &str, path: &str) -> Result<HeaderMap> {
+    fn headers(&self, session: &XSession, method: &str, path: &str) -> Result<HeaderMap> {
         let mut h = HeaderMap::new();
         let cookie = format!(
             "auth_token={}; ct0={}; twid={}",
-            self.session.auth_token, self.session.ct0, self.session.twid
+            session.auth_token, session.ct0, session.twid
         );
         h.insert(
             reqwest::header::AUTHORIZATION,
@@ -279,8 +404,7 @@ impl GqlClient {
         );
         h.insert(
             HeaderName::from_static("x-csrf-token"),
-            HeaderValue::from_str(&self.session.ct0)
-                .map_err(|e| Error::GraphqlShape(e.to_string()))?,
+            HeaderValue::from_str(&session.ct0).map_err(|e| Error::GraphqlShape(e.to_string()))?,
         );
         h.insert(
             HeaderName::from_static("x-twitter-auth-type"),
@@ -490,6 +614,27 @@ impl GqlClient {
     }
 }
 
+fn needs_query_id_refresh(e: &Error) -> bool {
+    matches!(
+        e,
+        Error::MissingQueryId { .. }
+            | Error::GraphqlStatus {
+                status: 400 | 404,
+                ..
+            }
+    )
+}
+
+fn is_auth_failure(e: &Error) -> bool {
+    matches!(
+        e,
+        Error::GraphqlStatus {
+            status: 401 | 403,
+            ..
+        }
+    )
+}
+
 fn compute_rate_limit_remaining(reset_epoch: Option<u64>) -> Duration {
     const DEFAULT_WINDOW: Duration = Duration::from_secs(15 * 60);
     const MIN_WINDOW: Duration = Duration::from_secs(60);
@@ -551,7 +696,95 @@ fn truncate(s: &str, max_bytes: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::truncate;
+    use super::{Error, GqlClient, Instant, is_auth_failure, needs_query_id_refresh, truncate};
+    use crate::auth::XSession;
+    use crate::gql::query_ids::QueryIdStore;
+
+    fn status_err(status: u16) -> Error {
+        Error::GraphqlStatus {
+            status,
+            body: String::new(),
+        }
+    }
+
+    fn session(tag: &str) -> XSession {
+        XSession {
+            auth_token: format!("auth-{tag}"),
+            ct0: format!("ct0-{tag}"),
+            twid: format!("twid-{tag}"),
+        }
+    }
+
+    fn test_client() -> GqlClient {
+        GqlClient::new(
+            session("initial"),
+            QueryIdStore::with_fallbacks(),
+            std::env::temp_dir().join("unrager-client-test-query-ids.json"),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn replace_session_bumps_generation() {
+        let client = test_client();
+        let (_, before) = client.session_snapshot();
+        client.replace_session(session("rotated"));
+        let (current, after) = client.session_snapshot();
+        assert_eq!(after, before + 1);
+        assert_eq!(current, session("rotated"));
+    }
+
+    #[tokio::test]
+    async fn refresh_retries_when_session_rotated_since_request_was_signed() {
+        let client = test_client();
+        let (_, signed_with) = client.session_snapshot();
+        client.replace_session(session("racer"));
+        assert!(client.try_refresh_session(signed_with).await);
+    }
+
+    #[tokio::test]
+    async fn refresh_backs_off_after_a_recent_failed_attempt() {
+        let client = test_client();
+        *client.session_refresh.lock().await = Some(Instant::now());
+        let (_, generation) = client.session_snapshot();
+        assert!(!client.try_refresh_session(generation).await);
+    }
+
+    #[tokio::test]
+    async fn refresh_cooldown_does_not_block_a_rotated_session_retry() {
+        let client = test_client();
+        *client.session_refresh.lock().await = Some(Instant::now());
+        let (_, signed_with) = client.session_snapshot();
+        client.replace_session(session("racer"));
+        assert!(client.try_refresh_session(signed_with).await);
+    }
+
+    #[test]
+    fn missing_query_id_triggers_refresh() {
+        assert!(needs_query_id_refresh(&Error::MissingQueryId {
+            operation: "BookmarkSearchTimeline",
+        }));
+    }
+
+    #[test]
+    fn stale_query_id_statuses_trigger_refresh() {
+        assert!(needs_query_id_refresh(&status_err(400)));
+        assert!(needs_query_id_refresh(&status_err(404)));
+        assert!(!needs_query_id_refresh(&status_err(401)));
+        assert!(!needs_query_id_refresh(&status_err(500)));
+    }
+
+    #[test]
+    fn auth_failure_matches_401_and_403_only() {
+        assert!(is_auth_failure(&status_err(401)));
+        assert!(is_auth_failure(&status_err(403)));
+        assert!(!is_auth_failure(&status_err(400)));
+        assert!(!is_auth_failure(&status_err(404)));
+        assert!(!is_auth_failure(&status_err(429)));
+        assert!(!is_auth_failure(&Error::MissingQueryId {
+            operation: "Viewer",
+        }));
+    }
 
     #[test]
     fn truncate_ascii_short() {

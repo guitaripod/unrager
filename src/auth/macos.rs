@@ -1,6 +1,6 @@
 use super::chromium::Browser;
 
-pub const PREFIX: &[u8] = b"v10";
+pub const PREFIXES: &[&[u8]] = &[b"v10"];
 pub const ITERS: u32 = 1003;
 
 pub async fn candidate_passwords(browser: &Browser) -> Vec<Vec<u8>> {

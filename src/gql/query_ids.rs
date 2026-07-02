@@ -3,46 +3,53 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-pub enum Operation {
-    Viewer,
-    TweetResultByRestId,
-    TweetDetail,
-    HomeTimeline,
-    HomeLatestTimeline,
-    UserByScreenName,
-    UserTweets,
-    UserTweetsAndReplies,
-    SearchTimeline,
-    BookmarkSearchTimeline,
-    Favoriters,
-    NotificationsTimeline,
-    FavoriteTweet,
-    UnfavoriteTweet,
-    AboutAccountQuery,
+/// Single source of truth for every GraphQL operation. One list generates the
+/// `Operation` enum, its wire `name()` (the variant identifier itself),
+/// `Operation::ALL`, and the hardcoded `FALLBACK_QUERY_IDS` table — so a new
+/// operation cannot be added without extending all of them at once, and the
+/// old failure mode (a variant silently missing from the hand-maintained
+/// `ALL`/fallback lists) is a compile error instead of a runtime
+/// "missing query id".
+macro_rules! operations {
+    ($(($variant:ident, $fallback_id:literal)),* $(,)?) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[serde(rename_all = "PascalCase")]
+        pub enum Operation {
+            $($variant,)*
+        }
+
+        impl Operation {
+            pub const ALL: &'static [Self] = &[$(Self::$variant,)*];
+
+            pub const fn name(self) -> &'static str {
+                match self {
+                    $(Self::$variant => stringify!($variant),)*
+                }
+            }
+        }
+
+        const FALLBACK_QUERY_IDS: &[(&str, &str)] = &[
+            $((stringify!($variant), $fallback_id),)*
+        ];
+    };
 }
 
-impl Operation {
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::Viewer => "Viewer",
-            Self::TweetResultByRestId => "TweetResultByRestId",
-            Self::TweetDetail => "TweetDetail",
-            Self::HomeTimeline => "HomeTimeline",
-            Self::HomeLatestTimeline => "HomeLatestTimeline",
-            Self::UserByScreenName => "UserByScreenName",
-            Self::UserTweets => "UserTweets",
-            Self::UserTweetsAndReplies => "UserTweetsAndReplies",
-            Self::SearchTimeline => "SearchTimeline",
-            Self::BookmarkSearchTimeline => "BookmarkSearchTimeline",
-            Self::Favoriters => "Favoriters",
-            Self::NotificationsTimeline => "NotificationsTimeline",
-            Self::FavoriteTweet => "FavoriteTweet",
-            Self::UnfavoriteTweet => "UnfavoriteTweet",
-            Self::AboutAccountQuery => "AboutAccountQuery",
-        }
-    }
+operations! {
+    (Viewer, "_8ClT24oZ8tpylf_OSuNdg"),
+    (TweetResultByRestId, "fHLDP3qFEjnTqhWBVvsREg"),
+    (TweetDetail, "QrLp7AR-eMyamw8D1N9l6A"),
+    (HomeTimeline, "3tb-_5Lf7kdCZ1cFHmsEfg"),
+    (HomeLatestTimeline, "eObmT5Nuapp04u8bYWf49Q"),
+    (UserByScreenName, "IGgvgiOx4QZndDHuD3x9TQ"),
+    (UserTweets, "naBcZ4al-iTCFBYGOAMzBQ"),
+    (UserTweetsAndReplies, "YhE6S_TtdhVxLtpokXrRaA"),
+    (SearchTimeline, "XN_HccZ9SU-miQVvwTAlFQ"),
+    (BookmarkSearchTimeline, "vctB13iDc4trZdZGzhNdVQ"),
+    (Favoriters, "E-ZTxvWWIkmOKwYdNTEefg"),
+    (NotificationsTimeline, "l6ovGrjBwVobgU4puBCycg"),
+    (FavoriteTweet, "lI07N6Otwv1PhnEgXILM7A"),
+    (UnfavoriteTweet, "ZYKSe-w7KEslx3JhSIk5LA"),
+    (AboutAccountQuery, "XRqGa7EeokUU5kppkh13EA"),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,19 +148,36 @@ impl QueryIdStore {
     }
 }
 
-const FALLBACK_QUERY_IDS: &[(&str, &str)] = &[
-    ("Viewer", "_8ClT24oZ8tpylf_OSuNdg"),
-    ("TweetResultByRestId", "fHLDP3qFEjnTqhWBVvsREg"),
-    ("TweetDetail", "QrLp7AR-eMyamw8D1N9l6A"),
-    ("HomeTimeline", "3tb-_5Lf7kdCZ1cFHmsEfg"),
-    ("HomeLatestTimeline", "eObmT5Nuapp04u8bYWf49Q"),
-    ("UserByScreenName", "IGgvgiOx4QZndDHuD3x9TQ"),
-    ("UserTweets", "naBcZ4al-iTCFBYGOAMzBQ"),
-    ("UserTweetsAndReplies", "YhE6S_TtdhVxLtpokXrRaA"),
-    ("SearchTimeline", "XN_HccZ9SU-miQVvwTAlFQ"),
-    ("Favoriters", "E-ZTxvWWIkmOKwYdNTEefg"),
-    ("NotificationsTimeline", "l6ovGrjBwVobgU4puBCycg"),
-    ("FavoriteTweet", "lI07N6Otwv1PhnEgXILM7A"),
-    ("UnfavoriteTweet", "ZYKSe-w7KEslx3JhSIk5LA"),
-    ("AboutAccountQuery", "XRqGa7EeokUU5kppkh13EA"),
-];
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fallback_table_covers_every_operation() {
+        let store = QueryIdStore::with_fallbacks();
+        for op in Operation::ALL {
+            assert!(
+                store.get(*op).is_some(),
+                "no fallback query id for {}",
+                op.name()
+            );
+        }
+    }
+
+    #[test]
+    fn all_lists_every_variant_exactly_once() {
+        let mut names: Vec<_> = Operation::ALL.iter().map(|op| op.name()).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), Operation::ALL.len());
+        assert_eq!(names.len(), FALLBACK_QUERY_IDS.len());
+    }
+
+    #[test]
+    fn wire_name_matches_serde_serialization() {
+        for op in Operation::ALL {
+            let serialized = serde_json::to_value(op).unwrap();
+            assert_eq!(serialized, serde_json::Value::String(op.name().to_string()));
+        }
+    }
+}

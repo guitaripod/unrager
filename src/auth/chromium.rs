@@ -142,6 +142,19 @@ pub async fn load_session() -> Result<XSession> {
     Ok(session)
 }
 
+/// Re-extracts the session from the browser and atomically replaces the
+/// on-disk cache once extraction succeeds. Called when a request fails with
+/// 401/403 — the cached cookies were rotated server-side, so waiting out the
+/// cache TTL would leave every command failing for up to a day. The existing
+/// cache is never deleted upfront: a failed extraction (locked keyring,
+/// browser removed, headless box) leaves a still-valid cache in place so the
+/// next process start can authenticate from it.
+pub async fn refresh_session() -> Result<XSession> {
+    let session = extract_session_from_browser().await?;
+    save_cached_session(&session);
+    Ok(session)
+}
+
 fn session_cache_path() -> Option<PathBuf> {
     Some(crate::config::cache_dir().ok()?.join("session-cache.json"))
 }
@@ -414,8 +427,9 @@ fn decrypt_all(encrypted: &[(String, Vec<u8>)], passwords: &[Vec<u8>]) -> Result
     let mut twid = None;
 
     for (name, ciphertext) in encrypted {
-        let plain = match winning_key {
-            Some(key) => decrypt_and_extract(ciphertext, &key)?,
+        let reused = winning_key.and_then(|key| decrypt_and_extract(ciphertext, &key).ok());
+        let plain = match reused {
+            Some(plain) => plain,
             None => {
                 let (key, plain) = try_all(ciphertext, passwords)?;
                 winning_key = Some(key);
@@ -476,13 +490,18 @@ fn decrypt_and_extract(encrypted: &[u8], key: &[u8; PBKDF2_KEY_LEN]) -> Result<S
     ))
 }
 
+fn strip_version_prefix(encrypted: &[u8]) -> Option<&[u8]> {
+    backend::PREFIXES
+        .iter()
+        .find_map(|prefix| encrypted.strip_prefix(*prefix))
+}
+
 fn decrypt_aes_cbc(encrypted: &[u8], key: &[u8; PBKDF2_KEY_LEN]) -> Result<Vec<u8>> {
-    if !encrypted.starts_with(backend::PREFIX) {
+    let Some(body) = strip_version_prefix(encrypted) else {
         return Err(Error::CookieDecrypt(
             "encrypted value missing expected version prefix",
         ));
-    }
-    let body = &encrypted[backend::PREFIX.len()..];
+    };
     if body.is_empty() || body.len() % 16 != 0 {
         return Err(Error::CookieDecrypt(
             "ciphertext length not a multiple of 16",
@@ -564,5 +583,58 @@ mod tests {
     fn infer_browser_falls_back_on_unknown_path() {
         let path = PathBuf::from("/tmp/totally-random.db");
         assert_eq!(infer_browser_from_path(&path).label, BROWSERS[0].label);
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_decrypt_tests {
+    use super::*;
+    use cbc::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
+
+    type Aes128CbcEnc = cbc::Encryptor<Aes128>;
+
+    fn encrypt(prefix: &[u8], password: &[u8], plaintext: &[u8]) -> Vec<u8> {
+        let key = derive_key(password).unwrap();
+        let ciphertext = Aes128CbcEnc::new(&key.into(), &AES_IV.into())
+            .encrypt_padded_vec_mut::<Pkcs7>(plaintext);
+        let mut out = prefix.to_vec();
+        out.extend_from_slice(&ciphertext);
+        out
+    }
+
+    #[test]
+    fn decrypts_v10_peanuts_cookie() {
+        let encrypted = encrypt(b"v10", b"peanuts", b"auth-token-value");
+        let (_, plain) = try_all(&encrypted, &[b"peanuts".to_vec()]).unwrap();
+        assert_eq!(plain, "auth-token-value");
+    }
+
+    #[test]
+    fn decrypts_v11_keyring_cookie() {
+        let encrypted = encrypt(b"v11", b"keyring-secret", b"csrf-value");
+        let passwords = vec![b"wrong-guess".to_vec(), b"keyring-secret".to_vec()];
+        let (_, plain) = try_all(&encrypted, &passwords).unwrap();
+        assert_eq!(plain, "csrf-value");
+    }
+
+    #[test]
+    fn rejects_unknown_version_prefix() {
+        let encrypted = encrypt(b"v99", b"peanuts", b"whatever");
+        assert!(try_all(&encrypted, &[b"peanuts".to_vec()]).is_err());
+    }
+
+    #[test]
+    fn decrypt_all_handles_mixed_v10_and_v11_cookies() {
+        let keyring = b"keyring-secret".to_vec();
+        let encrypted = vec![
+            ("auth_token".to_string(), encrypt(b"v11", &keyring, b"at")),
+            ("ct0".to_string(), encrypt(b"v10", b"peanuts", b"c0")),
+            ("twid".to_string(), encrypt(b"v10", b"peanuts", b"tw")),
+        ];
+        let passwords = vec![keyring, b"peanuts".to_vec()];
+        let session = decrypt_all(&encrypted, &passwords).unwrap();
+        assert_eq!(session.auth_token, "at");
+        assert_eq!(session.ct0, "c0");
+        assert_eq!(session.twid, "tw");
     }
 }

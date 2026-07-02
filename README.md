@@ -39,7 +39,7 @@ And it's not just the terminal: `unrager serve` exposes the same feeds over an H
 
 ## How auth works
 
-Reading uses your existing browser login. On startup, unrager reads two cookies — `auth_token` and `ct0` — from whichever Chromium-family browser you're logged into x.com with, decrypts them in memory using your OS credential store (macOS Keychain, Linux Secret Service), and hands them to X's GraphQL endpoints the same way the web client does. Nothing is written to disk, nothing is logged, nothing leaves your machine. The whole path is under [`src/auth/`](src/auth/) — ~300 lines, open-source, cargo-auditable.
+Reading uses your existing browser login. On startup, unrager reads two cookies — `auth_token` and `ct0` — from whichever Chromium-family browser you're logged into x.com with, decrypts them in memory using your OS credential store (macOS Keychain, Linux Secret Service — or Chromium’s keyring-less basic store), and hands them to X's GraphQL endpoints the same way the web client does. Nothing is written to disk, nothing is logged, nothing leaves your machine. The whole path is under [`src/auth/`](src/auth/) — ~300 lines, open-source, cargo-auditable.
 
 Writing is the other story: `unrager tweet` / `reply` go through the official X API v2 with **your own** OAuth 2.0 PKCE client. unrager never sees your password, your read cookies aren't used for writes, and posts are attributed to your developer client (not a shared one). No writes until you run `unrager auth login`.
 

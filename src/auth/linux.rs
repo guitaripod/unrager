@@ -2,7 +2,11 @@ use crate::error::{Error, Result};
 
 use super::chromium::Browser;
 
-pub const PREFIX: &[u8] = b"v11";
+/// Linux Chromium writes `v11` blobs when the AES key comes from the OS
+/// keyring, and `v10` blobs encrypted with the hardcoded "peanuts" password
+/// when no keyring is available (headless, `--password-store=basic`, window
+/// managers without gnome-keyring). Both must be accepted.
+pub const PREFIXES: &[&[u8]] = &[b"v10", b"v11"];
 pub const ITERS: u32 = 1;
 
 const PEANUTS_PASSWORD: &[u8] = b"peanuts";

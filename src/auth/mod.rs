@@ -8,7 +8,7 @@ pub(crate) mod macos;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct XSession {
     pub auth_token: String,
     pub ct0: String,

@@ -28,6 +28,12 @@ pub enum Error {
     #[error("x rate-limited · retry in {}s", remaining_secs)]
     RateLimited { remaining_secs: u64 },
 
+    #[error(
+        "no query id for operation {operation}; the query id scraper hasn't found it yet — \
+         retry with network access, or set [query_ids] {operation} = \"...\" in config.toml"
+    )]
+    MissingQueryId { operation: &'static str },
+
     #[error("graphql response shape unexpected: {0}")]
     GraphqlShape(String),
 

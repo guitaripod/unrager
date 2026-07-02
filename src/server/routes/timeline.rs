@@ -42,15 +42,18 @@ pub async fn home(
     state.activity.touch();
     let count = q.count.unwrap_or(DEFAULT_COUNT);
     let variant = FeedVariant::from_following(q.following);
+    let cursor = q.cursor.as_deref().filter(|c| !c.is_empty());
 
-    let stored = {
+    let stored = if crate::store::feed::cursor_belongs_to_store(cursor) {
         let store = state.feed.lock().await;
         let cold = store.count(variant).map(|n| n == 0).unwrap_or(true);
-        if cold && q.cursor.is_none() {
+        if cold && cursor.is_none() {
             None
         } else {
-            Some(store.read_page(variant, q.cursor.as_deref(), count as usize)?)
+            Some(store.read_page(variant, cursor, count as usize)?)
         }
+    } else {
+        None
     };
 
     let page = match stored {
@@ -61,17 +64,19 @@ pub async fn home(
                 cursor: page.next_cursor,
             }
         }
-        None => home_live(&state, q.following, count, q.mode.as_deref()).await?,
+        None => home_live(&state, q.following, count, cursor, q.mode.as_deref()).await?,
     };
     Ok(Json(page))
 }
 
-/// Live fetch used only when the materialized buffer is still cold (e.g. the
-/// very first launch before the ingest worker has filled it).
+/// Live fetch used when the materialized buffer is still cold (e.g. the very
+/// first launch before the ingest worker has filled it) and for continuing
+/// pagination with the live X cursor such a cold first page handed out.
 async fn home_live(
     state: &Arc<AppState>,
     following: bool,
     count: u32,
+    cursor: Option<&str>,
     mode: Option<&str>,
 ) -> std::result::Result<TimelinePage, ApiError> {
     let op = if following {
@@ -83,7 +88,7 @@ async fn home_live(
         .gql
         .post(
             op,
-            &endpoints::home_timeline_variables(count, None, &[]),
+            &endpoints::home_timeline_variables(count, cursor, &[]),
             &endpoints::home_timeline_features(),
         )
         .await?;

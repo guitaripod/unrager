@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 use tokio::sync::Semaphore;
 use tracing::{debug, warn};
@@ -326,28 +326,7 @@ impl FilterCache {
         if pruned > 0 {
             tracing::info!(pruned, "filter.db: pruned old entries");
         }
-        let mut mem: HashMap<String, FilterDecision> = HashMap::new();
-        {
-            let mut stmt = conn
-                .prepare("SELECT tweet_id, verdict FROM verdicts WHERE rubric_hash = ?1")
-                .map_err(|e| Error::Config(format!("prepare load: {e}")))?;
-            let rows = stmt
-                .query_map(params![&rubric_hash], |row| {
-                    let id: String = row.get(0)?;
-                    let v: i64 = row.get(1)?;
-                    let decision = if v == 1 {
-                        FilterDecision::Hide
-                    } else {
-                        FilterDecision::Keep
-                    };
-                    Ok((id, decision))
-                })
-                .map_err(|e| Error::Config(format!("query verdicts: {e}")))?;
-            for row in rows {
-                let (id, decision) = row.map_err(|e| Error::Config(format!("row decode: {e}")))?;
-                mem.insert(id, decision);
-            }
-        }
+        let mem = load_verdicts(&conn, &rubric_hash)?;
         debug!(
             rubric_hash = %rubric_hash,
             loaded = mem.len(),
@@ -360,8 +339,32 @@ impl FilterCache {
         })
     }
 
+    /// Switch this cache to a different rubric in place, reusing the
+    /// already-open connection: drop the in-memory map, adopt the new hash,
+    /// and reload whatever verdicts are already persisted under it. Much
+    /// cheaper than `open` (no new connection, no schema DDL, no retention
+    /// prune), so it's safe to call under a lock on a live rubric edit.
+    pub fn rekey(&mut self, rubric_hash: String) -> Result<()> {
+        if self.rubric_hash == rubric_hash {
+            return Ok(());
+        }
+        let mem = load_verdicts(&self.conn, &rubric_hash)?;
+        debug!(
+            rubric_hash = %rubric_hash,
+            loaded = mem.len(),
+            "filter cache rekeyed",
+        );
+        self.rubric_hash = rubric_hash;
+        self.mem = mem;
+        Ok(())
+    }
+
     pub fn get(&self, tweet_id: &str) -> Option<FilterDecision> {
         self.mem.get(tweet_id).copied()
+    }
+
+    pub fn rubric_hash(&self) -> &str {
+        &self.rubric_hash
     }
 
     pub fn put(&mut self, tweet_id: &str, decision: FilterDecision) {
@@ -388,11 +391,45 @@ impl FilterCache {
     }
 }
 
+/// Load every persisted verdict for one rubric hash into a fresh in-memory
+/// map. Shared by `FilterCache::open` and `FilterCache::rekey`.
+fn load_verdicts(conn: &Connection, rubric_hash: &str) -> Result<HashMap<String, FilterDecision>> {
+    let mut stmt = conn
+        .prepare("SELECT tweet_id, verdict FROM verdicts WHERE rubric_hash = ?1")
+        .map_err(|e| Error::Config(format!("prepare load: {e}")))?;
+    let rows = stmt
+        .query_map(params![rubric_hash], |row| {
+            let id: String = row.get(0)?;
+            let v: i64 = row.get(1)?;
+            let decision = if v == 1 {
+                FilterDecision::Hide
+            } else {
+                FilterDecision::Keep
+            };
+            Ok((id, decision))
+        })
+        .map_err(|e| Error::Config(format!("query verdicts: {e}")))?;
+    let mut mem = HashMap::new();
+    for row in rows {
+        let (id, decision) = row.map_err(|e| Error::Config(format!("row decode: {e}")))?;
+        mem.insert(id, decision);
+    }
+    Ok(mem)
+}
+
 pub struct Classifier {
     http: reqwest::Client,
     ollama: OllamaConfig,
     sem: Arc<Semaphore>,
-    system_prompt: Arc<String>,
+    system_prompt: Arc<RwLock<Arc<String>>>,
+}
+
+/// Grab the current system prompt out of the shared slot: an `Arc` clone,
+/// not a copy of the multi-KB prompt string. Poisoning is impossible in
+/// practice (writers only assign an `Arc`), but recover anyway rather than
+/// panicking inside the classification path.
+fn current_system_prompt(slot: &RwLock<Arc<String>>) -> Arc<String> {
+    slot.read().unwrap_or_else(PoisonError::into_inner).clone()
 }
 
 #[derive(Debug, Clone)]
@@ -407,8 +444,20 @@ impl Classifier {
             http: cfg.ollama.build_client(),
             ollama: cfg.ollama.clone(),
             sem: Arc::new(Semaphore::new(8)),
-            system_prompt: Arc::new(build_system_prompt(cfg)),
+            system_prompt: Arc::new(RwLock::new(Arc::new(build_system_prompt(cfg)))),
         }
+    }
+
+    /// Rebuild the classification system prompt from an edited config, in
+    /// place. Every live `ClassifierHandle` shares the same prompt slot, so
+    /// the background ingest worker and any in-flight handles pick up the
+    /// new rubric on their next classification — no restart required.
+    pub fn set_rubric(&self, cfg: &FilterConfig) {
+        let prompt = Arc::new(build_system_prompt(cfg));
+        *self
+            .system_prompt
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = prompt;
     }
 
     pub async fn init(&mut self) -> Result<()> {
@@ -456,14 +505,9 @@ impl Classifier {
         let system_prompt = self.system_prompt.clone();
         tokio::spawn(async move {
             let _permit = sem.acquire_owned().await.ok();
-            let verdict = classify_once(
-                &http,
-                &ollama,
-                &system_prompt,
-                &payload.rest_id,
-                &payload.text,
-            )
-            .await;
+            let prompt = current_system_prompt(&system_prompt);
+            let verdict =
+                classify_once(&http, &ollama, &prompt, &payload.rest_id, &payload.text).await;
             let _ = tx.send(Event::TweetClassified {
                 rest_id: payload.rest_id,
                 verdict,
@@ -490,7 +534,7 @@ pub struct ClassifierHandle {
     http: reqwest::Client,
     ollama: OllamaConfig,
     sem: Arc<Semaphore>,
-    system_prompt: Arc<String>,
+    system_prompt: Arc<RwLock<Arc<String>>>,
 }
 
 impl ClassifierHandle {
@@ -498,7 +542,13 @@ impl ClassifierHandle {
     /// Shares the concurrency semaphore so it never overwhelms Ollama.
     pub async fn classify(&self, rest_id: &str, text: &str) -> FilterDecision {
         let _permit = self.sem.acquire().await.ok();
-        classify_once(&self.http, &self.ollama, &self.system_prompt, rest_id, text).await
+        let prompt = current_system_prompt(&self.system_prompt);
+        classify_once(&self.http, &self.ollama, &prompt, rest_id, text).await
+    }
+
+    #[cfg(test)]
+    pub(crate) fn system_prompt_snapshot(&self) -> Arc<String> {
+        current_system_prompt(&self.system_prompt)
     }
 
     /// Quick liveness probe so the ingest worker skips classification entirely
@@ -834,6 +884,27 @@ mod tests {
     }
 
     #[test]
+    fn set_rubric_propagates_to_existing_handles() {
+        let classifier = Classifier::new(&cfg(vec!["war"], ""));
+        let handle = classifier.handle();
+        assert!(handle.system_prompt_snapshot().contains("- war"));
+        assert!(!handle.system_prompt_snapshot().contains("- crypto"));
+        classifier.set_rubric(&cfg(vec!["war", "crypto"], "keep humor"));
+        let prompt = handle.system_prompt_snapshot();
+        assert!(
+            prompt.contains("- crypto") && prompt.contains("keep humor"),
+            "a handle taken before the rubric edit must see the new prompt"
+        );
+    }
+
+    #[test]
+    fn cache_exposes_its_rubric_hash() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let cache = FilterCache::open(tmp.path(), "hash-x".into()).unwrap();
+        assert_eq!(cache.rubric_hash(), "hash-x");
+    }
+
+    #[test]
     fn cache_roundtrip_isolates_by_rubric_hash() {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let path = tmp.path().to_path_buf();
@@ -852,5 +923,48 @@ mod tests {
         let reopened_b = FilterCache::open(&path, "hash-b".into()).unwrap();
         assert_eq!(reopened_b.get("tweet1"), Some(FilterDecision::Keep));
         assert!(!reopened_b.contains("tweet2"));
+    }
+
+    #[test]
+    fn rekey_switches_rubric_in_place() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        {
+            let mut b = FilterCache::open(&path, "hash-b".into()).unwrap();
+            b.put("tweet1", FilterDecision::Keep);
+        }
+        let mut cache = FilterCache::open(&path, "hash-a".into()).unwrap();
+        cache.put("tweet1", FilterDecision::Hide);
+        cache.put("tweet2", FilterDecision::Hide);
+        cache.rekey("hash-b".into()).unwrap();
+        assert_eq!(cache.rubric_hash(), "hash-b");
+        assert_eq!(
+            cache.get("tweet1"),
+            Some(FilterDecision::Keep),
+            "verdicts already persisted under the new hash are loaded"
+        );
+        assert!(
+            !cache.contains("tweet2"),
+            "old-rubric in-memory verdicts are dropped"
+        );
+        cache.put("tweet3", FilterDecision::Hide);
+        let reopened_b = FilterCache::open(&path, "hash-b".into()).unwrap();
+        assert_eq!(
+            reopened_b.get("tweet3"),
+            Some(FilterDecision::Hide),
+            "post-rekey puts persist under the new hash"
+        );
+        let reopened_a = FilterCache::open(&path, "hash-a".into()).unwrap();
+        assert!(!reopened_a.contains("tweet3"));
+    }
+
+    #[test]
+    fn rekey_to_same_hash_is_a_noop() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut cache = FilterCache::open(tmp.path(), "hash-a".into()).unwrap();
+        cache.put("tweet1", FilterDecision::Hide);
+        cache.rekey("hash-a".into()).unwrap();
+        assert_eq!(cache.rubric_hash(), "hash-a");
+        assert_eq!(cache.get("tweet1"), Some(FilterDecision::Hide));
     }
 }

@@ -143,6 +143,44 @@ impl FeedStore {
         }
     }
 
+    /// The rubric hash the stored verdicts were classified under, if any
+    /// writer has recorded one. Readers compare it against their own live
+    /// rubric hash before trusting `filter_verdict` values — a mismatch means
+    /// every stored verdict predates the current rubric.
+    pub fn rubric_hash(&self) -> Option<String> {
+        self.conn
+            .query_row("SELECT hash FROM rubric WHERE id = 1", [], |row| row.get(0))
+            .ok()
+    }
+
+    /// Reconcile stored verdicts with the current rubric. When `hash` differs
+    /// from the recorded one (the user edited `filter.toml` or patched the
+    /// rubric over the API), every verdict is reset to unclassified so stale
+    /// hide/keep decisions can never be served, seeded, or re-persisted under
+    /// the new rubric. Returns `true` when the hash changed.
+    pub fn ensure_rubric_hash(&mut self, hash: &str) -> Result<bool> {
+        if self.rubric_hash().as_deref() == Some(hash) {
+            return Ok(false);
+        }
+        let reset = self.conn.execute(
+            "UPDATE tweets SET filter_verdict = 'unclassified' WHERE filter_verdict != 'unclassified'",
+            [],
+        )?;
+        self.conn.execute(
+            "INSERT INTO rubric (id, hash) VALUES (1, ?1)
+             ON CONFLICT(id) DO UPDATE SET hash = excluded.hash",
+            params![hash],
+        )?;
+        if reset > 0 {
+            tracing::info!(
+                reset,
+                hash,
+                "feed.db: rubric changed, stored verdicts reset to unclassified"
+            );
+        }
+        Ok(true)
+    }
+
     pub fn update_verdict(
         &mut self,
         variant: FeedVariant,
@@ -381,7 +419,8 @@ fn open_conn(path: &Path) -> Result<Connection> {
             last_poll_at      INTEGER NOT NULL,
             last_ingest_count INTEGER NOT NULL DEFAULT 0
         );
-        CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);",
+        CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS rubric (id INTEGER PRIMARY KEY CHECK (id = 1), hash TEXT NOT NULL);",
     )
     .map_err(|e| Error::Config(format!("feed.db schema: {e}")))?;
     Ok(conn)
@@ -429,6 +468,16 @@ fn verdict_from_str(s: &str) -> Option<FilterDecision> {
 /// TUI tell a store-paginated feed from a live one when deciding how to append.
 pub fn is_store_cursor(s: &str) -> bool {
     s.starts_with(CURSOR_TAG)
+}
+
+/// The single routing rule for Home requests: first pages (no cursor) and
+/// store-minted cursors belong to the materialized store; a live X cursor —
+/// handed out while the buffer was still cold — must keep paginating the live
+/// path, because `read_page` treats foreign cursors as "start from the top"
+/// and would replay the buffer head as page 2. Used by both the server's
+/// `/api/home` handler and the TUI's `try_fetch_from_store` guard.
+pub fn cursor_belongs_to_store(cursor: Option<&str>) -> bool {
+    cursor.is_none_or(is_store_cursor)
 }
 
 fn encode_following_cursor(created_at: i64, rest_id: &str) -> String {
@@ -697,6 +746,77 @@ mod tests {
             1,
             "an unrecognized cursor reads from the top"
         );
+    }
+
+    #[test]
+    fn rubric_hash_starts_unset_and_persists() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("feed.db");
+        {
+            let mut s = FeedStore::open_writer(&path).unwrap().unwrap();
+            assert_eq!(s.rubric_hash(), None, "fresh store has no rubric recorded");
+            assert!(s.ensure_rubric_hash("hash-a").unwrap());
+            assert_eq!(s.rubric_hash().as_deref(), Some("hash-a"));
+        }
+        let s = FeedStore::open_reader(&path).unwrap();
+        assert_eq!(
+            s.rubric_hash().as_deref(),
+            Some("hash-a"),
+            "readers see the writer's recorded rubric"
+        );
+    }
+
+    #[test]
+    fn same_rubric_hash_keeps_verdicts() {
+        let dir = TempDir::new().unwrap();
+        let mut s = writer(&dir);
+        s.ensure_rubric_hash("hash-a").unwrap();
+        s.upsert(FeedVariant::ForYou, &tweet("1", 100)).unwrap();
+        s.update_verdict(FeedVariant::ForYou, "1", FilterDecision::Hide)
+            .unwrap();
+        assert!(!s.ensure_rubric_hash("hash-a").unwrap(), "no-op on match");
+        let page = s.read_page(FeedVariant::ForYou, None, 10).unwrap();
+        assert_eq!(page.items[0].verdict, Some(FilterDecision::Hide));
+    }
+
+    #[test]
+    fn rubric_change_resets_all_verdicts_to_unclassified() {
+        let dir = TempDir::new().unwrap();
+        let mut s = writer(&dir);
+        s.ensure_rubric_hash("hash-a").unwrap();
+        s.upsert(FeedVariant::ForYou, &tweet("1", 100)).unwrap();
+        s.upsert(FeedVariant::Following, &tweet("2", 200)).unwrap();
+        s.update_verdict(FeedVariant::ForYou, "1", FilterDecision::Hide)
+            .unwrap();
+        s.update_verdict(FeedVariant::Following, "2", FilterDecision::Keep)
+            .unwrap();
+        assert!(s.ensure_rubric_hash("hash-b").unwrap());
+        assert_eq!(s.rubric_hash().as_deref(), Some("hash-b"));
+        let foryou = s.read_page(FeedVariant::ForYou, None, 10).unwrap();
+        assert_eq!(
+            foryou.items[0].verdict, None,
+            "old-rubric Hide must not survive a rubric edit"
+        );
+        let following = s.read_page(FeedVariant::Following, None, 10).unwrap();
+        assert_eq!(following.items[0].verdict, None);
+    }
+
+    #[test]
+    fn first_page_belongs_to_the_store() {
+        assert!(cursor_belongs_to_store(None));
+    }
+
+    #[test]
+    fn store_cursor_stays_on_the_store() {
+        assert!(cursor_belongs_to_store(Some("S1~1719000000:123456789")));
+        assert!(cursor_belongs_to_store(Some("S1~42")));
+    }
+
+    #[test]
+    fn live_x_cursor_routes_to_live_pagination() {
+        assert!(!cursor_belongs_to_store(Some(
+            "DAABCgABGKkX-qzAJxEKAAIYqRACRRrQAAgAAwAAAAEAAA"
+        )));
     }
 
     #[test]

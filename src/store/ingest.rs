@@ -84,10 +84,12 @@ pub async fn run(
     // Whether the last Following poll surfaced anything new — a Following feed
     // that's caught up (but below the cap) still counts as "full enough" to park.
     let mut following_dry = false;
+    let mut reconciled_rubric: Option<String> = None;
     loop {
         if *shutdown.borrow() {
             break;
         }
+        reconcile_rubric(&filter_cache, &mut store, &mut reconciled_rubric).await;
         let idle = activity.idle_secs();
         let active = idle < ACTIVE_WINDOW_SECS;
         // Park on buffer fullness, not idle time: keep topping the buffer up in
@@ -168,6 +170,29 @@ fn buffer_saturated(store: &FeedStore, cap: usize, following_dry: bool) -> bool 
     let foryou = store.count(FeedVariant::ForYou).unwrap_or(0);
     let following = store.count(FeedVariant::Following).unwrap_or(0);
     foryou >= cap && (following >= cap || following_dry)
+}
+
+/// Reset stored feed verdicts when the rubric behind the shared filter cache
+/// has changed — a live `PATCH /api/config/filter` re-keys the cache in place,
+/// and a `filter.toml` edit lands here on the next process start. Without the
+/// reset, the buffer would keep serving (and clients keep trusting) hide/keep
+/// decisions computed under the previous rubric. `last_reconciled` memoizes the
+/// hash this worker already pushed into the store: the rubric changes ~never,
+/// so a matching memo skips the sqlite round-trip entirely (the cache lock is
+/// held only long enough to copy the hash string).
+async fn reconcile_rubric(
+    filter_cache: &Mutex<FilterCache>,
+    store: &mut FeedStore,
+    last_reconciled: &mut Option<String>,
+) {
+    let hash = filter_cache.lock().await.rubric_hash().to_string();
+    if last_reconciled.as_deref() == Some(hash.as_str()) {
+        return;
+    }
+    match store.ensure_rubric_hash(&hash) {
+        Ok(_) => *last_reconciled = Some(hash),
+        Err(e) => tracing::warn!(error = %e, "feed.db rubric reconcile failed"),
+    }
 }
 
 async fn run_cycle(
@@ -316,6 +341,61 @@ mod tests {
             let d = jittered(100).as_secs_f64();
             assert!((90.0..=110.0).contains(&d), "jittered {d} out of band");
         }
+    }
+
+    #[tokio::test]
+    async fn reconcile_rubric_resets_stale_verdicts() {
+        use crate::tui::filter::FilterDecision;
+        let dir = TempDir::new().unwrap();
+        let mut store = FeedStore::open_writer(&dir.path().join("feed.db"))
+            .unwrap()
+            .unwrap();
+        store.ensure_rubric_hash("old-hash").unwrap();
+        store.upsert(FeedVariant::ForYou, &tweet("1", 100)).unwrap();
+        store
+            .update_verdict(FeedVariant::ForYou, "1", FilterDecision::Hide)
+            .unwrap();
+        let cache = Mutex::new(
+            FilterCache::open(&dir.path().join("filter.db"), "new-hash".into()).unwrap(),
+        );
+        let mut memo = None;
+        reconcile_rubric(&cache, &mut store, &mut memo).await;
+        assert_eq!(store.rubric_hash().as_deref(), Some("new-hash"));
+        assert_eq!(memo.as_deref(), Some("new-hash"));
+        let page = store.read_page(FeedVariant::ForYou, None, 10).unwrap();
+        assert_eq!(
+            page.items[0].verdict, None,
+            "old-rubric verdicts are unclassified after reconcile"
+        );
+        reconcile_rubric(&cache, &mut store, &mut memo).await;
+        assert_eq!(store.rubric_hash().as_deref(), Some("new-hash"));
+    }
+
+    #[tokio::test]
+    async fn reconcile_rubric_memoizes_unchanged_hash() {
+        let dir = TempDir::new().unwrap();
+        let mut store = FeedStore::open_writer(&dir.path().join("feed.db"))
+            .unwrap()
+            .unwrap();
+        let cache =
+            Mutex::new(FilterCache::open(&dir.path().join("filter.db"), "hash-a".into()).unwrap());
+        let mut memo = None;
+        reconcile_rubric(&cache, &mut store, &mut memo).await;
+        assert_eq!(store.rubric_hash().as_deref(), Some("hash-a"));
+        store.ensure_rubric_hash("sentinel").unwrap();
+        reconcile_rubric(&cache, &mut store, &mut memo).await;
+        assert_eq!(
+            store.rubric_hash().as_deref(),
+            Some("sentinel"),
+            "a matching memo skips the sqlite reconcile entirely"
+        );
+        memo = None;
+        reconcile_rubric(&cache, &mut store, &mut memo).await;
+        assert_eq!(
+            store.rubric_hash().as_deref(),
+            Some("hash-a"),
+            "a cleared memo (fresh worker) reconciles again"
+        );
     }
 
     #[test]

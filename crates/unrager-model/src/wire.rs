@@ -24,9 +24,14 @@ pub struct FeedStatusResponse {
     pub feeds: Vec<FeedStatus>,
 }
 
+/// One page of a thread. The first page always carries `focal` (the server
+/// 404s when the focal tweet is genuinely absent); cursor continuation pages
+/// omit it entirely — they only append replies, and clients keep rendering
+/// the focal they already have.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ThreadView {
-    pub focal: Tweet,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focal: Option<Tweet>,
     #[serde(default)]
     pub ancestors: Vec<Tweet>,
     #[serde(default)]

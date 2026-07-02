@@ -1,7 +1,7 @@
 use crate::server::error::ApiError;
 use crate::server::llm;
 use crate::server::state::AppState;
-use crate::tui::filter::FilterDecision;
+use crate::tui::filter::{FilterCache, FilterDecision};
 use async_stream::stream;
 use axum::extract::{Query, State};
 use axum::response::Sse;
@@ -36,6 +36,7 @@ pub async fn filter_stream(
         let cfg = state_clone.filter_config.lock().await.clone();
         let ollama = cfg.ollama.clone();
         let system = Arc::new(llm::classify_system_prompt(&cfg));
+        let rubric_snapshot = cfg.rubric_hash();
         for id in ids {
             // cache hit?
             {
@@ -58,7 +59,7 @@ pub async fn filter_stream(
             let decision = llm::classify_one(&ollama, system.clone(), text).await;
             {
                 let mut cache = state_clone.filter_cache.lock().await;
-                cache.put(&id, decision);
+                persist_verdict(&mut cache, &rubric_snapshot, &id, decision);
             }
             let _ = tx
                 .send(FilterVerdictEvent {
@@ -167,8 +168,7 @@ fn stream_tokens(
     user: String,
     label: &'static str,
 ) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
-    let (tx, mut rx) = mpsc::channel::<String>(128);
-    let done_tx = tx.clone();
+    let (tx, mut rx) = token_channel();
 
     tokio::spawn(async move {
         let body = serde_json::json!({
@@ -182,18 +182,16 @@ fn stream_tokens(
             "keep_alive": ollama.keep_alive,
             "options": { "temperature": 0, "num_predict": 1024 },
         });
-        let inner_tx = tx.clone();
         let _ = ollama
             .stream_chat(
                 body,
                 label,
                 move |token| {
-                    let _ = inner_tx.try_send(token.to_string());
+                    let _ = tx.send(token.to_string());
                 },
                 |_| {},
             )
             .await;
-        drop(done_tx);
     });
 
     let s = stream! {
@@ -209,9 +207,84 @@ fn stream_tokens(
     Sse::new(s).keep_alive(KeepAlive::new())
 }
 
+/// Lossless channel between the sync `stream_chat` token callback and the SSE
+/// body. It must be unbounded: the callback can't await, a bounded `try_send`
+/// silently drops tokens whenever a slow client stalls the SSE stream, and the
+/// backlog is inherently small (`num_predict: 1024` short strings), so every
+/// token is buffered until the client catches up instead of being discarded
+/// mid-output.
+fn token_channel() -> (
+    mpsc::UnboundedSender<String>,
+    mpsc::UnboundedReceiver<String>,
+) {
+    mpsc::unbounded_channel()
+}
+
+/// Persist a stream-computed verdict only while the live cache still speaks
+/// the rubric this stream snapshotted at start. A `PATCH /api/config/filter`
+/// arriving mid-stream re-keys the shared cache to the new rubric hash, and
+/// storing an old-prompt verdict under it would poison the new rubric's cache
+/// for the whole retention window. The SSE event is emitted either way — the
+/// client asked under the old rubric and still gets its answer.
+fn persist_verdict(cache: &mut FilterCache, rubric_snapshot: &str, id: &str, d: FilterDecision) {
+    if cache.rubric_hash() == rubric_snapshot {
+        cache.put(id, d);
+    } else {
+        tracing::debug!(
+            id,
+            snapshot = rubric_snapshot,
+            live = cache.rubric_hash(),
+            "rubric changed mid-stream; verdict not cached"
+        );
+    }
+}
+
 fn decision_to_verdict(d: FilterDecision) -> Verdict {
     match d {
         FilterDecision::Hide => Verdict::Hide,
         FilterDecision::Keep => Verdict::Keep,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn token_channel_is_lossless_when_the_consumer_stalls() {
+        let (tx, mut rx) = token_channel();
+        let total = 4096usize;
+        for i in 0..total {
+            assert!(tx.send(format!("t{i}")).is_ok());
+        }
+        drop(tx);
+        let mut received = Vec::with_capacity(total);
+        while let Some(t) = rx.recv().await {
+            received.push(t);
+        }
+        assert_eq!(received.len(), total);
+        assert_eq!(received.first().map(String::as_str), Some("t0"));
+        assert_eq!(received.last().map(String::as_str), Some("t4095"));
+    }
+
+    #[test]
+    fn verdict_persists_only_under_the_snapshotted_rubric() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut cache = FilterCache::open(tmp.path(), "old-rubric".into()).unwrap();
+        persist_verdict(&mut cache, "old-rubric", "t1", FilterDecision::Hide);
+        assert_eq!(
+            cache.get("t1"),
+            Some(FilterDecision::Hide),
+            "matching rubric persists normally"
+        );
+        cache.rekey("new-rubric".into()).unwrap();
+        persist_verdict(&mut cache, "old-rubric", "t2", FilterDecision::Hide);
+        assert_eq!(
+            cache.get("t2"),
+            None,
+            "an old-prompt verdict must not launder into the new rubric's cache"
+        );
+        let reopened = FilterCache::open(tmp.path(), "new-rubric".into()).unwrap();
+        assert!(!reopened.contains("t2"));
     }
 }

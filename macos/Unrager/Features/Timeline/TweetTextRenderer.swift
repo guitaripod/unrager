@@ -62,15 +62,26 @@ enum TweetTextRenderer {
             return NSAttributedString(string: word, attributes: [.font: font, .foregroundColor: DesignSystem.Color.hashtag])
         }
         if word.hasPrefix("http://") || word.hasPrefix("https://") {
-            let target = expansion[word] ?? word
-            var attrs: [NSAttributedString.Key: Any] = [
-                .font: font,
-                .foregroundColor: DesignSystem.Color.link,
-            ]
-            if let url = URL(string: target) { attrs[.link] = url }
-            return NSAttributedString(string: word, attributes: attrs)
+            return linkWord(word, target: expansion[word] ?? word, font: font)
+        }
+        if let target = expansion[word] {
+            return linkWord(word, target: target, font: font)
         }
         return NSAttributedString(string: word, attributes: base)
+    }
+
+    /// A tinted, tappable link run. `word` is usually a scheme-less display URL
+    /// — the server rewrites every t.co link in the body to X's display form
+    /// (`example.com/article…`), so matching only `http(s)://` prefixes would
+    /// leave every in-body link dead. The display token resolves to its expanded
+    /// target through the tweet's url entities, mirroring iOS `TweetText.classify`.
+    private static func linkWord(_ word: String, target: String, font: NSFont) -> NSAttributedString {
+        var attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: DesignSystem.Color.link,
+        ]
+        if let url = URL(string: target) { attrs[.link] = url }
+        return NSAttributedString(string: word, attributes: attrs)
     }
 
     /// Drops a trailing run of characters that aren't part of a handle/hashtag

@@ -145,6 +145,11 @@ private final class ImageGridView: NSView {
     private let overflowLabel = NSTextField(labelWithString: "")
     private let gap = DesignSystem.Spacing.xxs
     private var tapRecognizer: NSClickGestureRecognizer!
+    /// Exactly the constraints the last `layoutTiles` activated. Tile width /
+    /// height constraints live on the tiles themselves (not on this view), so
+    /// they must be tracked and deactivated explicitly — reused tiles would
+    /// otherwise accumulate one conflicting size pair per reconfigure.
+    private var tileConstraints: [NSLayoutConstraint] = []
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -215,7 +220,8 @@ private final class ImageGridView: NSView {
     }
 
     private func layoutTiles(count: Int, width: CGFloat, height: CGFloat) {
-        NSLayoutConstraint.deactivate(constraints)
+        NSLayoutConstraint.deactivate(tileConstraints)
+        tileConstraints.removeAll()
         let g = gap
         switch count {
         case 1:
@@ -239,17 +245,18 @@ private final class ImageGridView: NSView {
             pin(tiles[3], x: w + g, y: 0, w: w, h: h)
         }
         if let last = tiles.last {
-            NSLayoutConstraint.activate([
-                overflowLabel.centerXAnchor.constraint(equalTo: last.centerXAnchor),
-                overflowLabel.centerYAnchor.constraint(equalTo: last.centerYAnchor),
-            ])
+            tileConstraints.append(overflowLabel.centerXAnchor.constraint(equalTo: last.centerXAnchor))
+            tileConstraints.append(overflowLabel.centerYAnchor.constraint(equalTo: last.centerYAnchor))
         }
+        NSLayoutConstraint.activate(tileConstraints)
     }
 
-    /// Pins a tile by top-left origin (AppKit's y grows upward, so `y` is the
-    /// distance from the bottom).
+    /// Collects the constraints pinning a tile by top-left origin (AppKit's y
+    /// grows upward, so `y` is the distance from the bottom) into
+    /// `tileConstraints`; `layoutTiles` activates them in one batch and
+    /// deactivates exactly that batch on the next reconfigure.
     private func pin(_ tile: NSView, x: CGFloat, y: CGFloat, w: CGFloat, h: CGFloat) {
-        NSLayoutConstraint.activate([
+        tileConstraints.append(contentsOf: [
             tile.leadingAnchor.constraint(equalTo: leadingAnchor, constant: x),
             tile.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -y),
             tile.widthAnchor.constraint(equalToConstant: max(1, w)),

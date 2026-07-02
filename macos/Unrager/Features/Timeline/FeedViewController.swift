@@ -471,8 +471,12 @@ class FeedViewController: NSViewController {
 
     // MARK: - Read tracking
 
+    /// Queues scrolled-past tweets for `markSeen`, gated on the same
+    /// `supportsSeenTracking` rule as iOS — merely scrolling a search, profile,
+    /// bookmarks or For-You feed must never write into the server's shared
+    /// read-tracking store (or dim rows on feeds where dimming is meaningless).
     private func markVisibleSeen(rows: NSRange) {
-        guard MacSettings.seenDimming else { return }
+        guard MacSettings.seenDimming, supportsSeenTracking else { return }
         var fresh: [String] = []
         for row in rows.location..<(rows.location + rows.length) {
             guard let tweet = tweet(atRow: row) else { continue }
@@ -560,6 +564,10 @@ class FeedViewController: NSViewController {
 
     // MARK: - Engagement
 
+    /// Optimistic like: flip the heart on the visible row now, fire the
+    /// request, and on success write the confirmed state back into the view
+    /// model (so a second click can unlike and row reuse repaints the fresh
+    /// heart); only roll the row back if the network rejects it.
     func toggleLike(_ tweet: Tweet) {
         let liking = !tweet.favorited
         cell(for: tweet)?.applyOptimisticLike(liking, baseCount: tweet.likeCount)
@@ -567,6 +575,7 @@ class FeedViewController: NSViewController {
             do {
                 _ = liking ? try await api.like(tweetID: tweet.restID)
                            : try await api.unlike(tweetID: tweet.restID)
+                viewModel.applyLike(id: tweet.restID, favorited: liking)
             } catch {
                 cell(for: tweet)?.applyOptimisticLike(!liking, baseCount: tweet.likeCount)
                 AppLogger.shared.warn("like toggle failed: \(error)", category: .timeline)

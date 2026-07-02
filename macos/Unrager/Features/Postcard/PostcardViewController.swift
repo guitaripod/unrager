@@ -298,7 +298,7 @@ final class PostcardViewController: NSViewController {
     private static func loadThreadEntries(focal: Tweet) async -> [PostcardView.Entry] {
         let chain: [Tweet]
         if let thread = try? await AppEnvironment.shared.api.thread(id: focal.restID) {
-            chain = ancestorChain(focal: thread.focal, ancestors: thread.ancestors)
+            chain = ancestorChain(focal: thread.focal ?? focal, ancestors: thread.ancestors)
         } else {
             chain = [focal]
         }

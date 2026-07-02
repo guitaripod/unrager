@@ -151,14 +151,16 @@ final class ThreadViewController: NSViewController {
 
     /// Inserts the resolved conversation around the focal tweet. When the focal
     /// was rendered instantly, ancestors are prepended and the scroll offset is
-    /// compensated by their height so the focal tweet does not jump.
+    /// compensated by their height so the focal tweet does not jump. Falls back
+    /// to the focal already in hand when the response omits it.
     private func applyResolved(_ thread: ThreadView) {
-        focalID = thread.focal.restID
+        guard let focal = thread.focal ?? knownFocal else { return }
+        focalID = focal.restID
         let ancestors = thread.ancestors
-        let replies = dedupedReplies(thread.replies, excluding: Set(ancestors.map(\.restID) + [thread.focal.restID]))
+        let replies = dedupedReplies(thread.replies, excluding: Set(ancestors.map(\.restID) + [focal.restID]))
 
-        let hadInstantFocal = rows.count == 1 && rows.first?.restID == thread.focal.restID
-        let newRows = ancestors + [thread.focal] + replies
+        let hadInstantFocal = rows.count == 1 && rows.first?.restID == focal.restID
+        let newRows = ancestors + [focal] + replies
         rowIDs = Set(newRows.map(\.restID))
 
         guard hadInstantFocal, !ancestors.isEmpty else {
@@ -185,6 +187,13 @@ final class ThreadViewController: NSViewController {
         rowIDs.formUnion(fresh.map(\.restID))
         rows.append(contentsOf: fresh)
         tableView.reloadData()
+    }
+
+    /// The focal tweet already in hand (instant render from the feed, or a
+    /// previous page), used when a response omits `focal` — continuation pages
+    /// carry only replies and a cursor.
+    private var knownFocal: Tweet? {
+        focalID.flatMap { id in rows.first { $0.restID == id } }
     }
 
     private func dedupedReplies(_ replies: [Tweet], excluding ids: Set<String>) -> [Tweet] {
@@ -308,11 +317,23 @@ extension ThreadViewController: NSTableViewDelegate {
             do {
                 _ = liking ? try await api.like(tweetID: tweet.restID)
                            : try await api.unlike(tweetID: tweet.restID)
+                confirmLike(id: tweet.restID, favorited: liking)
             } catch {
                 cell(for: tweet)?.applyOptimisticLike(!liking, baseCount: tweet.likeCount)
                 AppLogger.shared.warn("thread like failed: \(error)", category: .thread)
             }
         }
+    }
+
+    /// Writes a confirmed like/unlike back into the row model and reloads that
+    /// row so its handlers capture the fresh state — otherwise a second click
+    /// re-sends "like" forever and any reuse repaints the stale heart.
+    private func confirmLike(id: String, favorited: Bool) {
+        guard let index = rows.firstIndex(where: { $0.restID == id }),
+              let toggled = rows[index].togglingLike(to: favorited) else { return }
+        rows[index] = toggled
+        tableView.reloadData(forRowIndexes: IndexSet(integer: index),
+                             columnIndexes: IndexSet(integer: 0))
     }
 
     /// The displayed row view for a tweet, or nil if it's offscreen — lets a like

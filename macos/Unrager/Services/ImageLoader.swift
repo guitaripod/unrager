@@ -20,8 +20,8 @@ enum ImageLoader {
         Task { _ = await ImagePipeline.shared.prefetch(url, maxPixel: maxPixel) }
     }
 
-    static func cancel(_ url: URL) {
-        Task { await ImagePipeline.shared.cancel(url) }
+    static func cancelPrefetch(_ url: URL) {
+        Task { await ImagePipeline.shared.cancelPrefetch(url) }
     }
 
     private static func nsImage(from decoded: DecodedImage) -> NSImage {

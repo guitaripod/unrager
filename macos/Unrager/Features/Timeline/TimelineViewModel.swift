@@ -131,11 +131,44 @@ final class TimelineViewModel {
         TimelineCache.shared.save(tweets, key: key)
     }
 
+    /// Writes a confirmed like/unlike back into the published tweets (and the
+    /// on-disk seed), so row reuse, context menus and keyboard commands all see
+    /// the new state — without this, a second heart click re-sends "like"
+    /// forever and any reuse repaints the stale, unliked model. Mirrors iOS.
+    func applyLike(id: String, favorited: Bool) {
+        var changed = false
+        let updated = tweets.value.map { tweet -> Tweet in
+            guard tweet.restID == id, let toggled = tweet.togglingLike(to: favorited) else { return tweet }
+            changed = true
+            return toggled
+        }
+        guard changed else { return }
+        tweets.send(updated)
+        schedulePersist()
+    }
+
+    private var persistTask: Task<Void, Never>?
+
+    /// Coalesces a burst of engagement write-backs into one disk write: each
+    /// call pushes the pending save out another 500 ms, and the latest
+    /// published snapshot wins when it fires.
+    private func schedulePersist() {
+        persistTask?.cancel()
+        persistTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard let self, !Task.isCancelled else { return }
+            self.persistTask = nil
+            self.persistCache(self.tweets.value)
+        }
+    }
+
     private func reset() {
         cursor = nil
         exhausted = false
         hasLoadedOnce = false
         seenIDs.removeAll()
+        persistTask?.cancel()
+        persistTask = nil
         collectingProgress.send(nil)
         footerState.send(.none)
         freshnessAnchor = nil

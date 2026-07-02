@@ -5300,6 +5300,7 @@ mod tests {
         let cell = CellSize { w: 9, h: 17 };
         let mut reg = MediaRegistry::with_kitty_cell(cell);
         let cover = "https://pbs.twimg.com/media/HLCuDlba8AEGRVw.jpg";
+        reg.insert_loading(cover);
         reg.mark_ready_kitty(cover, 7, 680, 272);
 
         let mut tweet = make_tweet("1", "body");

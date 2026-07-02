@@ -25,6 +25,8 @@ impl App {
         self.source = source::Source::new(kind);
         self.error = None;
         self.focus_stack.clear();
+        self.abandon_pending_navigation();
+        self.fetch_baseline = None;
         self.active = ActivePane::Source;
         self.expanded_bodies.clear();
         self.inline_threads.clear();
@@ -61,6 +63,17 @@ impl App {
         }
     }
 
+    /// Drop every navigation request whose result would push a pane the user
+    /// no longer expects: in-flight `:tweet`/notification opens, likers/Follow
+    /// profile opens, and the notification scroll target tied to them. Called
+    /// when the user backs out or the source is replaced — the fetches keep
+    /// running, but their results are discarded on arrival.
+    fn abandon_pending_navigation(&mut self) {
+        self.pending_open = None;
+        self.pending_user_detail = None;
+        self.pending_notif_scroll = None;
+    }
+
     pub(super) fn back_out(&mut self, can_quit: bool) {
         if let Some(popped) = self.focus_stack.pop() {
             if matches!(popped, FocusEntry::Ask(_) | FocusEntry::Brief(_))
@@ -68,7 +81,7 @@ impl App {
             {
                 ask::unload(ollama);
             }
-            self.pending_thread = None;
+            self.abandon_pending_navigation();
             if self.focus_stack.is_empty() {
                 self.active = ActivePane::Source;
             }

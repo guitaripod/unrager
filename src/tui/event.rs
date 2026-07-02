@@ -38,7 +38,6 @@ pub enum Event {
         silent: bool,
     },
     ThreadLoaded {
-        request_id: RequestId,
         focal_id: String,
         result: Result<TimelinePage>,
     },
@@ -92,6 +91,7 @@ pub enum Event {
         handle: String,
     },
     UserTimelineLoaded {
+        request_id: RequestId,
         result: Result<crate::parse::timeline::TimelinePage>,
     },
     LikersPageLoaded {

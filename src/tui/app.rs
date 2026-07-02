@@ -188,6 +188,10 @@ pub struct App {
     pub filter_inflight: HashSet<String>,
     pub filter_hidden_count: usize,
     pub filter_counted_ids: HashSet<String>,
+    /// Once-per-session latch for the "feed store has no rubric marker" log,
+    /// so a buffer written by a pre-rubric-marker `unrager serve` produces one
+    /// actionable warning instead of a line per store read.
+    pub(super) rubric_marker_warned: bool,
     pub pending_classification: Vec<Tweet>,
     pub translations: HashMap<String, String>,
     pub translation_inflight: HashSet<String>,
@@ -202,8 +206,8 @@ pub struct App {
     pub notif_unread_badge: usize,
     pub(super) client: Arc<GqlClient>,
     pub(super) tx: EventTx,
-    pub(super) pending_thread: Option<crate::tui::event::RequestId>,
     pub(super) pending_open: Option<crate::tui::event::RequestId>,
+    pub(super) pending_user_detail: Option<crate::tui::event::RequestId>,
     pub(super) pending_notif_scroll: Option<String>,
     pub(super) fetch_baseline: Option<usize>,
     pub update_available: Option<String>,
@@ -471,6 +475,7 @@ impl App {
             filter_inflight: HashSet::new(),
             filter_hidden_count: 0,
             filter_counted_ids: HashSet::new(),
+            rubric_marker_warned: false,
             pending_classification: Vec::new(),
             translations: HashMap::new(),
             translation_inflight: HashSet::new(),
@@ -484,8 +489,8 @@ impl App {
             notif_unread_badge: 0,
             client,
             tx,
-            pending_thread: None,
             pending_open: None,
+            pending_user_detail: None,
             pending_notif_scroll: None,
             fetch_baseline: None,
             update_available: None,
@@ -709,8 +714,8 @@ impl App {
 
     pub fn is_any_loading(&self) -> bool {
         self.source.loading
-            || self.pending_thread.is_some()
             || self.pending_open.is_some()
+            || self.pending_user_detail.is_some()
             || self.focus_stack.last().is_some_and(|e| match e {
                 FocusEntry::Tweet(d) => d.loading,
                 FocusEntry::Likers(l) => l.loading,
@@ -773,11 +778,9 @@ impl App {
                 append,
                 silent,
             } => self.handle_timeline_loaded(kind, result, append, silent),
-            Event::ThreadLoaded {
-                request_id,
-                focal_id,
-                result,
-            } => self.handle_thread_loaded(request_id, focal_id, result),
+            Event::ThreadLoaded { focal_id, result } => {
+                self.handle_thread_loaded(focal_id, result);
+            }
             Event::OpenTweetResolved { request_id, result } => {
                 self.handle_open_tweet_resolved(request_id, result);
             }
@@ -822,8 +825,8 @@ impl App {
             Event::NotificationPageLoaded { result, append } => {
                 self.handle_notification_page_loaded(result, append);
             }
-            Event::UserTimelineLoaded { result } => {
-                self.handle_user_timeline_loaded(result);
+            Event::UserTimelineLoaded { request_id, result } => {
+                self.handle_user_timeline_loaded(request_id, result);
             }
             Event::LikersPageLoaded {
                 tweet_id,

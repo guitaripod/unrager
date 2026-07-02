@@ -587,21 +587,53 @@ impl MediaRegistry {
     }
 
     pub fn mark_ready_kitty(&mut self, url: &str, id: u32, w: u32, h: u32) {
+        if !self.entries.contains_key(url) {
+            tracing::debug!(url = %url, id, "kitty image arrived after eviction; discarding");
+            self.discard_kitty_image(id);
+            return;
+        }
         tracing::debug!(url = %url, w, h, "media ready (kitty)");
-        self.entries
+        let previous = self
+            .entries
             .insert(url.to_string(), MediaEntry::ReadyKitty { id, w, h });
+        if let Some(MediaEntry::ReadyKitty { id: old_id, .. }) = previous
+            && old_id != id
+        {
+            self.discard_kitty_image(old_id);
+        }
     }
 
     pub fn mark_ready_pixels(&mut self, url: &str, pixels: Arc<Vec<u8>>, w: u32, h: u32) {
+        let Some(entry) = self.entries.get_mut(url) else {
+            tracing::debug!(url = %url, "pixel image arrived after eviction; discarding");
+            return;
+        };
         tracing::debug!(url = %url, w, h, "media ready (pixels)");
-        self.entries
-            .insert(url.to_string(), MediaEntry::ReadyPixels { pixels, w, h });
+        *entry = MediaEntry::ReadyPixels { pixels, w, h };
     }
 
     pub fn mark_failed(&mut self, url: &str, err: String) {
         tracing::warn!(url = %url, error = %err, "media failed");
-        self.entries
-            .insert(url.to_string(), MediaEntry::Failed(err));
+        if let Some(entry) = self.entries.get_mut(url) {
+            *entry = MediaEntry::Failed(err);
+        }
+    }
+
+    /// Free a transmitted kitty image that no longer has a live registry
+    /// entry — its Loading placeholder was LRU-evicted while the download
+    /// was still in flight, or a newer transmit replaced it. Completions may
+    /// only update entries still tracked in `insertion_order`; inserting
+    /// untracked entries here would create orphans the eviction loop can
+    /// never remove (unbounded pixel RAM / terminal graphics memory).
+    fn discard_kitty_image(&mut self, id: u32) {
+        self.placement_cache
+            .retain(|&(image_id, _), _| image_id != id);
+        delete_image(id);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn insert_loading(&mut self, url: &str) {
+        self.insert_entry(url.to_string(), MediaEntry::Loading);
     }
 }
 
@@ -1181,4 +1213,91 @@ pub fn media_badge_failed() -> Line<'static> {
         Span::raw("  "),
         Span::styled("[img ×]", Style::default().fg(color)),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn kitty_registry() -> MediaRegistry {
+        MediaRegistry::with_kitty_cell(CellSize { w: 9, h: 17 })
+    }
+
+    fn pixels() -> Arc<Vec<u8>> {
+        Arc::new(vec![0u8; 4])
+    }
+
+    #[test]
+    fn late_completion_for_evicted_url_is_dropped() {
+        let mut reg = kitty_registry();
+        for i in 0..=MAX_MEDIA_ENTRIES {
+            reg.insert_loading(&format!("u{i}"));
+        }
+        assert!(reg.get("u0").is_none(), "oldest Loading entry was evicted");
+        reg.mark_ready_pixels("u0", pixels(), 1, 1);
+        assert!(
+            reg.get("u0").is_none(),
+            "a completion for an evicted URL must not re-enter the registry untracked"
+        );
+        assert!(reg.entries.len() <= MAX_MEDIA_ENTRIES);
+    }
+
+    #[test]
+    fn late_failure_for_evicted_url_is_dropped() {
+        let mut reg = kitty_registry();
+        for i in 0..=MAX_MEDIA_ENTRIES {
+            reg.insert_loading(&format!("u{i}"));
+        }
+        reg.mark_failed("u0", "boom".into());
+        assert!(reg.get("u0").is_none());
+        assert!(reg.entries.len() <= MAX_MEDIA_ENTRIES);
+    }
+
+    #[test]
+    fn completions_update_tracked_entries_and_stay_evictable() {
+        let mut reg = kitty_registry();
+        reg.insert_loading("first");
+        reg.mark_ready_pixels("first", pixels(), 1, 1);
+        assert!(matches!(
+            reg.get("first"),
+            Some(MediaEntry::ReadyPixels { .. })
+        ));
+        for i in 0..MAX_MEDIA_ENTRIES {
+            reg.insert_loading(&format!("u{i}"));
+            reg.mark_ready_pixels(&format!("u{i}"), pixels(), 1, 1);
+        }
+        assert!(
+            reg.get("first").is_none(),
+            "a completed entry is still tracked and evicted in insertion order"
+        );
+        assert_eq!(
+            reg.entries.len(),
+            MAX_MEDIA_ENTRIES,
+            "the cap holds no matter how many completions land"
+        );
+        assert_eq!(
+            reg.insertion_order.len(),
+            reg.entries.len(),
+            "every live entry stays registered for eviction"
+        );
+    }
+
+    #[test]
+    fn replaced_kitty_transmit_releases_the_old_image_id() {
+        let mut reg = kitty_registry();
+        reg.insert_loading("a");
+        reg.mark_ready_kitty("a", 1, 10, 10);
+        reg.placement_cache.insert((1, 42), (5, 5));
+        reg.mark_ready_kitty("a", 2, 10, 10);
+        assert!(matches!(
+            reg.get("a"),
+            Some(MediaEntry::ReadyKitty { id: 2, .. })
+        ));
+        assert!(
+            !reg.placement_cache
+                .keys()
+                .any(|&(image_id, _)| image_id == 1),
+            "placements for the superseded image id are dropped"
+        );
+    }
 }

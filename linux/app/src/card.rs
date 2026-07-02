@@ -55,14 +55,7 @@ fn header_row(tweet: &Tweet, ctx: &Ctx, cb: &CardCallbacks) -> gtk::Widget {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
 
     let avatar = adw::Avatar::new(44, Some(&tweet.author.name), true);
-    if let Some(url) = tweet
-        .author
-        .avatar_url
-        .as_deref()
-        .and_then(|u| Url::parse(u).ok())
-    {
-        ctx.images.load_avatar(&avatar, ctx.api.clone(), url);
-    }
+    ctx.load_avatar(&avatar, tweet.author.avatar_url.as_deref());
 
     let avatar_btn = gtk::Button::builder()
         .child(&avatar)
@@ -143,14 +136,10 @@ fn media_widget(tweet: &Tweet, ctx: &Ctx, cb: &CardCallbacks) -> Option<gtk::Wid
         // through the proxy as before.
         if playable {
             if let Ok(url) = Url::parse(&media.url) {
-                ctx.images.load(&picture, ctx.api.clone(), url);
+                ctx.load_picture(&picture, url);
             }
         } else {
-            ctx.images.load(
-                &picture,
-                ctx.api.clone(),
-                ctx.api.media_url(&id, viewable[pos]),
-            );
+            ctx.load_picture(&picture, ctx.api.media_url(&id, viewable[pos]));
         }
 
         let open_media = cb.open_media.clone();
@@ -427,14 +416,7 @@ fn quoted_block(quoted: &Tweet, ctx: &Ctx) -> gtk::Widget {
 
     let head_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let avatar = adw::Avatar::new(20, Some(&quoted.author.name), true);
-    if let Some(url) = quoted
-        .author
-        .avatar_url
-        .as_deref()
-        .and_then(|u| Url::parse(u).ok())
-    {
-        ctx.images.load_avatar(&avatar, ctx.api.clone(), url);
-    }
+    ctx.load_avatar(&avatar, quoted.author.avatar_url.as_deref());
     head_row.append(&avatar);
 
     let head = gtk::Label::new(Some(&format!(
@@ -501,6 +483,7 @@ fn like_button(tweet: &Tweet, ctx: &Ctx, cb: &CardCallbacks) -> gtk::Widget {
 
     let liked = Rc::new(Cell::new(tweet.favorited));
     let base_count = tweet.like_count;
+    let favorited_at_build = tweet.favorited;
     let api = ctx.api.clone();
     let id = tweet.rest_id.clone();
     let toast = cb.toast.clone();
@@ -513,11 +496,7 @@ fn like_button(tweet: &Tweet, ctx: &Ctx, cb: &CardCallbacks) -> gtk::Widget {
         } else {
             button.remove_css_class("liked");
         }
-        let new_count = if now {
-            base_count + 1
-        } else {
-            base_count.saturating_sub(1)
-        };
+        let new_count = like_count_after(base_count, favorited_at_build, now);
         label.set_label(&format::count(new_count as i64));
 
         let api = api.clone();
@@ -540,4 +519,41 @@ fn like_button(tweet: &Tweet, ctx: &Ctx, cb: &CardCallbacks) -> gtk::Widget {
     });
 
     button.upcast()
+}
+
+/// The like count to show after an optimistic like/unlike toggle, relative to
+/// the state the card was built with: the build-time count already includes the
+/// user's own like when the tweet arrived favorited, so returning to the
+/// build-time state restores the build-time count, and only a genuine
+/// transition away from it moves the count by one.
+fn like_count_after(count_at_build: u64, favorited_at_build: bool, liked_now: bool) -> u64 {
+    if liked_now == favorited_at_build {
+        count_at_build
+    } else if liked_now {
+        count_at_build + 1
+    } else {
+        count_at_build.saturating_sub(1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::like_count_after;
+
+    #[test]
+    fn already_favorited_round_trip_restores_count() {
+        assert_eq!(like_count_after(10, true, false), 9);
+        assert_eq!(like_count_after(10, true, true), 10);
+    }
+
+    #[test]
+    fn not_favorited_round_trip_restores_count() {
+        assert_eq!(like_count_after(10, false, true), 11);
+        assert_eq!(like_count_after(10, false, false), 10);
+    }
+
+    #[test]
+    fn unlike_never_underflows() {
+        assert_eq!(like_count_after(0, true, false), 0);
+    }
 }

@@ -10,7 +10,6 @@ use std::rc::Rc;
 use unrager_gtk_core::ApiError;
 use unrager_gtk_core::format;
 use unrager_gtk_core::model::{ProfileView, TimelinePage, User};
-use url::Url;
 
 pub struct ProfileInit {
     pub ctx: Ctx,
@@ -284,9 +283,7 @@ fn fill_header(header: &gtk::Box, user: &User, ctx: &Ctx) {
 
     let avatar = adw::Avatar::new(72, Some(&user.name), true);
     avatar.set_valign(gtk::Align::Start);
-    if let Some(url) = user.avatar_url.as_deref().and_then(|u| Url::parse(u).ok()) {
-        ctx.images.load_avatar(&avatar, ctx.api.clone(), url);
-    }
+    ctx.load_avatar(&avatar, user.avatar_url.as_deref());
     header.append(&avatar);
 
     let column = gtk::Box::new(gtk::Orientation::Vertical, 2);

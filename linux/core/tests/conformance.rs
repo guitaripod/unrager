@@ -4,7 +4,7 @@
 
 use unrager_gtk_core::model::{
     FeedStatusResponse, FilterVerdictEvent, Media, MediaKind, Notification, SearchProduct,
-    SessionState, SourceKind, TokenEvent, Tweet, Verdict,
+    SessionState, SourceKind, ThreadView, TokenEvent, Tweet, Verdict,
 };
 
 fn decode<T: serde::de::DeserializeOwned>(json: &str) -> T {
@@ -133,6 +133,37 @@ fn media_kind_unit_and_struct_variants() {
         }
         other => panic!("expected poll, got {other:?}"),
     }
+}
+
+const MINIMAL_TWEET: &str = r#"
+{"rest_id":"1","author":{"rest_id":"2","handle":"a","name":"A","verified":false,
+  "followers":0,"following":0},"created_at":"2026-06-19T12:00:00Z","text":"hi",
+  "reply_count":0,"retweet_count":0,"like_count":0,"quote_count":0,"view_count":null,
+  "media":[],"url":"https://x.com/a/status/1"}
+"#;
+
+#[test]
+fn thread_view_first_page_carries_focal() {
+    let json = format!(
+        r#"{{"focal":{MINIMAL_TWEET},"ancestors":[],"replies":[{MINIMAL_TWEET}],"cursor":"next"}}"#
+    );
+    let view: ThreadView = decode(&json);
+    assert_eq!(view.focal.as_ref().map(|t| t.rest_id.as_str()), Some("1"));
+    assert_eq!(view.replies.len(), 1);
+    assert_eq!(view.cursor.as_deref(), Some("next"));
+}
+
+#[test]
+fn thread_view_continuation_omits_focal() {
+    let json = format!(r#"{{"replies":[{MINIMAL_TWEET}],"cursor":null}}"#);
+    let view: ThreadView = decode(&json);
+    assert!(
+        view.focal.is_none(),
+        "continuation pages carry no focal key"
+    );
+    assert!(view.ancestors.is_empty());
+    assert_eq!(view.replies.len(), 1);
+    assert!(view.cursor.is_none());
 }
 
 #[test]

@@ -6,7 +6,8 @@
 use crate::shared::Ctx;
 use adw::prelude::*;
 use relm4::prelude::*;
-use unrager_gtk_core::{AppSettings, AppearanceMode, FontScale, MediaSize};
+use unrager_gtk_core::settings::normalize_server_url;
+use unrager_gtk_core::{ApiClient, AppSettings, AppearanceMode, FontScale, MediaSize};
 
 pub struct SettingsInit {
     pub ctx: Ctx,
@@ -16,6 +17,10 @@ pub struct SettingsInit {
 pub struct Settings {
     ctx: Ctx,
     settings: AppSettings,
+    /// The Server URL entry itself; reading `server_row.text()` at use time
+    /// means the Test button always exercises the address the user is looking
+    /// at, without mirroring every keystroke into the model.
+    server_row: adw::EntryRow,
     status_row: adw::ActionRow,
     test_button: gtk::Button,
     test_spinner: gtk::Spinner,
@@ -58,14 +63,8 @@ impl Component for Settings {
                 add = &adw::PreferencesGroup {
                     set_title: "Server",
 
-                    adw::EntryRow {
-                        set_title: "Server URL",
-                        set_text: &model.settings.server_url,
-                        set_show_apply_button: true,
-                        connect_apply[sender] => move |row| {
-                            sender.input(SettingsInput::ServerUrl(row.text().to_string()));
-                        },
-                    },
+                    #[local_ref]
+                    server_row -> adw::EntryRow {},
 
                     #[local_ref]
                     status_row -> adw::ActionRow {},
@@ -140,6 +139,15 @@ impl Component for Settings {
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
+        let server_row = adw::EntryRow::new();
+        server_row.set_title("Server URL");
+        server_row.set_text(&init.settings.server_url);
+        server_row.set_show_apply_button(true);
+        let apply_sender = sender.clone();
+        server_row.connect_apply(move |row| {
+            apply_sender.input(SettingsInput::ServerUrl(row.text().to_string()));
+        });
+
         let status_row = adw::ActionRow::new();
         status_row.set_title("Connection");
         status_row.set_subtitle("Not tested");
@@ -163,10 +171,12 @@ impl Component for Settings {
         let model = Settings {
             ctx: init.ctx,
             settings: init.settings,
+            server_row: server_row.clone(),
             status_row: status_row.clone(),
             test_button: test_button.clone(),
             test_spinner: test_spinner.clone(),
         };
+        let server_row = &model.server_row;
         let status_row = &model.status_row;
         let widgets = view_output!();
         ComponentParts { model, widgets }
@@ -207,10 +217,14 @@ impl Component for Settings {
                 });
             }
             SettingsInput::TestConnection => {
+                let Some(url) = normalize_server_url(&self.server_row.text()) else {
+                    self.status_row.set_subtitle("Not a valid server URL");
+                    return;
+                };
                 self.status_row.set_subtitle("Testing…");
                 self.test_spinner.set_visible(true);
                 self.test_button.set_sensitive(false);
-                let api = self.ctx.api.clone();
+                let api = ApiClient::new(url);
                 sender.oneshot_command(async move {
                     SettingsCmd::Tested(
                         api.whoami()

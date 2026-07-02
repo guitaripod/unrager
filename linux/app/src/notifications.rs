@@ -1,12 +1,11 @@
 //! Notifications feed: actor avatar + "who did what" + snippet + thumbnail.
 //! Tapping a row opens the target thread (or the actor's profile for follows).
 
-use crate::shared::{Ctx, Route, empty_state, error_state, loading_state};
+use crate::shared::{Ctx, FetchGeneration, Route, empty_state, error_state, loading_state};
 use adw::prelude::*;
 use relm4::prelude::*;
 use unrager_gtk_core::ApiError;
 use unrager_gtk_core::model::{Notification, NotificationsPage};
-use url::Url;
 
 pub struct NotificationsInit {
     pub ctx: Ctx,
@@ -19,6 +18,13 @@ pub struct Notifications {
     cursor: Option<String>,
     loading: bool,
     exhausted: bool,
+    /// Bumped by every Refresh so a result from an earlier fetch (e.g. a
+    /// LoadMore that was in flight when the user refreshed) is recognized as
+    /// stale and dropped instead of interleaving pages.
+    generation: FetchGeneration,
+    /// A Refresh arrived while a fetch was in flight; fire one fresh fetch when
+    /// that fetch completes, so at most one fetch is ever in flight.
+    refresh_queued: bool,
 }
 
 #[derive(Debug)]
@@ -35,7 +41,10 @@ pub enum NotificationsOutput {
 
 #[derive(Debug)]
 pub enum NotificationsCmd {
-    Loaded(Result<NotificationsPage, ApiError>),
+    Loaded {
+        generation: u64,
+        result: Result<NotificationsPage, ApiError>,
+    },
 }
 
 #[relm4::component(pub)]
@@ -97,15 +106,21 @@ impl Component for Notifications {
             cursor: None,
             loading: true,
             exhausted: false,
+            generation: FetchGeneration::default(),
+            refresh_queued: false,
         };
 
         let list_box = &list;
         let widgets = view_output!();
 
         let api = model.ctx.api.clone();
-        sender.oneshot_command(
-            async move { NotificationsCmd::Loaded(api.notifications(None).await) },
-        );
+        let generation = model.generation.current();
+        sender.oneshot_command(async move {
+            NotificationsCmd::Loaded {
+                generation,
+                result: api.notifications(None).await,
+            }
+        });
 
         ComponentParts { model, widgets }
     }
@@ -119,12 +134,13 @@ impl Component for Notifications {
                 self.targets.clear();
                 self.cursor = None;
                 self.exhausted = false;
-                self.loading = true;
+                self.generation.bump();
                 self.list.set_placeholder(Some(&loading_state()));
-                let api = self.ctx.api.clone();
-                sender.oneshot_command(async move {
-                    NotificationsCmd::Loaded(api.notifications(None).await)
-                });
+                if self.loading {
+                    self.refresh_queued = true;
+                    return;
+                }
+                self.spawn_refresh(&sender);
             }
             NotificationsInput::LoadMore => {
                 if self.loading || self.exhausted {
@@ -135,8 +151,12 @@ impl Component for Notifications {
                 };
                 self.loading = true;
                 let api = self.ctx.api.clone();
+                let generation = self.generation.current();
                 sender.oneshot_command(async move {
-                    NotificationsCmd::Loaded(api.notifications(Some(&cursor)).await)
+                    NotificationsCmd::Loaded {
+                        generation,
+                        result: api.notifications(Some(&cursor)).await,
+                    }
                 });
             }
             NotificationsInput::RowActivated(index) => {
@@ -153,8 +173,16 @@ impl Component for Notifications {
         sender: ComponentSender<Self>,
         _root: &Self::Root,
     ) {
-        let NotificationsCmd::Loaded(result) = message;
+        let NotificationsCmd::Loaded { generation, result } = message;
         self.loading = false;
+        if self.refresh_queued {
+            self.refresh_queued = false;
+            self.spawn_refresh(&sender);
+            return;
+        }
+        if !self.generation.is_current(generation) {
+            return;
+        }
         match result {
             Ok(page) => {
                 for notif in &page.notifications {
@@ -190,6 +218,22 @@ impl Component for Notifications {
     }
 }
 
+impl Notifications {
+    /// Spawns the single in-flight first-page fetch for a queued or immediate
+    /// Refresh, stamped with the current generation.
+    fn spawn_refresh(&mut self, sender: &ComponentSender<Self>) {
+        self.loading = true;
+        let api = self.ctx.api.clone();
+        let generation = self.generation.current();
+        sender.oneshot_command(async move {
+            NotificationsCmd::Loaded {
+                generation,
+                result: api.notifications(None).await,
+            }
+        });
+    }
+}
+
 fn build_notification_row(notif: &Notification, ctx: &Ctx) -> gtk::Widget {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     row.add_css_class("tweet-card");
@@ -197,14 +241,10 @@ fn build_notification_row(notif: &Notification, ctx: &Ctx) -> gtk::Widget {
     let actor_name = notif.actors.first().map(|a| a.name.as_str());
     let avatar = adw::Avatar::new(40, actor_name, true);
     avatar.set_valign(gtk::Align::Start);
-    if let Some(url) = notif
-        .actors
-        .first()
-        .and_then(|a| a.avatar_url.as_deref())
-        .and_then(|u| Url::parse(u).ok())
-    {
-        ctx.images.load_avatar(&avatar, ctx.api.clone(), url);
-    }
+    ctx.load_avatar(
+        &avatar,
+        notif.actors.first().and_then(|a| a.avatar_url.as_deref()),
+    );
     row.append(&avatar);
 
     let column = gtk::Box::new(gtk::Orientation::Vertical, 2);
@@ -239,17 +279,18 @@ fn build_notification_row(notif: &Notification, ctx: &Ctx) -> gtk::Widget {
 
     row.append(&column);
 
-    if let (Some(tweet_id), true) = (
-        notif.target_tweet_id.as_deref(),
-        !notif.target_media.is_empty(),
-    ) {
+    if ctx.images_enabled()
+        && let (Some(tweet_id), true) = (
+            notif.target_tweet_id.as_deref(),
+            !notif.target_media.is_empty(),
+        )
+    {
         let thumb = gtk::Image::new();
         thumb.set_pixel_size(52);
         thumb.set_valign(gtk::Align::Start);
         thumb.set_overflow(gtk::Overflow::Hidden);
         thumb.add_css_class("notif-thumb");
-        ctx.images
-            .load_image(&thumb, ctx.api.clone(), ctx.api.media_url(tweet_id, 0));
+        ctx.load_thumbnail(&thumb, ctx.api.media_url(tweet_id, 0));
         row.append(&thumb);
     }
 

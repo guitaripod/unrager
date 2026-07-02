@@ -179,36 +179,39 @@ impl Component for Thread {
         let ThreadCmd::Loaded(result) = message;
         clear(&self.container);
         match result {
-            Ok(view) => {
-                let callbacks = self.callbacks(&sender);
-                for ancestor in &view.ancestors {
-                    self.container
-                        .append(&build_tweet_card(ancestor, &self.ctx, &callbacks));
+            Ok(view) => match &view.focal {
+                Some(focal_tweet) => {
+                    let callbacks = self.callbacks(&sender);
+                    for ancestor in &view.ancestors {
+                        self.container
+                            .append(&build_tweet_card(ancestor, &self.ctx, &callbacks));
+                    }
+                    let focal = build_tweet_card(focal_tweet, &self.ctx, &callbacks);
+                    focal.add_css_class("focal");
+                    self.container.append(&focal);
+                    for reply in &view.replies {
+                        self.container
+                            .append(&build_tweet_card(reply, &self.ctx, &callbacks));
+                    }
+                    if !view.ancestors.is_empty() {
+                        self.scroll_to_focal(&focal);
+                    }
                 }
-                let focal = build_tweet_card(&view.focal, &self.ctx, &callbacks);
-                focal.add_css_class("focal");
-                self.container.append(&focal);
-                for reply in &view.replies {
-                    self.container
-                        .append(&build_tweet_card(reply, &self.ctx, &callbacks));
-                }
-                if !view.ancestors.is_empty() {
-                    self.scroll_to_focal(&focal);
-                }
-            }
-            Err(error) => {
-                let retry = sender.clone();
-                clear(&self.container);
-                self.container
-                    .append(&error_state(&error.user_message(), move || {
-                        retry.input(ThreadInput::Reload)
-                    }));
-            }
+                None => self.show_error("Thread is missing its focal post", &sender),
+            },
+            Err(error) => self.show_error(&error.user_message(), &sender),
         }
     }
 }
 
 impl Thread {
+    fn show_error(&self, message: &str, sender: &ComponentSender<Self>) {
+        let retry = sender.clone();
+        self.container.append(&error_state(message, move || {
+            retry.input(ThreadInput::Reload)
+        }));
+    }
+
     /// Anchors the view on the focal post once layout settles, so a thread with
     /// ancestors doesn't open scrolled to the top showing a parent tweet. Runs
     /// on idle because the cards aren't allocated yet at the end of `update_cmd`.

@@ -217,7 +217,11 @@ pub fn default_server_url() -> Url {
     Url::parse(DEFAULT_SERVER).expect("default server URL is valid")
 }
 
-fn normalize_server_url(raw: &str) -> Option<Url> {
+/// Parses a user-entered server URL into a usable base URL: trims whitespace
+/// and requires a scheme and host. `None` for anything a client couldn't
+/// actually connect to, so callers can reject the input instead of silently
+/// falling back.
+pub fn normalize_server_url(raw: &str) -> Option<Url> {
     let trimmed = raw.trim();
     let url = Url::parse(trimmed).ok()?;
     if url.has_host() && !url.scheme().is_empty() {
@@ -268,6 +272,23 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(s.server_url().as_str(), "http://example.com:9000/");
+    }
+
+    #[test]
+    fn normalize_server_url_accepts_a_real_base() {
+        assert_eq!(
+            normalize_server_url(" http://100.64.0.1:7777 ")
+                .unwrap()
+                .as_str(),
+            "http://100.64.0.1:7777/"
+        );
+    }
+
+    #[test]
+    fn normalize_server_url_rejects_unusable_input() {
+        assert_eq!(normalize_server_url("not a url"), None);
+        assert_eq!(normalize_server_url(""), None);
+        assert_eq!(normalize_server_url("unix:/run/unrager.sock"), None);
     }
 
     #[test]

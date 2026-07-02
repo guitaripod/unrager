@@ -4,7 +4,6 @@
 
 use crate::compose::{Compose, ComposeInit, ComposeMode};
 use crate::feed::{Feed, FeedInit, FeedInput, FeedOutput, FeedSource};
-use crate::image::ImagePipeline;
 use crate::media_viewer::{MediaViewer, MediaViewerInit};
 use crate::notifications::{Notifications, NotificationsInit, NotificationsOutput, summary_title};
 use crate::profile::{Profile, ProfileInit, ProfileOutput};
@@ -14,8 +13,6 @@ use crate::stream_sheet::{StreamInit, StreamRequest, StreamSheet};
 use crate::thread::{Thread, ThreadInit, ThreadOutput};
 use adw::prelude::*;
 use relm4::prelude::*;
-use std::cell::Cell;
-use std::rc::Rc;
 use std::sync::Arc;
 use unrager_gtk_core::model::SearchProduct;
 use unrager_gtk_core::{
@@ -42,6 +39,11 @@ pub struct App {
     toasts: adw::ToastOverlay,
     sidebar: gtk::ListBox,
     status: adw::StatusPage,
+    status_nav_page: adw::NavigationPage,
+    /// Whether a server connection has succeeded before, so one-time startup
+    /// work (the notification poller, the QA screen router) doesn't run again
+    /// on a reconnect after a Settings server change.
+    connected_once: bool,
     feed: Option<Controller<Feed>>,
     threads: Vec<Controller<Thread>>,
     profiles: Vec<Controller<Profile>>,
@@ -60,6 +62,10 @@ pub enum AppInput {
     RefreshCurrent,
     Reconnect,
     SettingsChanged(AppSettings),
+    /// A page left the navigation stack (back button / gesture); drop the
+    /// thread/profile controller it belonged to so components don't accumulate
+    /// for the app's lifetime.
+    PagePopped(adw::NavigationPage),
 }
 
 #[derive(Debug)]
@@ -138,17 +144,25 @@ impl Component for App {
         }
 
         let api = Arc::new(ApiClient::new(settings.server_url()));
-        let ctx = Ctx {
+        let ctx = Ctx::new(
             api,
-            images: ImagePipeline::new(),
-            media_size: Rc::new(Cell::new(settings.media_size)),
-        };
+            settings.media_size,
+            settings.images_enabled,
+            settings.track_seen,
+        );
 
         let nav = adw::NavigationView::new();
         let toasts = adw::ToastOverlay::new();
         let sidebar = gtk::ListBox::new();
         let status = build_status("Connecting…", "Starting unrager serve.", true);
-        nav.push(&status_page("Unrager", &status));
+        let status_nav_page = status_page("Unrager", &status);
+        nav.push(&status_nav_page);
+        {
+            let popped = sender.input_sender().clone();
+            nav.connect_popped(move |_, page| {
+                let _ = popped.send(AppInput::PagePopped(page.clone()));
+            });
+        }
 
         let model = App {
             settings,
@@ -158,6 +172,8 @@ impl Component for App {
             toasts: toasts.clone(),
             sidebar: sidebar.clone(),
             status: status.clone(),
+            status_nav_page,
+            connected_once: false,
             feed: None,
             threads: Vec::new(),
             profiles: Vec::new(),
@@ -209,33 +225,27 @@ impl Component for App {
                     let _ = feed.sender().send(FeedInput::Reload);
                 }
             }
-            AppInput::Reconnect => {
-                self.status.set_title("Connecting…");
-                self.status.set_description(Some("Starting unrager serve."));
-                self.status
-                    .set_icon_name(Some("network-transmit-receive-symbolic"));
-                let spin = gtk::Spinner::new();
-                spin.start();
-                spin.set_size_request(32, 32);
-                self.status.set_child(Some(&spin));
-                let configured = Some(self.settings.server_url());
-                sender.oneshot_command(async move {
-                    AppCmd::Serve(Box::new(ServeManager::start(configured).await))
-                });
-            }
+            AppInput::Reconnect => self.reconnect(&sender),
             AppInput::SettingsChanged(settings) => {
                 apply_appearance(settings.appearance);
                 apply_css(settings.font_scale);
-                let media_size_changed = settings.media_size != self.settings.media_size;
+                let display_changed = settings.media_size != self.settings.media_size
+                    || settings.images_enabled != self.settings.images_enabled;
+                let server_changed = settings.server_url() != self.settings.server_url();
                 self.ctx.media_size.set(settings.media_size);
+                self.ctx.set_images_enabled(settings.images_enabled);
+                self.ctx.track_seen.set(settings.track_seen);
                 self.settings = settings;
                 if let Err(error) = self.settings.save() {
                     tracing::warn!(target: "ui", "failed to save settings: {error}");
                 }
-                if media_size_changed && let Some(feed) = &self.feed {
+                if server_changed {
+                    self.reconnect(&sender);
+                } else if display_changed && let Some(feed) = &self.feed {
                     let _ = feed.sender().send(FeedInput::Rebuild);
                 }
             }
+            AppInput::PagePopped(page) => self.release_popped(&page),
         }
     }
 
@@ -255,9 +265,12 @@ impl Component for App {
                         self.sidebar.select_row(Some(&row));
                     }
                     self.show_source(FeedSource::HomeForYou, "For You", &sender);
-                    start_poller(self.ctx.api.clone(), &sender);
-                    if let Ok(screen) = std::env::var("UNRAGER_SCREEN") {
-                        self.route_to_screen(&screen, &sender, root);
+                    if !self.connected_once {
+                        self.connected_once = true;
+                        start_poller(self.ctx.api.clone(), &sender);
+                        if let Ok(screen) = std::env::var("UNRAGER_SCREEN") {
+                            self.route_to_screen(&screen, &sender, root);
+                        }
                     }
                 }
                 Err(error) => {
@@ -310,6 +323,48 @@ impl App {
         }
     }
 
+    /// Shows the connecting status page and re-runs the serve/connect flow
+    /// against the current Settings server URL. Used by the failure page's
+    /// "Try Again" and whenever the server URL changes in Settings, so a new
+    /// address takes effect immediately instead of after a restart.
+    fn reconnect(&mut self, sender: &ComponentSender<Self>) {
+        self.status.set_title("Connecting…");
+        self.status.set_description(Some("Starting unrager serve."));
+        self.status
+            .set_icon_name(Some("network-transmit-receive-symbolic"));
+        let spin = gtk::Spinner::new();
+        spin.start();
+        spin.set_size_request(32, 32);
+        self.status.set_child(Some(&spin));
+        self.replace_stack(&self.status_nav_page.clone());
+        let configured = Some(self.settings.server_url());
+        sender.oneshot_command(async move {
+            AppCmd::Serve(Box::new(ServeManager::start(configured).await))
+        });
+    }
+
+    /// Replaces the whole navigation stack with `page` and drops every cached
+    /// stack controller — feed, notifications, threads, profiles — since all of
+    /// their pages just left the stack. The caller immediately reassigns the
+    /// one controller it's installing.
+    fn replace_stack(&mut self, page: &adw::NavigationPage) {
+        self.nav.replace(std::slice::from_ref(page));
+        self.feed = None;
+        self.notifications = None;
+        self.threads.clear();
+        self.profiles.clear();
+    }
+
+    /// Drops the thread/profile controller backing a popped navigation page;
+    /// relm4 shuts the component down on drop.
+    fn release_popped(&mut self, page: &adw::NavigationPage) {
+        let child = page.child();
+        self.threads
+            .retain(|c| Some(c.widget().upcast_ref::<gtk::Widget>()) != child.as_ref());
+        self.profiles
+            .retain(|c| Some(c.widget().upcast_ref::<gtk::Widget>()) != child.as_ref());
+    }
+
     fn show_notifications(&mut self, sender: &ComponentSender<Self>) {
         let controller = Notifications::builder()
             .launch(NotificationsInit {
@@ -318,8 +373,7 @@ impl App {
             .forward(sender.input_sender(), |out| match out {
                 NotificationsOutput::Open(route) => AppInput::Route(route),
             });
-        self.nav
-            .replace(&[wrap_page("Notifications", controller.widget())]);
+        self.replace_stack(&wrap_page("Notifications", controller.widget()));
         self.notifications = Some(controller);
     }
 
@@ -345,8 +399,7 @@ impl App {
             .forward(sender.input_sender(), |out| match out {
                 FeedOutput::Open(route) => AppInput::Route(route),
             });
-        let page = wrap_page(title, feed.widget());
-        self.nav.replace(&[page]);
+        self.replace_stack(&wrap_page(title, feed.widget()));
         self.feed = Some(feed);
     }
 

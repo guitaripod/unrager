@@ -162,9 +162,7 @@ impl MediaViewer {
         } else {
             self.video.set_file(gio::File::NONE);
             self.picture.set_paintable(gdk::Paintable::NONE);
-            self.ctx
-                .images
-                .load(&self.picture, self.ctx.api.clone(), url);
+            self.ctx.load_media_view(&self.picture, url);
             self.stack.set_visible_child_name("photo");
         }
         self.counter

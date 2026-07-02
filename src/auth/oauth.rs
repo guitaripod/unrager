@@ -380,17 +380,14 @@ mod tests {
         assert!(!v.contains('/'));
     }
 
+    /// Both cases live in one test because they mutate the same process-wide
+    /// env var — as separate tests they race under parallel test threads.
     #[test]
-    fn client_id_reads_env_var() {
-        // SAFETY: tests run single-threaded enough for this (no other test touches this var)
+    fn client_id_env_var_read_and_whitespace_rejection() {
         unsafe { std::env::set_var(CLIENT_ID_ENV, "env_client_42") };
         let got = client_id().expect("env should satisfy client_id lookup");
         assert_eq!(got, "env_client_42");
-        unsafe { std::env::remove_var(CLIENT_ID_ENV) };
-    }
 
-    #[test]
-    fn client_id_rejects_empty_env() {
         unsafe { std::env::set_var(CLIENT_ID_ENV, "   ") };
         let err = client_id().expect_err("whitespace-only env must not count as configured");
         assert!(

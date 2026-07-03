@@ -20,6 +20,11 @@ final class ThreadViewController: UIViewController {
     private var replyOrder: [String] = []
     private var ancestorOrder: [String] = []
     private var focalID: String?
+    /// When opened from a notification/permalink (by id), scroll to the focal
+    /// tweet once the thread lands so the user starts on the post the
+    /// notification is about, not the conversation root. Cleared after the
+    /// first scroll. False for feed-opened threads (focal already at top).
+    private var scrollToFocalOnLoad = false
     private var selfHandle: String?
     private var cursor: String?
     private var exhausted = false
@@ -87,12 +92,14 @@ final class ThreadViewController: UIViewController {
     init(tweetID: String) {
         self.tweetID = tweetID
         super.init(nibName: nil, bundle: nil)
+        scrollToFocalOnLoad = true
     }
 
     /// Opens from a `Tweet` already in hand (the feed) so the focal tweet renders
     /// instantly while ancestors and replies stream in.
     convenience init(tweet: Tweet) {
         self.init(tweetID: tweet.restID)
+        scrollToFocalOnLoad = false
         focalID = tweet.restID
         tweetsByID[tweet.restID] = tweet
     }
@@ -308,10 +315,26 @@ final class ThreadViewController: UIViewController {
         snapshot.appendItems(displayedReplies(), toSection: .replies)
         let shouldPinFocal = didRenderFocal && !ancestors.isEmpty
         dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
-            guard let self, shouldPinFocal, let anchorBefore else { return }
-            self.pinFocal(toScreenY: anchorBefore)
+            guard let self else { return }
+            if self.scrollToFocalOnLoad, !ancestors.isEmpty {
+                self.scrollToFocalOnLoad = false
+                self.scrollFocalToTop()
+            } else if shouldPinFocal, let anchorBefore {
+                self.pinFocal(toScreenY: anchorBefore)
+            }
         }
         didRenderFocal = true
+    }
+
+    /// Brings the focal tweet to the top of the viewport (used when a thread is
+    /// opened by id from a notification, so ancestors sit above it off-screen).
+    private func scrollFocalToTop() {
+        guard let focalID, let indexPath = dataSource.indexPath(for: focalID),
+              let attributes = collectionView.layoutAttributesForItem(at: indexPath) else { return }
+        let maxOffset = max(0, collectionView.contentSize.height - collectionView.bounds.height
+            + collectionView.adjustedContentInset.bottom)
+        let target = min(max(0, attributes.frame.minY - collectionView.adjustedContentInset.top), maxOffset)
+        collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: false)
     }
 
     /// The focal cell's top in the collection's content space minus the current

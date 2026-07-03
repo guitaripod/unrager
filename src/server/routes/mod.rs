@@ -1,3 +1,4 @@
+pub mod about;
 pub mod compose;
 pub mod config;
 pub mod engage;

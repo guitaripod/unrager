@@ -3,10 +3,9 @@ use crate::config::{self, AppConfig};
 use crate::error::Result;
 use crate::gql::GqlClient;
 use crate::model::Tweet;
+use crate::store::about::{AboutFetcher, AboutStore};
 use crate::store::feed::FeedStore;
 use crate::store::ingest::Activity;
-use crate::tui::about_fetch::AboutFetcher;
-use crate::tui::about_store::AboutStore;
 use crate::tui::ask;
 use crate::tui::background::Background;
 use crate::tui::brief::BriefView;
@@ -317,7 +316,7 @@ impl App {
         let config_dir = config::config_dir()?;
         let seen = SeenStore::open(&cache_dir.join("seen.db"))?;
         let notif_seen = SeenStore::open(&cache_dir.join("notif_seen.db"))?;
-        let about = AboutStore::open(&cache_dir.join("about.db"))?;
+        let about = AboutStore::open(&crate::store::about::db_path(&cache_dir))?;
         let about_fetcher = AboutFetcher::new(client.clone());
         let session_path = config_dir.join("session.json");
 

@@ -623,6 +623,7 @@ extension FeedViewController: NSTableViewDelegate {
         let seen = MacSettings.seenDimming && seenIDs.contains(tweet.restID)
         cell.configure(with: tweet, imagesEnabled: AppSettings.imagesEnabled,
                        contentWidth: contentWidth(), seen: seen)
+        applyFlag(to: cell, author: tweet.author)
         cell.onTapAuthor = { [weak self] in self?.navigator?.openProfile(handle: tweet.author.handle) }
         cell.onTapQuoted = { [weak self] in
             if let quoted = tweet.quotedTweet { self?.navigator?.openThread(for: quoted) }
@@ -640,6 +641,34 @@ extension FeedViewController: NSTableViewDelegate {
         let row = TweetRowView()
         row.identifier = TweetRowView.reuseID
         return row
+    }
+
+    /// Decorates the row with the author's country flag: synchronously when
+    /// the author already resolved this session, otherwise lazily — the
+    /// resolve lands as a direct label update on whichever visible rows show
+    /// that author, with no table reload.
+    private func applyFlag(to cell: TweetRowView, author: User) {
+        let flags = AppEnvironment.shared.flags
+        if let known = flags.cached(restID: author.restID) {
+            cell.setFlag(known.flag)
+            return
+        }
+        let authorID = author.restID
+        flags.resolve(restID: authorID, screenName: author.handle) { [weak self] resolved in
+            self?.updateVisibleFlags(authorID: authorID, flag: resolved.flag)
+        }
+    }
+
+    private func updateVisibleFlags(authorID: String, flag: String?) {
+        guard let flag, !flag.isEmpty else { return }
+        let visible = tableView.rows(in: scrollView.contentView.documentVisibleRect)
+        guard visible.length > 0 else { return }
+        for row in visible.location..<(visible.location + visible.length) {
+            guard let tweet = tweet(atRow: row), tweet.author.restID == authorID,
+                  let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? TweetRowView
+            else { continue }
+            cell.setFlag(flag)
+        }
     }
 
     /// The trailing end-of-feed / caught-up footer. The caught-up state is

@@ -3,7 +3,7 @@ use crate::config::AppConfig;
 use crate::gql::{GqlClient, QueryIdStore};
 use crate::model::{Tweet, User};
 use crate::parse::timeline::TimelinePage;
-use crate::tui::about_store::AboutStore;
+use crate::store::about::{AboutFetcher, AboutStore};
 use crate::tui::app::*;
 use crate::tui::event::Event;
 use crate::tui::filter::FilterMode;
@@ -31,7 +31,7 @@ pub fn dummy_app() -> (App, mpsc::UnboundedReceiver<Event>, TempDir) {
     let seen = SeenStore::open(&tmp.path().join("seen.db")).unwrap();
     let notif_seen = SeenStore::open(&tmp.path().join("notif_seen.db")).unwrap();
     let about = AboutStore::open(&tmp.path().join("about.db")).unwrap();
-    let about_fetcher = crate::tui::about_fetch::AboutFetcher::new(client.clone());
+    let about_fetcher = AboutFetcher::new(client.clone());
     let app = App {
         running: true,
         mode: InputMode::Normal,

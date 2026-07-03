@@ -36,9 +36,23 @@ final class ProfileViewController: FeedViewController {
                 let profile = try await AppEnvironment.shared.api.profile(handle: handle)
                 profileHeader.configure(with: profile.user)
                 title = profile.user.name
+                loadFlag(for: profile.user)
             } catch {
                 AppLogger.shared.warn("profile load failed: \(error)", category: .profile)
             }
+        }
+    }
+
+    /// Resolves the profiled user's country flag and shows the header's
+    /// "based in <country>" line, mirroring the TUI's profile header. The
+    /// header rides as a self-sizing boundary item, so its layout is
+    /// invalidated for the extra line to be measured.
+    private func loadFlag(for user: User) {
+        AppEnvironment.shared.flags.resolve(restID: user.restID, screenName: user.handle) {
+            [weak self] resolved in
+            guard let self, resolved.country != nil else { return }
+            self.profileHeader.setBasedIn(flag: resolved.flag, country: resolved.country)
+            self.collectionView.collectionViewLayout.invalidateLayout()
         }
     }
 }
@@ -48,6 +62,7 @@ private final class ProfileHeaderView: UIView {
     private let nameLabel = UILabel()
     private let handleLabel = UILabel()
     private let countsLabel = UILabel()
+    private let basedInLabel = UILabel()
     private let briefButton = UIButton(configuration: .tinted())
     private let separator = UIView()
     var onBrief: (() -> Void)?
@@ -65,6 +80,9 @@ private final class ProfileHeaderView: UIView {
         handleLabel.textColor = DesignSystem.Color.secondaryLabel
         countsLabel.font = DesignSystem.Typography.metric()
         countsLabel.textColor = DesignSystem.Color.secondaryLabel
+        basedInLabel.font = DesignSystem.Typography.metric()
+        basedInLabel.textColor = DesignSystem.Color.secondaryLabel
+        basedInLabel.isHidden = true
 
         var config = UIButton.Configuration.tinted()
         config.title = "Brief"
@@ -74,7 +92,7 @@ private final class ProfileHeaderView: UIView {
         briefButton.configuration = config
         briefButton.addAction(UIAction { [weak self] _ in self?.onBrief?() }, for: .touchUpInside)
 
-        let text = UIStackView(arrangedSubviews: [nameLabel, handleLabel, countsLabel])
+        let text = UIStackView(arrangedSubviews: [nameLabel, handleLabel, countsLabel, basedInLabel])
         text.axis = .vertical
         text.spacing = 2
 
@@ -115,5 +133,17 @@ private final class ProfileHeaderView: UIView {
         if AppSettings.imagesEnabled, let url = user.avatarURL.flatMap(URL.init) {
             avatar.load(url: url, targetSize: CGSize(width: 64, height: 64))
         }
+    }
+
+    /// Shows "based in <flag> <country>" (the TUI's profile line) once the
+    /// about-account lookup resolves; hidden when X carries no country.
+    func setBasedIn(flag: String?, country: String?) {
+        guard let country, !country.isEmpty else {
+            basedInLabel.isHidden = true
+            return
+        }
+        let flagPrefix = flag.map { "\($0) " } ?? ""
+        basedInLabel.text = "based in \(flagPrefix)\(country)"
+        basedInLabel.isHidden = false
     }
 }

@@ -1,5 +1,3 @@
-pub mod about_fetch;
-pub mod about_store;
 pub mod app;
 mod app_fetch;
 mod app_keys;

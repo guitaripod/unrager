@@ -2,6 +2,7 @@ use crate::auth::chromium;
 use crate::config::{self, FeedConfig};
 use crate::error::Result;
 use crate::gql::{GqlClient, QueryIdStore};
+use crate::store::about::{self, AboutFetcher, AboutStore};
 use crate::store::feed::FeedStore;
 use crate::store::ingest::Activity;
 use crate::tui::filter::{Classifier, FilterCache, FilterConfig};
@@ -25,6 +26,10 @@ pub struct AppState {
     pub feed: Mutex<FeedStore>,
     /// Bumped on every feed read; the ingest worker uses it to gate polling.
     pub activity: Arc<Activity>,
+    /// Cache over `about.db` — the same file the TUI uses, so flags a TUI
+    /// session already resolved answer instantly here and vice versa.
+    pub about: Mutex<AboutStore>,
+    pub about_fetcher: AboutFetcher,
     pub feed_cfg: FeedConfig,
     pub feed_db_path: PathBuf,
     pub lock_path: PathBuf,
@@ -57,6 +62,9 @@ impl AppState {
         let feed_db_path = cache_dir.join("feed.db");
         let feed = FeedStore::open_reader(&feed_db_path)?;
 
+        let about_store = AboutStore::open(&about::db_path(&cache_dir))?;
+        let about_fetcher = AboutFetcher::new(gql.clone());
+
         let session_path = config_dir.join("server-session.json");
         let state: SessionState = load_session_state(&session_path).unwrap_or_default();
 
@@ -69,6 +77,8 @@ impl AppState {
             session: Mutex::new(state),
             feed: Mutex::new(feed),
             activity: Arc::new(Activity::idle()),
+            about: Mutex::new(about_store),
+            about_fetcher,
             feed_cfg: app_config.feed.clone(),
             feed_db_path,
             lock_path: cache_dir.join("server.lock"),

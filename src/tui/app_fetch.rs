@@ -921,13 +921,18 @@ impl App {
             return;
         }
         self.about_inflight.insert(rest_id.clone());
-        self.about_fetcher.spawn(rest_id, handle, self.tx.clone());
+        let fetcher = self.about_fetcher.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = fetcher.fetch(&handle).await;
+            let _ = tx.send(Event::AboutProfileResolved { rest_id, result });
+        });
     }
 
     pub(super) fn handle_about_profile_resolved(
         &mut self,
         rest_id: String,
-        result: crate::tui::about_fetch::FetchOutcome,
+        result: crate::store::about::FetchOutcome,
     ) {
         self.about_inflight.remove(&rest_id);
         match result {

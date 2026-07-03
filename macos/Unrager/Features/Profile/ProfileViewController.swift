@@ -28,9 +28,19 @@ final class ProfileViewController: FeedViewController {
             do {
                 let profile = try await api.profile(handle: handle)
                 profileHeader.configure(with: profile.user, imagesEnabled: AppSettings.imagesEnabled)
+                loadFlag(for: profile.user)
             } catch {
                 AppLogger.shared.warn("profile load failed: \(error)", category: .profile)
             }
+        }
+    }
+
+    /// Resolves the profiled user's country flag and shows the header's
+    /// "based in <country>" line, mirroring the TUI's profile header.
+    private func loadFlag(for user: User) {
+        AppEnvironment.shared.flags.resolve(restID: user.restID, screenName: user.handle) {
+            [weak profileHeader] resolved in
+            profileHeader?.setBasedIn(flag: resolved.flag, country: resolved.country)
         }
     }
 

@@ -50,6 +50,7 @@ final class TweetRowView: NSTableCellView {
 
     private let avatar = AsyncImageView()
     private let nameLabel = TweetRowView.label(font: DesignSystem.Typography.name(), color: DesignSystem.Color.label)
+    private let flagLabel = TweetRowView.label(font: DesignSystem.Typography.name(), color: DesignSystem.Color.label)
     private let verifiedBadge = NSImageView()
     private let handleTimeLabel = TweetRowView.label(font: DesignSystem.Typography.handle(), color: DesignSystem.Color.secondaryLabel)
     private let replyingLabel = TweetRowView.label(font: DesignSystem.Typography.metric(), color: DesignSystem.Color.secondaryLabel)
@@ -108,10 +109,14 @@ final class TweetRowView: NSTableCellView {
 
         nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         nameLabel.lineBreakMode = .byTruncatingTail
+        flagLabel.setContentHuggingPriority(.required, for: .horizontal)
+        flagLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        flagLabel.isHidden = true
+        flagLabel.setAccessibilityElement(false)
         handleTimeLabel.lineBreakMode = .byTruncatingTail
         handleTimeLabel.setContentCompressionResistancePriority(.defaultLow - 1, for: .horizontal)
 
-        let header = NSStackView(views: [nameLabel, verifiedBadge, handleTimeLabel])
+        let header = NSStackView(views: [nameLabel, flagLabel, verifiedBadge, handleTimeLabel])
         header.orientation = .horizontal
         header.spacing = DesignSystem.Spacing.xs
         header.alignment = .firstBaseline
@@ -266,6 +271,7 @@ final class TweetRowView: NSTableCellView {
         self.contentWidth = contentWidth
         setIndent(inThread ? indentLevel : 0)
         nameLabel.stringValue = tweet.author.name
+        setFlag(nil)
         verifiedBadge.isHidden = !tweet.author.verified
         configureHandleLine(tweet, isFocal: isFocal)
         configureReplyingRow(tweet, isReply: isReply, inThread: inThread)
@@ -288,6 +294,14 @@ final class TweetRowView: NSTableCellView {
         analyticsView.isHidden = !showAnalytics
         if showAnalytics { analyticsView.configure(with: tweet) }
         configureActions(tweet)
+    }
+
+    /// Shows (or clears) the author's country flag directly after the display
+    /// name, mirroring the TUI's name-line flag. Safe to call on a visible
+    /// row — the header stays a fixed single line, so no height change.
+    func setFlag(_ flag: String?) {
+        flagLabel.stringValue = flag ?? ""
+        flagLabel.isHidden = (flag ?? "").isEmpty
     }
 
     private func configureHandleLine(_ tweet: Tweet, isFocal: Bool) {

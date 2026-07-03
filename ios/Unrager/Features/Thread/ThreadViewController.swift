@@ -40,6 +40,7 @@ final class ThreadViewController: UIViewController {
         cell.configure(with: tweet, imagesEnabled: AppSettings.imagesEnabled,
                        contentWidth: max(120, width - CGFloat(min(indent, 3)) * ThreadRailView.step),
                        inReplyContext: true, focal: isFocal, ownTweet: ownTweet, indentLevel: indent)
+        self.applyFlag(to: cell, author: tweet.author)
         cell.onTapAuthor = { [weak self] in self?.push(ProfileViewController(handle: tweet.author.handle)) }
         cell.onLike = { [weak self] in self?.toggleLike(tweet, cell: cell) }
         cell.onReply = { [weak self] in self?.reply(to: tweet) }
@@ -329,6 +330,31 @@ final class ThreadViewController: UIViewController {
 
     private func push(_ vc: UIViewController) {
         navigationController?.pushViewController(vc, animated: true)
+    }
+
+    /// Decorates a thread row with the author's country flag: synchronously on
+    /// a session-cache hit, otherwise lazily via a direct label update on the
+    /// visible cells showing that author — never a snapshot churn.
+    private func applyFlag(to cell: TweetCell, author: User) {
+        let flags = AppEnvironment.shared.flags
+        if let known = flags.cached(restID: author.restID) {
+            cell.setFlag(known.flag)
+            return
+        }
+        let authorID = author.restID
+        flags.resolve(restID: authorID, screenName: author.handle) { [weak self] resolved in
+            self?.updateVisibleFlags(authorID: authorID, flag: resolved.flag)
+        }
+    }
+
+    private func updateVisibleFlags(authorID: String, flag: String?) {
+        guard let flag, !flag.isEmpty else { return }
+        for indexPath in collectionView.indexPathsForVisibleItems {
+            guard let id = dataSource.itemIdentifier(for: indexPath),
+                  let tweet = tweetsByID[id], tweet.author.restID == authorID,
+                  let cell = collectionView.cellForItem(at: indexPath) as? TweetCell else { continue }
+            cell.setFlag(flag)
+        }
     }
 }
 

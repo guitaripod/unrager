@@ -14,10 +14,10 @@ pub use crate::models::ServerErrorKind;
 pub use error::ApiError;
 
 use crate::models::{
-    AskPreset, ComposeMedia, ComposeResult, EngageResult, FeedStatusResponse, FilterConfig,
-    FilterVerdictEvent, LikersPage, MarkSeenResult, NotificationsPage, ProfileView, SearchProduct,
-    SeenCheck, ServerError, ServerHealth, SessionState, ThreadView, TimelinePage, TokenEvent,
-    Tweet, Whoami,
+    AboutView, AskPreset, ComposeMedia, ComposeResult, EngageResult, FeedStatusResponse,
+    FilterConfig, FilterVerdictEvent, LikersPage, MarkSeenResult, NotificationsPage, ProfileView,
+    SearchProduct, SeenCheck, ServerError, ServerHealth, SessionState, ThreadView, TimelinePage,
+    TokenEvent, Tweet, Whoami,
 };
 use futures::{Stream, StreamExt};
 use reqwest::Client;
@@ -195,6 +195,18 @@ impl ApiClient {
         }
         self.get(self.build(&["api", "likers", tweet_id], &query)?)
             .await
+    }
+
+    /// A user's about-account block with the server-derived country flag.
+    /// `status` distinguishes a usable answer (`resolved`/`none`, cacheable
+    /// for the session) from `deferred` (rate-limited upstream — retry later,
+    /// never cache).
+    pub async fn about(&self, rest_id: &str, screen_name: &str) -> Result<AboutView, ApiError> {
+        self.get(self.build(
+            &["api", "about", rest_id],
+            &[("screen_name", screen_name.to_string())],
+        )?)
+        .await
     }
 
     // MARK: - Engage
@@ -558,6 +570,36 @@ mod tests {
 
         let err = client(&server).tweet("123").await.unwrap_err();
         assert_eq!(err, ApiError::NotFound("no such tweet".to_string()));
+    }
+
+    #[tokio::test]
+    async fn about_sends_screen_name_and_decodes_resolved() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/about/44196397"))
+            .and(query_param("screen_name", "elonmusk"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "resolved",
+                "profile": {
+                    "rest_id": "44196397",
+                    "handle": "elonmusk",
+                    "name": "Elon Musk",
+                    "account_based_in": "United States"
+                },
+                "alpha2": "US",
+                "flag": "🇺🇸"
+            })))
+            .mount(&server)
+            .await;
+
+        let view = client(&server).about("44196397", "elonmusk").await.unwrap();
+        assert_eq!(view.status, crate::models::AboutStatus::Resolved);
+        assert_eq!(
+            view.profile.unwrap().account_based_in.as_deref(),
+            Some("United States")
+        );
+        assert_eq!(view.alpha2.as_deref(), Some("US"));
+        assert_eq!(view.flag.as_deref(), Some("🇺🇸"));
     }
 
     #[tokio::test]

@@ -4,6 +4,7 @@ mod card;
 mod compose;
 mod desktop;
 mod feed;
+mod flags;
 mod image;
 mod media_viewer;
 mod notifications;

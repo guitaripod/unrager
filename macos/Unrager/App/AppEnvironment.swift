@@ -9,6 +9,9 @@ final class AppEnvironment {
     static let shared = AppEnvironment()
 
     let api: APIClient
+    /// Session-scoped author country-flag resolver shared by every feed,
+    /// thread and profile screen, so an author resolves at most once per run.
+    let flags: AuthorFlags
     let log = AppLogger.shared
 
     /// The signed-in account, fetched once and cached. Lets surfaces like the
@@ -19,6 +22,7 @@ final class AppEnvironment {
 
     private init() {
         api = APIClient(baseURL: { AppSettings.serverURL })
+        flags = AuthorFlags(api: api)
     }
 
     /// The signed-in handle if already known, else nil. Non-blocking — kicks off

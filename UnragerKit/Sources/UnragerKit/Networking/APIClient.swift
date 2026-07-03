@@ -119,6 +119,16 @@ public final class APIClient: Sendable {
         return try await get("api/likers/\(pathSegment(tweetID))", query: query, as: LikersPage.self)
     }
 
+    /// The about-account view for a user: X's self-declared "based in"
+    /// country with a server-derived alpha-2 code and flag emoji. A
+    /// `deferred` status means the server was rate-limited upstream — never
+    /// cache it, retry later.
+    public func about(restID: String, screenName: String) async throws -> AboutView {
+        try await get("api/about/\(pathSegment(restID))",
+                      query: [URLQueryItem(name: "screen_name", value: screenName)],
+                      as: AboutView.self)
+    }
+
     // MARK: - Engage
 
     public func like(tweetID: String) async throws -> EngageResult {

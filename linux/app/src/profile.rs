@@ -2,7 +2,7 @@
 //! user's recent tweets. `GET /api/profile/{handle}` for the first page, then
 //! `GET /api/sources/user/{handle}` for pagination.
 
-use crate::card::{CardCallbacks, build_tweet_card, verified_mark};
+use crate::card::{CardCallbacks, build_tweet_card, flag_mark, verified_mark};
 use crate::shared::{Ctx, Route, empty_state, error_state, loading_state};
 use adw::prelude::*;
 use relm4::prelude::*;
@@ -294,6 +294,7 @@ fn fill_header(header: &gtk::Box, user: &User, ctx: &Ctx) {
     name.set_xalign(0.0);
     name.add_css_class("profile-name");
     name_line.append(&name);
+    name_line.append(&flag_mark(user, ctx));
     if user.verified {
         name_line.append(&verified_mark());
     }
@@ -313,5 +314,33 @@ fn fill_header(header: &gtk::Box, user: &User, ctx: &Ctx) {
     counts.add_css_class("tweet-meta");
     column.append(&counts);
 
+    column.append(&based_in_line(user, ctx));
+
     header.append(&column);
+}
+
+/// The "🇺🇸 based in United States" row under the follower counts, mirroring
+/// the TUI's profile pane. Hidden until the session flag cache resolves the
+/// user to a country; users without one never show it.
+fn based_in_line(user: &User, ctx: &Ctx) -> gtk::Label {
+    let based_in = gtk::Label::new(None);
+    based_in.set_xalign(0.0);
+    based_in.add_css_class("tweet-meta");
+    based_in.set_visible(false);
+    let weak = based_in.downgrade();
+    ctx.resolve_about(&user.rest_id, &user.handle, move |info| {
+        let Some(label) = weak.upgrade() else {
+            return;
+        };
+        let Some(country) = info.based_in.as_deref() else {
+            return;
+        };
+        let text = match info.flag.as_deref() {
+            Some(flag) => format!("{flag} based in {country}"),
+            None => format!("based in {country}"),
+        };
+        label.set_text(&text);
+        label.set_visible(true);
+    });
+    based_in
 }

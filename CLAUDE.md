@@ -58,8 +58,9 @@ The crates.io step reads `CARGO_REGISTRY_TOKEN` from repo secrets. Each publish 
 - `src/auth/` — chromium cookie extraction + OAuth 2.0 PKCE
 - `src/gql/` — GraphQL client, query ID scraper, endpoint builders
 - `src/parse/` — response → Tweet/User structs
-- `src/store/` — materialized Home buffer (gated `any(tui, server)`)
+- `src/store/` — materialized Home buffer + shared caches (gated `any(tui, server)`)
   - `feed.rs` — `FeedStore` over `feed.db`: capped per-variant ring buffer (For You = `ingest_seq DESC`, Following = `created_at DESC`), keyset pagination, `fs2` flock writer lock (`open_writer`/`open_reader`), verdict column, freshness `feed_meta`
+  - `about.rs` — `AboutStore` (`about.db`, shared TUI+server) + `AboutFetcher` (single-flight `AboutAccountQuery`, only `Ok` outcomes cached); backs the TUI flag column and `GET /api/about/{rest_id}` (`src/server/routes/about.rs` → `unrager_model::AboutView`, status resolved/none/deferred)
   - `ingest.rs` — background worker (`run`) + `Activity` gate: poll → parse → classify (reusing `FilterCache`/`ClassifierHandle`) → upsert → trim. Parks on **buffer saturation, not idle time** (`buffer_saturated`): it keeps topping the buffer up in the background until For You hits the cap and Following hits the cap or goes "dry" (a poll surfaces nothing new), then parks (no fetching/GPU) until a client wakes it — so the buffer is already large when the app opens. Polls briskly (`active_poll_secs`) only while a client is active (`ACTIVE_WINDOW_SECS`), otherwise the slower `recent_poll_secs` while still filling. (There is no longer an `idle_after_secs` time-based park.)
 - `src/model.rs` — Tweet, User, Media, MediaKind
 - `src/util.rs` — shared utilities (short_count, parse_tweet_ref)

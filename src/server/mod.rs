@@ -87,6 +87,7 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/feed/status", get(routes::feed::status))
         .route("/tweet/{id}", get(routes::tweet::single))
         .route("/thread/{id}", get(routes::tweet::thread))
+        .route("/about/{rest_id}", get(routes::about::about))
         .route("/profile/{handle}", get(routes::profile::profile))
         .route("/likers/{tweet_id}", get(routes::profile::likers))
         .route("/engage/{tweet_id}/like", post(routes::engage::like))

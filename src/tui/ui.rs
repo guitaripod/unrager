@@ -249,7 +249,7 @@ pub struct RenderContext<'a> {
     pub songlink_reg: &'a crate::tui::songlink::SongLinkRegistry,
     pub translations: &'a HashMap<String, String>,
     pub liked_tweet_ids: &'a HashSet<String>,
-    pub about_store: &'a crate::tui::about_store::AboutStore,
+    pub about_store: &'a crate::store::about::AboutStore,
     pub write_rate_limit: Option<std::time::Duration>,
     pub self_handle: Option<&'a str>,
     /// Overrides the cell pixel size used for sizing the feed-avatar

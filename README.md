@@ -145,7 +145,7 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
   <img src="assets/profile.png" alt="own profile showing tweets with full metrics and expanded bodies" width="800">
 </p>
 
-`p` opens the profile of whoever your cursor is on — the selected tweet's author, the notification actor, or your own profile if nothing's selected. The header pins a kitty-graphics avatar, display name, handle, and follower / following counts; on non-kitty terminals (or while the image is downloading) it falls back to a text-only header. When X exposes an `about_profile` block (via the `AboutAccountQuery` endpoint), the header also surfaces the country flag + `based in <country>`, the location source ("via United States App Store" / "via Web"), `joined <Mon YYYY>`, blue-verification start date, the X affiliate badge handle, and the number of past username changes. The country flag also rides next to the handle in every feed row. Your own profile renders with full metrics forced visible — including an analytics block on the focal tweet (views, likes, retweets, replies, quotes, bookmarks, engagement rate). `:user <handle>` opens anyone's timeline. Press `R` to toggle between their tweets and replies. `<space> o` switches between all tweets and originals only (hides replies, quotes, retweets).
+`p` opens the profile of whoever your cursor is on — the selected tweet's author, the notification actor, or your own profile if nothing's selected. The header pins a kitty-graphics avatar, display name, handle, and follower / following counts; on non-kitty terminals (or while the image is downloading) it falls back to a text-only header. When X exposes an `about_profile` block (via the `AboutAccountQuery` endpoint), the header also surfaces the country flag + `based in <country>`, the location source ("via United States App Store" / "via Web"), `joined <Mon YYYY>`, blue-verification start date, the X affiliate badge handle, and the number of past username changes. The country flag also rides next to the handle in every feed row — in the TUI and, via `unrager serve`, in the iOS, macOS, and Linux apps. Your own profile renders with full metrics forced visible — including an analytics block on the focal tweet (views, likes, retweets, replies, quotes, bookmarks, engagement rate). `:user <handle>` opens anyone's timeline. Press `R` to toggle between their tweets and replies. `<space> o` switches between all tweets and originals only (hides replies, quotes, retweets).
 
 ## Help overlay
 
@@ -384,7 +384,7 @@ Config paths are platform-native: Linux uses `~/.config/unrager/` + `~/.cache/un
 | `~/.cache/unrager/seen.db` | Read-tracking SQLite |
 | `~/.cache/unrager/filter.db` | Filter verdict cache |
 | `~/.cache/unrager/feed.db` | Materialized Home buffer — pre-fetched, pre-classified For You + Following (capped ring; `feed.db.writer.lock` guards the single writer) |
-| `~/.cache/unrager/about.db` | `AboutAccountQuery` cache (country flag + about_profile, keyed by rest_id; negative entries TTL 30d) |
+| `~/.cache/unrager/about.db` | `AboutAccountQuery` cache (country flag + about_profile, keyed by rest_id; negative entries TTL 30d; shared by the TUI and `unrager serve`, which exposes it to the native clients via `GET /api/about/{rest_id}`) |
 | `~/.cache/unrager/media/<tweet_id>/` | Downloaded attachments for `m` (external viewer) |
 | `~/.cache/unrager/screenshots/` | PNG screenshots written by `S` |
 | `~/.cache/unrager/avatars/<sha256>.bin` | Author-avatar disk cache (LRU-pruned to 50 MB) |

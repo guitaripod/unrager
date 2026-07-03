@@ -187,7 +187,7 @@ pub enum Event {
     },
     AboutProfileResolved {
         rest_id: String,
-        result: crate::tui::about_fetch::FetchOutcome,
+        result: crate::store::about::FetchOutcome,
     },
 }
 

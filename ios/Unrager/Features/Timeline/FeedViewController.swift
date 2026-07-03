@@ -56,6 +56,7 @@ class FeedViewController: UIViewController {
             - DesignSystem.Spacing.m - DesignSystem.Spacing.l
         cell.configure(with: tweet, imagesEnabled: AppSettings.imagesEnabled,
                        contentWidth: max(120, contentWidth), seen: self.viewModel.isSeen(tweet.restID))
+        self.applyFlag(to: cell, author: tweet.author)
         cell.onTapAuthor = { [weak self] in self?.handleProfile(tweet.author.handle) }
         cell.onTapPhoto = { [weak self] index in self?.openMedia(tweet, at: index) }
         cell.onTapCard = { url in UIApplication.shared.open(url) }
@@ -191,6 +192,32 @@ class FeedViewController: UIViewController {
     private func cell(for tweet: Tweet) -> TweetCell? {
         guard let index = dataSource.indexPath(for: tweet.restID) else { return nil }
         return collectionView.cellForItem(at: index) as? TweetCell
+    }
+
+    /// Decorates the row with the author's country flag: synchronously when
+    /// the author already resolved this session, otherwise lazily — the
+    /// resolve lands as a direct label update on whichever cells currently
+    /// show that author, with no snapshot churn.
+    private func applyFlag(to cell: TweetCell, author: User) {
+        let flags = AppEnvironment.shared.flags
+        if let known = flags.cached(restID: author.restID) {
+            cell.setFlag(known.flag)
+            return
+        }
+        let authorID = author.restID
+        flags.resolve(restID: authorID, screenName: author.handle) { [weak self] resolved in
+            self?.updateVisibleFlags(authorID: authorID, flag: resolved.flag)
+        }
+    }
+
+    private func updateVisibleFlags(authorID: String, flag: String?) {
+        guard let flag, !flag.isEmpty else { return }
+        for indexPath in collectionView.indexPathsForVisibleItems {
+            guard let id = dataSource.itemIdentifier(for: indexPath),
+                  let tweet = tweetsByID[id], tweet.author.restID == authorID,
+                  let cell = collectionView.cellForItem(at: indexPath) as? TweetCell else { continue }
+            cell.setFlag(flag)
+        }
     }
 
     /// One Save action for a lone attachment, or a "Save media" submenu with

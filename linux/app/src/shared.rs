@@ -1,5 +1,6 @@
 //! Cross-component shared context and routing messages.
 
+use crate::flags::{AboutInfo, FlagResolver};
 use crate::image::ImagePipeline;
 use adw::prelude::*;
 use std::cell::Cell;
@@ -65,6 +66,7 @@ pub fn error_state<F: Fn() + 'static>(message: &str, retry: F) -> adw::StatusPag
 pub struct Ctx {
     pub api: Arc<ApiClient>,
     images: ImagePipeline,
+    flags: FlagResolver,
     pub media_size: Rc<Cell<MediaSize>>,
     images_enabled: Rc<Cell<bool>>,
     /// Whether scrolled-past tweets are reported to the server's seen store —
@@ -80,12 +82,26 @@ impl Ctx {
         track_seen: bool,
     ) -> Self {
         Self {
-            api,
+            api: api.clone(),
             images: ImagePipeline::new(),
+            flags: FlagResolver::new(api),
             media_size: Rc::new(Cell::new(media_size)),
             images_enabled: Rc::new(Cell::new(images_enabled)),
             track_seen: Rc::new(Cell::new(track_seen)),
         }
+    }
+
+    /// Lazily resolves an author's country flag / "based in" info through the
+    /// session-scoped [`FlagResolver`]; `apply` fires once with the answer
+    /// (synchronously on a cache hit) and never for authors the server keeps
+    /// deferring, so it must hold only weak widget references.
+    pub fn resolve_about(
+        &self,
+        rest_id: &str,
+        screen_name: &str,
+        apply: impl Fn(&AboutInfo) + 'static,
+    ) {
+        self.flags.resolve(rest_id, screen_name, apply);
     }
 
     /// Whether inline avatars/media download at all — the "Load images"

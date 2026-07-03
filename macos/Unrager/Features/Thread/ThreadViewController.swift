@@ -265,6 +265,7 @@ extension ThreadViewController: NSTableViewDelegate {
                        isReply: isReply, isFocal: isFocal, inThread: true,
                        indentLevel: indent,
                        showAnalytics: isFocal && isOwn)
+        applyFlag(to: cell, author: tweet.author)
         cell.onTapAuthor = { [weak self] in self?.navigator?.openProfile(handle: tweet.author.handle) }
         cell.onLike = { [weak self] in self?.toggleLike(tweet) }
         cell.onReply = { [weak self] in self?.navigator?.compose(replyingTo: tweet) }
@@ -285,6 +286,30 @@ extension ThreadViewController: NSTableViewDelegate {
         let row = TweetRowView()
         row.identifier = TweetRowView.reuseID
         return row
+    }
+
+    /// Decorates a thread row with the author's country flag: synchronously
+    /// on a session-cache hit, otherwise lazily via a direct label update on
+    /// the visible rows showing that author — never a table reload.
+    private func applyFlag(to cell: TweetRowView, author: User) {
+        let flags = AppEnvironment.shared.flags
+        if let known = flags.cached(restID: author.restID) {
+            cell.setFlag(known.flag)
+            return
+        }
+        let authorID = author.restID
+        flags.resolve(restID: authorID, screenName: author.handle) { [weak self] resolved in
+            self?.updateVisibleFlags(authorID: authorID, flag: resolved.flag)
+        }
+    }
+
+    private func updateVisibleFlags(authorID: String, flag: String?) {
+        guard let flag, !flag.isEmpty else { return }
+        for (index, tweet) in rows.enumerated() where tweet.author.restID == authorID {
+            guard let cell = tableView.view(atColumn: 0, row: index, makeIfNecessary: false) as? TweetRowView
+            else { continue }
+            cell.setFlag(flag)
+        }
     }
 
     /// Opens tapped media in the full-window viewer — a zoomable photo gallery

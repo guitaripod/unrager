@@ -3,8 +3,8 @@
 //! emits — the same fixtures the Apple client tests against.
 
 use unrager_gtk_core::model::{
-    FeedStatusResponse, FilterVerdictEvent, Media, MediaKind, Notification, SearchProduct,
-    SessionState, SourceKind, ThreadView, TokenEvent, Tweet, Verdict,
+    AboutStatus, AboutView, FeedStatusResponse, FilterVerdictEvent, Media, MediaKind, Notification,
+    SearchProduct, SessionState, SourceKind, ThreadView, TokenEvent, Tweet, Verdict,
 };
 
 fn decode<T: serde::de::DeserializeOwned>(json: &str) -> T {
@@ -205,6 +205,66 @@ fn sse_event_shapes() {
     assert!(done.done);
     let verdict: FilterVerdictEvent = decode(r#"{"id":"1","verdict":"hide"}"#);
     assert_eq!(verdict.verdict, Verdict::Hide);
+}
+
+#[test]
+fn about_view_resolved_carries_profile_and_derived_flag() {
+    let json = r#"
+    {"status":"resolved",
+     "profile":{"rest_id":"44196397","handle":"elonmusk","name":"Elon Musk",
+                "account_based_in":"United States","location_accurate":true,
+                "source":"United States App Store","username_changes":2,
+                "created_at":"2009-06-02T20:12:29Z","is_blue_verified":true,"verified":false},
+     "alpha2":"US","flag":"🇺🇸"}
+    "#;
+    let view: AboutView = decode(json);
+    assert_eq!(view.status, AboutStatus::Resolved);
+    let profile = view.profile.expect("resolved carries a profile");
+    assert_eq!(profile.handle, "elonmusk");
+    assert_eq!(profile.account_based_in.as_deref(), Some("United States"));
+    assert_eq!(view.alpha2.as_deref(), Some("US"));
+    assert_eq!(view.flag.as_deref(), Some("🇺🇸"));
+}
+
+#[test]
+fn about_view_resolved_without_country_has_no_flag() {
+    let json = r#"
+    {"status":"resolved",
+     "profile":{"rest_id":"9","handle":"a","name":"A"},
+     "alpha2":null,"flag":null}
+    "#;
+    let view: AboutView = decode(json);
+    assert_eq!(view.status, AboutStatus::Resolved);
+    assert!(view.profile.is_some());
+    assert!(view.alpha2.is_none());
+    assert!(view.flag.is_none());
+}
+
+#[test]
+fn about_view_none_decodes_with_explicit_nulls_and_with_omitted_fields() {
+    let explicit: AboutView =
+        decode(r#"{"status":"none","profile":null,"alpha2":null,"flag":null}"#);
+    assert_eq!(explicit.status, AboutStatus::None);
+    assert!(explicit.profile.is_none());
+    assert!(explicit.alpha2.is_none());
+    assert!(explicit.flag.is_none());
+
+    let omitted: AboutView = decode(r#"{"status":"none"}"#);
+    assert_eq!(omitted.status, AboutStatus::None);
+    assert!(omitted.profile.is_none());
+    assert!(omitted.flag.is_none());
+}
+
+#[test]
+fn about_view_deferred_decodes_with_explicit_nulls_and_with_omitted_fields() {
+    let explicit: AboutView =
+        decode(r#"{"status":"deferred","profile":null,"alpha2":null,"flag":null}"#);
+    assert_eq!(explicit.status, AboutStatus::Deferred);
+    assert!(explicit.profile.is_none());
+
+    let omitted: AboutView = decode(r#"{"status":"deferred"}"#);
+    assert_eq!(omitted.status, AboutStatus::Deferred);
+    assert!(omitted.flag.is_none());
 }
 
 #[test]

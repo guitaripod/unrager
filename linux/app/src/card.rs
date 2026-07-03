@@ -78,6 +78,7 @@ fn header_row(tweet: &Tweet, ctx: &Ctx, cb: &CardCallbacks) -> gtk::Widget {
     name.set_ellipsize(pango::EllipsizeMode::End);
     name.add_css_class("tweet-name");
     name_line.append(&name);
+    name_line.append(&flag_mark(&tweet.author, ctx));
     if tweet.author.verified {
         name_line.append(&verified_mark());
     }
@@ -222,6 +223,29 @@ fn with_play_badge(picture: gtk::Picture, playable: bool) -> gtk::Widget {
     badge.set_can_target(false);
     overlay.add_overlay(&badge);
     overlay.upcast()
+}
+
+/// The author's country flag directly after the display name, mirroring the
+/// TUI. Starts hidden and fills in asynchronously once the session flag cache
+/// resolves the author (synchronously on a cache hit); authors without a
+/// country simply never show it. The tooltip carries the country name, since
+/// a flag glyph alone can be ambiguous.
+pub(crate) fn flag_mark(author: &unrager_gtk_core::model::User, ctx: &Ctx) -> gtk::Label {
+    let flag = gtk::Label::new(None);
+    flag.set_visible(false);
+    flag.add_css_class("flag");
+    let weak = flag.downgrade();
+    ctx.resolve_about(&author.rest_id, &author.handle, move |info| {
+        let Some(label) = weak.upgrade() else {
+            return;
+        };
+        if let Some(emoji) = info.flag.as_deref() {
+            label.set_text(emoji);
+            label.set_tooltip_text(info.based_in.as_deref());
+            label.set_visible(true);
+        }
+    });
+    flag
 }
 
 /// A verified badge as a themed symbolic icon rather than a raw "✓" glyph, so

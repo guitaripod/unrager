@@ -63,6 +63,7 @@ final class TweetCell: UICollectionViewCell {
 
     private let avatar = AsyncImageView(frame: .zero)
     private let nameLabel = UILabel()
+    private let flagLabel = UILabel()
     private let verifiedBadge = UIImageView()
     private let replyMarker = UIImageView()
     private let handleTimeLabel = UILabel()
@@ -142,6 +143,7 @@ final class TweetCell: UICollectionViewCell {
     ) {
         setIndent(indentLevel)
         nameLabel.text = tweet.author.name
+        setFlag(nil)
         verifiedBadge.isHidden = !tweet.author.verified
         replyMarker.isHidden = !(tweet.inReplyToTweetID != nil && !inReplyContext)
         handleTimeLabel.attributedText = Self.handleTime(tweet, absolute: focal)
@@ -165,6 +167,15 @@ final class TweetCell: UICollectionViewCell {
         configureActions(tweet)
         analyticsView.configure(tweet, visible: focal && ownTweet)
         configureAccessibility(tweet, seen: seen)
+    }
+
+    /// Shows (or clears) the author's country flag directly after the display
+    /// name, mirroring the TUI's name-line flag. Safe to call on a visible
+    /// cell — the header is a fixed single line, so no height change and no
+    /// snapshot churn.
+    func setFlag(_ flag: String?) {
+        flagLabel.text = flag
+        flagLabel.isHidden = (flag ?? "").isEmpty
     }
 
     /// Indents the card by reply depth so a reply-to-a-reply sits further right
@@ -291,6 +302,12 @@ final class TweetCell: UICollectionViewCell {
         nameLabel.textColor = DesignSystem.Color.label
         nameLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
+        flagLabel.font = DesignSystem.Typography.name()
+        flagLabel.setContentHuggingPriority(.required, for: .horizontal)
+        flagLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        flagLabel.isHidden = true
+        flagLabel.isAccessibilityElement = false
+
         verifiedBadge.image = DesignSystem.icon("checkmark.seal.fill", pointSize: 13)
         verifiedBadge.tintColor = DesignSystem.Color.verified
         verifiedBadge.setContentHuggingPriority(.required, for: .horizontal)
@@ -306,7 +323,7 @@ final class TweetCell: UICollectionViewCell {
         handleTimeLabel.textColor = DesignSystem.Color.secondaryLabel
         handleTimeLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let header = UIStackView(arrangedSubviews: [replyMarker, nameLabel, verifiedBadge, handleTimeLabel, UIView()])
+        let header = UIStackView(arrangedSubviews: [replyMarker, nameLabel, flagLabel, verifiedBadge, handleTimeLabel, UIView()])
         header.axis = .horizontal
         header.spacing = 4
         header.alignment = .center

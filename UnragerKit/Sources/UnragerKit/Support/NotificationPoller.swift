@@ -104,6 +104,16 @@ public final class NotificationPoller {
         onUnreadCount?(0)
     }
 
+    /// Marks a single notification (and everything at/older than it) seen —
+    /// the "tapping a row reads it" action — then pushes the marker and
+    /// reports the recomputed unread count from the last fetched page.
+    public func markSeen(_ notification: XNotification) {
+        guard NotificationPrefs.markSeen(timestamp: notification.timestamp, id: notification.id)
+        else { return }
+        pushSeenMarker()
+        onUnreadCount?(NotificationPrefs.unreadCount(in: lastPage))
+    }
+
     /// Fires a poll without awaiting it. Skipped if a fetch is already in
     /// flight (no overlap, no pile-up).
     public func pollOnce() {

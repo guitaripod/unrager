@@ -146,7 +146,15 @@ final class NotificationCenterService: NSObject {
     func markAllSeen(displayed: [XNotification] = []) {
         NotificationPrefs.markSeen(in: displayed)
         poller.markCurrentSeen()
-        clearDeliveredState()
+        UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+        root?.setNotificationsBadge(nil)
+        mirrorIconBadge(0)
+    }
+
+    /// Marks a single notification read when the user taps it, advancing the
+    /// seen marker to that row and refreshing the badge.
+    func markSeen(_ notification: XNotification) {
+        poller.markSeen(notification)
     }
 
     private func clearDeliveredState() {

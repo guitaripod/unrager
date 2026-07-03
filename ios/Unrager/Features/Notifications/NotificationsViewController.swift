@@ -466,6 +466,9 @@ extension NotificationsViewController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         collectionView.deselectItem(at: indexPath, animated: true)
         guard let id = dataSource.itemIdentifier(for: indexPath), let notif = items[id] else { return }
+        NotificationCenterService.shared.markSeen(notif)
+        unreadCutoff = NotificationPrefs.lastSeenTimestamp
+        reconfigureAllRows()
         if let tweetID = notif.targetTweetID {
             navigationController?.pushViewController(ThreadViewController(tweetID: tweetID), animated: true)
         } else if notif.actors.count > 1 {

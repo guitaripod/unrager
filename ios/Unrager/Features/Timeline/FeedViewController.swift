@@ -31,6 +31,11 @@ class FeedViewController: UIViewController {
     /// Re-derives the "updated Nm ago" pill while the feed is on screen, so it
     /// climbs live instead of freezing at the value from the last load.
     private var freshnessTimer: Timer?
+    /// Auto-hides the "updated Nm ago" pill a few seconds after it appears, and
+    /// stays hidden (the 20s tick won't re-pop it) until the feed is entered
+    /// again — it's a glance, not a permanent fixture.
+    private var freshnessHideWork: DispatchWorkItem?
+    private var freshnessDismissed = false
     /// Set between drag-begin and the feed coming to rest. No inline video plays
     /// while scrolling, so `AVPlayer` allocation/decode never lands on the scroll
     /// path — the source of the start-of-scroll frame spike.
@@ -116,6 +121,7 @@ class FeedViewController: UIViewController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         settleVideoPlayback()
+        freshnessDismissed = false
         startFreshnessTimer()
     }
 
@@ -881,15 +887,40 @@ class FeedViewController: UIViewController {
     /// mutates a row.
     private func applyFreshness(_ text: String?) {
         guard let text, !text.isEmpty else {
+            freshnessHideWork?.cancel()
+            freshnessDismissed = false
             freshnessPill.isHidden = true
+            freshnessPill.alpha = 1
             setFreshnessInset(0)
             return
         }
         freshnessLabel.text = text
+        guard !freshnessDismissed else { return }
         freshnessPill.isHidden = false
+        freshnessPill.alpha = 1
         view.layoutIfNeeded()
         freshnessPill.layer.cornerRadius = freshnessPill.bounds.height / 2
         setFreshnessInset(freshnessPill.frame.height + DesignSystem.Spacing.s * 2)
+        scheduleFreshnessHide()
+    }
+
+    /// Fades the freshness pill out ~4s after it shows and reclaims its strip,
+    /// so it reads as a brief "here's how fresh this is" glance.
+    private func scheduleFreshnessHide() {
+        freshnessHideWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            UIView.animate(withDuration: 0.3) {
+                self.freshnessPill.alpha = 0
+            } completion: { _ in
+                self.freshnessDismissed = true
+                self.freshnessPill.isHidden = true
+                self.freshnessPill.alpha = 1
+                self.setFreshnessInset(0)
+            }
+        }
+        freshnessHideWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: work)
     }
 
     /// Reserves a `top`-point strip for the freshness pill via
@@ -1004,7 +1035,9 @@ class FeedViewController: UIViewController {
         config.contentInsets = NSDirectionalEdgeInsets(top: 5, leading: 10, bottom: 5, trailing: 12)
         let button = UIButton(configuration: config)
         button.setContentCompressionResistancePriority(.required, for: .horizontal)
+        button.setContentHuggingPriority(.required, for: .horizontal)
         button.titleLabel?.numberOfLines = 1
+        button.titleLabel?.lineBreakMode = .byClipping
         button.addAction(UIAction { [weak self] _ in self?.jumpToNextUnread() }, for: .touchUpInside)
         let longPress = UILongPressGestureRecognizer(target: self, action: #selector(unreadPillLongPressed(_:)))
         button.addGestureRecognizer(longPress)
@@ -1035,7 +1068,7 @@ class FeedViewController: UIViewController {
         let count = viewModel.unreadCount
         unreadButton.isHidden = count == 0
         guard count > 0 else { return }
-        unreadButtonView.configuration?.title = "\(count)"
+        unreadButtonView.configuration?.title = count > 99 ? "99+" : "\(count)"
         unreadButtonView.accessibilityLabel = "\(count) unread, jump to next unread"
         unreadButtonView.accessibilityHint = "Scrolls to the next unread tweet. Long-press to mark all read."
     }

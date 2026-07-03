@@ -15,6 +15,11 @@ final class MentionsViewController: FeedViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "Mentions"
-        navigationItem.largeTitleDisplayMode = .always
+        navigationItem.largeTitleDisplayMode = .automatic
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        navigationController?.navigationBar.prefersLargeTitles = true
     }
 }

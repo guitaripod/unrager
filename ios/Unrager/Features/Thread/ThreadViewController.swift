@@ -343,9 +343,14 @@ final class ThreadViewController: UIViewController {
     private func scrollFocalToTop() {
         guard let focalID, let indexPath = dataSource.indexPath(for: focalID),
               let attributes = collectionView.layoutAttributesForItem(at: indexPath) else { return }
-        let maxOffset = max(0, collectionView.contentSize.height - collectionView.bounds.height
-            + collectionView.adjustedContentInset.bottom)
-        let target = min(max(0, attributes.frame.minY - collectionView.adjustedContentInset.top), maxOffset)
+        let topInset = collectionView.adjustedContentInset.top
+        let target = max(0, attributes.frame.minY - topInset)
+        let requiredBottom = target + collectionView.bounds.height
+            - collectionView.contentSize.height
+        let extraBottom = max(0, requiredBottom - collectionView.safeAreaInsets.bottom)
+        if abs(collectionView.contentInset.bottom - extraBottom) > 0.5 {
+            collectionView.contentInset.bottom = extraBottom
+        }
         if abs(collectionView.contentOffset.y - target) > 0.5 {
             collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: false)
         }

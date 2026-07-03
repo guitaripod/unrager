@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-07-03
+
 - **The iOS app now reposts, quote-tweets, and bookmarks.** The action row under every tweet gained a repost button (with a Repost / Undo repost / Quote menu, green while reposted, optimistic count) and a bookmark button (filled while saved), joining reply, like, and a new dedicated share button; the views count sits at the end as plain text. Repost, quote (opens the composer with the quoted post attached), and bookmark all write back so a second tap and cell reuse show the true state. The Bookmarks tab opens your full bookmarks list by default and still filters by keyword. All of this is powered by new server endpoints (`POST/DELETE /api/tweets/{id}/retweet` and `/bookmark`) — and the server now warms X's request-signing key on startup with retries so these stricter mutations don't intermittently fail.
 - **The iOS composer actually attaches your photos, and can quote.** Picked images now upload through the server (new `POST /api/media/upload`) and post with the tweet — previously they were silently dropped — with honest upload progress and a retry on failure that never loses an already-uploaded image. The character counter now uses X's weighted 280 rules (URLs count as 23, CJK/emoji as 2).
 - **The iOS app can follow, unfollow, and browse followers/following.** Profiles gained a Follow/Unfollow button and tappable follower/following counts that open paginated people lists, plus a Tweets / Replies toggle. Backed by new `/api/users/{id}/follow` and `/followers`·`/following` endpoints.
@@ -197,7 +199,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.20.0...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.21.0...HEAD
+[0.21.0]: https://github.com/guitaripod/unrager/releases/tag/0.21.0
 [0.20.0]: https://github.com/guitaripod/unrager/releases/tag/0.20.0
 [0.19.2]: https://github.com/guitaripod/unrager/releases/tag/0.19.2
 [0.19.1]: https://github.com/guitaripod/unrager/releases/tag/0.19.1

@@ -28,6 +28,8 @@ async fn do_compose(
 ) -> std::result::Result<Json<unrager_model::ComposeResult>, ApiError> {
     let mut text = String::new();
     let mut media_paths: Vec<NamedTempFile> = Vec::new();
+    let mut media_ids: Vec<String> = Vec::new();
+    let mut quote_tweet_id: Option<String> = None;
 
     while let Some(field) = multipart
         .next_field()
@@ -41,6 +43,28 @@ async fn do_compose(
                     .text()
                     .await
                     .map_err(|e| ApiError::bad_request(e.to_string()))?;
+            }
+            "media_ids" | "media_ids[]" => {
+                let raw = field
+                    .text()
+                    .await
+                    .map_err(|e| ApiError::bad_request(e.to_string()))?;
+                media_ids.extend(
+                    raw.split(',')
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string),
+                );
+            }
+            "quote_tweet_id" => {
+                let raw = field
+                    .text()
+                    .await
+                    .map_err(|e| ApiError::bad_request(e.to_string()))?;
+                let trimmed = raw.trim();
+                if !trimmed.is_empty() {
+                    quote_tweet_id = Some(trimmed.to_string());
+                }
             }
             "media" | "media[]" => {
                 let filename = field
@@ -69,7 +93,7 @@ async fn do_compose(
         }
     }
 
-    if text.trim().is_empty() && media_paths.is_empty() {
+    if text.trim().is_empty() && media_paths.is_empty() && media_ids.is_empty() {
         return Err(ApiError::bad_request("text or media required"));
     }
 
@@ -80,7 +104,13 @@ async fn do_compose(
 
     let api = ApiClient::new().await?;
     let posted = api
-        .post_with_media(&text, in_reply_to.as_deref(), &files)
+        .post_composed(
+            &text,
+            in_reply_to.as_deref(),
+            quote_tweet_id.as_deref(),
+            &files,
+            &media_ids,
+        )
         .await?;
 
     Ok(Json(unrager_model::ComposeResult {

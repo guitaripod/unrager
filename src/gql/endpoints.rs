@@ -264,6 +264,96 @@ pub fn favorite_variables(tweet_id: &str) -> Value {
     json!({ "tweet_id": tweet_id })
 }
 
+pub fn create_retweet_variables(tweet_id: &str) -> Value {
+    json!({ "tweet_id": tweet_id, "dark_request": false })
+}
+
+pub fn delete_retweet_variables(tweet_id: &str) -> Value {
+    json!({ "source_tweet_id": tweet_id, "dark_request": false })
+}
+
+pub fn bookmark_variables(tweet_id: &str) -> Value {
+    json!({ "tweet_id": tweet_id })
+}
+
+pub fn bookmarks_timeline_variables(count: u32, cursor: Option<&str>) -> Value {
+    let mut vars = json!({
+        "count": count,
+        "includePromotedContent": false
+    });
+    if let Some(c) = cursor {
+        vars["cursor"] = Value::String(c.to_string());
+    }
+    vars
+}
+
+pub fn bookmarks_timeline_features() -> Value {
+    full_switch_timeline_features()
+}
+
+pub fn user_list_variables(user_id: &str, count: u32, cursor: Option<&str>) -> Value {
+    let mut vars = json!({
+        "userId": user_id,
+        "count": count,
+        "includePromotedContent": false
+    });
+    if let Some(c) = cursor {
+        vars["cursor"] = Value::String(c.to_string());
+    }
+    vars
+}
+
+pub fn user_list_features() -> Value {
+    full_switch_timeline_features()
+}
+
+/// The full 39-switch feature set the current web bundle sends with its
+/// lazy-loaded timeline queries (`Bookmarks`, `Followers`, `Following`).
+/// Values mirror what x.com sends for a logged-in web session.
+fn full_switch_timeline_features() -> Value {
+    json!({
+        "rweb_video_screen_enabled": false,
+        "rweb_cashtags_enabled": false,
+        "profile_label_improvements_pcf_label_in_post_enabled": true,
+        "responsive_web_profile_redirect_enabled": true,
+        "rweb_tipjar_consumption_enabled": true,
+        "verified_phone_label_enabled": false,
+        "creator_subscriptions_tweet_preview_api_enabled": true,
+        "responsive_web_graphql_timeline_navigation_enabled": true,
+        "responsive_web_graphql_skip_user_profile_image_extensions_enabled": false,
+        "premium_content_api_read_enabled": false,
+        "communities_web_enable_tweet_community_results_fetch": true,
+        "c9s_tweet_anatomy_moderator_badge_enabled": true,
+        "responsive_web_grok_analyze_button_fetch_trends_enabled": false,
+        "responsive_web_grok_analyze_post_followups_enabled": false,
+        "rweb_cashtags_composer_attachment_enabled": false,
+        "responsive_web_jetfuel_frame": false,
+        "responsive_web_grok_share_attachment_enabled": false,
+        "responsive_web_grok_annotations_enabled": false,
+        "articles_preview_enabled": true,
+        "responsive_web_edit_tweet_api_enabled": true,
+        "rweb_conversational_replies_downvote_enabled": false,
+        "graphql_is_translatable_rweb_tweet_is_translatable_enabled": true,
+        "view_counts_everywhere_api_enabled": true,
+        "longform_notetweets_consumption_enabled": true,
+        "responsive_web_twitter_article_tweet_consumption_enabled": true,
+        "content_disclosure_indicator_enabled": false,
+        "content_disclosure_ai_generated_indicator_enabled": false,
+        "responsive_web_grok_show_grok_translated_post": false,
+        "responsive_web_grok_analysis_button_from_backend": false,
+        "post_ctas_fetch_enabled": false,
+        "freedom_of_speech_not_reach_fetch_enabled": true,
+        "standardized_nudges_misinfo": true,
+        "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": true,
+        "longform_notetweets_rich_text_read_enabled": true,
+        "longform_notetweets_inline_media_enabled": true,
+        "responsive_web_grok_image_annotation_enabled": false,
+        "responsive_web_grok_imagine_annotation_enabled": false,
+        "responsive_web_grok_community_note_auto_translation_is_enabled": false,
+        "responsive_web_enhance_cards_enabled": false
+    })
+}
+
 pub fn mutation_features() -> Value {
     json!({})
 }

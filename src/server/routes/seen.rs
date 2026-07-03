@@ -47,3 +47,29 @@ pub async fn check(
         json!({ "id": id.clone(), "seen": store.is_seen(&id) }),
     ))
 }
+
+pub async fn notifications_seen_get(
+    State(state): State<Arc<AppState>>,
+) -> std::result::Result<Json<unrager_model::NotificationsSeenMarker>, ApiError> {
+    let store = state.seen.lock().await;
+    Ok(Json(unrager_model::NotificationsSeenMarker {
+        marker: store.notifications_marker(),
+    }))
+}
+
+pub async fn notifications_seen_put(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<unrager_model::NotificationsSeenMarker>,
+) -> std::result::Result<Json<unrager_model::NotificationsSeenMarker>, ApiError> {
+    let marker = body
+        .marker
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .ok_or_else(|| ApiError::bad_request("marker required"))?;
+    let mut store = state.seen.lock().await;
+    store.set_notifications_marker(marker);
+    Ok(Json(unrager_model::NotificationsSeenMarker {
+        marker: store.notifications_marker(),
+    }))
+}

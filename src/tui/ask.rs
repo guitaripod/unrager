@@ -10,7 +10,7 @@ use tracing::{debug, info, warn};
 
 pub const DEFAULT_PROMPT: &str = "Explain this post";
 
-const SYSTEM_PROMPT: &str = "You help a reader understand a social media post. Be concise, direct, and factual. Keep replies short (2–4 short paragraphs). If the post is ambiguous or lacks context, say so plainly. Prefer plain prose. Use markdown sparingly: **bold**, bulleted lists with '- ', and inline `code` are fine when they genuinely help, but avoid headings, horizontal rules, tables, and heavy formatting.";
+pub const SYSTEM_PROMPT: &str = "You help a reader understand a social media post. Be concise, direct, and factual. Keep replies short (2–4 short paragraphs). If the post is ambiguous or lacks context, say so plainly. Prefer plain prose. Use markdown sparingly: **bold**, bulleted lists with '- ', and inline `code` are fine when they genuinely help, but avoid headings, horizontal rules, tables, and heavy formatting.";
 
 const MAX_REPLIES_IN_CONTEXT: usize = 20;
 
@@ -265,30 +265,61 @@ pub fn send(
         if !images.is_empty() {
             debug!(tweet_id = %tweet_id, count = images.len(), "ask images attached");
         }
-        let messages = build_messages(&tweet, &replies, thread.as_ref(), &turns, images);
+        let ctx = PromptContext {
+            ancestors: thread
+                .as_ref()
+                .map(|t| t.ancestors.iter().map(prompt_entry).collect())
+                .unwrap_or_default(),
+            siblings: thread
+                .as_ref()
+                .map(|t| t.siblings.iter().map(prompt_entry).collect())
+                .unwrap_or_default(),
+            replies: replies.iter().map(prompt_entry).collect(),
+        };
+        let messages = build_messages(&tweet.author.handle, &tweet.text, &ctx, &turns, images);
         stream_ollama(&ollama, &tweet_id, messages, &tx).await;
     });
 }
 
-fn build_messages(
-    tweet: &Tweet,
-    replies: &[Tweet],
-    thread: Option<&ThreadContext>,
+/// The `(handle, text)` view of a tweet that the ask prompt builder consumes —
+/// the wire ask endpoint ships exactly this shape, so the TUI and the server
+/// build byte-identical prompts.
+#[derive(Debug, Clone)]
+pub struct PromptEntry {
+    pub handle: String,
+    pub text: String,
+}
+
+fn prompt_entry(t: &Tweet) -> PromptEntry {
+    PromptEntry {
+        handle: t.author.handle.clone(),
+        text: t.text.clone(),
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PromptContext {
+    pub ancestors: Vec<PromptEntry>,
+    pub siblings: Vec<PromptEntry>,
+    pub replies: Vec<PromptEntry>,
+}
+
+pub fn build_messages(
+    handle: &str,
+    tweet_text: &str,
+    ctx: &PromptContext,
     turns: &[(Role, String)],
     images: Vec<String>,
 ) -> Vec<Value> {
     let mut out: Vec<Value> = Vec::with_capacity(turns.len() + 1);
     out.push(json!({ "role": "system", "content": SYSTEM_PROMPT }));
-    let handle = &tweet.author.handle;
-    let tweet_text = &tweet.text;
     let mut first_user = true;
     for (role, text) in turns {
         match role {
             Role::User => {
                 let content = if first_user {
                     let mut buf = String::new();
-                    let ctx_with_ancestors = thread.filter(|ctx| !ctx.ancestors.is_empty());
-                    if let Some(ctx) = ctx_with_ancestors {
+                    if !ctx.ancestors.is_empty() {
                         buf.push_str("Full thread (root first, indented by depth):\n");
                         for (i, anc) in ctx.ancestors.iter().enumerate() {
                             let indent = "  ".repeat(i);
@@ -297,7 +328,7 @@ fn build_messages(
                             let label = if i == 0 { "root" } else { "reply" };
                             buf.push_str(&format!(
                                 "{indent}[{label}] @{}: {snippet}\n",
-                                anc.author.handle
+                                anc.handle
                             ));
                         }
                         let indent = "  ".repeat(ctx.ancestors.len());
@@ -309,7 +340,7 @@ fn build_messages(
                             for s in ctx.siblings.iter().take(MAX_REPLIES_IN_CONTEXT) {
                                 let snippet: String = s.text.chars().take(400).collect();
                                 let snippet = snippet.replace('\n', " ");
-                                buf.push_str(&format!("- @{}: {}\n", s.author.handle, snippet));
+                                buf.push_str(&format!("- @{}: {}\n", s.handle, snippet));
                             }
                         }
                         buf.push_str(&format!(
@@ -318,12 +349,12 @@ fn build_messages(
                     } else {
                         buf.push_str(&format!("@{handle} posted:\n{tweet_text}\n"));
                     }
-                    if !replies.is_empty() {
+                    if !ctx.replies.is_empty() {
                         buf.push_str("\nReplies to the asked post:\n");
-                        for reply in replies.iter().take(MAX_REPLIES_IN_CONTEXT) {
+                        for reply in ctx.replies.iter().take(MAX_REPLIES_IN_CONTEXT) {
                             let snippet: String = reply.text.chars().take(400).collect();
                             let snippet = snippet.replace('\n', " ");
-                            buf.push_str(&format!("- @{}: {}\n", reply.author.handle, snippet));
+                            buf.push_str(&format!("- @{}: {}\n", reply.handle, snippet));
                         }
                     }
                     buf.push_str(&format!("\n{text}"));
@@ -346,7 +377,7 @@ fn build_messages(
     out
 }
 
-async fn fetch_images(tweet: &Tweet) -> Vec<String> {
+pub async fn fetch_images(tweet: &Tweet) -> Vec<String> {
     let photo_urls: Vec<String> = tweet
         .media
         .iter()
@@ -423,4 +454,85 @@ fn finish(tx: &EventTx, tweet_id: &str, error: Option<String>) {
         tweet_id: tweet_id.to_string(),
         error,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(handle: &str, text: &str) -> PromptEntry {
+        PromptEntry {
+            handle: handle.into(),
+            text: text.into(),
+        }
+    }
+
+    #[test]
+    fn build_messages_plain_post_folds_context_into_first_user_turn() {
+        let ctx = PromptContext {
+            replies: vec![entry("carol", "great point"), entry("dave", "nope")],
+            ..Default::default()
+        };
+        let turns = vec![(Role::User, "Explain this post.".to_string())];
+        let msgs = build_messages("alice", "hello world", &ctx, &turns, Vec::new());
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0]["role"], "system");
+        let content = msgs[1]["content"].as_str().unwrap();
+        assert!(content.contains("@alice posted:\nhello world"));
+        assert!(content.contains("Replies to the asked post:"));
+        assert!(content.contains("- @carol: great point"));
+        assert!(content.ends_with("Explain this post."));
+    }
+
+    #[test]
+    fn build_messages_with_ancestors_renders_the_thread_root_first() {
+        let ctx = PromptContext {
+            ancestors: vec![entry("root", "the original"), entry("mid", "a reply")],
+            siblings: vec![entry("sib", "same level")],
+            replies: Vec::new(),
+        };
+        let turns = vec![(Role::User, "What does this mean?".to_string())];
+        let msgs = build_messages("alice", "the asked reply", &ctx, &turns, Vec::new());
+        let content = msgs[1]["content"].as_str().unwrap();
+        assert!(content.contains("Full thread (root first, indented by depth):"));
+        assert!(content.contains("[root] @root: the original"));
+        assert!(content.contains("  [reply] @mid: a reply"));
+        assert!(content.contains("    [reply] @alice: the asked reply"));
+        assert!(content.contains("Other replies at the same level"));
+        assert!(content.contains("- @sib: same level"));
+        assert!(content.contains("asking specifically about the last reply (@alice)"));
+    }
+
+    #[test]
+    fn build_messages_keeps_followup_turns_verbatim_and_context_only_once() {
+        let ctx = PromptContext {
+            replies: vec![entry("carol", "great point")],
+            ..Default::default()
+        };
+        let turns = vec![
+            (Role::User, "Explain this post.".to_string()),
+            (Role::Assistant, "It is about testing.".to_string()),
+            (Role::User, "Summarize the replies.".to_string()),
+        ];
+        let msgs = build_messages("alice", "hello", &ctx, &turns, Vec::new());
+        assert_eq!(msgs.len(), 4);
+        assert_eq!(msgs[2]["role"], "assistant");
+        assert_eq!(msgs[2]["content"], "It is about testing.");
+        assert_eq!(msgs[3]["content"], "Summarize the replies.");
+        let first = msgs[1]["content"].as_str().unwrap();
+        assert!(first.contains("Replies to the asked post:"));
+    }
+
+    #[test]
+    fn build_messages_attaches_images_only_to_the_first_user_turn() {
+        let ctx = PromptContext::default();
+        let turns = vec![
+            (Role::User, "Explain.".to_string()),
+            (Role::Assistant, "Done.".to_string()),
+            (Role::User, "More.".to_string()),
+        ];
+        let msgs = build_messages("a", "t", &ctx, &turns, vec!["b64".to_string()]);
+        assert!(msgs[1].get("images").is_some());
+        assert!(msgs[3].get("images").is_none());
+    }
 }

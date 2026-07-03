@@ -476,38 +476,9 @@ pub async fn fetch_likers(
         .and_then(Value::as_array)
         .ok_or_else(|| Error::GraphqlShape("missing favoriters instructions".into()))?;
 
-    let mut page = LikersPage::default();
-    for instr in instructions {
-        let instr_type = instr.get("type").and_then(Value::as_str).unwrap_or("");
-        match instr_type {
-            "TimelineAddEntries" | "TimelineReplaceEntry" => {
-                let entries = instr.get("entries").and_then(Value::as_array);
-                let Some(entries) = entries else { continue };
-                for entry in entries {
-                    let entry_id = entry.get("entryId").and_then(Value::as_str).unwrap_or("");
-                    if entry_id.starts_with("cursor-bottom-") {
-                        if let Some(v) = entry.pointer("/content/value").and_then(Value::as_str) {
-                            page.next_cursor = Some(v.to_string());
-                        }
-                        continue;
-                    }
-                    if entry_id.starts_with("cursor-top-") {
-                        continue;
-                    }
-                    let user_result = entry
-                        .pointer("/content/itemContent/user_results/result")
-                        .or_else(|| entry.pointer("/content/item/itemContent/user_results/result"));
-                    let Some(user_result) = user_result else {
-                        continue;
-                    };
-                    if let Some(u) = crate::parse::user::parse_user_result(user_result) {
-                        page.users.push(u);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    Ok(page)
+    let parsed = crate::parse::user::parse_user_list_instructions(instructions);
+    Ok(LikersPage {
+        users: parsed.users,
+        next_cursor: parsed.next_cursor,
+    })
 }

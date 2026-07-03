@@ -45,10 +45,18 @@ operations! {
     (UserTweetsAndReplies, "YhE6S_TtdhVxLtpokXrRaA"),
     (SearchTimeline, "XN_HccZ9SU-miQVvwTAlFQ"),
     (BookmarkSearchTimeline, "vctB13iDc4trZdZGzhNdVQ"),
+    (Bookmarks, "tUVliYsHyxrQIT4HXUWNdA"),
     (Favoriters, "E-ZTxvWWIkmOKwYdNTEefg"),
+    (Followers, "4yeuNabfz3qFlfncCAy8Yw"),
+    (BlueVerifiedFollowers, "iYaPJI11EY8VtCL3hrKU9A"),
+    (Following, "eNoXdfXv5rU75RBzlmfuPA"),
     (NotificationsTimeline, "l6ovGrjBwVobgU4puBCycg"),
     (FavoriteTweet, "lI07N6Otwv1PhnEgXILM7A"),
     (UnfavoriteTweet, "ZYKSe-w7KEslx3JhSIk5LA"),
+    (CreateRetweet, "mbRO74GrOvSfRcJnlMapnQ"),
+    (DeleteRetweet, "ZyZigVsNiFO6v1dEks1eWg"),
+    (CreateBookmark, "aoDbu3RHznuiSkQ9aNM67Q"),
+    (DeleteBookmark, "Wlmlj2-xzyS1GN3a6cj-mQ"),
     (AboutAccountQuery, "XRqGa7EeokUU5kppkh13EA"),
 }
 

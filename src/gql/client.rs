@@ -132,6 +132,97 @@ impl GqlClient {
         self.call(Method::Post, op, variables, features, true).await
     }
 
+    /// Form-encoded POST to a legacy `x.com/i/api/1.1` REST endpoint (e.g.
+    /// `friendships/create.json`), signed with the same cookie/bearer/csrf
+    /// headers as GraphQL calls. `path` must start with `/i/api/1.1/`.
+    /// 429s land in the shared write bucket; a 401/403 triggers the same
+    /// browser session re-extraction and single retry as GraphQL calls.
+    pub async fn post_form_1_1(&self, path: &str, form: &[(&str, &str)]) -> Result<Value> {
+        match self.post_form_once(path, form).await {
+            Ok(v) => Ok(v),
+            Err(signed) if is_auth_failure(&signed.error) => {
+                tracing::warn!(
+                    "{path}: {} — re-extracting browser session and retrying",
+                    signed.error
+                );
+                if self.try_refresh_session(signed.generation).await {
+                    self.post_form_once(path, form)
+                        .await
+                        .map_err(|retry| retry.error)
+                } else {
+                    Err(signed.error)
+                }
+            }
+            Err(signed) => Err(signed.error),
+        }
+    }
+
+    async fn post_form_once(
+        &self,
+        path: &str,
+        form: &[(&str, &str)],
+    ) -> std::result::Result<Value, SignedError> {
+        let (session, generation) = self.session_snapshot();
+        self.post_form_signed(&session, path, form)
+            .await
+            .map_err(|error| SignedError { error, generation })
+    }
+
+    async fn post_form_signed(
+        &self,
+        session: &XSession,
+        path: &str,
+        form: &[(&str, &str)],
+    ) -> Result<Value> {
+        if let Some(remaining) = self.rate_limit_remaining_for(RateLimitKind::Write) {
+            return Err(Error::RateLimited {
+                remaining_secs: remaining.as_secs().max(1),
+            });
+        }
+        self.throttle().await;
+        let url = format!("https://x.com{path}");
+        tracing::debug!(path, "rest form request");
+        let mut headers = self.headers(session, "POST", path)?;
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/x-www-form-urlencoded"),
+        );
+        let res = self
+            .http
+            .post(&url)
+            .headers(headers)
+            .form(form)
+            .send()
+            .await?;
+
+        let status = res.status();
+        if status.as_u16() == 429 {
+            let reset_hdr = res
+                .headers()
+                .get("x-rate-limit-reset")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok());
+            let cooldown = compute_rate_limit_remaining(reset_hdr);
+            self.record_rate_limit(RateLimitKind::Write, cooldown);
+            return Err(Error::RateLimited {
+                remaining_secs: cooldown.as_secs().max(1),
+            });
+        }
+        let body = res.text().await?;
+        if !status.is_success() {
+            return Err(Error::GraphqlStatus {
+                status: status.as_u16(),
+                body: truncate(&body, 400),
+            });
+        }
+        serde_json::from_str(&body).map_err(|e| {
+            Error::GraphqlShape(format!(
+                "rest response was not valid json ({e}); body preview: {}",
+                truncate(&body, 400)
+            ))
+        })
+    }
+
     async fn call(
         &self,
         method: Method,
@@ -249,11 +340,7 @@ impl GqlClient {
                     .query(&query)
             }
             Method::Post => {
-                let body = serde_json::json!({
-                    "variables": variables,
-                    "features": features,
-                    "queryId": qid.id,
-                });
+                let body = Self::post_body(variables, features, &qid.id);
                 self.http
                     .post(&url)
                     .headers(self.headers(session, method_str, &path)?)
@@ -263,6 +350,166 @@ impl GqlClient {
 
         let res = req.send().await?;
         self.parse(res, method.kind(), op, background).await
+    }
+
+    /// The POST body for a persisted GraphQL operation. Feature-less
+    /// mutations omit the `features` key entirely — X's own client never
+    /// sends one there, and at least `CreateBookmark` hard-404s a request
+    /// that carries even an empty `features` object.
+    fn post_body(variables: &Value, features: &Value, query_id: &str) -> Value {
+        let mut body = serde_json::json!({
+            "variables": variables,
+            "queryId": query_id,
+        });
+        let empty = features.as_object().map(|m| m.is_empty()).unwrap_or(false);
+        if !empty {
+            body["features"] = features.clone();
+        }
+        body
+    }
+
+    /// Upload media through X's session-authenticated chunked upload
+    /// (`upload.x.com/i/media/upload.json`) — the path the web client itself
+    /// uses. Serves accounts with no OAuth2 developer credentials; the
+    /// returned media id is usable in compose calls for the same account.
+    pub async fn upload_media_session(
+        &self,
+        bytes: &[u8],
+        mime: &str,
+        media_category: &str,
+    ) -> Result<String> {
+        const UPLOAD_URL: &str = "https://upload.x.com/i/media/upload.json";
+        const CHUNK_SIZE: usize = 4 * 1024 * 1024;
+        let (session, _) = self.session_snapshot();
+
+        let init = reqwest::multipart::Form::new()
+            .text("command", "INIT")
+            .text("total_bytes", bytes.len().to_string())
+            .text("media_type", mime.to_string())
+            .text("media_category", media_category.to_string());
+        let value = self
+            .send_upload(UPLOAD_URL, &session, init)
+            .await?
+            .ok_or_else(|| Error::GraphqlShape("upload INIT returned an empty body".into()))?;
+        let media_id = value
+            .get("media_id_string")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| {
+                Error::GraphqlShape(format!("upload INIT response missing media id: {value}"))
+            })?;
+        tracing::debug!(media_id, size = bytes.len(), "session upload INIT");
+
+        for (segment_index, chunk) in bytes.chunks(CHUNK_SIZE).enumerate() {
+            let part = reqwest::multipart::Part::bytes(chunk.to_vec())
+                .file_name("chunk")
+                .mime_str("application/octet-stream")
+                .map_err(|e| Error::GraphqlShape(format!("bad chunk mime: {e}")))?;
+            let append = reqwest::multipart::Form::new()
+                .text("command", "APPEND")
+                .text("media_id", media_id.clone())
+                .text("segment_index", segment_index.to_string())
+                .part("media", part);
+            self.send_upload(UPLOAD_URL, &session, append).await?;
+        }
+
+        let finalize = reqwest::multipart::Form::new()
+            .text("command", "FINALIZE")
+            .text("media_id", media_id.clone());
+        let finalized = self.send_upload(UPLOAD_URL, &session, finalize).await?;
+        if let Some(info) = finalized.as_ref().and_then(|v| v.get("processing_info")) {
+            self.poll_upload_status(UPLOAD_URL, &session, &media_id, info)
+                .await?;
+        }
+        Ok(media_id)
+    }
+
+    async fn send_upload(
+        &self,
+        url: &str,
+        session: &XSession,
+        form: reqwest::multipart::Form,
+    ) -> Result<Option<Value>> {
+        let res = self
+            .http
+            .post(url)
+            .headers(self.upload_headers(session, "POST")?)
+            .multipart(form)
+            .send()
+            .await?;
+        let status = res.status();
+        let body = res.text().await?;
+        if !status.is_success() {
+            return Err(Error::GraphqlStatus {
+                status: status.as_u16(),
+                body: truncate(&body, 400),
+            });
+        }
+        if body.is_empty() {
+            return Ok(None);
+        }
+        serde_json::from_str(&body)
+            .map(Some)
+            .map_err(|e| Error::GraphqlShape(format!("upload response was not valid json ({e})")))
+    }
+
+    async fn poll_upload_status(
+        &self,
+        url: &str,
+        session: &XSession,
+        media_id: &str,
+        initial_info: &Value,
+    ) -> Result<()> {
+        const MAX_ATTEMPTS: u32 = 30;
+        let mut wait_secs = initial_info
+            .get("check_after_secs")
+            .and_then(Value::as_u64)
+            .unwrap_or(1);
+        for _ in 0..MAX_ATTEMPTS {
+            tokio::time::sleep(Duration::from_secs(wait_secs.max(1))).await;
+            let res = self
+                .http
+                .get(url)
+                .headers(self.upload_headers(session, "GET")?)
+                .query(&[("command", "STATUS"), ("media_id", media_id)])
+                .send()
+                .await?;
+            let value: Value = res.json().await?;
+            let Some(info) = value.get("processing_info") else {
+                return Ok(());
+            };
+            match info.get("state").and_then(Value::as_str).unwrap_or("") {
+                "succeeded" => return Ok(()),
+                "failed" => {
+                    let reason = info
+                        .pointer("/error/message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("(no reason reported)");
+                    return Err(Error::GraphqlShape(format!(
+                        "media processing failed: {reason}"
+                    )));
+                }
+                _ => {
+                    wait_secs = info
+                        .get("check_after_secs")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(2);
+                }
+            }
+        }
+        Err(Error::GraphqlShape(
+            "media processing did not complete after status polling".into(),
+        ))
+    }
+
+    /// Session-signed headers for `upload.x.com`, without a content type —
+    /// reqwest's multipart builder must set its own boundary header, and
+    /// `RequestBuilder::form`/`multipart` never *replace* an existing
+    /// content-type.
+    fn upload_headers(&self, session: &XSession, method: &str) -> Result<HeaderMap> {
+        let mut h = self.headers(session, method, "/i/media/upload.json")?;
+        h.remove(reqwest::header::CONTENT_TYPE);
+        Ok(h)
     }
 
     fn lookup_qid(&self, op: Operation) -> Option<QueryId> {
@@ -329,13 +576,38 @@ impl GqlClient {
         }
     }
 
+    /// Warms the x-client-transaction-id key material, retrying with backoff
+    /// until it succeeds. Transaction-strict mutations (CreateBookmark,
+    /// CreateRetweet) 404 without it, so a single transient startup scrape
+    /// failure must not leave the key unavailable for the whole process life.
     pub async fn warm_transaction_key(&self) {
+        const BACKOFFS: [u64; 5] = [5, 15, 30, 60, 120];
+        for (attempt, delay) in std::iter::once(0)
+            .chain(BACKOFFS.iter().copied())
+            .enumerate()
+        {
+            if delay > 0 {
+                tokio::time::sleep(Duration::from_secs(delay)).await;
+            }
+            if self.try_warm_transaction_key().await {
+                if attempt > 0 {
+                    tracing::info!("transaction key warmed after {attempt} retries");
+                }
+                return;
+            }
+        }
+        tracing::warn!(
+            "transaction key still unavailable after retries; strict mutations may fail"
+        );
+    }
+
+    async fn try_warm_transaction_key(&self) -> bool {
         match scraper::scrape(&self.http).await {
             Ok(result) => {
                 {
                     let mut guard = match self.store.lock() {
                         Ok(g) => g,
-                        Err(_) => return,
+                        Err(_) => return false,
                     };
                     guard.merge_iter(result.query_ids);
                     let _ = guard.save_cached(&self.cache_path);
@@ -345,12 +617,15 @@ impl GqlClient {
                         tracing::info!("transaction key material loaded");
                         *guard = Some(material);
                     }
+                    true
                 } else {
                     tracing::warn!("scraper succeeded but transaction key material unavailable");
+                    false
                 }
             }
             Err(e) => {
                 tracing::warn!("startup scrape failed (transaction key unavailable): {e}");
+                false
             }
         }
     }

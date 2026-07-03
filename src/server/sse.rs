@@ -1,6 +1,7 @@
 use crate::server::error::ApiError;
 use crate::server::llm;
 use crate::server::state::AppState;
+use crate::tui::ask;
 use crate::tui::filter::{FilterCache, FilterDecision};
 use async_stream::stream;
 use axum::extract::{Query, State};
@@ -11,7 +12,9 @@ use serde::Deserialize;
 use std::convert::Infallible;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use unrager_model::{AskPreset, FilterVerdictEvent, TokenEvent, Verdict};
+use unrager_model::{
+    AskPreset, AskRequest, AskRole, AskTurn, FilterVerdictEvent, TokenEvent, Verdict,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct FilterQuery {
@@ -104,6 +107,78 @@ pub async fn ask_stream(
     ))
 }
 
+/// `POST /api/sse/ask` — the conversational ask stream. Mirrors the TUI's ask
+/// view: the focal tweet (fetched fresh, photos attached for multimodal
+/// models) plus client-supplied thread context and the full turn history are
+/// folded into the same prompt the TUI builds, and tokens stream back as the
+/// usual `TokenEvent` SSE.
+pub async fn ask_context_stream(
+    State(state): State<Arc<AppState>>,
+    axum::Json(req): axum::Json<AskRequest>,
+) -> std::result::Result<Sse<impl Stream<Item = std::result::Result<Event, Infallible>>>, ApiError>
+{
+    if req.turns.is_empty() {
+        return Err(ApiError::bad_request("turns must not be empty"));
+    }
+    let last_is_user = matches!(
+        req.turns.last(),
+        Some(AskTurn {
+            role: AskRole::User,
+            ..
+        })
+    );
+    if !last_is_user {
+        return Err(ApiError::bad_request("turns must end with a user turn"));
+    }
+    let tweet = llm::fetch_tweet(&state.gql, &req.tweet_id).await?;
+    let cfg = state.filter_config.lock().await.clone();
+
+    let images = ask::fetch_images(&tweet).await;
+    let ctx = ask::PromptContext {
+        ancestors: req.ancestors.into_iter().map(prompt_entry).collect(),
+        siblings: req.siblings.into_iter().map(prompt_entry).collect(),
+        replies: req.replies.into_iter().map(prompt_entry).collect(),
+    };
+    let turns: Vec<(ask::Role, String)> = req
+        .turns
+        .into_iter()
+        .map(|t| {
+            let role = match t.role {
+                AskRole::User => ask::Role::User,
+                AskRole::Assistant => ask::Role::Assistant,
+            };
+            (role, t.text)
+        })
+        .collect();
+    let messages = ask::build_messages(&tweet.author.handle, &tweet.text, &ctx, &turns, images);
+    tracing::info!(
+        tweet_id = %tweet.rest_id,
+        turns = turns.len(),
+        ancestors = ctx.ancestors.len(),
+        siblings = ctx.siblings.len(),
+        replies = ctx.replies.len(),
+        "ask context stream start"
+    );
+
+    let ollama = cfg.ollama.clone();
+    let body = serde_json::json!({
+        "model": ollama.model,
+        "messages": messages,
+        "stream": true,
+        "think": true,
+        "keep_alive": ollama.keep_alive,
+        "options": { "temperature": 0.3, "num_predict": 2048 },
+    });
+    Ok(stream_body(ollama, body, "ask"))
+}
+
+fn prompt_entry(e: unrager_model::AskContextEntry) -> ask::PromptEntry {
+    ask::PromptEntry {
+        handle: e.handle,
+        text: e.text,
+    }
+}
+
 fn parse_preset(s: &str) -> Option<AskPreset> {
     match s.to_ascii_lowercase().as_str() {
         "explain" => Some(AskPreset::Explain),
@@ -168,20 +243,30 @@ fn stream_tokens(
     user: String,
     label: &'static str,
 ) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
+    let body = serde_json::json!({
+        "model": ollama.model,
+        "messages": [
+            { "role": "system", "content": system },
+            { "role": "user", "content": user },
+        ],
+        "stream": true,
+        "think": false,
+        "keep_alive": ollama.keep_alive,
+        "options": { "temperature": 0, "num_predict": 1024 },
+    });
+    stream_body(ollama, body, label)
+}
+
+/// Streams a fully-built Ollama chat body as a `TokenEvent` SSE response —
+/// the shared core of the single-shot streams and the conversational ask.
+fn stream_body(
+    ollama: crate::tui::filter::OllamaConfig,
+    body: serde_json::Value,
+    label: &'static str,
+) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
     let (tx, mut rx) = token_channel();
 
     tokio::spawn(async move {
-        let body = serde_json::json!({
-            "model": ollama.model,
-            "messages": [
-                { "role": "system", "content": system },
-                { "role": "user", "content": user },
-            ],
-            "stream": true,
-            "think": false,
-            "keep_alive": ollama.keep_alive,
-            "options": { "temperature": 0, "num_predict": 1024 },
-        });
         let _ = ollama
             .stream_chat(
                 body,

@@ -93,6 +93,7 @@ pub fn emit_dry_run(
     let preview_request = crate::api::PostRequest {
         text: text.to_string(),
         in_reply_to_tweet_id: in_reply_to_tweet_id.map(str::to_string),
+        quote_tweet_id: None,
         media_ids: placeholder_media_ids,
     };
 

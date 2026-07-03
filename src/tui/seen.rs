@@ -18,6 +18,11 @@ impl SeenStore {
                 tweet_id TEXT PRIMARY KEY,
                 seen_at INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS notification_seen (
+                slot INTEGER PRIMARY KEY CHECK (slot = 0),
+                marker TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
             PRAGMA journal_mode = WAL;
             PRAGMA synchronous = NORMAL;",
         )?;
@@ -81,6 +86,49 @@ impl SeenStore {
     pub fn count_unseen(&self, tweet_ids: &[String]) -> usize {
         tweet_ids.iter().filter(|id| !self.is_seen(id)).count()
     }
+
+    /// The newest-seen notification marker (a timestamp-id string chosen by
+    /// clients), persisted so badge state syncs across every client of this
+    /// account. `None` until a client has ever marked notifications seen.
+    pub fn notifications_marker(&self) -> Option<String> {
+        self.conn
+            .query_row(
+                "SELECT marker FROM notification_seen WHERE slot = 0",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .ok()
+    }
+
+    /// Advances the shared notification marker, but never regresses it: a
+    /// slower or offline client pushing an older marker must not re-light
+    /// badges on clients that already synced a newer one. Markers are
+    /// `<timestamp_ms>-<id>`; freshness is the leading millisecond count.
+    pub fn set_notifications_marker(&mut self, marker: &str) {
+        if let Some(current) = self.notifications_marker() {
+            if marker_millis(marker) < marker_millis(&current) {
+                return;
+            }
+        }
+        let now = chrono::Utc::now().timestamp();
+        if let Err(e) = self.conn.execute(
+            "INSERT INTO notification_seen (slot, marker, updated_at) VALUES (0, ?1, ?2)
+             ON CONFLICT(slot) DO UPDATE SET marker = excluded.marker,
+                                             updated_at = excluded.updated_at",
+            params![marker, now],
+        ) {
+            tracing::warn!("notification seen marker write failed: {e}");
+        }
+    }
+}
+
+fn marker_millis(marker: &str) -> i64 {
+    marker
+        .split_once('-')
+        .map(|(ms, _)| ms)
+        .unwrap_or(marker)
+        .parse()
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -130,5 +178,43 @@ mod tests {
         assert!(store.is_seen("a"));
         assert!(store.is_seen("b"));
         assert!(store.is_seen("c"));
+    }
+
+    #[test]
+    fn notifications_marker_starts_absent_and_upserts() {
+        let (_tmp, mut store) = fresh_store();
+        assert_eq!(store.notifications_marker(), None);
+        store.set_notifications_marker("1700000000000-abc");
+        assert_eq!(
+            store.notifications_marker().as_deref(),
+            Some("1700000000000-abc")
+        );
+        store.set_notifications_marker("1800000000000-def");
+        assert_eq!(
+            store.notifications_marker().as_deref(),
+            Some("1800000000000-def")
+        );
+    }
+
+    #[test]
+    fn notifications_marker_never_regresses() {
+        let (_tmp, mut store) = fresh_store();
+        store.set_notifications_marker("1800000000000-def");
+        store.set_notifications_marker("1700000000000-abc");
+        assert_eq!(
+            store.notifications_marker().as_deref(),
+            Some("1800000000000-def")
+        );
+    }
+
+    #[test]
+    fn notifications_marker_persists_across_opens() {
+        let tmp = NamedTempFile::new().unwrap();
+        {
+            let mut s = SeenStore::open(tmp.path()).unwrap();
+            s.set_notifications_marker("m-1");
+        }
+        let s = SeenStore::open(tmp.path()).unwrap();
+        assert_eq!(s.notifications_marker().as_deref(), Some("m-1"));
     }
 }

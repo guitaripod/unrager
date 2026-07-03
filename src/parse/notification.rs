@@ -11,6 +11,10 @@ pub struct RawNotification {
     pub notification_type: String,
     pub actors: Vec<User>,
     pub others_count: Option<u64>,
+    /// X's fully rendered notification text ("Your poll has ended", "A and 3
+    /// others liked your post"), so actor-less kinds don't degrade to
+    /// "Someone <type>".
+    pub message: Option<String>,
     pub target_tweet_id: Option<String>,
     pub target_tweet_like_count: Option<u64>,
     pub target_tweet_created_at: Option<DateTime<Utc>>,
@@ -169,6 +173,7 @@ fn build_tweet_entry(_entry_id: &str, content: &Value) -> Option<RawNotification
         notification_type,
         actors: vec![tweet.author.clone()],
         others_count: None,
+        message: None,
         target_tweet_id: Some(tweet.rest_id.clone()),
         target_tweet_like_count: Some(tweet.like_count),
         target_tweet_created_at: Some(tweet.created_at),
@@ -194,11 +199,12 @@ fn build_grouped_entry(entry_id: &str, content: &Value) -> Option<RawNotificatio
     let notification_type = classify_type(icon, element);
 
     let actors = extract_actors(item);
-    let others_count = item
+    let message = item
         .pointer("/rich_message/text")
         .and_then(Value::as_str)
         .or_else(|| item.pointer("/message/text").and_then(Value::as_str))
-        .and_then(extract_others_count);
+        .map(|s| decode_html_entities(s.trim()));
+    let others_count = message.as_deref().and_then(extract_others_count);
 
     let target = extract_target_tweet(item);
     let target_tweet_id = target.as_ref().map(|t| t.id.clone());
@@ -220,6 +226,7 @@ fn build_grouped_entry(entry_id: &str, content: &Value) -> Option<RawNotificatio
         notification_type,
         actors,
         others_count,
+        message,
         target_tweet_id,
         target_tweet_like_count: target.as_ref().map(|t| t.like_count),
         target_tweet_created_at: target.as_ref().map(|t| t.created_at),
@@ -524,6 +531,41 @@ mod tests {
         let page = parse_notifications_timeline(&response).unwrap();
         assert_eq!(page.top_cursor.as_deref(), Some("TOP_CUR"));
         assert_eq!(page.next_cursor.as_deref(), Some("BOT_CUR"));
+    }
+
+    #[test]
+    fn grouped_entry_carries_rendered_message_and_others_count() {
+        let content = json!({
+            "clientEventInfo": { "element": "users_liked_your_tweet" },
+            "itemContent": {
+                "notification_icon": "heart_icon",
+                "timestamp_ms": "1700000000000",
+                "rich_message": { "text": "Alice, Bob and 47 others liked your post" }
+            }
+        });
+        let n = build_grouped_entry("g-1", &content).unwrap();
+        assert_eq!(
+            n.message.as_deref(),
+            Some("Alice, Bob and 47 others liked your post")
+        );
+        assert_eq!(n.others_count, Some(47));
+    }
+
+    #[test]
+    fn actorless_grouped_entry_keeps_message_without_others_count() {
+        let content = json!({
+            "clientEventInfo": { "element": "" },
+            "itemContent": {
+                "notification_icon": "histogram_icon",
+                "timestamp_ms": "1700000000000",
+                "message": { "text": "Your poll has ended" }
+            }
+        });
+        let n = build_grouped_entry("g-2", &content).unwrap();
+        assert_eq!(n.notification_type, "Poll");
+        assert_eq!(n.message.as_deref(), Some("Your poll has ended"));
+        assert_eq!(n.others_count, None);
+        assert!(n.actors.is_empty());
     }
 
     #[test]

@@ -30,6 +30,10 @@ pub struct AppState {
     /// session already resolved answer instantly here and vice versa.
     pub about: Mutex<AboutStore>,
     pub about_fetcher: AboutFetcher,
+    /// Set once X rejects the full `Followers` GraphQL op (removed upstream in
+    /// 2025) so `/api/users/{id}/followers` skips straight to the
+    /// `BlueVerifiedFollowers` fallback on subsequent requests.
+    pub followers_op_dead: std::sync::atomic::AtomicBool,
     pub feed_cfg: FeedConfig,
     pub feed_db_path: PathBuf,
     pub lock_path: PathBuf,
@@ -79,6 +83,7 @@ impl AppState {
             activity: Arc::new(Activity::idle()),
             about: Mutex::new(about_store),
             about_fetcher,
+            followers_op_dead: std::sync::atomic::AtomicBool::new(false),
             feed_cfg: app_config.feed.clone(),
             feed_db_path,
             lock_path: cache_dir.join("server.lock"),

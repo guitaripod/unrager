@@ -15,9 +15,28 @@ pub(crate) fn sse_stream<T>(client: Client, url: Url) -> impl Stream<Item = Resu
 where
     T: DeserializeOwned + 'static,
 {
+    sse_request(client.get(url))
+}
+
+/// The POST flavor used by the conversational ask endpoint — the same SSE
+/// response framing, but the request carries a JSON body.
+pub(crate) fn sse_stream_post<T>(
+    client: Client,
+    url: Url,
+    body: serde_json::Value,
+) -> impl Stream<Item = Result<T, ApiError>>
+where
+    T: DeserializeOwned + 'static,
+{
+    sse_request(client.post(url).json(&body))
+}
+
+fn sse_request<T>(builder: reqwest::RequestBuilder) -> impl Stream<Item = Result<T, ApiError>>
+where
+    T: DeserializeOwned + 'static,
+{
     async_stream::stream! {
-        let resp = match client
-            .get(url)
+        let resp = match builder
             .header(reqwest::header::ACCEPT, "text/event-stream")
             .send()
             .await

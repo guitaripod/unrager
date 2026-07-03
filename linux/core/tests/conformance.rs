@@ -3,8 +3,9 @@
 //! emits — the same fixtures the Apple client tests against.
 
 use unrager_gtk_core::model::{
-    AboutStatus, AboutView, FeedStatusResponse, FilterVerdictEvent, Media, MediaKind, Notification,
-    SearchProduct, SessionState, SourceKind, ThreadView, TokenEvent, Tweet, Verdict,
+    AboutStatus, AboutView, FeedStatusResponse, FilterVerdictEvent, Media, MediaKind,
+    MediaUploadResult, Notification, NotificationsSeenMarker, SearchProduct, SessionState,
+    SourceKind, ThreadView, TokenEvent, Tweet, UserListPage, Verdict,
 };
 
 fn decode<T: serde::de::DeserializeOwned>(json: &str) -> T {
@@ -289,4 +290,110 @@ fn notification_renames_type_and_carries_target_media() {
         "https://pbs.twimg.com/media/x.jpg"
     );
     assert_eq!(notif.target_media[0].width, Some(1200));
+    assert_eq!(notif.others_count, None, "absent others_count defaults");
+    assert_eq!(notif.message, None, "absent message defaults");
+}
+
+#[test]
+fn notification_carries_others_count_and_rendered_message() {
+    let json = r#"
+    {"id":"n2","type":"like","actors":[],
+     "others_count":47,"message":"Alice, Bob and 47 others liked your post",
+     "timestamp":"2026-06-19T12:30:00Z"}
+    "#;
+    let notif: Notification = decode(json);
+    assert_eq!(notif.others_count, Some(47));
+    assert_eq!(
+        notif.message.as_deref(),
+        Some("Alice, Bob and 47 others liked your post")
+    );
+}
+
+#[test]
+fn user_list_page_decodes_users_and_cursor() {
+    let json = r#"
+    {"users":[{"rest_id":"9","handle":"carol","name":"Carol","verified":false,
+               "followers":10,"following":5,"avatar_url":null}],
+     "cursor":"1234|5678"}
+    "#;
+    let page: UserListPage = decode(json);
+    assert_eq!(page.users.len(), 1);
+    assert_eq!(page.users[0].handle, "carol");
+    assert_eq!(page.cursor.as_deref(), Some("1234|5678"));
+
+    let empty: UserListPage = decode(r#"{"users":[],"cursor":null}"#);
+    assert!(empty.users.is_empty());
+    assert!(empty.cursor.is_none());
+}
+
+#[test]
+fn media_upload_result_decodes() {
+    let result: MediaUploadResult = decode(r#"{"media_id":"1790000000000000009"}"#);
+    assert_eq!(result.media_id, "1790000000000000009");
+}
+
+#[test]
+fn notifications_seen_marker_decodes_null_and_value() {
+    let unset: NotificationsSeenMarker = decode(r#"{"marker":null}"#);
+    assert!(unset.marker.is_none());
+    let set: NotificationsSeenMarker = decode(r#"{"marker":"1700000000000"}"#);
+    assert_eq!(set.marker.as_deref(), Some("1700000000000"));
+}
+
+#[test]
+fn profile_user_carries_optional_followed_by_me() {
+    let user: unrager_gtk_core::model::User = decode(
+        r#"{"rest_id":"9","handle":"carol","name":"Carol","verified":false,
+            "followers":10,"following":5,"avatar_url":null,"followed_by_me":true}"#,
+    );
+    assert_eq!(user.followed_by_me, Some(true));
+
+    let bare: unrager_gtk_core::model::User = decode(
+        r#"{"rest_id":"9","handle":"carol","name":"Carol","verified":false,
+            "followers":10,"following":5,"avatar_url":null}"#,
+    );
+    assert_eq!(bare.followed_by_me, None);
+    let v = serde_json::to_value(&bare).expect("encode");
+    assert!(
+        !v.as_object().unwrap().contains_key("followed_by_me"),
+        "unknown follow state must stay off the wire"
+    );
+}
+
+#[test]
+fn ask_request_encodes_the_post_sse_ask_body() {
+    use unrager_gtk_core::model::{AskContextEntry, AskRequest, AskRole, AskTurn};
+    let req = AskRequest {
+        tweet_id: "1".into(),
+        turns: vec![
+            AskTurn {
+                role: AskRole::User,
+                text: "Explain".into(),
+            },
+            AskTurn {
+                role: AskRole::Assistant,
+                text: "Sure.".into(),
+            },
+            AskTurn {
+                role: AskRole::User,
+                text: "More".into(),
+            },
+        ],
+        ancestors: vec![AskContextEntry {
+            handle: "root".into(),
+            text: "op".into(),
+        }],
+        siblings: vec![],
+        replies: vec![AskContextEntry {
+            handle: "c".into(),
+            text: "r".into(),
+        }],
+    };
+    let v = serde_json::to_value(&req).expect("encode");
+    assert_eq!(v["tweet_id"], "1");
+    assert_eq!(v["turns"][0]["role"], "user");
+    assert_eq!(v["turns"][1]["role"], "assistant");
+    assert_eq!(v["ancestors"][0]["handle"], "root");
+    let back: AskRequest = serde_json::from_value(v).expect("decode");
+    assert_eq!(back, req);
 }

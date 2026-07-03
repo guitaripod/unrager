@@ -294,6 +294,7 @@ mod tests {
                 followers: 0,
                 following: 0,
                 avatar_url: None,
+                followed_by_me: None,
             },
             created_at: DateTime::from_timestamp(created_ts, 0).unwrap(),
             text: "hi".into(),

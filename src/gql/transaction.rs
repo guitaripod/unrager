@@ -175,32 +175,45 @@ fn cubic_bezier_value(x1: f64, y1: f64, x2: f64, y2: f64, target_x: f64) -> f64 
     bezier((low + high) / 2.0, y1, y2)
 }
 
+/// Float→hex exactly as X's transaction-id reference implementations do it:
+/// integer digits, then fractional digits emitted until the (dyadic) f64
+/// remainder is *exactly* zero. The previous 13-digit cap with epsilon
+/// stops truncated the tail of most 2-dp-rounded matrix values, silently
+/// corrupting the animation key — X's strictly-validated mutations
+/// (`CreateBookmark`, `CreateRetweet`) then bounce with bare 404s, only
+/// passing for materials whose matrices happened to expand short. Zero
+/// yields an empty string and a pure fraction starts with `.`, matching the
+/// reference; `animate` normalizes both. The iteration bound is only a
+/// NaN/∞ guard — an f64 fraction times 16 zeroes out within ~270 steps.
 fn float_to_hex(value: f64) -> String {
-    if value == 0.0 {
-        return "0".to_string();
-    }
-
-    let int_part = value.floor() as u64;
-    let frac = value - value.floor();
-
-    let mut result = format!("{int_part:x}");
-
-    if frac > 1e-10 {
-        result.push('.');
-        let mut f = frac;
-        for _ in 0..13 {
-            f *= 16.0;
-            let digit = f.floor() as u8;
-            if let Some(c) = char::from_digit(digit as u32, 16) {
-                result.push(c);
-            }
-            f -= digit as f64;
-            if f.abs() < 1e-10 {
-                break;
-            }
+    let mut result = String::new();
+    let mut quotient = value.trunc();
+    let mut x = value;
+    while quotient > 0.0 {
+        quotient = (x / 16.0).trunc();
+        let remainder = (x - quotient * 16.0).trunc() as u32;
+        if let Some(c) = char::from_digit(remainder.min(15), 16) {
+            result.insert(0, c);
         }
+        x = quotient;
     }
 
+    let mut fraction = value - value.trunc();
+    if fraction == 0.0 || !fraction.is_finite() {
+        return result;
+    }
+    result.push('.');
+    for _ in 0..1100 {
+        if fraction <= 0.0 {
+            break;
+        }
+        fraction *= 16.0;
+        let digit = fraction.trunc() as u32;
+        if let Some(c) = char::from_digit(digit.min(15), 16) {
+            result.push(c);
+        }
+        fraction -= f64::from(digit);
+    }
     result
 }
 
@@ -232,6 +245,7 @@ pub fn parse_path_data(d: &str) -> Vec<Vec<i32>> {
 
 static VERIFICATION_RE: OnceLock<Regex> = OnceLock::new();
 static ONDEMAND_RE: OnceLock<Regex> = OnceLock::new();
+static ONDEMAND_CHUNK_ID_RE: OnceLock<Regex> = OnceLock::new();
 static SVG_PATH_RE: OnceLock<Regex> = OnceLock::new();
 static JS_INDEX_RE: OnceLock<Regex> = OnceLock::new();
 
@@ -246,6 +260,11 @@ fn ondemand_re() -> &'static Regex {
     ONDEMAND_RE.get_or_init(|| {
         Regex::new(r#"['"]ondemand\.s['"]:\s*['"](\w+)['"]"#).expect("ondemand regex")
     })
+}
+
+fn ondemand_chunk_id_re() -> &'static Regex {
+    ONDEMAND_CHUNK_ID_RE
+        .get_or_init(|| Regex::new(r#"(\d+):\s*"ondemand\.s""#).expect("ondemand chunk id regex"))
 }
 
 fn svg_path_re() -> &'static Regex {
@@ -298,12 +317,26 @@ fn extract_svg_frames(html: &str) -> Option<Vec<Vec<Vec<i32>>>> {
     Some(frames)
 }
 
+/// The homepage names the `ondemand.s` chunk in one of two webpack formats:
+/// the legacy direct map (`"ondemand.s":"<hash>"`) or the current split maps
+/// (`<id>:"ondemand.s"` for the name and `<id>:"<hash>"` for the content
+/// hash). Both resolve to the same CDN URL scheme.
 fn extract_ondemand_url(html: &str) -> Option<String> {
-    let cap = ondemand_re().captures(html)?;
-    let hash = cap.get(1)?.as_str();
-    Some(format!(
-        "https://abs.twimg.com/responsive-web/client-web/ondemand.s.{hash}a.js"
-    ))
+    if let Some(hash) = ondemand_re()
+        .captures(html)
+        .and_then(|cap| cap.get(1))
+        .map(|m| m.as_str().to_string())
+    {
+        return Some(ondemand_url(&hash));
+    }
+    let chunk_id = ondemand_chunk_id_re().captures(html)?.get(1)?.as_str();
+    let hash_re = Regex::new(&format!(r#"[^\d]{chunk_id}:\s*"([0-9a-f]{{5,12}})""#)).ok()?;
+    let hash = hash_re.captures(html)?.get(1)?.as_str();
+    Some(ondemand_url(hash))
+}
+
+fn ondemand_url(hash: &str) -> String {
+    format!("https://abs.twimg.com/responsive-web/client-web/ondemand.s.{hash}a.js")
 }
 
 pub fn extract_indices_from_js(js: &str) -> Option<(usize, Vec<usize>)> {
@@ -376,7 +409,7 @@ mod tests {
 
     #[test]
     fn float_to_hex_integers() {
-        assert_eq!(float_to_hex(0.0), "0");
+        assert_eq!(float_to_hex(0.0), "");
         assert_eq!(float_to_hex(10.0), "a");
         assert_eq!(float_to_hex(255.0), "ff");
         assert_eq!(float_to_hex(16.0), "10");
@@ -384,8 +417,29 @@ mod tests {
 
     #[test]
     fn float_to_hex_fractions() {
-        assert_eq!(float_to_hex(0.5), "0.8");
-        assert_eq!(float_to_hex(0.25), "0.4");
+        assert_eq!(float_to_hex(0.5), ".8");
+        assert_eq!(float_to_hex(0.25), ".4");
+    }
+
+    /// Digit-exact against the reference implementation's expansions of
+    /// 2-dp-rounded values — the 14th-and-beyond digits are what the old
+    /// truncating conversion dropped.
+    #[test]
+    fn float_to_hex_full_dyadic_expansion() {
+        assert_eq!(float_to_hex(0.29), ".4a3d70a3d70a3c");
+        assert_eq!(float_to_hex(0.87), ".deb851eb851eb8");
+        assert_eq!(float_to_hex(0.06), ".0f5c28f5c28f5c");
+        assert_eq!(float_to_hex(0.99), ".fd70a3d70a3d7");
+        assert_eq!(float_to_hex(0.13), ".2147ae147ae148");
+    }
+
+    #[test]
+    fn animate_normalizes_bare_fraction_and_zero_hex() {
+        let row = vec![0, 0, 0, 255, 255, 255, 0, 64, 128, 192, 32];
+        let result = animate(&row, 0.0);
+        assert!(!result.is_empty());
+        assert!(!result.contains('.'));
+        assert!(!result.contains('-'));
     }
 
     #[test]
@@ -435,6 +489,29 @@ mod tests {
     #[test]
     fn extract_verification_key_missing() {
         assert!(extract_verification_key("<html></html>").is_none());
+    }
+
+    #[test]
+    fn extract_ondemand_url_legacy_direct_map() {
+        let html = r#"{"ondemand.s":"abc123"}"#;
+        assert_eq!(
+            extract_ondemand_url(html).as_deref(),
+            Some("https://abs.twimg.com/responsive-web/client-web/ondemand.s.abc123a.js")
+        );
+    }
+
+    #[test]
+    fn extract_ondemand_url_split_chunk_maps() {
+        let html = r#"e+({59862:"ondemand.LottieWeb",59924:"ondemand.s",60041:"i18n/emoji-gu"}[e]||e)+"."+{59862:"684ba55",59924:"886e61d",60041:"74fb946"}[e]+"a.js""#;
+        assert_eq!(
+            extract_ondemand_url(html).as_deref(),
+            Some("https://abs.twimg.com/responsive-web/client-web/ondemand.s.886e61da.js")
+        );
+    }
+
+    #[test]
+    fn extract_ondemand_url_missing() {
+        assert!(extract_ondemand_url("<html></html>").is_none());
     }
 
     #[test]

@@ -20,6 +20,8 @@ pub use error::ApiError;
 
 pub async fn serve(addr: SocketAddr) -> crate::error::Result<()> {
     let state = Arc::new(AppState::build().await?);
+    let warm_client = state.gql.clone();
+    tokio::spawn(async move { warm_client.warm_transaction_key().await });
     write_lockfile(&state)?;
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     spawn_ingest(&state, shutdown_rx).await;
@@ -77,6 +79,10 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/whoami", get(routes::whoami::whoami))
         .route("/sources/home", get(routes::timeline::home))
         .route("/sources/user/{handle}", get(routes::timeline::user))
+        .route(
+            "/sources/user/{handle}/replies",
+            get(routes::timeline::user_replies),
+        )
         .route("/sources/search", get(routes::timeline::search))
         .route("/sources/mentions", get(routes::timeline::mentions))
         .route("/sources/bookmarks", get(routes::timeline::bookmarks))
@@ -92,8 +98,23 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/likers/{tweet_id}", get(routes::profile::likers))
         .route("/engage/{tweet_id}/like", post(routes::engage::like))
         .route("/engage/{tweet_id}/unlike", post(routes::engage::unlike))
+        .route(
+            "/tweets/{tweet_id}/retweet",
+            post(routes::engage::retweet).delete(routes::engage::unretweet),
+        )
+        .route(
+            "/tweets/{tweet_id}/bookmark",
+            post(routes::engage::bookmark).delete(routes::engage::unbookmark),
+        )
+        .route(
+            "/users/{user_id}/follow",
+            post(routes::users::follow).delete(routes::users::unfollow),
+        )
+        .route("/users/{user_id}/followers", get(routes::users::followers))
+        .route("/users/{user_id}/following", get(routes::users::following))
         .route("/compose", post(routes::compose::compose))
         .route("/reply/{tweet_id}", post(routes::compose::reply))
+        .route("/media/upload", post(routes::media::upload))
         .route(
             "/seen",
             get(routes::seen::list)
@@ -101,6 +122,10 @@ fn router(state: Arc<AppState>) -> Router {
                 .delete(routes::seen::clear),
         )
         .route("/seen/{id}", get(routes::seen::check))
+        .route(
+            "/notifications/seen",
+            get(routes::seen::notifications_seen_get).put(routes::seen::notifications_seen_put),
+        )
         .route(
             "/session",
             get(routes::session::get).patch(routes::session::patch),
@@ -111,13 +136,17 @@ fn router(state: Arc<AppState>) -> Router {
         )
         .route("/media/{tweet_id}/{index}", get(routes::media::proxy))
         .route("/sse/filter", get(sse::filter_stream))
-        .route("/sse/ask", get(sse::ask_stream))
+        .route(
+            "/sse/ask",
+            get(sse::ask_stream).post(sse::ask_context_stream),
+        )
         .route("/sse/brief", get(sse::brief_stream))
         .route("/sse/translate", get(sse::translate_stream));
 
     Router::new()
         .nest("/api", api)
         .fallback(fallback)
+        .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
         .layer(CompressionLayer::new())
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())

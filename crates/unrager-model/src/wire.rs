@@ -160,6 +160,47 @@ impl AskPreset {
     }
 }
 
+/// One turn of an ask conversation (`POST /api/sse/ask`). Roles serialize
+/// lowercase to match Ollama's chat roles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AskRole {
+    User,
+    Assistant,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AskTurn {
+    pub role: AskRole,
+    pub text: String,
+}
+
+/// A lightweight tweet reference carried as ask context — only what the
+/// prompt builder needs, so clients don't round-trip full `Tweet`s.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AskContextEntry {
+    pub handle: String,
+    pub text: String,
+}
+
+/// Request body for `POST /api/sse/ask` — the conversational ask stream with
+/// thread context, mirroring the TUI's ask view. `turns` is the whole
+/// conversation, oldest first, and must end with the user's current
+/// question; `ancestors`/`siblings`/`replies` are optional thread context the
+/// client already has loaded (ancestors root-first). The response is the
+/// same `TokenEvent` SSE stream as `GET /api/sse/ask`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AskRequest {
+    pub tweet_id: String,
+    pub turns: Vec<AskTurn>,
+    #[serde(default)]
+    pub ancestors: Vec<AskContextEntry>,
+    #[serde(default)]
+    pub siblings: Vec<AskContextEntry>,
+    #[serde(default)]
+    pub replies: Vec<AskContextEntry>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FilterTopic {
     pub name: String,
@@ -194,6 +235,16 @@ pub struct Notification {
     /// attachments), so clients can show a thumbnail. Empty otherwise.
     #[serde(default)]
     pub target_media: Vec<crate::Media>,
+    /// How many additional actors X aggregated beyond `actors`
+    /// ("A, B and 47 others liked your post"). Absent when the group is fully
+    /// enumerated.
+    #[serde(default)]
+    pub others_count: Option<u64>,
+    /// X's fully rendered notification text ("Your poll has ended",
+    /// "A and 3 others liked your post"). Clients should render this verbatim
+    /// for actor-less notification kinds instead of synthesizing copy.
+    #[serde(default)]
+    pub message: Option<String>,
     pub timestamp: DateTime<Utc>,
 }
 
@@ -211,6 +262,30 @@ pub struct NotificationsPage {
     pub notifications: Vec<Notification>,
     #[serde(default)]
     pub cursor: Option<String>,
+}
+
+/// One page of a user list (`GET /api/users/{id}/followers` and
+/// `/api/users/{id}/following`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UserListPage {
+    #[serde(default)]
+    pub users: Vec<User>,
+    #[serde(default)]
+    pub cursor: Option<String>,
+}
+
+/// `POST /api/media/upload`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MediaUploadResult {
+    pub media_id: String,
+}
+
+/// `GET`/`PUT /api/notifications/seen` — the newest-seen notification marker,
+/// persisted server-side so badge state syncs across clients.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct NotificationsSeenMarker {
+    #[serde(default)]
+    pub marker: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -326,5 +401,149 @@ mod tests {
     fn about_view_exact_wire_shape_for_deferred() {
         let v = serde_json::to_value(AboutView::deferred()).unwrap();
         assert_eq!(v, json!({"status": "deferred"}));
+    }
+
+    #[test]
+    fn notification_defaults_others_count_and_message_when_absent() {
+        let json = r#"
+        {"id":"n1","type":"like","actors":[],"target_tweet_id":null,
+         "target_tweet_snippet":null,"target_tweet_like_count":null,
+         "target_media":[],"timestamp":"2026-06-19T12:30:00Z"}
+        "#;
+        let notif: Notification = serde_json::from_str(json).unwrap();
+        assert_eq!(notif.others_count, None);
+        assert_eq!(notif.message, None);
+    }
+
+    #[test]
+    fn notification_carries_others_count_and_message() {
+        let json = r#"
+        {"id":"n1","type":"like","actors":[],"others_count":47,
+         "message":"A, B and 47 others liked your post",
+         "timestamp":"2026-06-19T12:30:00Z"}
+        "#;
+        let notif: Notification = serde_json::from_str(json).unwrap();
+        assert_eq!(notif.others_count, Some(47));
+        assert_eq!(
+            notif.message.as_deref(),
+            Some("A, B and 47 others liked your post")
+        );
+    }
+
+    #[test]
+    fn user_list_page_roundtrips_and_defaults() {
+        let page: UserListPage = serde_json::from_str(r#"{}"#).unwrap();
+        assert!(page.users.is_empty());
+        assert!(page.cursor.is_none());
+
+        let page = UserListPage {
+            users: vec![crate::User {
+                rest_id: "1".into(),
+                handle: "a".into(),
+                name: "A".into(),
+                verified: false,
+                followers: 0,
+                following: 0,
+                avatar_url: None,
+                followed_by_me: None,
+            }],
+            cursor: Some("next".into()),
+        };
+        let json = serde_json::to_string(&page).unwrap();
+        let back: UserListPage = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, page);
+    }
+
+    #[test]
+    fn ask_request_defaults_context_arrays() {
+        let req: AskRequest = serde_json::from_str(
+            r#"{"tweet_id":"1","turns":[{"role":"user","text":"Explain this post."}]}"#,
+        )
+        .unwrap();
+        assert_eq!(req.tweet_id, "1");
+        assert_eq!(req.turns.len(), 1);
+        assert_eq!(req.turns[0].role, AskRole::User);
+        assert!(req.ancestors.is_empty());
+        assert!(req.siblings.is_empty());
+        assert!(req.replies.is_empty());
+    }
+
+    #[test]
+    fn ask_request_roundtrips_full_context_and_roles() {
+        let req = AskRequest {
+            tweet_id: "42".into(),
+            turns: vec![
+                AskTurn {
+                    role: AskRole::User,
+                    text: "Explain".into(),
+                },
+                AskTurn {
+                    role: AskRole::Assistant,
+                    text: "It means…".into(),
+                },
+                AskTurn {
+                    role: AskRole::User,
+                    text: "And the replies?".into(),
+                },
+            ],
+            ancestors: vec![AskContextEntry {
+                handle: "root".into(),
+                text: "the root post".into(),
+            }],
+            siblings: vec![],
+            replies: vec![AskContextEntry {
+                handle: "carol".into(),
+                text: "nice".into(),
+            }],
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""role":"user""#));
+        assert!(json.contains(r#""role":"assistant""#));
+        let back: AskRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, req);
+    }
+
+    #[test]
+    fn user_followed_by_me_is_optional_and_omitted_when_absent() {
+        let user: crate::User = serde_json::from_str(
+            r#"{"rest_id":"1","handle":"a","name":"A","verified":false,
+                "followers":0,"following":0,"avatar_url":null}"#,
+        )
+        .unwrap();
+        assert_eq!(user.followed_by_me, None);
+        let v = serde_json::to_value(&user).unwrap();
+        assert!(!v.as_object().unwrap().contains_key("followed_by_me"));
+
+        let followed: crate::User = serde_json::from_str(
+            r#"{"rest_id":"1","handle":"a","name":"A","verified":false,
+                "followers":0,"following":0,"followed_by_me":true}"#,
+        )
+        .unwrap();
+        assert_eq!(followed.followed_by_me, Some(true));
+        let v = serde_json::to_value(&followed).unwrap();
+        assert_eq!(v["followed_by_me"], json!(true));
+    }
+
+    #[test]
+    fn media_upload_result_wire_shape() {
+        let v = serde_json::to_value(MediaUploadResult {
+            media_id: "12345".into(),
+        })
+        .unwrap();
+        assert_eq!(v, json!({"media_id": "12345"}));
+    }
+
+    #[test]
+    fn notifications_seen_marker_roundtrips_null_and_value() {
+        let empty: NotificationsSeenMarker = serde_json::from_str(r#"{"marker":null}"#).unwrap();
+        assert_eq!(empty.marker, None);
+        let omitted: NotificationsSeenMarker = serde_json::from_str(r#"{}"#).unwrap();
+        assert_eq!(omitted.marker, None);
+        let set: NotificationsSeenMarker = serde_json::from_str(r#"{"marker":"1234"}"#).unwrap();
+        assert_eq!(set.marker.as_deref(), Some("1234"));
+        assert_eq!(
+            serde_json::to_value(&set).unwrap(),
+            json!({"marker": "1234"})
+        );
     }
 }

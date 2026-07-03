@@ -119,10 +119,40 @@ fn filter_originals(v: Vec<Tweet>) -> Vec<Tweet> {
         .collect()
 }
 
+#[derive(Debug, Deserialize, Default)]
+pub struct UserQuery {
+    #[serde(default)]
+    pub cursor: Option<String>,
+    #[serde(default)]
+    pub count: Option<u32>,
+    #[serde(default)]
+    pub include_replies: bool,
+}
+
 pub async fn user(
     State(state): State<Arc<AppState>>,
     Path(handle): Path<String>,
-    Query(q): Query<PageQuery>,
+    Query(q): Query<UserQuery>,
+) -> std::result::Result<Json<TimelinePage>, ApiError> {
+    user_timeline(&state, &handle, &q, q.include_replies).await
+}
+
+/// The tweets-and-replies variant of a user timeline (the TUI's `R` toggle),
+/// exposed both as this subresource and as `?include_replies=true` on the
+/// base route.
+pub async fn user_replies(
+    State(state): State<Arc<AppState>>,
+    Path(handle): Path<String>,
+    Query(q): Query<UserQuery>,
+) -> std::result::Result<Json<TimelinePage>, ApiError> {
+    user_timeline(&state, &handle, &q, true).await
+}
+
+async fn user_timeline(
+    state: &Arc<AppState>,
+    handle: &str,
+    q: &UserQuery,
+    include_replies: bool,
 ) -> std::result::Result<Json<TimelinePage>, ApiError> {
     let screen = handle.trim_start_matches('@');
     if screen.is_empty() {
@@ -130,10 +160,15 @@ pub async fn user(
     }
     let count = q.count.unwrap_or(DEFAULT_COUNT);
     let user_id = source::resolve_user_id(&state.gql, screen).await?;
+    let op = if include_replies {
+        Operation::UserTweetsAndReplies
+    } else {
+        Operation::UserTweets
+    };
     let response = state
         .gql
         .get(
-            Operation::UserTweets,
+            op,
             &endpoints::user_tweets_variables(&user_id, count, q.cursor.as_deref()),
             &endpoints::user_tweets_features(),
         )
@@ -232,37 +267,49 @@ pub async fn mentions(
     }))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 pub struct BookmarkQuery {
-    pub q: String,
+    #[serde(default)]
+    pub q: Option<String>,
     #[serde(default)]
     pub cursor: Option<String>,
     #[serde(default)]
     pub count: Option<u32>,
 }
 
+/// With a non-empty `q`, searches bookmarks (`BookmarkSearchTimeline`);
+/// without one, serves the full Bookmarks timeline.
 pub async fn bookmarks(
     State(state): State<Arc<AppState>>,
     Query(q): Query<BookmarkQuery>,
 ) -> std::result::Result<Json<TimelinePage>, ApiError> {
-    if q.q.trim().is_empty() {
-        return Err(ApiError::bad_request(
-            "bookmarks requires a non-empty q parameter",
-        ));
-    }
     let count = q.count.unwrap_or(DEFAULT_COUNT);
-    let response = state
-        .gql
-        .get(
-            Operation::BookmarkSearchTimeline,
-            &endpoints::bookmark_search_variables(&q.q, count, q.cursor.as_deref()),
-            &endpoints::bookmark_search_features(),
-        )
-        .await?;
-    let instructions = timeline::extract_instructions(
-        &response,
-        "/data/search_by_raw_query/bookmarks_search_timeline/timeline/instructions",
-    )?;
+    let query = q.q.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let (response, path) = match query {
+        Some(search) => (
+            state
+                .gql
+                .get(
+                    Operation::BookmarkSearchTimeline,
+                    &endpoints::bookmark_search_variables(search, count, q.cursor.as_deref()),
+                    &endpoints::bookmark_search_features(),
+                )
+                .await?,
+            "/data/search_by_raw_query/bookmarks_search_timeline/timeline/instructions",
+        ),
+        None => (
+            state
+                .gql
+                .get(
+                    Operation::Bookmarks,
+                    &endpoints::bookmarks_timeline_variables(count, q.cursor.as_deref()),
+                    &endpoints::bookmarks_timeline_features(),
+                )
+                .await?,
+            "/data/bookmark_timeline_v2/timeline/instructions",
+        ),
+    };
+    let instructions = timeline::extract_instructions(&response, path)?;
     let page = timeline::walk(instructions);
     Ok(Json(TimelinePage {
         tweets: page.tweets,
@@ -296,6 +343,8 @@ pub async fn notifications(
             target_tweet_snippet: n.target_tweet_snippet,
             target_tweet_like_count: n.target_tweet_like_count,
             target_media: n.target_media,
+            others_count: n.others_count,
+            message: n.message,
             timestamp: n.timestamp,
         })
         .collect();

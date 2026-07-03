@@ -11,6 +11,12 @@ pub struct User {
     pub following: u64,
     #[serde(default)]
     pub avatar_url: Option<String>,
+    /// Whether the authenticated viewer follows this user. Populated on
+    /// profile payloads (X's `UserByScreenName` relationship perspective);
+    /// absent on timeline authors and older servers, so it stays optional
+    /// and is omitted from the wire when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub followed_by_me: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

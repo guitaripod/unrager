@@ -101,6 +101,21 @@ impl ApiClient {
             .await
     }
 
+    /// The tweets-and-replies variant of a user timeline
+    /// (`GET /api/sources/user/{handle}/replies`), matching the TUI's `R`
+    /// toggle on profiles.
+    pub async fn user_timeline_replies(
+        &self,
+        handle: &str,
+        cursor: Option<&str>,
+        count: Option<u32>,
+    ) -> Result<TimelinePage, ApiError> {
+        let mut query = vec![];
+        append_page(&mut query, cursor, count);
+        self.get(self.build(&["api", "sources", "user", handle, "replies"], &query)?)
+            .await
+    }
+
     pub async fn search(
         &self,
         q: &str,
@@ -381,6 +396,39 @@ impl ApiClient {
                 ("preset", preset.as_str().to_string()),
             ],
         )
+    }
+
+    /// The conversational ask stream (`POST /api/sse/ask`): thread context and
+    /// the whole turn history ride in the JSON body, tokens stream back as the
+    /// usual `TokenEvent` SSE.
+    pub fn ask_context_stream(
+        &self,
+        request: &unrager_model::AskRequest,
+    ) -> impl Stream<Item = Result<TokenEvent, ApiError>> + use<> {
+        let built = self.build(&["api", "sse", "ask"], &[]);
+        let body = serde_json::to_value(request);
+        let client = self.sse_http.clone();
+        async_stream::stream! {
+            let url = match built {
+                Ok(url) => url,
+                Err(e) => {
+                    yield Err(e);
+                    return;
+                }
+            };
+            let body = match body {
+                Ok(body) => body,
+                Err(e) => {
+                    yield Err(ApiError::InvalidRequest(e.to_string()));
+                    return;
+                }
+            };
+            let inner = sse::sse_stream_post::<TokenEvent>(client, url, body);
+            futures::pin_mut!(inner);
+            while let Some(item) = inner.next().await {
+                yield item;
+            }
+        }
     }
 
     pub fn brief_stream(

@@ -10,4 +10,5 @@ pub mod seen;
 pub mod session;
 pub mod timeline;
 pub mod tweet;
+pub mod users;
 pub mod whoami;

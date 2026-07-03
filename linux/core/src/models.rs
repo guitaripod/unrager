@@ -11,10 +11,11 @@ use serde::Deserialize;
 use unrager_model::User;
 
 pub use unrager_model::{
-    AboutProfile, AboutStatus, AboutView, AskPreset, BriefChunk, ComposeResult, FeedMode,
-    FeedStatus, FeedStatusResponse, FilterTopic, FilterVerdictEvent, Media, MediaKind,
-    Notification, NotificationActor, NotificationsPage, PollOption, ProfileView, SearchProduct,
-    SessionState, SourceKind, ThreadView, TimelinePage, TokenEvent, Tweet, Verdict,
+    AboutProfile, AboutStatus, AboutView, AskContextEntry, AskPreset, AskRequest, AskRole, AskTurn,
+    BriefChunk, ComposeResult, FeedMode, FeedStatus, FeedStatusResponse, FilterTopic,
+    FilterVerdictEvent, Media, MediaKind, MediaUploadResult, Notification, NotificationActor,
+    NotificationsPage, NotificationsSeenMarker, PollOption, ProfileView, SearchProduct,
+    SessionState, SourceKind, ThreadView, TimelinePage, TokenEvent, Tweet, UserListPage, Verdict,
 };
 
 /// `GET /api/health`. Extra `build` field is ignored.

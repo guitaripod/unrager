@@ -11,6 +11,7 @@ const TWEETS_ENDPOINT: &str = "https://api.x.com/2/tweets";
 pub struct PostRequest {
     pub text: String,
     pub in_reply_to_tweet_id: Option<String>,
+    pub quote_tweet_id: Option<String>,
     pub media_ids: Vec<String>,
 }
 
@@ -19,6 +20,9 @@ impl PostRequest {
         let mut body = json!({ "text": self.text });
         if let Some(ref reply_to) = self.in_reply_to_tweet_id {
             body["reply"] = json!({ "in_reply_to_tweet_id": reply_to });
+        }
+        if let Some(ref quote) = self.quote_tweet_id {
+            body["quote_tweet_id"] = json!(quote);
         }
         if !self.media_ids.is_empty() {
             body["media"] = json!({ "media_ids": self.media_ids });
@@ -63,24 +67,45 @@ impl ApiClient {
         in_reply_to_tweet_id: Option<&str>,
         media_files: &[MediaFile],
     ) -> Result<PostedTweet> {
-        let media_ids = if media_files.is_empty() {
-            Vec::new()
-        } else {
+        self.post_composed(text, in_reply_to_tweet_id, None, media_files, &[])
+            .await
+    }
+
+    /// Full compose surface: uploads `media_files`, appends any pre-uploaded
+    /// `media_ids`, and supports quoting a tweet.
+    pub async fn post_composed(
+        &self,
+        text: &str,
+        in_reply_to_tweet_id: Option<&str>,
+        quote_tweet_id: Option<&str>,
+        media_files: &[MediaFile],
+        media_ids: &[String],
+    ) -> Result<PostedTweet> {
+        let mut ids = Vec::with_capacity(media_files.len() + media_ids.len());
+        if !media_files.is_empty() {
             let uploader = MediaUploader::new(&self.http, &self.access_token);
-            let mut ids = Vec::with_capacity(media_files.len());
             for file in media_files {
                 let id = uploader.upload(file).await?;
                 tracing::debug!("uploaded {} → media_id {id}", file.path.display());
                 ids.push(id);
             }
-            ids
-        };
+        }
+        ids.extend(media_ids.iter().cloned());
         let request = PostRequest {
             text: text.to_string(),
             in_reply_to_tweet_id: in_reply_to_tweet_id.map(str::to_string),
-            media_ids,
+            quote_tweet_id: quote_tweet_id.map(str::to_string),
+            media_ids: ids,
         };
         self.post_request(&request).await
+    }
+
+    /// Upload a single media file and return its media id without posting
+    /// anything. Backs `POST /api/media/upload`.
+    pub async fn upload_media(&self, file: &MediaFile) -> Result<String> {
+        MediaUploader::new(&self.http, &self.access_token)
+            .upload(file)
+            .await
     }
 
     async fn post_request(&self, request: &PostRequest) -> Result<PostedTweet> {
@@ -135,4 +160,53 @@ fn is_credits_depleted(status: u16, body: &str) -> bool {
             || body.contains("credits to fulfill")
             || body.contains("insufficient")
             || body.contains("\"type\":\"https://api.twitter.com/2/problems/credits\""))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn post_request_minimal_text_only() {
+        let req = PostRequest {
+            text: "hello".into(),
+            in_reply_to_tweet_id: None,
+            quote_tweet_id: None,
+            media_ids: vec![],
+        };
+        assert_eq!(req.to_json(), json!({"text": "hello"}));
+    }
+
+    #[test]
+    fn post_request_carries_quote_tweet_id() {
+        let req = PostRequest {
+            text: "take".into(),
+            in_reply_to_tweet_id: None,
+            quote_tweet_id: Some("123".into()),
+            media_ids: vec![],
+        };
+        assert_eq!(
+            req.to_json(),
+            json!({"text": "take", "quote_tweet_id": "123"})
+        );
+    }
+
+    #[test]
+    fn post_request_full_shape() {
+        let req = PostRequest {
+            text: "all".into(),
+            in_reply_to_tweet_id: Some("9".into()),
+            quote_tweet_id: Some("123".into()),
+            media_ids: vec!["m1".into(), "m2".into()],
+        };
+        assert_eq!(
+            req.to_json(),
+            json!({
+                "text": "all",
+                "reply": {"in_reply_to_tweet_id": "9"},
+                "quote_tweet_id": "123",
+                "media": {"media_ids": ["m1", "m2"]}
+            })
+        );
+    }
 }

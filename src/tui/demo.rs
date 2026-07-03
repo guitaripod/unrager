@@ -26,6 +26,7 @@ fn user(handle: &str, name: &str, verified: bool, followers: u64) -> User {
         followers,
         following: followers / 20,
         avatar_url: None,
+        followed_by_me: None,
     }
 }
 

@@ -114,13 +114,43 @@ final class MediaViewerViewController: UIViewController {
         ])
     }
 
+    /// Shares the full-resolution image — never the feed-snapshot placeholder,
+    /// and never the tailnet-only proxy URL (useless to any recipient outside
+    /// the tailnet). If the full-res load hasn't landed yet it's fetched here,
+    /// with the button disabled meanwhile; a failed fetch says so explicitly.
     private func shareCurrent() {
-        let url = AppEnvironment.shared.api.mediaURL(tweetID: tweetID, index: indices[currentPage])
         let visible = collectionView.cellForItem(at: IndexPath(item: currentPage, section: 0)) as? ZoomablePhotoCell
-        let items: [Any] = [visible?.image ?? url]
-        let activity = UIActivityViewController(activityItems: items, applicationActivities: nil)
+        if let visible, visible.hasFullRes, let image = visible.image {
+            presentShare(image)
+            return
+        }
+        shareButton.isEnabled = false
+        let url = AppEnvironment.shared.api.mediaURL(tweetID: tweetID, index: indices[currentPage])
+        Task { [weak self] in
+            defer { self?.shareButton.isEnabled = true }
+            guard let data = try? await URLSession.shared.data(from: url).0,
+                  let image = UIImage(data: data) else {
+                AppLogger.shared.warn("share full-res fetch failed: \(url)", category: .media)
+                self?.presentShareFailure()
+                return
+            }
+            self?.presentShare(image)
+        }
+    }
+
+    private func presentShare(_ image: UIImage) {
+        let activity = UIActivityViewController(activityItems: [image], applicationActivities: nil)
         activity.popoverPresentationController?.sourceView = shareButton
         present(activity, animated: true)
+    }
+
+    private func presentShareFailure() {
+        let alert = UIAlertController(
+            title: "Couldn't load full-size image",
+            message: "The full-resolution image couldn't be fetched from the server. Check the connection and try again.",
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        present(alert, animated: true)
     }
 
     @objc private func handleDismissPan(_ gesture: UIPanGestureRecognizer) {
@@ -192,6 +222,9 @@ private final class ZoomablePhotoCell: UICollectionViewCell, UIScrollViewDelegat
     private var task: Task<Void, Never>?
 
     var image: UIImage? { imageView.image }
+    /// True once the full-resolution download replaced the feed-snapshot
+    /// placeholder — the only state whose `image` is worth sharing.
+    private(set) var hasFullRes = false
     var isAtMinimumZoom: Bool { scrollView.zoomScale <= scrollView.minimumZoomScale + 0.01 }
 
     override init(frame: CGRect) {
@@ -220,13 +253,17 @@ private final class ZoomablePhotoCell: UICollectionViewCell, UIScrollViewDelegat
     func load(url: URL, placeholder: UIImage? = nil) {
         task?.cancel()
         scrollView.setZoomScale(1, animated: false)
+        hasFullRes = false
         imageView.image = placeholder
         if placeholder != nil { layoutImage() }
         let bounds = self.bounds.size
         task = Task { [weak self] in
             let loaded = await Self.fullResImage(url, fitting: bounds)
             guard let self, !Task.isCancelled else { return }
-            self.imageView.image = loaded
+            if let loaded {
+                self.imageView.image = loaded
+                self.hasFullRes = true
+            }
             self.layoutImage()
         }
     }
@@ -265,6 +302,7 @@ private final class ZoomablePhotoCell: UICollectionViewCell, UIScrollViewDelegat
         task?.cancel()
         scrollView.setZoomScale(1, animated: false)
         imageView.image = nil
+        hasFullRes = false
     }
 
     private static func fullResImage(_ url: URL, fitting: CGSize) async -> UIImage? {

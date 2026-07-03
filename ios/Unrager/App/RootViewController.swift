@@ -115,6 +115,14 @@ final class RootViewController: UITabBarController {
         }
     }
 
+    /// Switches to the Notifications tab at its root (or Home as a fallback) —
+    /// where a tapped summary banner lands.
+    func showNotificationsTab() {
+        let index = notificationsTabIndex ?? 0
+        selectedIndex = index
+        (viewControllers?[index] as? UINavigationController)?.popToRootViewController(animated: false)
+    }
+
     /// Switches to the Notifications tab (or Home as a fallback) and pushes a
     /// view controller onto that stack — used to deep-link a tapped banner.
     func openInNotificationsStack(_ controller: UIViewController) {

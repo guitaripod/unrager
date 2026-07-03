@@ -2,15 +2,19 @@ import PhotosUI
 import UIKit
 import UnragerKit
 
-/// Compose a new tweet or a reply. unrager never posts to X itself: the action
-/// copies the composed text to the clipboard and opens X's web compose intent
-/// (prefilled, and for replies anchored to the parent tweet), then dismisses —
-/// mirroring the TUI's open-X behavior. The in-app editor (text + char count,
-/// photo thumbnails) stays for drafting; the button reads "Open in X".
+/// Compose a new tweet, a reply, or a quote — posted through the unrager
+/// server (`/api/compose`, `/api/reply/{id}`) so it lands as the signed-in
+/// account without bouncing to the X app. Picked photos upload first
+/// (`/api/media/upload`, sequential, with per-item progress in the post
+/// button) and their minted ids ride along as `media_ids`; a quote carries
+/// `quote_tweet_id` and shows a preview card of the quoted tweet. Failures
+/// surface an alert with Retry — already-uploaded attachments aren't
+/// re-uploaded — and never silently drop media.
 final class ComposeViewController: UIViewController {
     enum Mode {
         case new
         case reply(to: Tweet)
+        case quote(of: Tweet)
     }
 
     private let mode: Mode
@@ -19,8 +23,12 @@ final class ComposeViewController: UIViewController {
     private let counter = UILabel()
     private let attachmentBar = UIStackView()
     private var attachments: [Attachment] = []
+    /// Media ids already minted for an attachment, keyed by the attachment's
+    /// local id — a Retry after a mid-batch failure skips completed uploads.
+    private var uploadedIDs: [UUID: String] = [:]
+    private var isPosting = false
     private lazy var postButton = UIBarButtonItem(
-        title: "Open in X", style: .prominent, target: self, action: #selector(post))
+        title: "Post", style: .prominent, target: self, action: #selector(post))
     private lazy var photoButton = UIBarButtonItem(
         image: DesignSystem.icon("photo.on.rectangle"),
         primaryAction: UIAction { [weak self] _ in self?.presentPicker() })
@@ -45,8 +53,15 @@ final class ComposeViewController: UIViewController {
         super.viewDidLoad()
         view.backgroundColor = DesignSystem.Color.background
         switch mode {
-        case .new: title = "New Tweet"
-        case let .reply(tweet): title = "Reply to @\(tweet.author.handle)"
+        case .new:
+            title = "New Tweet"
+            placeholder.text = "What’s happening?"
+        case let .reply(tweet):
+            title = "Reply to @\(tweet.author.handle)"
+            placeholder.text = "Post your reply"
+        case let .quote(tweet):
+            title = "Quote @\(tweet.author.handle)"
+            placeholder.text = "Add a comment"
         }
         navigationItem.leftBarButtonItem = UIBarButtonItem(
             barButtonSystemItem: .cancel, target: self, action: #selector(cancel))
@@ -58,7 +73,6 @@ final class ComposeViewController: UIViewController {
         textView.delegate = self
         textView.textColor = DesignSystem.Color.label
 
-        placeholder.text = "What’s happening?"
         placeholder.font = DesignSystem.Typography.system(20, weight: .regular)
         placeholder.textColor = DesignSystem.Color.tertiaryLabel
 
@@ -75,11 +89,25 @@ final class ComposeViewController: UIViewController {
         textView.addManaged(placeholder)
         view.addManaged(attachmentBar)
         view.addManaged(counter)
+
+        if case let .quote(tweet) = mode {
+            let preview = QuotePreviewView(tweet: tweet)
+            view.addManaged(preview)
+            NSLayoutConstraint.activate([
+                preview.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: DesignSystem.Spacing.l),
+                preview.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -DesignSystem.Spacing.l),
+                preview.bottomAnchor.constraint(equalTo: attachmentBar.topAnchor, constant: -DesignSystem.Spacing.s),
+                textView.bottomAnchor.constraint(equalTo: preview.topAnchor, constant: -DesignSystem.Spacing.s),
+            ])
+        } else {
+            textView.bottomAnchor.constraint(
+                equalTo: attachmentBar.topAnchor, constant: -DesignSystem.Spacing.s).isActive = true
+        }
+
         NSLayoutConstraint.activate([
             textView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: DesignSystem.Spacing.s),
             textView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: DesignSystem.Spacing.l),
             textView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -DesignSystem.Spacing.l),
-            textView.bottomAnchor.constraint(equalTo: attachmentBar.topAnchor, constant: -DesignSystem.Spacing.s),
             placeholder.topAnchor.constraint(equalTo: textView.topAnchor, constant: 8),
             placeholder.leadingAnchor.constraint(equalTo: textView.leadingAnchor, constant: 5),
             attachmentBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: DesignSystem.Spacing.l),
@@ -128,8 +156,10 @@ final class ComposeViewController: UIViewController {
         textViewDidChange(textView)
     }
 
+    /// Remaining budget under X's weighted 280 (URLs count 23, CJK/emoji count
+    /// 2), so the counter — and the post gate — agree with what X will accept.
     private func updateCounter() {
-        let remaining = 280 - textView.text.count
+        let remaining = TweetCounter.remaining(for: textView.text)
         counter.text = "\(remaining)"
         counter.textColor = remaining < 0 ? .systemRed : DesignSystem.Color.secondaryLabel
     }
@@ -140,17 +170,85 @@ final class ComposeViewController: UIViewController {
 
     @objc private func cancel() { dismiss(animated: true) }
 
-    /// Copies the draft to the clipboard (a backup, since intent URLs can drop
-    /// long text) and opens X's compose intent prefilled. For replies the parent
-    /// id is appended so X anchors the reply. Then dismisses.
+    // MARK: - Posting
+
     @objc private func post() {
-        let text = textView.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard hasContent else { return }
-        UIPasteboard.general.string = text
-        Haptics.success()
-        autoLikeIfReply()
-        openInX(text: text)
-        dismiss(animated: true)
+        Task { await submit() }
+    }
+
+    /// Uploads pending attachments (sequentially, with per-item progress in
+    /// the post button), then posts through the server API for the current
+    /// mode. Success dismisses; failure re-enables the editor and offers Retry.
+    private func submit() async {
+        guard hasContent, !isPosting else { return }
+        isPosting = true
+        setEditorLocked(true)
+        defer {
+            isPosting = false
+            setEditorLocked(false)
+        }
+        do {
+            let mediaIDs = try await uploadPendingAttachments()
+            postButton.title = "Posting…"
+            let text = textView.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            switch mode {
+            case .new:
+                _ = try await EngageService.publish.compose(text: text, mediaIDs: mediaIDs)
+            case let .reply(tweet):
+                _ = try await EngageService.publish.reply(to: tweet.restID, text: text, mediaIDs: mediaIDs)
+                autoLikeIfReply()
+            case let .quote(tweet):
+                _ = try await EngageService.publish.compose(
+                    text: text, mediaIDs: mediaIDs, quoteTweetID: tweet.restID)
+            }
+            Haptics.success()
+            dismiss(animated: true)
+        } catch {
+            Haptics.error()
+            AppLogger.shared.warn("compose post failed: \(error)", category: .compose)
+            presentPostFailure(error)
+        }
+    }
+
+    /// Uploads every attachment that hasn't already minted a media id and
+    /// returns the ids in attachment order. Sequential, so the "Uploading
+    /// N/M…" progress is honest and a failure pinpoints one item.
+    private func uploadPendingAttachments() async throws -> [String] {
+        var ids: [String] = []
+        for (index, attachment) in attachments.enumerated() {
+            if let existing = uploadedIDs[attachment.id] {
+                ids.append(existing)
+                continue
+            }
+            postButton.title = "Uploading \(index + 1)/\(attachments.count)…"
+            let id = try await EngageService.publish.upload(attachment.media)
+            uploadedIDs[attachment.id] = id
+            ids.append(id)
+        }
+        return ids
+    }
+
+    /// Locks (or restores) the editor while a post is in flight so the draft
+    /// can't mutate mid-upload; restoring re-derives the post button's
+    /// enabled state from the draft.
+    private func setEditorLocked(_ locked: Bool) {
+        textView.isEditable = !locked
+        attachmentBar.isUserInteractionEnabled = !locked
+        photoButton.isEnabled = !locked && attachments.count < Self.maxAttachments
+        postButton.isEnabled = !locked && hasContent && TweetCounter.remaining(for: textView.text) >= 0
+        if !locked { postButton.title = "Post" }
+    }
+
+    private func presentPostFailure(_ error: any Error) {
+        let alert = UIAlertController(
+            title: "Couldn't post",
+            message: error.localizedDescription,
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Retry", style: .default) { [weak self] _ in
+            Task { await self?.submit() }
+        })
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        present(alert, animated: true)
     }
 
     /// Replying to someone auto-likes their tweet (mirroring the TUI's reply
@@ -159,46 +257,12 @@ final class ComposeViewController: UIViewController {
         guard case let .reply(tweet) = mode, !tweet.favorited else { return }
         Task { _ = try? await AppEnvironment.shared.api.like(tweetID: tweet.restID) }
     }
-
-    /// Hands the draft off to the real X app. A reply opens the parent tweet
-    /// in-app so the reply lands in the right thread (matching the TUI — the X
-    /// URL scheme can't prefill a reply composer); a new tweet opens the
-    /// composer prefilled. The web URL is the fallback when the app is absent.
-    private func openInX(text: String) {
-        let appURL: URL?
-        let webURL: URL?
-        switch mode {
-        case let .reply(tweet):
-            appURL = URL(string: "twitter://status?id=\(tweet.restID)")
-            webURL = URL(string: tweet.url)
-        default:
-            var components = URLComponents(string: "twitter://post")
-            components?.queryItems = [URLQueryItem(name: "message", value: text)]
-            appURL = components?.url
-            webURL = intentURL(text: text)
-        }
-        if let appURL, UIApplication.shared.canOpenURL(appURL) {
-            UIApplication.shared.open(appURL)
-            return
-        }
-        if let webURL { UIApplication.shared.open(webURL) }
-    }
-
-    private func intentURL(text: String) -> URL? {
-        var components = URLComponents(string: "https://x.com/intent/post")
-        var items = [URLQueryItem(name: "text", value: text)]
-        if case let .reply(tweet) = mode {
-            items.append(URLQueryItem(name: "in_reply_to", value: tweet.restID))
-        }
-        components?.queryItems = items
-        return components?.url
-    }
 }
 
 extension ComposeViewController: UITextViewDelegate {
     func textViewDidChange(_ textView: UITextView) {
         placeholder.isHidden = !textView.text.isEmpty
-        postButton.isEnabled = hasContent && textView.text.count <= 280
+        postButton.isEnabled = !isPosting && hasContent && TweetCounter.remaining(for: textView.text) >= 0
         updateCounter()
     }
 }
@@ -218,6 +282,54 @@ extension ComposeViewController: PHPickerViewControllerDelegate {
                 Task { @MainActor in self?.addAttachment(attachment) }
             }
         }
+    }
+}
+
+/// The quoted tweet's preview card in the quote composer: author line + a few
+/// lines of text in the same bordered treatment as `TweetCell`'s inline quote.
+private final class QuotePreviewView: UIView {
+    init(tweet: Tweet) {
+        super.init(frame: .zero)
+        layer.cornerRadius = DesignSystem.Radius.control
+        layer.cornerCurve = .continuous
+        layer.borderWidth = 1
+        layer.borderColor = DesignSystem.Color.separator.cgColor
+
+        let author = UILabel()
+        author.numberOfLines = 1
+        let attributed = NSMutableAttributedString(string: tweet.author.name, attributes: [
+            .font: DesignSystem.Typography.handle(),
+            .foregroundColor: DesignSystem.Color.label,
+        ])
+        attributed.append(NSAttributedString(string: " @\(tweet.author.handle)", attributes: [
+            .font: DesignSystem.Typography.handle(),
+            .foregroundColor: DesignSystem.handleColor(tweet.author.handle),
+        ]))
+        author.attributedText = attributed
+
+        let body = UILabel()
+        body.font = DesignSystem.Typography.metric()
+        body.textColor = DesignSystem.Color.label
+        body.numberOfLines = 4
+        body.text = tweet.text
+        body.isHidden = tweet.text.isEmpty
+
+        let stack = UIStackView(arrangedSubviews: [author, body])
+        stack.axis = .vertical
+        stack.spacing = 6
+        addManaged(stack)
+        stack.pinEdges(to: self, insets: UIEdgeInsets(top: 8, left: 10, bottom: 8, right: 10))
+
+        isAccessibilityElement = true
+        accessibilityLabel = "Quoting \(tweet.author.name): \(tweet.text)"
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func traitCollectionDidChange(_ previous: UITraitCollection?) {
+        super.traitCollectionDidChange(previous)
+        layer.borderColor = DesignSystem.Color.separator.cgColor
     }
 }
 

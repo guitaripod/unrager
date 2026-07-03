@@ -61,7 +61,7 @@ final class TimelineViewModel {
                 return "mentions"
             case let .bookmarks(query):
                 let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                return q.isEmpty ? nil : "bookmarks-\(q)"
+                return q.isEmpty ? "bookmarks-all" : "bookmarks-\(q)"
             }
         }
     }
@@ -119,6 +119,15 @@ final class TimelineViewModel {
         case .mentions: return true
         default: return false
         }
+    }
+
+    /// The rage filter exists to de-rage the algorithmic Home feeds. Deliberate
+    /// visits — profiles (including the user's own), search, bookmarks,
+    /// mentions — load unfiltered and render instantly instead of stalling
+    /// behind a collect-then-show classification batch.
+    var usesFilterCollect: Bool {
+        if case .home = source { return true }
+        return false
     }
 
     init(source: Source) {
@@ -225,9 +234,28 @@ final class TimelineViewModel {
     /// see the new state — without this, a second heart tap re-sends "like"
     /// forever and any reuse repaints the stale, unliked model.
     func applyLike(id: String, favorited: Bool) {
+        applyEngagement(id: id) { $0.togglingLike(to: favorited) }
+    }
+
+    /// Writes a confirmed repost/undo back into the published tweets, same
+    /// contract as `applyLike`.
+    func applyRetweet(id: String, retweeted: Bool) {
+        applyEngagement(id: id) { $0.togglingRetweet(to: retweeted) }
+    }
+
+    /// Writes a confirmed bookmark/unbookmark back into the published tweets,
+    /// same contract as `applyLike`.
+    func applyBookmark(id: String, bookmarked: Bool) {
+        applyEngagement(id: id) { $0.togglingBookmark(to: bookmarked) }
+    }
+
+    /// The shared confirmed-engagement write-back: replaces the matching tweet
+    /// with `transform`'s copy (nil = already in that state, nothing to do)
+    /// and re-persists the display seed.
+    private func applyEngagement(id: String, _ transform: (Tweet) -> Tweet?) {
         var changed = false
         let updated = tweets.value.map { tweet -> Tweet in
-            guard tweet.restID == id, let toggled = tweet.togglingLike(to: favorited) else { return tweet }
+            guard tweet.restID == id, let toggled = transform(tweet) else { return tweet }
             changed = true
             return toggled
         }
@@ -271,6 +299,23 @@ final class TimelineViewModel {
         return ordered.first { idx in idx < all.count && !readIDs.contains(all[idx].restID) }
     }
 
+    /// Marks every loaded, not-yet-read tweet as seen — the "mark all read"
+    /// action (the TUI's `U`). Optimistically flips local state so rows dim and
+    /// the unread pill clears immediately, then routes the server write through
+    /// the same batched, retry/backoff-protected `flushSeen` path as scroll-past
+    /// seen tracking — a one-shot fire-and-forget would let a single network
+    /// blip permanently lose the read-state the batched path would have retried.
+    func markAllRead() {
+        guard supportsSeenTracking else { return }
+        let unseen = tweets.value.map(\.restID).filter { !readIDs.contains($0) }
+        guard !unseen.isEmpty else { return }
+        readIDs.formUnion(unseen)
+        seenChanged.send(unseen)
+        pendingSeen.formUnion(unseen)
+        scheduleFlush()
+        AppLogger.shared.info("mark all read queued (\(unseen.count) tweets)", category: .timeline)
+    }
+
     /// Queues ids the user has scrolled past for a batched `markSeen`, and
     /// optimistically marks them read locally.
     func enqueueSeen(_ ids: [String]) {
@@ -281,14 +326,24 @@ final class TimelineViewModel {
         scheduleFlush()
     }
 
-    private func scheduleFlush() {
+    private static let maxFlushRetries = 5
+
+    /// Consecutive failed `markSeen` flushes; drives the retry backoff and
+    /// resets on the first success.
+    private var flushRetries = 0
+
+    private func scheduleFlush(after seconds: Double = 1) {
         guard markTask == nil else { return }
         markTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(1))
+            try? await Task.sleep(for: .seconds(seconds))
             await self?.flushSeen()
         }
     }
 
+    /// Sends the pending seen batch. On failure the batch is re-queued and the
+    /// flush re-armed with exponential backoff (capped), so one network blip
+    /// doesn't silently lose a screenful of read-state; past the cap the ids
+    /// stay queued and the next scroll-past re-arms the flush.
     private func flushSeen() async {
         markTask = nil
         let batch = Array(pendingSeen)
@@ -296,27 +351,49 @@ final class TimelineViewModel {
         pendingSeen.removeAll()
         do {
             _ = try await api.markSeen(ids: batch)
+            flushRetries = 0
             readIDs.formUnion(batch)
             seenChanged.send(batch)
             AppLogger.shared.debug("marked \(batch.count) tweets seen", category: .timeline)
         } catch {
-            AppLogger.shared.warn("markSeen failed: \(error)", category: .timeline)
+            pendingSeen.formUnion(batch)
+            guard flushRetries < Self.maxFlushRetries else {
+                AppLogger.shared.warn("markSeen failed (retries exhausted, \(batch.count) ids held): \(error)",
+                                      category: .timeline)
+                return
+            }
+            flushRetries += 1
+            let delay = pow(2, Double(flushRetries))
+            AppLogger.shared.warn("markSeen failed, retrying in \(Int(delay))s: \(error)", category: .timeline)
+            scheduleFlush(after: delay)
         }
     }
 
+    /// The maximum number of concurrent `checkSeen` round-trips per page —
+    /// the API has no batch read-check, but an unbounded burst of 25-40
+    /// requests starves the feed fetch and media streams on slow links.
+    private static let reconcileWidth = 4
+
     /// On load, asks the server which freshly-fetched ids are already read so
-    /// they render dimmed from the first frame. Checks run concurrently since
-    /// the API offers no batch read-check (only `markSeen` batches).
+    /// they render dimmed from the first frame. Checks run a bounded few at a
+    /// time.
     private func reconcileSeen(_ ids: [String]) {
         guard ClientSettings.markSeenEnabled, supportsSeenTracking, !ids.isEmpty else { return }
         let api = self.api
         Task { [weak self] in
             let confirmed = await withTaskGroup(of: String?.self) { group -> [String] in
-                for id in ids {
+                var pending = ids.makeIterator()
+                func addNext() -> Bool {
+                    guard let id = pending.next() else { return false }
                     group.addTask { ((try? await api.checkSeen(id: id)) == true) ? id : nil }
+                    return true
                 }
+                for _ in 0..<Self.reconcileWidth where addNext() {}
                 var hits: [String] = []
-                for await result in group { if let result { hits.append(result) } }
+                for await result in group {
+                    if let result { hits.append(result) }
+                    _ = addNext()
+                }
                 return hits
             }
             guard let self, !confirmed.isEmpty else { return }
@@ -395,10 +472,10 @@ final class TimelineViewModel {
     }
 
     /// Sources that need a query show nothing (not an error) until one is set.
+    /// Bookmarks never wait — an empty query means the full timeline.
     private var isAwaitingQuery: Bool {
         switch source {
         case let .search(query, _): return query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        case let .bookmarks(query): return query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         default: return false
         }
     }
@@ -419,7 +496,7 @@ final class TimelineViewModel {
             cursor = nil
             exhaustion.reset()
         }
-        if AppSettings.filterEnabled {
+        if AppSettings.filterEnabled, usesFilterCollect {
             await collectBatch(reset: reset)
         } else {
             await fetchPage(reset: reset)
@@ -563,7 +640,11 @@ final class TimelineViewModel {
         case .mentions:
             return try await api.mentions(cursor: cursor)
         case let .bookmarks(query):
-            return try await api.bookmarks(query: query, cursor: cursor)
+            let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !q.isEmpty else {
+                return try await EngageService.engage.bookmarksTimeline(cursor: cursor)
+            }
+            return try await api.bookmarks(query: q, cursor: cursor)
         }
     }
 }

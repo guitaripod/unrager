@@ -55,7 +55,8 @@ class FeedViewController: UIViewController {
         let contentWidth = self.collectionView.bounds.width - 44 - DesignSystem.Spacing.l
             - DesignSystem.Spacing.m - DesignSystem.Spacing.l
         cell.configure(with: tweet, imagesEnabled: AppSettings.imagesEnabled,
-                       contentWidth: max(120, contentWidth), seen: self.viewModel.isSeen(tweet.restID))
+                       contentWidth: max(120, contentWidth), seen: self.viewModel.isSeen(tweet.restID),
+                       bodyLineLimit: self.expandedBodies.contains(id) ? 0 : TweetCell.feedBodyLineLimit)
         self.applyFlag(to: cell, author: tweet.author)
         cell.onTapAuthor = { [weak self] in self?.handleProfile(tweet.author.handle) }
         cell.onTapPhoto = { [weak self] index in self?.openMedia(tweet, at: index) }
@@ -64,14 +65,32 @@ class FeedViewController: UIViewController {
         cell.onTapQuoted = { [weak self] in
             if let quoted = tweet.quotedTweet { self?.handleSelect(quoted) }
         }
-        cell.onLike = { [weak self] in self?.toggleLike(tweet, cell: cell) }
+        cell.onLike = { [weak self, weak cell] in self?.toggleLike(tweet, cell: cell) }
+        cell.onToggleRetweet = { [weak self, weak cell] in self?.toggleRetweet(tweet, cell: cell) }
+        cell.onQuote = { [weak self] in self?.presentQuote(tweet) }
+        cell.onToggleBookmark = { [weak self, weak cell] in self?.toggleBookmark(tweet, cell: cell) }
+        cell.onShare = { [weak self] in self?.shareTweet(tweet) }
         cell.onTapMention = { [weak self] handle in self?.handleProfile(handle) }
         cell.onTapHashtag = { [weak self] query in self?.openHashtag(query) }
+        cell.onShowMore = { [weak self] in self?.expandBody(id) }
         if self.isOwnTweet(tweet) {
             cell.enableLikers { [weak self] in
                 self?.navigationController?.pushViewController(LikersViewController(tweetID: tweet.restID), animated: true)
             }
         }
+    }
+
+    /// Tweet ids the user expanded past the feed's body line cap; those rows
+    /// render their full text until the screen goes away.
+    private var expandedBodies = Set<String>()
+
+    /// Re-renders one row with its full body after a "Show more" tap.
+    private func expandBody(_ id: String) {
+        expandedBodies.insert(id)
+        var snapshot = dataSource.snapshot()
+        guard snapshot.itemIdentifiers.contains(id) else { return }
+        snapshot.reconfigureItems([id])
+        dataSource.apply(snapshot, animatingDifferences: true)
     }
 
     init(viewModel: TimelineViewModel) {
@@ -138,9 +157,26 @@ class FeedViewController: UIViewController {
         let translate = UIAction(title: "Translate", image: DesignSystem.icon("character.bubble")) { [weak self] _ in
             self?.presentStream(title: "Translation") { api.translateStream(tweetID: tweet.restID) }
         }
+        let brief = UIAction(title: "Brief author", image: DesignSystem.icon("person.text.rectangle")) { [weak self] _ in
+            self?.presentStream(title: "Brief · @\(tweet.author.handle)") {
+                api.briefStream(handle: tweet.author.handle)
+            }
+        }
         let like = UIAction(title: tweet.favorited ? "Unlike" : "Like",
                             image: DesignSystem.icon(tweet.favorited ? "heart.slash" : "heart")) { [weak self] _ in
             self?.toggleLike(tweet, cell: self?.cell(for: tweet))
+        }
+        let repost = UIAction(title: tweet.retweeted ? "Undo repost" : "Repost",
+                              image: DesignSystem.icon("arrow.2.squarepath"),
+                              attributes: tweet.retweeted ? [.destructive] : []) { [weak self] _ in
+            self?.toggleRetweet(tweet, cell: self?.cell(for: tweet))
+        }
+        let quote = UIAction(title: "Quote", image: DesignSystem.icon("quote.bubble")) { [weak self] _ in
+            self?.presentQuote(tweet)
+        }
+        let bookmark = UIAction(title: tweet.bookmarked ? "Remove bookmark" : "Bookmark",
+                                image: DesignSystem.icon(tweet.bookmarked ? "bookmark.slash" : "bookmark")) { [weak self] _ in
+            self?.toggleBookmark(tweet, cell: self?.cell(for: tweet))
         }
         let likers = UIAction(title: "Liked by", image: DesignSystem.icon("heart.text.square")) { [weak self] _ in
             self?.navigationController?.pushViewController(LikersViewController(tweetID: tweet.restID), animated: true)
@@ -161,8 +197,10 @@ class FeedViewController: UIViewController {
         let copyEmbed = UIAction(title: "Copy embed link", image: DesignSystem.icon("link.badge.plus")) { _ in
             UIPasteboard.general.string = Self.fixupxURL(tweet)
         }
-        var topLevel: [UIMenuElement] = [ask, translate, like]
-        if isOwnTweet(tweet) { topLevel.append(likers) }
+        var topLevel: [UIMenuElement] = [ask, brief, translate]
+        var engagement: [UIMenuElement] = [like, repost, quote, bookmark]
+        if isOwnTweet(tweet) { engagement.append(likers) }
+        topLevel.append(UIMenu(options: .displayInline, children: engagement))
         if let saveMedia { topLevel.append(saveMedia) }
         topLevel.append(UIMenu(options: .displayInline, children: [share, screenshot, open, copy, copyEmbed]))
         return UIMenu(children: topLevel)
@@ -353,6 +391,7 @@ class FeedViewController: UIViewController {
         collectingView.isHidden = true
         view.addManaged(collectingView)
         collectingView.pinEdges(to: view)
+        view.insertSubview(collectingView, belowSubview: collectionView)
     }
 
     /// Builds the freshness pill: a dim caption on a subtle capsule, pinned
@@ -891,7 +930,7 @@ class FeedViewController: UIViewController {
     /// (so a second tap can unlike and reconfigures don't revert the heart);
     /// only roll the cell back if the network rejects it.
     private func toggleLike(_ tweet: Tweet, cell: TweetCell?) {
-        let target = !tweet.favorited
+        let target = !(cell?.isLiked ?? tweet.favorited)
         let optimisticCount = max(0, tweet.likeCount + (target ? 1 : -1))
         cell?.applyLike(favorited: target, count: optimisticCount)
         Task {
@@ -901,11 +940,56 @@ class FeedViewController: UIViewController {
                     : try await AppEnvironment.shared.api.unlike(tweetID: tweet.restID)
                 viewModel.applyLike(id: tweet.restID, favorited: target)
             } catch {
-                cell?.applyLike(favorited: tweet.favorited, count: tweet.likeCount)
+                cell?.applyLike(favorited: !target, count: tweet.likeCount)
                 Haptics.error()
                 AppLogger.shared.warn("like failed: \(error)", category: .timeline)
             }
         }
+    }
+
+    /// Optimistic repost toggle, same contract as `toggleLike`: the arrows go
+    /// green and the count bumps instantly, the confirmed state is written back
+    /// through the view model, and the cell rolls back on a network reject.
+    private func toggleRetweet(_ tweet: Tweet, cell: TweetCell?) {
+        let target = !(cell?.isRetweeted ?? tweet.retweeted)
+        cell?.applyRetweet(retweeted: target, count: max(0, tweet.retweetCount + (target ? 1 : -1)))
+        Task {
+            do {
+                _ = target
+                    ? try await EngageService.engage.retweet(tweetID: tweet.restID)
+                    : try await EngageService.engage.unretweet(tweetID: tweet.restID)
+                viewModel.applyRetweet(id: tweet.restID, retweeted: target)
+            } catch {
+                cell?.applyRetweet(retweeted: !target, count: tweet.retweetCount)
+                Haptics.error()
+                AppLogger.shared.warn("retweet failed: \(error)", category: .timeline)
+            }
+        }
+    }
+
+    /// Optimistic bookmark toggle, same contract as `toggleLike`.
+    private func toggleBookmark(_ tweet: Tweet, cell: TweetCell?) {
+        let target = !(cell?.isBookmarked ?? tweet.bookmarked)
+        cell?.applyBookmark(bookmarked: target, count: max(0, tweet.bookmarkCount + (target ? 1 : -1)))
+        Task {
+            do {
+                _ = target
+                    ? try await EngageService.engage.bookmark(tweetID: tweet.restID)
+                    : try await EngageService.engage.unbookmark(tweetID: tweet.restID)
+                viewModel.applyBookmark(id: tweet.restID, bookmarked: target)
+            } catch {
+                cell?.applyBookmark(bookmarked: !target, count: tweet.bookmarkCount)
+                Haptics.error()
+                AppLogger.shared.warn("bookmark failed: \(error)", category: .timeline)
+            }
+        }
+    }
+
+    /// Opens the compose screen prefilled with a quote preview of `tweet`;
+    /// posting sends `quote_tweet_id`.
+    private func presentQuote(_ tweet: Tweet) {
+        let compose = ComposeViewController(mode: .quote(of: tweet))
+        present(UINavigationController(rootViewController: compose), animated: true)
     }
 
     // MARK: - Unread navigation
@@ -913,15 +997,29 @@ class FeedViewController: UIViewController {
     private lazy var unreadButtonView: UIButton = {
         var config = UIButton.Configuration.tinted()
         config.cornerStyle = .capsule
-        config.image = DesignSystem.icon("chevron.down", pointSize: 11, weight: .bold)
+        config.image = DesignSystem.icon("arrow.down.to.line", pointSize: 11, weight: .bold)
         config.imagePlacement = .leading
         config.imagePadding = 4
         config.baseForegroundColor = DesignSystem.Color.accent
         config.contentInsets = NSDirectionalEdgeInsets(top: 5, leading: 10, bottom: 5, trailing: 12)
         let button = UIButton(configuration: config)
+        button.setContentCompressionResistancePriority(.required, for: .horizontal)
+        button.titleLabel?.numberOfLines = 1
         button.addAction(UIAction { [weak self] _ in self?.jumpToNextUnread() }, for: .touchUpInside)
+        let longPress = UILongPressGestureRecognizer(target: self, action: #selector(unreadPillLongPressed(_:)))
+        button.addGestureRecognizer(longPress)
         return button
     }()
+
+    /// Long-pressing the unread pill marks every loaded tweet read (the TUI's
+    /// `U`): rows dim, the pill clears, and the server's read tracker catches up
+    /// in one batch.
+    @objc private func unreadPillLongPressed(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began else { return }
+        Haptics.success()
+        viewModel.markAllRead()
+        updateUnreadCount()
+    }
 
     private lazy var unreadButton: UIBarButtonItem = {
         let item = UIBarButtonItem(customView: unreadButtonView)
@@ -929,7 +1027,7 @@ class FeedViewController: UIViewController {
         return item
     }()
 
-    /// Shows a "⌄ N" pill — a down-chevron and the unread count — only while
+    /// Shows a "⤓ N" pill — a jump-down glyph and the unread count — only while
     /// there are unread tweets below the fold (the jump scrolls *down* to the
     /// next one). Hidden entirely at zero, so there's no bare, inert arrow.
     func updateUnreadCount() {
@@ -938,7 +1036,8 @@ class FeedViewController: UIViewController {
         unreadButton.isHidden = count == 0
         guard count > 0 else { return }
         unreadButtonView.configuration?.title = "\(count)"
-        unreadButtonView.accessibilityLabel = "\(count) unread below, jump to next"
+        unreadButtonView.accessibilityLabel = "\(count) unread, jump to next unread"
+        unreadButtonView.accessibilityHint = "Scrolls to the next unread tweet. Long-press to mark all read."
     }
 
     /// Shows the "jump to next unread" button only on seen-tracking feeds
@@ -953,9 +1052,16 @@ class FeedViewController: UIViewController {
     /// nil — for subclasses composing their own bar-button array.
     var unreadBarButton: UIBarButtonItem? { viewModel.supportsSeenTracking ? unreadButton : nil }
 
+    /// Walks the *displayed* order (the diffable snapshot, which reflects the
+    /// chronological re-sort when it's on — model indices don't), wrapping to
+    /// the top, and scrolls to the first unread row past the viewport.
     private func jumpToNextUnread() {
+        let ids = dataSource.snapshot().itemIdentifiers
+        guard !ids.isEmpty else { return }
         let visible = collectionView.indexPathsForVisibleItems.map(\.item).max() ?? -1
-        guard let next = viewModel.nextUnreadIndex(after: visible) else { return }
+        let ordered = Array((visible + 1)..<ids.count) + Array(0...max(0, min(visible, ids.count - 1)))
+        guard let next = ordered.first(where: { $0 >= 0 && $0 < ids.count && !viewModel.isSeen(ids[$0]) })
+        else { return }
         Haptics.selection()
         collectionView.scrollToItem(at: IndexPath(item: next, section: 0), at: .top, animated: true)
     }

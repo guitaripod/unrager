@@ -59,7 +59,7 @@ final class StreamSheetViewController: UIViewController {
                     if !event.token.isEmpty {
                         self.spinner.stopAnimating()
                         self.raw.append(event.token)
-                        self.textView.attributedText = Self.render(self.raw)
+                        self.textView.attributedText = Self.renderMarkdown(self.raw)
                     }
                     if event.done { break }
                 }
@@ -87,7 +87,8 @@ final class StreamSheetViewController: UIViewController {
     }
 
     /// Renders the LLM's markdown (bold + bullets) while preserving newlines.
-    private static func render(_ markdown: String) -> NSAttributedString {
+    /// Shared with the conversational ask sheet so both render identically.
+    static func renderMarkdown(_ markdown: String) -> NSAttributedString {
         let bulletized = markdown
             .split(separator: "\n", omittingEmptySubsequences: false)
             .map { line -> String in

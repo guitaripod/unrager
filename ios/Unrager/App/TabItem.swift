@@ -7,8 +7,7 @@ import UnragerKit
 /// resolve asynchronously (a keyword prompt / a `whoami` lookup), so their roots
 /// are lightweight hosts that defer the real screen.
 enum TabItem: String, CaseIterable, Sendable {
-    case forYou
-    case following
+    case home
     case search
     case notifications
     case mentions
@@ -16,7 +15,7 @@ enum TabItem: String, CaseIterable, Sendable {
     case myProfile
     case settings
 
-    static let defaults: [TabItem] = [.forYou, .search, .notifications, .settings]
+    static let defaults: [TabItem] = [.home, .search, .notifications, .settings]
     static let maxCount = 5
 
     /// Clamps a selection to the bar's invariants: de-duplicated, capped at
@@ -28,10 +27,17 @@ enum TabItem: String, CaseIterable, Sendable {
         return capped.isEmpty ? defaults : capped
     }
 
+    /// Decodes a persisted raw value, folding the legacy separate "For You" /
+    /// "Following" entries into the single Home tab — the live tab itself
+    /// toggles between the two modes, so two rows only contradicted the bar.
+    static func resolve(persisted raw: String) -> TabItem? {
+        if raw == "forYou" || raw == "following" { return .home }
+        return TabItem(rawValue: raw)
+    }
+
     var title: String {
         switch self {
-        case .forYou: return "For You"
-        case .following: return "Following"
+        case .home: return "Home"
         case .search: return "Search"
         case .notifications: return "Notifications"
         case .mentions: return "Mentions"
@@ -43,8 +49,7 @@ enum TabItem: String, CaseIterable, Sendable {
 
     var symbol: String {
         switch self {
-        case .forYou: return "sparkles"
-        case .following: return "person.2.fill"
+        case .home: return "house.fill"
         case .search: return "magnifyingglass"
         case .notifications: return "bell.fill"
         case .mentions: return "at"
@@ -54,11 +59,19 @@ enum TabItem: String, CaseIterable, Sendable {
         }
     }
 
-    /// Notifications and Settings read better with large titles.
+    /// The Edit Tabs subtitle; only Home needs one (to explain that the single
+    /// entry carries both feed modes).
+    var subtitle: String? {
+        self == .home ? "Toggles For You / Following" : nil
+    }
+
+    /// List-style tabs read better with large titles; Notifications matches
+    /// the compact centered header the feed tabs use (its nav bar carries the
+    /// filter menu instead).
     private var prefersLargeTitles: Bool {
         switch self {
-        case .notifications, .settings, .mentions, .bookmarks, .myProfile: return true
-        case .forYou, .following, .search: return false
+        case .settings, .mentions, .bookmarks, .myProfile: return true
+        case .home, .search, .notifications: return false
         }
     }
 
@@ -75,8 +88,7 @@ enum TabItem: String, CaseIterable, Sendable {
     @MainActor
     private func makeRoot() -> UIViewController {
         switch self {
-        case .forYou: return HomeViewController(initialFollowing: false)
-        case .following: return HomeViewController(initialFollowing: true)
+        case .home: return HomeViewController()
         case .search: return SearchViewController()
         case .notifications: return NotificationsViewController()
         case .mentions: return MentionsViewController()

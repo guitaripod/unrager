@@ -5,7 +5,7 @@ import UnragerKit
 /// arrives while the app is foregrounded — the in-app counterpart to a system
 /// banner, needing no notification permission. It carries the action badge,
 /// who did what, and the target snippet; slides in with a spring, auto-dismisses
-/// after a few seconds, and deep-links on tap.
+/// after a few seconds, deep-links on tap, and dismisses on a swipe up.
 final class NotificationToast: UIView {
     private let onTap: () -> Void
     private var dismissWork: DispatchWorkItem?
@@ -68,6 +68,14 @@ final class NotificationToast: UIView {
         ])
 
         addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleTap)))
+        let swipe = UISwipeGestureRecognizer(target: self, action: #selector(handleSwipeUp))
+        swipe.direction = .up
+        addGestureRecognizer(swipe)
+
+        isAccessibilityElement = true
+        accessibilityTraits = .button
+        accessibilityLabel = [title, subtitle].compactMap { $0 }.joined(separator: ", ")
+        accessibilityHint = "Opens the notification. Swipe up with two fingers to dismiss."
     }
 
     /// Drops the toast in from above the safe area, springs it to rest, and arms
@@ -111,6 +119,11 @@ final class NotificationToast: UIView {
 
     @objc private func handleTap() {
         onTap()
+        dismiss()
+    }
+
+    @objc private func handleSwipeUp() {
+        Haptics.selection()
         dismiss()
     }
 }

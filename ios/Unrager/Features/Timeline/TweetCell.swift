@@ -52,6 +52,14 @@ final class TweetCell: UICollectionViewCell {
     var onTapCard: ((URL) -> Void)?
     var onLike: (() -> Void)?
     var onReply: (() -> Void)?
+    /// Fired by the repost menu's Repost / Undo repost item; the host flips
+    /// the state optimistically via `applyRetweet` and confirms server-side.
+    var onToggleRetweet: (() -> Void)?
+    /// Fired by the repost menu's Quote item; opens the compose screen with a
+    /// quote preview.
+    var onQuote: (() -> Void)?
+    var onToggleBookmark: (() -> Void)?
+    var onShare: (() -> Void)?
     /// Fired by a press-and-hold on the like button. Enabled per-config via
     /// `enableLikers(_:)` — only where the viewer can actually see the likers
     /// (their own tweets), so a long-hold elsewhere leaves the tap-to-like intact.
@@ -60,6 +68,9 @@ final class TweetCell: UICollectionViewCell {
     /// Routes a tapped `@mention` to a profile, or `#hashtag` to search.
     var onTapMention: ((String) -> Void)?
     var onTapHashtag: ((String) -> Void)?
+    /// Fired by the "Show more" affordance under a truncated feed body; the
+    /// feed re-renders this row with the full text.
+    var onShowMore: (() -> Void)?
 
     private let avatar = AsyncImageView(frame: .zero)
     private let nameLabel = UILabel()
@@ -86,8 +97,22 @@ final class TweetCell: UICollectionViewCell {
     private let replyButton = TweetCell.makeActionButton(symbol: "bubble.left")
     private let retweetButton = TweetCell.makeActionButton(symbol: "arrow.2.squarepath")
     private let likeButton = TweetCell.makeActionButton(symbol: "heart")
-    private let viewsButton = TweetCell.makeActionButton(symbol: "chart.bar")
+    private let bookmarkButton = TweetCell.makeActionButton(symbol: "bookmark")
+    private let shareButton = TweetCell.makeActionButton(symbol: "square.and.arrow.up")
+    private let viewsLabel = UILabel()
+    private let showMoreButton = TweetCell.makeShowMoreButton()
     private let likeLongPress = UILongPressGestureRecognizer()
+    /// Live engagement state — the optimistic truth the cell currently shows,
+    /// updated by `configure` and the `apply*` calls. Toggle handlers read
+    /// these instead of the tweet captured at bind time, so tapping a menu
+    /// item (e.g. "Undo repost") before the confirmed write-back reconfigures
+    /// the row acts on what the user sees, not a stale snapshot.
+    private(set) var isRetweeted = false
+    private(set) var isLiked = false
+    private(set) var isBookmarked = false
+
+    /// Feed-context body cap (v. the unlimited focal/thread rendering).
+    static let feedBodyLineLimit = 10
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -112,11 +137,16 @@ final class TweetCell: UICollectionViewCell {
         onTapCard = nil
         onLike = nil
         onReply = nil
+        onToggleRetweet = nil
+        onQuote = nil
+        onToggleBookmark = nil
+        onShare = nil
         onShowLikers = nil
         likeLongPress.isEnabled = false
         onTapQuoted = nil
         onTapMention = nil
         onTapHashtag = nil
+        onShowMore = nil
     }
 
     /// Inline-video playback control, driven by the feed so only the most-visible
@@ -135,11 +165,14 @@ final class TweetCell: UICollectionViewCell {
     /// meaningful in the thread's replies section) and suppresses the standalone
     /// is-a-reply marker, mirroring the TUI. `focal` switches the timestamp to an
     /// absolute one and, when `ownTweet`, appends the post-analytics block — the
-    /// same emphasis the TUI gives the open tweet.
+    /// same emphasis the TUI gives the open tweet. `bodyLineLimit` caps a
+    /// note-length feed body behind a "Show more" affordance (0 = unlimited,
+    /// the focal/thread rendering).
     func configure(
         with tweet: Tweet, imagesEnabled: Bool, contentWidth: CGFloat,
         seen: Bool = false, inReplyContext: Bool = false,
-        focal: Bool = false, ownTweet: Bool = false, indentLevel: Int = 0
+        focal: Bool = false, ownTweet: Bool = false, indentLevel: Int = 0,
+        bodyLineLimit: Int = 0
     ) {
         setIndent(indentLevel)
         nameLabel.text = tweet.author.name
@@ -155,7 +188,8 @@ final class TweetCell: UICollectionViewCell {
         bodyView.onTapMention = { [weak self] in self?.onTapMention?($0) }
         bodyView.onTapHashtag = { [weak self] in self?.onTapHashtag?($0) }
         bodyView.onTapURL = { [weak self] in self?.onTapCard?($0) }
-        contentView.alpha = seen ? 0.55 : 1
+        applyBodyLimit(body, limit: bodyLineLimit, contentWidth: contentWidth)
+        contentView.alpha = seen ? 0.85 : 1
 
         loadAvatar(into: avatar, url: tweet.author.avatarURL, size: 44, fallbackPoint: 36, enabled: imagesEnabled)
 
@@ -167,6 +201,37 @@ final class TweetCell: UICollectionViewCell {
         configureActions(tweet)
         analyticsView.configure(tweet, visible: focal && ownTweet)
         configureAccessibility(tweet, seen: seen)
+    }
+
+    /// Collapses a note-length body to `limit` lines behind a tappable
+    /// "Show more" (X's feed truncation). Only kicks in when the full text
+    /// meaningfully exceeds the cap — truncating to reclaim a line or two
+    /// would make "Show more" feel like a cheat — and measures against the
+    /// row's real text width so the decision matches what renders.
+    private func applyBodyLimit(_ body: NSAttributedString, limit: Int, contentWidth: CGFloat) {
+        guard limit > 0, body.length > 0,
+              Self.bodyExceedsLimit(body, limit: limit, contentWidth: contentWidth) else {
+            bodyView.textContainer.maximumNumberOfLines = 0
+            showMoreButton.isHidden = true
+            return
+        }
+        bodyView.textContainer.maximumNumberOfLines = limit
+        bodyView.textContainer.lineBreakMode = .byTruncatingTail
+        showMoreButton.isHidden = false
+    }
+
+    /// Whether `body` renders meaningfully past `limit` lines at `contentWidth`
+    /// — the +2 slack keeps "Show more" from hiding a mere line or two. Line
+    /// count divides the measured height by the full per-line advance
+    /// (lineHeight + leading, matching `.usesFontLeading`).
+    static func bodyExceedsLimit(_ body: NSAttributedString, limit: Int, contentWidth: CGFloat) -> Bool {
+        let bounds = body.boundingRect(
+            with: CGSize(width: contentWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
+        let font = DesignSystem.Typography.body()
+        let lineAdvance = max(1, font.lineHeight + max(0, font.leading))
+        let lines = Int((bounds.height / lineAdvance).rounded())
+        return lines > limit + 2
     }
 
     /// Shows (or clears) the author's country flag directly after the display
@@ -252,23 +317,63 @@ final class TweetCell: UICollectionViewCell {
 
     private func configureActions(_ tweet: Tweet) {
         replyButton.configuration?.title = label(tweet.replyCount)
-        retweetButton.configuration?.title = label(tweet.retweetCount)
-        likeButton.configuration?.title = label(tweet.likeCount)
-        viewsButton.configuration?.title = tweet.viewCount.map { Format.count($0) } ?? ""
+        viewsLabel.attributedText = Self.viewsText(tweet.viewCount)
+        applyLike(favorited: tweet.favorited, count: tweet.likeCount)
+        applyRetweet(retweeted: tweet.retweeted, count: tweet.retweetCount)
+        applyBookmark(bookmarked: tweet.bookmarked, count: tweet.bookmarkCount)
+    }
 
-        let liked = tweet.favorited
-        likeButton.configuration?.image = DesignSystem.icon(liked ? "heart.fill" : "heart", pointSize: 15)
-        likeButton.configuration?.baseForegroundColor = liked ? DesignSystem.Color.like : DesignSystem.Color.secondaryLabel
+    /// The passive views metric — a glyph + count rendered as plain text, so it
+    /// doesn't masquerade as a tappable button in the action row.
+    private static func viewsText(_ count: Int?) -> NSAttributedString? {
+        guard let count, count > 0 else { return nil }
+        let result = NSMutableAttributedString()
+        if let glyph = DesignSystem.icon("chart.bar", pointSize: 12)?
+            .withTintColor(DesignSystem.Color.secondaryLabel, renderingMode: .alwaysOriginal) {
+            let attachment = NSTextAttachment(image: glyph)
+            attachment.bounds = CGRect(x: 0, y: -1.5, width: glyph.size.width, height: glyph.size.height)
+            result.append(NSAttributedString(attachment: attachment))
+            result.append(NSAttributedString(string: " "))
+        }
+        result.append(NSAttributedString(string: Format.count(count), attributes: [
+            .font: DesignSystem.Typography.metric(),
+            .foregroundColor: DesignSystem.Color.secondaryLabel,
+        ]))
+        return result
     }
 
     /// Reflects an optimistic like toggle without re-running the full config —
     /// the feed calls this the instant the user taps so the heart fills before
     /// the network confirms.
     func applyLike(favorited: Bool, count: Int) {
+        isLiked = favorited
         likeButton.configuration?.title = label(count)
         likeButton.configuration?.image = DesignSystem.icon(favorited ? "heart.fill" : "heart", pointSize: 15)
         likeButton.configuration?.baseForegroundColor = favorited ? DesignSystem.Color.like : DesignSystem.Color.secondaryLabel
         likeButton.accessibilityLabel = favorited ? "Unlike" : "Like"
+    }
+
+    /// Reflects an optimistic repost toggle: green tint while reposted (X's
+    /// repost affordance), and keeps the deferred menu's Repost / Undo repost
+    /// title in step. Called by `configure` and the instant the user picks the
+    /// menu item, before the network confirms.
+    func applyRetweet(retweeted: Bool, count: Int) {
+        isRetweeted = retweeted
+        retweetButton.configuration?.title = label(count)
+        retweetButton.configuration?.baseForegroundColor =
+            retweeted ? DesignSystem.Color.retweet : DesignSystem.Color.secondaryLabel
+        retweetButton.accessibilityLabel = retweeted ? "Reposted, \(count)" : "Repost, \(count)"
+    }
+
+    /// Reflects an optimistic bookmark toggle — filled accent glyph while
+    /// bookmarked, matching the like/repost treatment.
+    func applyBookmark(bookmarked: Bool, count: Int) {
+        isBookmarked = bookmarked
+        bookmarkButton.configuration?.title = label(count)
+        bookmarkButton.configuration?.image = DesignSystem.icon(bookmarked ? "bookmark.fill" : "bookmark", pointSize: 15)
+        bookmarkButton.configuration?.baseForegroundColor =
+            bookmarked ? DesignSystem.Color.accent : DesignSystem.Color.secondaryLabel
+        bookmarkButton.accessibilityLabel = bookmarked ? "Remove bookmark, \(count)" : "Bookmark, \(count)"
     }
 
     private func configureAccessibility(_ tweet: Tweet, seen: Bool) {
@@ -277,10 +382,10 @@ final class TweetCell: UICollectionViewCell {
         avatar.accessibilityLabel = "\(tweet.author.name), profile"
 
         replyButton.accessibilityLabel = "Reply, \(tweet.replyCount)"
-        retweetButton.accessibilityLabel = "Reposts, \(tweet.retweetCount)"
         likeButton.accessibilityLabel = tweet.favorited ? "Unlike, \(tweet.likeCount)" : "Like, \(tweet.likeCount)"
-        viewsButton.accessibilityLabel = tweet.viewCount.map { "\(Format.count($0)) views" }
-        viewsButton.isAccessibilityElement = tweet.viewCount != nil
+        shareButton.accessibilityLabel = "Share"
+        viewsLabel.accessibilityLabel = tweet.viewCount.map { "\(Format.count($0)) views" }
+        viewsLabel.isAccessibilityElement = tweet.viewCount != nil
 
         let verified = tweet.author.verified ? ", verified" : ""
         let seenSuffix = seen ? ", already seen" : ""
@@ -333,24 +438,35 @@ final class TweetCell: UICollectionViewCell {
 
         buildQuoted()
 
+        viewsLabel.font = DesignSystem.Typography.metric()
+        viewsLabel.textColor = DesignSystem.Color.secondaryLabel
+
         actionBar.axis = .horizontal
         actionBar.distribution = .fillEqually
         actionBar.addArrangedSubview(replyButton)
         actionBar.addArrangedSubview(retweetButton)
         actionBar.addArrangedSubview(likeButton)
-        actionBar.addArrangedSubview(viewsButton)
+        actionBar.addArrangedSubview(bookmarkButton)
+        actionBar.addArrangedSubview(shareButton)
+        actionBar.addArrangedSubview(viewsLabel)
         likeButton.addTarget(self, action: #selector(likeTapped), for: .touchUpInside)
         likeLongPress.addTarget(self, action: #selector(likeLongPressed))
         likeLongPress.isEnabled = false
         likeButton.addGestureRecognizer(likeLongPress)
         replyButton.addTarget(self, action: #selector(replyTapped), for: .touchUpInside)
         replyButton.accessibilityHint = "Reply to this tweet"
-        retweetButton.isUserInteractionEnabled = false
+        bookmarkButton.addTarget(self, action: #selector(bookmarkTapped), for: .touchUpInside)
+        shareButton.addTarget(self, action: #selector(shareTapped), for: .touchUpInside)
+        configureRetweetMenu()
 
-        let column = UIStackView(arrangedSubviews: [header, bodyView, mediaContent, quotedContainer, actionBar, analyticsView])
+        showMoreButton.isHidden = true
+        showMoreButton.addTarget(self, action: #selector(showMoreTapped), for: .touchUpInside)
+
+        let column = UIStackView(arrangedSubviews: [header, bodyView, showMoreButton, mediaContent, quotedContainer, actionBar, analyticsView])
         column.axis = .vertical
         column.spacing = DesignSystem.Spacing.s
         column.setCustomSpacing(DesignSystem.Spacing.xs, after: header)
+        column.setCustomSpacing(DesignSystem.Spacing.xs, after: bodyView)
 
         contentView.addManaged(avatar)
         contentView.addManaged(column)
@@ -424,6 +540,22 @@ final class TweetCell: UICollectionViewCell {
         ])
     }
 
+    private static func makeShowMoreButton() -> UIButton {
+        var config = UIButton.Configuration.plain()
+        config.title = "Show more"
+        config.baseForegroundColor = DesignSystem.Color.accent
+        config.contentInsets = NSDirectionalEdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 0)
+        config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var out = incoming
+            out.font = DesignSystem.Typography.metric()
+            return out
+        }
+        let button = UIButton(configuration: config)
+        button.contentHorizontalAlignment = .leading
+        button.accessibilityHint = "Shows the full tweet text"
+        return button
+    }
+
     private static func makeActionButton(symbol: String) -> UIButton {
         var config = UIButton.Configuration.plain()
         config.image = DesignSystem.icon(symbol, pointSize: 15)
@@ -440,8 +572,61 @@ final class TweetCell: UICollectionViewCell {
         return button
     }
 
+    /// The repost affordance: a tap opens Repost / Undo repost / Quote (X's
+    /// repost sheet), never fires a blind toggle. Deferred + uncached so the
+    /// first item's title always reflects the current repost state, including
+    /// an optimistic flip made moments earlier.
+    private func configureRetweetMenu() {
+        retweetButton.showsMenuAsPrimaryAction = true
+        retweetButton.accessibilityHint = "Shows repost and quote options"
+        retweetButton.menu = UIMenu(children: [
+            UIDeferredMenuElement.uncached { [weak self] completion in
+                guard let self else {
+                    completion([])
+                    return
+                }
+                let toggle = UIAction(
+                    title: self.isRetweeted ? "Undo repost" : "Repost",
+                    image: DesignSystem.icon("arrow.2.squarepath"),
+                    attributes: self.isRetweeted ? [.destructive] : []
+                ) { [weak self] _ in
+                    Haptics.tap()
+                    self?.onToggleRetweet?()
+                }
+                let quote = UIAction(
+                    title: "Quote",
+                    image: DesignSystem.icon("quote.bubble")
+                ) { [weak self] _ in
+                    Haptics.tap()
+                    self?.onQuote?()
+                }
+                completion([toggle, quote])
+            }
+        ])
+    }
+
+    /// Expands the action buttons' effective touch target to the HIG's
+    /// 44pt minimum without growing the visible row: a near-miss around the
+    /// action bar routes to the button instead of falling through to the row
+    /// (which would push the thread).
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        for button in [replyButton, retweetButton, likeButton, bookmarkButton, shareButton]
+        where !button.isHidden && button.window != nil {
+            let local = button.convert(point, from: self)
+            if button.point(inside: local, with: event) { break }
+            let dx = max(0, (44 - button.bounds.width) / 2)
+            let dy = max(0, (44 - button.bounds.height) / 2)
+            if button.bounds.insetBy(dx: -dx, dy: -dy).contains(local) { return button }
+        }
+        return super.hitTest(point, with: event)
+    }
+
     @objc private func authorTapped() { onTapAuthor?() }
     @objc private func quotedTapped() { onTapQuoted?() }
+    @objc private func showMoreTapped() {
+        Haptics.tap()
+        onShowMore?()
+    }
     @objc private func replyTapped() {
         Haptics.tap()
         onReply?()
@@ -449,6 +634,14 @@ final class TweetCell: UICollectionViewCell {
     @objc private func likeTapped() {
         Haptics.tap()
         onLike?()
+    }
+    @objc private func bookmarkTapped() {
+        Haptics.tap()
+        onToggleBookmark?()
+    }
+    @objc private func shareTapped() {
+        Haptics.tap()
+        onShare?()
     }
     @objc private func likeLongPressed(_ recognizer: UILongPressGestureRecognizer) {
         guard recognizer.state == .began else { return }

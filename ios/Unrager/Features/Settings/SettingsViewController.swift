@@ -34,9 +34,13 @@ final class SettingsViewController: UIViewController {
     private let markSeenSwitch = UISwitch()
     private let profileButton = UIButton(configuration: .gray())
     private let notificationsSwitch = UISwitch()
+    private let bannerSoundSwitch = UISwitch()
+    private let quietHoursSwitch = UISwitch()
+    private let quietStartPicker = UIDatePicker()
+    private let quietEndPicker = UIDatePicker()
     private var kindSwitches: [NotificationKind: UISwitch] = [:]
-    private var kindRows: [UIView] = []
-    private var notificationsCardStack: UIStackView?
+    private var bannerOnlyRows: [UIView] = []
+    private var quietWindowRow: UIView?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -66,11 +70,15 @@ final class SettingsViewController: UIViewController {
         serverField.placeholder = "http://192.168.1.10:7777"
         serverField.borderStyle = .none
         serverField.font = DesignSystem.Typography.body()
+        serverField.textColor = DesignSystem.Color.secondaryLabel
         serverField.autocapitalizationType = .none
         serverField.autocorrectionType = .no
         serverField.keyboardType = .URL
+        serverField.returnKeyType = .done
         serverField.clearButtonMode = .whileEditing
-        serverField.addTarget(self, action: #selector(serverChanged), for: .editingChanged)
+        serverField.addTarget(self, action: #selector(serverEditingBegan), for: .editingDidBegin)
+        serverField.addTarget(self, action: #selector(serverEditingEnded), for: .editingDidEnd)
+        serverField.addTarget(self, action: #selector(serverReturnTapped), for: .editingDidEndOnExit)
 
         statusLabel.font = DesignSystem.Typography.metric()
         statusLabel.textColor = DesignSystem.Color.secondaryLabel
@@ -92,10 +100,10 @@ final class SettingsViewController: UIViewController {
         filterSwitch.addTarget(self, action: #selector(filterChanged), for: .valueChanged)
 
         stack.addArrangedSubview(section("Server", card: card([
-            fieldRow(serverField),
+            labeledFieldRow("Server URL", serverField),
             navRow("Test connection", icon: "bolt.horizontal") { [weak self] in self?.testConnection() },
             contentRow(statusLabel),
-        ]), footnote: "The unrager server (`unrager serve`) — a Linux box, a Mac, any machine you keep running. Use its LAN or Tailscale address."))
+        ]), footnote: "The unrager server (`unrager serve`) — a Linux box, a Mac, any machine you keep running. Use its LAN or Tailscale address. Tap the address to edit; it applies when you finish editing."))
 
         stack.addArrangedSubview(section("Account", card: card([
             navRow("Open my profile", icon: "person.crop.circle") { [weak self] in self?.openMyProfile() },
@@ -127,22 +135,25 @@ final class SettingsViewController: UIViewController {
         ]), footnote: "Runs each tweet through your local Ollama classifier; matches are removed from the feed. Refresh after toggling."))
 
         stack.addArrangedSubview(section("About", card: card([
+            navRow("What's new", icon: "sparkles") { [weak self] in
+                self?.navigationController?.pushViewController(ChangelogViewController(), animated: true)
+            },
             contentRow(captionLabel("unrager · a calm X client. The server does the X work; this app is a thin native client.")),
         ])))
     }
 
     // MARK: - Notifications
 
-    /// The notifications card: a master banner toggle, per-type toggles (enabled
-    /// only while the master is on), and a row that jumps to the system
-    /// notification settings. The unread badge is independent of these toggles —
-    /// they only gate local banners. NO PUSH: banners are foreground/best-effort.
+    /// The notifications card: per-type toggles (gating both in-app toasts and
+    /// local banners), a master banner toggle, banner sound + quiet hours
+    /// (banner-only, so they follow the master), and a row that jumps to the
+    /// system notification settings. The unread badge is independent of every
+    /// toggle here. NO PUSH: banners are foreground/best-effort.
     private func notificationsSection() -> UIView {
         notificationsSwitch.isOn = NotificationPrefs.bannersEnabled
         notificationsSwitch.addTarget(self, action: #selector(notificationsChanged), for: .valueChanged)
 
-        var rows: [UIView] = [toggleRow("Notifications", notificationsSwitch)]
-        kindRows = NotificationKind.allCases.map { kind in
+        var rows: [UIView] = NotificationKind.allCases.map { kind in
             let control = UISwitch()
             control.isOn = NotificationPrefs.bannerEnabled(for: kind)
             control.addAction(UIAction { _ in
@@ -152,20 +163,84 @@ final class SettingsViewController: UIViewController {
             kindSwitches[kind] = control
             return toggleRow(kind.title, control)
         }
-        rows.append(contentsOf: kindRows)
+        rows.append(toggleRow("Banners", notificationsSwitch))
+
+        bannerSoundSwitch.isOn = NotificationPrefs.bannerSoundEnabled
+        bannerSoundSwitch.addTarget(self, action: #selector(bannerSoundChanged), for: .valueChanged)
+        quietHoursSwitch.isOn = NotificationPrefs.quietHoursEnabled
+        quietHoursSwitch.addTarget(self, action: #selector(quietHoursChanged), for: .valueChanged)
+        let soundRow = toggleRow("Banner sound", bannerSoundSwitch)
+        let quietRow = toggleRow("Quiet hours", quietHoursSwitch)
+        let windowRow = quietHoursWindowRow()
+        quietWindowRow = windowRow
+        bannerOnlyRows = [soundRow, quietRow, windowRow]
+        rows.append(contentsOf: bannerOnlyRows)
+
         rows.append(navRow("System notification settings", icon: "gear") { [weak self] in
             self?.openSystemNotificationSettings()
         })
 
-        updateKindRowsEnabled()
+        updateBannerRowsEnabled()
         return section("Notifications", card: card(rows),
-                       footnote: "Banners are delivered by an in-app poller while Unrager is active (best-effort in the background); there is no push server, so they won't arrive when the app is closed. The Notifications-tab badge always counts unread activity regardless of these toggles.")
+                       footnote: "The type toggles gate both in-app toasts and system banners; likes and reposts are off by default. Banners are delivered by an in-app poller while Unrager is active (best-effort in the background); there is no push server, so they won't arrive when the app is closed. During quiet hours banners land silently in Notification Center. The Notifications-tab badge always counts unread activity regardless of these toggles.")
     }
 
-    private func updateKindRowsEnabled() {
+    /// The "From … until …" row of compact time pickers bounding the
+    /// quiet-hours window; only enabled while quiet hours are on.
+    private func quietHoursWindowRow() -> UIView {
+        for picker in [quietStartPicker, quietEndPicker] {
+            picker.datePickerMode = .time
+            picker.preferredDatePickerStyle = .compact
+            picker.setContentHuggingPriority(.required, for: .horizontal)
+        }
+        quietStartPicker.date = Self.time(minute: NotificationPrefs.quietHoursStartMinute)
+        quietEndPicker.date = Self.time(minute: NotificationPrefs.quietHoursEndMinute)
+        quietStartPicker.accessibilityLabel = "Quiet hours start"
+        quietEndPicker.accessibilityLabel = "Quiet hours end"
+        quietStartPicker.addTarget(self, action: #selector(quietWindowChanged), for: .valueChanged)
+        quietEndPicker.addTarget(self, action: #selector(quietWindowChanged), for: .valueChanged)
+
+        return paddedRow([captionLabel("From"), quietStartPicker,
+                          captionLabel("until"), quietEndPicker, UIView()])
+    }
+
+    private static func time(minute: Int) -> Date {
+        Calendar.current.date(bySettingHour: minute / 60, minute: minute % 60, second: 0, of: Date()) ?? Date()
+    }
+
+    private static func minute(of date: Date) -> Int {
+        let components = Calendar.current.dateComponents([.hour, .minute], from: date)
+        return (components.hour ?? 0) * 60 + (components.minute ?? 0)
+    }
+
+    /// Sound and quiet hours only shape system banners, so they follow the
+    /// master banner switch; the per-type rows stay live regardless because
+    /// they also gate in-app toasts.
+    private func updateBannerRowsEnabled() {
         let enabled = notificationsSwitch.isOn
-        for control in kindSwitches.values { control.isEnabled = enabled }
-        for row in kindRows { row.alpha = enabled ? 1 : 0.4 }
+        bannerSoundSwitch.isEnabled = enabled
+        quietHoursSwitch.isEnabled = enabled
+        let quietOn = enabled && quietHoursSwitch.isOn
+        quietStartPicker.isEnabled = quietOn
+        quietEndPicker.isEnabled = quietOn
+        for row in bannerOnlyRows { row.alpha = enabled ? 1 : 0.4 }
+        if enabled { quietWindowRow?.alpha = quietOn ? 1 : 0.4 }
+    }
+
+    @objc private func bannerSoundChanged() {
+        NotificationPrefs.bannerSoundEnabled = bannerSoundSwitch.isOn
+        Haptics.selection()
+    }
+
+    @objc private func quietHoursChanged() {
+        NotificationPrefs.quietHoursEnabled = quietHoursSwitch.isOn
+        updateBannerRowsEnabled()
+        Haptics.selection()
+    }
+
+    @objc private func quietWindowChanged() {
+        NotificationPrefs.quietHoursStartMinute = Self.minute(of: quietStartPicker.date)
+        NotificationPrefs.quietHoursEndMinute = Self.minute(of: quietEndPicker.date)
     }
 
     @objc private func notificationsChanged() {
@@ -181,11 +256,11 @@ final class SettingsViewController: UIViewController {
                     NotificationPrefs.bannersEnabled = false
                     self.present(self.permissionDeniedAlert(), animated: true)
                 }
-                self.updateKindRowsEnabled()
+                self.updateBannerRowsEnabled()
             }
         } else {
             NotificationPrefs.bannersEnabled = false
-            updateKindRowsEnabled()
+            updateBannerRowsEnabled()
         }
     }
 
@@ -305,8 +380,28 @@ final class SettingsViewController: UIViewController {
         return button
     }
 
-    private func fieldRow(_ field: UITextField) -> UIView { paddedRow([field]) }
     private func contentRow(_ view: UIView) -> UIView { paddedRow([view]) }
+
+    /// A captioned, visibly-editable field row: a small "Server URL"-style
+    /// caption above the value, with a trailing pencil glyph signalling that
+    /// the text edits in place.
+    private func labeledFieldRow(_ title: String, _ field: UITextField) -> UIView {
+        let caption = UILabel()
+        caption.text = title
+        caption.font = DesignSystem.Typography.caption()
+        caption.textColor = DesignSystem.Color.secondaryLabel
+
+        let column = UIStackView(arrangedSubviews: [caption, field])
+        column.axis = .vertical
+        column.spacing = 2
+
+        let pencil = UIImageView(image: DesignSystem.icon("pencil", pointSize: 14))
+        pencil.tintColor = DesignSystem.Color.accent
+        pencil.setContentHuggingPriority(.required, for: .horizontal)
+        pencil.isAccessibilityElement = false
+
+        return paddedRow([column, UIView(), pencil])
+    }
 
     private func paddedRow(_ subviews: [UIView]) -> UIView {
         let row = UIStackView(arrangedSubviews: subviews)
@@ -332,8 +427,34 @@ final class SettingsViewController: UIViewController {
         return label
     }
 
-    @objc private func serverChanged() {
-        AppSettings.serverURLString = serverField.text ?? ""
+    @objc private func serverEditingBegan() {
+        serverField.textColor = DesignSystem.Color.label
+    }
+
+    @objc private func serverReturnTapped() {
+        serverField.resignFirstResponder()
+    }
+
+    /// Commits the server URL once editing finishes — never per keystroke, so
+    /// background traffic can't be redirected at a half-typed host (or the
+    /// useless localhost fallback after the clear button). An invalid or empty
+    /// value reverts to the previous address with a visible explanation.
+    @objc private func serverEditingEnded() {
+        serverField.textColor = DesignSystem.Color.secondaryLabel
+        let candidate = (serverField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard candidate != AppSettings.serverURLString else { return }
+        guard let url = URL(string: candidate), let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https", url.host != nil else {
+            serverField.text = AppSettings.serverURLString
+            statusLabel.textColor = .systemRed
+            statusLabel.text = "Not a valid server URL — kept \(AppSettings.serverURLString)"
+            Haptics.error()
+            return
+        }
+        AppSettings.serverURLString = candidate
+        statusLabel.textColor = DesignSystem.Color.secondaryLabel
+        statusLabel.text = "Server set to \(candidate)"
+        AppLogger.shared.info("server URL changed to \(candidate)", category: .app)
     }
 
     @objc private func appearanceChanged() {

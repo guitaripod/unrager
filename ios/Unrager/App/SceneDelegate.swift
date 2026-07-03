@@ -26,10 +26,13 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     #if DEBUG
     /// Deterministic deep-navigation for screenshot QA, driven by the
-    /// `UNRAGER_SCREEN` env var (e.g. `thread:123`, `profile:jack`, `settings`).
+    /// `UNRAGER_SCREEN` env var. Both `:` and `/` separate the route from its
+    /// arguments (`thread:123` ≡ `thread/123`), matching how QA harnesses
+    /// naturally write path-shaped routes; unmatched routes are logged so a
+    /// silent miss can't masquerade as a green run.
     private func handleDebugLaunch(_ root: RootViewController) {
         guard let screen = ProcessInfo.processInfo.environment["UNRAGER_SCREEN"], !screen.isEmpty else { return }
-        let parts = screen.split(separator: ":").map(String.init)
+        let parts = screen.split(whereSeparator: { $0 == ":" || $0 == "/" }).map(String.init)
         let api = AppEnvironment.shared.api
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             func homeNav() -> UINavigationController? { root.viewControllers?.first as? UINavigationController }
@@ -46,7 +49,12 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                 if let n = try? UnragerJSON.decode(XNotification.self, from: Data(json.utf8)) {
                     root.showNotificationToast([n])
                 }
-            case "notifications": root.selectedIndex = 2
+            case "notifications":
+                root.selectedIndex = 2
+                if parts.count > 1, parts[1] == "mentions" {
+                    ((root.viewControllers?[2] as? UINavigationController)?
+                        .viewControllers.first as? NotificationsViewController)?.debugShowMentions()
+                }
             case "settings": root.selectedIndex = 3
             case "filter":
                 root.selectedIndex = 3
@@ -56,12 +64,29 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                 root.selectedIndex = 3
                 (root.viewControllers?[3] as? UINavigationController)?
                     .pushViewController(EditTabsViewController(), animated: false)
+            case "changelog":
+                root.selectedIndex = 3
+                (root.viewControllers?[3] as? UINavigationController)?
+                    .pushViewController(ChangelogViewController(), animated: false)
+            case "userlist" where parts.count > 2:
+                let mode: UserListViewController.Mode = parts[2] == "following" ? .following : .followers
+                homeNav()?.pushViewController(UserListViewController(userID: parts[1], mode: mode), animated: false)
+            case "askctx" where parts.count > 1:
+                let id = parts[1]
+                Task {
+                    guard let tweet = try? await api.tweet(id: id) else { return }
+                    let sheet = AskConversationViewController(
+                        context: .init(tweet: tweet), initialPrompt: "Explain this post.")
+                    root.present(UINavigationController(rootViewController: sheet), animated: false)
+                }
             case "myprofile":
                 homeNav()?.pushViewController(MyProfileViewController(), animated: false)
             case "mentions":
                 homeNav()?.pushViewController(MentionsViewController(), animated: false)
             case "profile" where parts.count > 1:
-                homeNav()?.pushViewController(ProfileViewController(handle: parts[1]), animated: false)
+                let profile = ProfileViewController(handle: parts[1])
+                homeNav()?.pushViewController(profile, animated: false)
+                if parts.count > 2, parts[2] == "replies" { profile.debugShowReplies() }
             case "thread" where parts.count > 1:
                 homeNav()?.pushViewController(ThreadViewController(tweetID: parts[1]), animated: false)
             case "likers" where parts.count > 1:
@@ -92,8 +117,17 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                     if wantsThread { postcard.debugEnableThread() }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 5) { postcard.debugSaveExport() }
                 }
+            case "bookmarks":
+                homeNav()?.pushViewController(BookmarksViewController(), animated: false)
             case "compose":
                 root.present(UINavigationController(rootViewController: ComposeViewController(mode: .new)), animated: false)
+            case "quote" where parts.count > 1:
+                let id = parts[1]
+                Task {
+                    guard let tweet = try? await api.tweet(id: id) else { return }
+                    root.present(UINavigationController(
+                        rootViewController: ComposeViewController(mode: .quote(of: tweet))), animated: false)
+                }
             case "brief" where parts.count > 1:
                 let handle = parts[1]
                 root.presentStream(title: "Brief · @\(handle)") { api.briefStream(handle: handle) }
@@ -104,7 +138,8 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             case "translate" where parts.count > 1:
                 let id = parts[1]
                 root.presentStream(title: "Translation") { api.translateStream(tweetID: id) }
-            default: break
+            default:
+                AppLogger.shared.warn("UNRAGER_SCREEN unmatched route: \(screen)", category: .app)
             }
         }
     }

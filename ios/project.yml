@@ -42,6 +42,8 @@ targets:
     platform: iOS
     sources:
       - path: Unrager
+      - path: ../CHANGELOG.md
+        buildPhase: resources
     dependencies:
       - package: UnragerKit
         product: UnragerKit

@@ -8,6 +8,8 @@ import simd
 /// 0 to 1, ringed by a pulse whose radius tracks the same value — so the
 /// animation visibly reflects the batch filling. The live "collecting tweets…
 /// N/25" caption overlays the lower third in `DesignSystem` typography.
+/// In light mode the accent mix is capped low so overlapping orbs stay
+/// discrete soft shapes on white instead of flooding the frame flat blue.
 ///
 /// Driven by `MTKView`'s own `CADisplayLink` at ~60fps; paused whenever the
 /// view is hidden or off-window so it draws zero frames in the background.
@@ -288,7 +290,8 @@ enum CollectingShader {
         if (u.isDark > 0.5) {
             color = bg + glow * intensity;
         } else {
-            color = mix(bg, accent, clamp(intensity, 0.0, 0.9));
+            float3 tinted = mix(bg, accent, 0.05);
+            color = mix(tinted, accent, clamp(intensity, 0.0, 1.0) * 0.32);
         }
 
         // Fine grain to avoid banding on the gradients.

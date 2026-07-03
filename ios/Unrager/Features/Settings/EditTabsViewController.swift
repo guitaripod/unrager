@@ -11,6 +11,9 @@ final class EditTabsViewController: UIViewController {
     private var collectionView: UICollectionView!
     private var dataSource: UICollectionViewDiffableDataSource<Section, TabItem>!
     private var active: [TabItem] = ClientSettings.tabs
+    /// The selection on entry; leaving without changing it skips the tab-bar
+    /// rebuild (which would wipe every tab's scroll position and pushed stack).
+    private let originalTabs: [TabItem] = ClientSettings.tabs
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -35,12 +38,16 @@ final class EditTabsViewController: UIViewController {
         apply(animated: false)
     }
 
-    /// Rebuilds the live tab bar only when leaving — rebuilding mid-edit would
-    /// recreate the Settings stack hosting this very screen and pop it out from
-    /// under the user. Selections persist immediately; the bar catches up here.
+    /// Rebuilds the live tab bar only when leaving *and* only when the
+    /// selection actually changed — rebuilding mid-edit would recreate the
+    /// Settings stack hosting this very screen, and rebuilding on a no-change
+    /// exit would needlessly destroy every tab's scroll position, pushed
+    /// screens and in-flight state. Selections persist immediately; the bar
+    /// catches up here.
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         guard isMovingFromParent || isBeingDismissed else { return }
+        guard active != originalTabs else { return }
         (view.window?.rootViewController as? RootViewController)?.rebuildTabs()
     }
 
@@ -49,6 +56,8 @@ final class EditTabsViewController: UIViewController {
             [weak self] cell, indexPath, tab in
             var content = cell.defaultContentConfiguration()
             content.text = tab.title
+            content.secondaryText = tab.subtitle
+            content.secondaryTextProperties.color = DesignSystem.Color.secondaryLabel
             content.image = DesignSystem.icon(tab.symbol, pointSize: 18)
             content.imageProperties.tintColor = DesignSystem.Color.accent
             cell.contentConfiguration = content

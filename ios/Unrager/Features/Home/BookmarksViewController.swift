@@ -1,12 +1,12 @@
 import UIKit
 import UnragerKit
 
-/// Bookmarks as a standalone tab root. X has no "all bookmarks" listing — only
-/// keyword search — so this prompts for a keyword on first appearance and shows
-/// a search button to change it. Until a keyword is entered the feed shows its
-/// awaiting-query empty state.
+/// Bookmarks as a standalone tab root. Loads the full bookmarks timeline by
+/// default (the server's `/api/sources/bookmarks` with no query); the search
+/// field narrows it via X's bookmark keyword search, and clearing or
+/// cancelling the search restores the full listing.
 final class BookmarksViewController: FeedViewController {
-    private var hasPrompted = false
+    private let searchController = UISearchController(searchResultsController: nil)
 
     init() {
         super.init(viewModel: TimelineViewModel(source: .bookmarks(query: "")))
@@ -19,34 +19,34 @@ final class BookmarksViewController: FeedViewController {
         super.viewDidLoad()
         title = "Bookmarks"
         navigationItem.largeTitleDisplayMode = .always
-        navigationItem.rightBarButtonItem = UIBarButtonItem(
-            image: DesignSystem.icon("magnifyingglass"),
-            primaryAction: UIAction { [weak self] _ in self?.promptKeyword() })
+        searchController.searchBar.placeholder = "Search bookmarks"
+        searchController.searchBar.autocapitalizationType = .none
+        searchController.searchBar.delegate = self
+        searchController.obscuresBackgroundDuringPresentation = false
+        navigationItem.searchController = searchController
+        navigationItem.hidesSearchBarWhenScrolling = false
     }
 
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        guard !hasPrompted else { return }
-        hasPrompted = true
-        promptKeyword()
+    private func applyQuery(_ raw: String?) {
+        let query = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        viewModel.updateSource(.bookmarks(query: query))
+    }
+}
+
+extension BookmarksViewController: UISearchBarDelegate {
+    func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
+        applyQuery(searchBar.text)
     }
 
-    private func promptKeyword() {
-        let alert = UIAlertController(
-            title: "Search Bookmarks",
-            message: "X searches bookmarks by keyword — there's no \"all\" listing.",
-            preferredStyle: .alert)
-        alert.addTextField {
-            $0.placeholder = "keyword"
-            $0.autocapitalizationType = .none
-            $0.returnKeyType = .search
-        }
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Search", style: .default) { [weak self] _ in
-            let query = alert.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !query.isEmpty else { return }
-            self?.viewModel.updateSource(.bookmarks(query: query))
-        })
-        present(alert, animated: true)
+    func searchBarCancelButtonClicked(_ searchBar: UISearchBar) {
+        applyQuery(nil)
+    }
+
+    /// Clearing the field (the `x` button or select-all-delete) restores the
+    /// full timeline without waiting for a Search tap; typing alone never
+    /// fires a fetch.
+    func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
+        guard searchText.isEmpty else { return }
+        applyQuery(nil)
     }
 }

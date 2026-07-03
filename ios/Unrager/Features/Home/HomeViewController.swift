@@ -9,12 +9,12 @@ final class HomeViewController: FeedViewController {
     private var chronological = false
     private let titleButton = UIButton(type: .system)
 
-    /// The dedicated Following tab pins Following; the For You / Home tab reopens
-    /// on whatever mode it was last left on (`ClientSettings.homeFollowing`).
-    /// Originals is restored for both. Local state is authoritative — the feed
-    /// loads from it immediately, with no wait for the server session.
-    init(initialFollowing: Bool = false) {
-        let restoredFollowing = initialFollowing || ClientSettings.homeFollowing
+    /// The Home tab reopens on whatever mode it was last left on
+    /// (`ClientSettings.homeFollowing`); Originals is restored too. Local state
+    /// is authoritative — the feed loads from it immediately, with no wait for
+    /// the server session.
+    init() {
+        let restoredFollowing = ClientSettings.homeFollowing
         let restoredOriginals = ClientSettings.homeOriginals
         following = restoredFollowing
         originals = restoredOriginals
@@ -34,28 +34,44 @@ final class HomeViewController: FeedViewController {
         setChronologicalSort(chronological && following)
     }
 
+    /// The title rides as a *leading* bar item (X's own pattern), so its
+    /// position never jumps when the trailing cluster changes between modes.
+    /// The nav item's own title is blanked — the tab is titled "Home", which
+    /// would otherwise render redundantly in the centre.
     private func configureTitleMenu() {
-        navigationItem.titleView = titleButton
+        navigationItem.title = ""
+        navigationItem.leftBarButtonItem = UIBarButtonItem(customView: titleButton)
         updateTitle()
     }
 
-    private lazy var originalsButton = UIBarButtonItem(
-        image: DesignSystem.icon("line.3.horizontal.decrease.circle"),
-        primaryAction: UIAction { [weak self] _ in self?.toggleOriginals() })
-
-    private lazy var chronologicalButton = UIBarButtonItem(
-        image: DesignSystem.icon("clock"),
-        primaryAction: UIAction { [weak self] _ in self?.toggleChronological() })
+    private lazy var filterButton = UIBarButtonItem(
+        image: DesignSystem.icon("line.3.horizontal.decrease.circle"), menu: filterMenu())
 
     private func configureNavItems() {
         refreshRightBarItems()
-        updateOriginalsBadge()
-        updateChronologicalBadge()
+    }
+
+    /// One trailing menu button carries both feed filters — Originals and (on
+    /// Following) the chronological sort — so the bar holds at most two
+    /// trailing items and the header never crowds or lurches on a mode switch.
+    private func filterMenu() -> UIMenu {
+        var children: [UIMenuElement] = [
+            UIAction(title: "Originals only", image: DesignSystem.icon("line.3.horizontal.decrease"),
+                     state: originals ? .on : .off) { [weak self] _ in self?.toggleOriginals() },
+        ]
+        if following {
+            children.append(UIAction(title: "Chronological order", image: DesignSystem.icon("clock"),
+                                     state: chronological ? .on : .off) { [weak self] _ in self?.toggleChronological() })
+        }
+        return UIMenu(children: children)
     }
 
     private func refreshRightBarItems() {
-        let chrono = following ? chronologicalButton : nil
-        navigationItem.rightBarButtonItems = [originalsButton, chrono, unreadBarButton].compactMap { $0 }
+        filterButton.menu = filterMenu()
+        let filterActive = originals || (chronological && following)
+        filterButton.image = DesignSystem.icon(
+            filterActive ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+        navigationItem.rightBarButtonItems = [filterButton, unreadBarButton].compactMap { $0 }
     }
 
     private func updateTitle() {
@@ -122,9 +138,9 @@ final class HomeViewController: FeedViewController {
         present(alert, animated: true)
     }
 
-    private func switchHome(following: Bool) {
+    private func switchHome(following: Bool, persist: Bool = true) {
         self.following = following
-        ClientSettings.homeFollowing = following
+        if persist { ClientSettings.homeFollowing = following }
         viewModel.updateSource(.home(following: following, originals: originals))
         setChronologicalSort(chronological && following)
         updateTabBarItem()
@@ -138,8 +154,10 @@ final class HomeViewController: FeedViewController {
     }
 
     #if DEBUG
-    /// Screenshot router entry point: jump straight to the Following feed.
-    func debugSwitchToFollowing() { switchHome(following: true) }
+    /// Screenshot router entry point: jump straight to the Following feed
+    /// without persisting the mode, so a QA run can't contaminate later runs
+    /// (or the user's real preference).
+    func debugSwitchToFollowing() { switchHome(following: true, persist: false) }
     #endif
 
     private func toggleOriginals() {
@@ -149,12 +167,7 @@ final class HomeViewController: FeedViewController {
         if case .home = viewModel.source {
             viewModel.updateSource(.home(following: following, originals: originals))
         }
-        updateOriginalsBadge()
-    }
-
-    private func updateOriginalsBadge() {
-        originalsButton.image = DesignSystem.icon(
-            originals ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+        refreshRightBarItems()
     }
 
     /// Toggles strict newest-first ordering of the Following feed.
@@ -163,11 +176,7 @@ final class HomeViewController: FeedViewController {
         ClientSettings.followingChronological = chronological
         Haptics.selection()
         setChronologicalSort(chronological && following)
-        updateChronologicalBadge()
-    }
-
-    private func updateChronologicalBadge() {
-        chronologicalButton.image = DesignSystem.icon(chronological ? "clock.fill" : "clock")
+        refreshRightBarItems()
     }
 
     /// Mirrors the live feed mode onto the tab bar so the Home tab reads

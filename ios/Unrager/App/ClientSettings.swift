@@ -11,6 +11,7 @@ enum ClientSettings {
         static let homeFollowing = "unrager.ios.homeFollowing"
         static let homeOriginals = "unrager.ios.homeOriginals"
         static let followingChronological = "unrager.ios.followingChronological"
+        static let recentSearches = "unrager.ios.recentSearches"
     }
 
     /// Whether the Following feed is sorted strictly newest-first. X's
@@ -46,10 +47,31 @@ enum ClientSettings {
     /// The user's ordered tab-bar selection (max 5). Persisted as raw values;
     /// falls back to the default set, and is sanitized so a corrupt or
     /// out-of-bounds stored value can never produce an empty or oversized bar.
+    static let maxRecentSearches = 10
+
+    /// The user's recent search queries, most recent first, shown on the
+    /// Search tab's empty state. Capped and de-duplicated case-insensitively.
+    static var recentSearches: [String] {
+        get { defaults.stringArray(forKey: Key.recentSearches) ?? [] }
+        set { defaults.set(Array(newValue.prefix(maxRecentSearches)), forKey: Key.recentSearches) }
+    }
+
+    static func addRecentSearch(_ query: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        var list = recentSearches.filter { $0.caseInsensitiveCompare(trimmed) != .orderedSame }
+        list.insert(trimmed, at: 0)
+        recentSearches = list
+    }
+
+    static func clearRecentSearches() {
+        defaults.removeObject(forKey: Key.recentSearches)
+    }
+
     static var tabs: [TabItem] {
         get {
             guard let raw = defaults.array(forKey: Key.tabs) as? [String] else { return TabItem.defaults }
-            let resolved = raw.compactMap(TabItem.init(rawValue:))
+            let resolved = raw.compactMap(TabItem.resolve(persisted:))
             return TabItem.sanitized(resolved)
         }
         set { defaults.set(TabItem.sanitized(newValue).map(\.rawValue), forKey: Key.tabs) }

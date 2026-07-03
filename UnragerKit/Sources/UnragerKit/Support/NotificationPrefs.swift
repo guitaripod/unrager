@@ -38,6 +38,26 @@ public enum NotificationKind: String, Sendable, CaseIterable {
         default: return nil
         }
     }
+
+    /// Whether this kind alerts (toast/banner) before the user touches any
+    /// toggle. Conversation-grade activity (someone said something to you, or
+    /// started following you) defaults on; volume engagement (likes, reposts)
+    /// defaults off so a viral post doesn't turn the app into a noise machine.
+    public var alertsByDefault: Bool {
+        switch self {
+        case .reply, .mention, .quote, .follow: return true
+        case .like, .repost: return false
+        }
+    }
+
+    /// Whether a banner for this kind should interrupt quietly: likes and
+    /// reposts are worth a list entry, not a sound or a lit screen.
+    public var isPassiveDelivery: Bool {
+        switch self {
+        case .like, .repost: return true
+        case .reply, .mention, .quote, .follow: return false
+        }
+    }
 }
 
 /// Client-side notification preferences (UserDefaults). The badge/unread count
@@ -57,6 +77,11 @@ public enum NotificationPrefs {
         static let perKindPrefix = "unrager.notifications.kind."
         static let lastSeenID = "unrager.notifications.lastSeenID"
         static let lastSeenTimestamp = "unrager.notifications.lastSeenTimestamp"
+        static let bannerSound = "unrager.notifications.bannerSound"
+        static let quietHoursEnabled = "unrager.notifications.quietHours.enabled"
+        static let quietHoursStart = "unrager.notifications.quietHours.startMinute"
+        static let quietHoursEnd = "unrager.notifications.quietHours.endMinute"
+        static let deliveredBannerIDs = "unrager.notifications.deliveredBannerIDs"
     }
 
     /// The master switch: when on (and the system permission is granted) the
@@ -68,11 +93,11 @@ public enum NotificationPrefs {
         set { defaults.set(newValue, forKey: Key.bannersEnabled) }
     }
 
-    /// Whether a given activity kind is allowed to raise a banner. Defaults to
-    /// on so enabling the master switch lights up every type the user hasn't
-    /// explicitly muted.
+    /// Whether a given activity kind is allowed to alert — this single per-kind
+    /// toggle gates both in-app toasts and local banners. Defaults follow
+    /// `alertsByDefault`: replies/mentions/quotes/follows on, likes/reposts off.
     public static func bannerEnabled(for kind: NotificationKind) -> Bool {
-        defaults.object(forKey: Key.perKindPrefix + kind.rawValue) as? Bool ?? true
+        defaults.object(forKey: Key.perKindPrefix + kind.rawValue) as? Bool ?? kind.alertsByDefault
     }
 
     public static func setBannerEnabled(_ enabled: Bool, for kind: NotificationKind) {
@@ -86,6 +111,79 @@ public enum NotificationPrefs {
         guard bannersEnabled else { return false }
         guard let kind = NotificationKind.from(rawType: rawType) else { return true }
         return bannerEnabled(for: kind)
+    }
+
+    /// Whether an in-app toast should be raised for a raw server type. Toasts
+    /// need no system permission and no master switch — they honor the per-kind
+    /// mute toggles, and unmapped junk types (Recommendation/Trending/Poll/…)
+    /// never toast: the tab badge and list carry those.
+    public static func shouldToast(rawType: String) -> Bool {
+        guard let kind = NotificationKind.from(rawType: rawType) else { return false }
+        return bannerEnabled(for: kind)
+    }
+
+    /// Whether banners carry the default sound (subject to quiet hours). On by
+    /// default; likes/reposts are always silent regardless.
+    public static var bannerSoundEnabled: Bool {
+        get { defaults.object(forKey: Key.bannerSound) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Key.bannerSound) }
+    }
+
+    // MARK: - Quiet hours
+
+    public static var quietHoursEnabled: Bool {
+        get { defaults.bool(forKey: Key.quietHoursEnabled) }
+        set { defaults.set(newValue, forKey: Key.quietHoursEnabled) }
+    }
+
+    /// Quiet-hours window start, in minutes from local midnight (default 22:00).
+    public static var quietHoursStartMinute: Int {
+        get { defaults.object(forKey: Key.quietHoursStart) as? Int ?? 22 * 60 }
+        set { defaults.set(newValue, forKey: Key.quietHoursStart) }
+    }
+
+    /// Quiet-hours window end, in minutes from local midnight (default 08:00).
+    public static var quietHoursEndMinute: Int {
+        get { defaults.object(forKey: Key.quietHoursEnd) as? Int ?? 8 * 60 }
+        set { defaults.set(newValue, forKey: Key.quietHoursEnd) }
+    }
+
+    /// True when `date` falls inside the enabled quiet-hours window. Handles
+    /// windows that wrap midnight (22:00 → 08:00); a start equal to the end
+    /// means the window is degenerate and never matches.
+    public static func isQuietHours(at date: Date = Date(), calendar: Calendar = .current) -> Bool {
+        guard quietHoursEnabled else { return false }
+        let start = quietHoursStartMinute
+        let end = quietHoursEndMinute
+        guard start != end else { return false }
+        let components = calendar.dateComponents([.hour, .minute], from: date)
+        let minute = (components.hour ?? 0) * 60 + (components.minute ?? 0)
+        if start < end {
+            return minute >= start && minute < end
+        }
+        return minute >= start || minute < end
+    }
+
+    // MARK: - Delivered-banner dedupe
+
+    /// The cap on remembered banner ids; old entries fall off first.
+    private static let deliveredBannerCap = 300
+
+    /// Whether a system banner for this notification id was already posted —
+    /// dedupes the foreground diff path against the background marker path so
+    /// the user is never alerted twice for one event.
+    public static func hasDeliveredBanner(id: String) -> Bool {
+        (defaults.array(forKey: Key.deliveredBannerIDs) as? [String])?.contains(id) ?? false
+    }
+
+    public static func recordDeliveredBanners(ids: [String]) {
+        guard !ids.isEmpty else { return }
+        var stored = (defaults.array(forKey: Key.deliveredBannerIDs) as? [String]) ?? []
+        stored.append(contentsOf: ids.filter { !stored.contains($0) })
+        if stored.count > deliveredBannerCap {
+            stored.removeFirst(stored.count - deliveredBannerCap)
+        }
+        defaults.set(stored, forKey: Key.deliveredBannerIDs)
     }
 
     /// The newest notification the user has actually viewed (id + its timestamp).
@@ -104,16 +202,26 @@ public enum NotificationPrefs {
         set { defaults.set(newValue?.timeIntervalSince1970 ?? 0, forKey: Key.lastSeenTimestamp) }
     }
 
+    /// Advances the last-seen marker to the supplied instant, monotonically —
+    /// it never moves backward, so an older marker (a stale page, a lagging
+    /// server marker) can't resurrect already-cleared unreads. Returns true if
+    /// the marker moved. The primitive under every other `markSeen`, and the
+    /// adoption point for a server-side marker read from another device.
+    @discardableResult
+    public static func markSeen(timestamp: Date, id: String? = nil) -> Bool {
+        if let current = lastSeenTimestamp, timestamp <= current { return false }
+        lastSeenID = id
+        lastSeenTimestamp = timestamp
+        return true
+    }
+
     /// Advances the last-seen marker to the newest of the supplied notifications,
     /// monotonically — it never moves backward, so viewing an older page can't
     /// resurrect already-cleared unreads. Returns true if the marker moved.
     @discardableResult
     public static func markSeen(upTo newest: XNotification?) -> Bool {
         guard let newest else { return false }
-        if let current = lastSeenTimestamp, newest.timestamp <= current { return false }
-        lastSeenID = newest.id
-        lastSeenTimestamp = newest.timestamp
-        return true
+        return markSeen(timestamp: newest.timestamp, id: newest.id)
     }
 
     /// Advances the marker to the newest notification *by timestamp* in a loaded

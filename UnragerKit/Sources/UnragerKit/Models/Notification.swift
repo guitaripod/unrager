@@ -31,6 +31,12 @@ public struct XNotification: Decodable, Sendable, Hashable, Identifiable {
     public let id: String
     public let type: String
     public let actors: [NotificationActor]
+    /// How many additional actors X groups beyond `actors` ("and N others").
+    /// Absent on servers that predate the field — treat as zero.
+    public let othersCount: Int?
+    /// X's fully rendered notification text (e.g. "Your poll has ended").
+    /// The fallback copy for actor-less types; absent on older servers.
+    public let message: String?
     public let targetTweetID: String?
     public let targetTweetSnippet: String?
     public let targetTweetLikeCount: Int?
@@ -38,7 +44,8 @@ public struct XNotification: Decodable, Sendable, Hashable, Identifiable {
     public let timestamp: Date
 
     enum CodingKeys: String, CodingKey {
-        case id, type, actors
+        case id, type, actors, message
+        case othersCount = "others_count"
         case targetTweetID = "target_tweet_id"
         case targetTweetSnippet = "target_tweet_snippet"
         case targetTweetLikeCount = "target_tweet_like_count"
@@ -51,6 +58,8 @@ public struct XNotification: Decodable, Sendable, Hashable, Identifiable {
         id = try c.decode(String.self, forKey: .id)
         type = try c.decode(String.self, forKey: .type)
         actors = try c.decodeIfPresent([NotificationActor].self, forKey: .actors) ?? []
+        othersCount = try c.decodeIfPresent(Int.self, forKey: .othersCount)
+        message = try c.decodeIfPresent(String.self, forKey: .message)
         targetTweetID = try c.decodeIfPresent(String.self, forKey: .targetTweetID)
         targetTweetSnippet = try c.decodeIfPresent(String.self, forKey: .targetTweetSnippet)
         targetTweetLikeCount = try c.decodeIfPresent(Int.self, forKey: .targetTweetLikeCount)

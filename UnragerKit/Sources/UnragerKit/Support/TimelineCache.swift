@@ -88,6 +88,18 @@ public final class TimelineCache: Sendable {
             return allowed.contains(scalar) ? Character(scalar) : "_"
         }
         let name = String(safe).isEmpty ? "_" : String(safe)
-        return directory.appendingPathComponent("\(name).json")
+        return directory.appendingPathComponent("\(name)-\(stableHash(key)).json")
+    }
+
+    /// A deterministic (launch-stable, unlike `Hashable`) short digest of the
+    /// full key so two keys that sanitize to the same filename — e.g. the
+    /// synthetic `user-jack/replies` and a real handle `jack_replies` — never
+    /// collide on disk.
+    private func stableHash(_ key: String) -> String {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in key.utf8 {
+            hash = (hash ^ UInt64(byte)) &* 0x100000001b3
+        }
+        return String(hash, radix: 36)
     }
 }

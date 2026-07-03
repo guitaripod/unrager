@@ -27,14 +27,32 @@ const fetchCrates = async () => {
   return total;
 };
 
-const fetchGithubReleases = async (token) => {
+const githubHeaders = (token) => {
   const headers = {
     "User-Agent": UA,
     Accept: "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
   };
   if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+};
 
+/// Counts binary-tarball downloads across every release. Authenticates when a
+/// token is supplied (5000/hr), but a revoked/expired token must not zero the
+/// count: on the token being rejected (401/403) it retries unauthenticated,
+/// which still reads public releases within GitHub's 60/hr unauth budget.
+const fetchGithubReleases = async (token) => {
+  try {
+    return await countGithubDownloads(githubHeaders(token));
+  } catch (e) {
+    if (token && /github (401|403)/.test(e?.message || "")) {
+      return await countGithubDownloads(githubHeaders(null));
+    }
+    throw e;
+  }
+};
+
+const countGithubDownloads = async (headers) => {
   let url = GITHUB_URL;
   let total = 0;
   let pages = 0;

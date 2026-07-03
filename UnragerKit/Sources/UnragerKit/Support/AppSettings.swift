@@ -59,6 +59,7 @@ public enum AppSettings {
         static let filterEnabled = "unrager.filterEnabled"
         static let appearanceMigrated = "unrager.appearanceMigratedToLocal.v1"
         static let fontScale = "unrager.fontScale"
+        static let composeViaOfficialApp = "unrager.composeViaOfficialApp"
     }
 
     /// Posted after the user changes `fontScale` so already-visible views can
@@ -127,5 +128,14 @@ public enum AppSettings {
     public static var filterEnabled: Bool {
         get { defaults.bool(forKey: Key.filterEnabled) }
         set { defaults.set(newValue, forKey: Key.filterEnabled) }
+    }
+
+    /// When true (the default), the Tweet / reply buttons hand off to the
+    /// official X app with the text prefilled instead of posting through the
+    /// server's OAuth client — so writing costs nothing and needs no
+    /// developer credentials.
+    public static var composeViaOfficialApp: Bool {
+        get { defaults.object(forKey: Key.composeViaOfficialApp) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Key.composeViaOfficialApp) }
     }
 }

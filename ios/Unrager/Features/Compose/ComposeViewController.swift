@@ -28,7 +28,7 @@ final class ComposeViewController: UIViewController {
     private var uploadedIDs: [UUID: String] = [:]
     private var isPosting = false
     private lazy var postButton = UIBarButtonItem(
-        title: "Post", style: .prominent, target: self, action: #selector(post))
+        title: "Tweet", style: .prominent, target: self, action: #selector(post))
     private lazy var photoButton = UIBarButtonItem(
         image: DesignSystem.icon("photo.on.rectangle"),
         primaryAction: UIAction { [weak self] _ in self?.presentPicker() })
@@ -181,6 +181,10 @@ final class ComposeViewController: UIViewController {
     /// mode. Success dismisses; failure re-enables the editor and offers Retry.
     private func submit() async {
         guard hasContent, !isPosting else { return }
+        if AppSettings.composeViaOfficialApp {
+            handoffToOfficialApp()
+            return
+        }
         isPosting = true
         setEditorLocked(true)
         defer {
@@ -210,6 +214,36 @@ final class ComposeViewController: UIViewController {
         }
     }
 
+    /// Hands the draft to the official X app via an intent URL (falling back
+    /// to the web composer), with the text also copied to the clipboard so
+    /// anything the intent can't carry — media, or a quote when the app
+    /// ignores the appended URL — can be pasted. No OAuth, no server post.
+    private func handoffToOfficialApp() {
+        let text = textView.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        var message = text
+        var inReplyTo: String?
+        switch mode {
+        case .new:
+            break
+        case let .reply(tweet):
+            inReplyTo = tweet.restID
+        case let .quote(tweet):
+            message = text.isEmpty ? tweet.url : "\(text) \(tweet.url)"
+        }
+        UIPasteboard.general.string = text
+        autoLikeIfReply()
+
+        var components = URLComponents(string: "https://x.com/intent/tweet")
+        var items = [URLQueryItem(name: "text", value: message)]
+        if let inReplyTo { items.append(URLQueryItem(name: "in_reply_to", value: inReplyTo)) }
+        components?.queryItems = items
+        guard let url = components?.url else { dismiss(animated: true); return }
+        UIApplication.shared.open(url) { [weak self] _ in
+            Haptics.success()
+            self?.dismiss(animated: true)
+        }
+    }
+
     /// Uploads every attachment that hasn't already minted a media id and
     /// returns the ids in attachment order. Sequential, so the "Uploading
     /// N/M…" progress is honest and a failure pinpoints one item.
@@ -236,7 +270,7 @@ final class ComposeViewController: UIViewController {
         attachmentBar.isUserInteractionEnabled = !locked
         photoButton.isEnabled = !locked && attachments.count < Self.maxAttachments
         postButton.isEnabled = !locked && hasContent && TweetCounter.remaining(for: textView.text) >= 0
-        if !locked { postButton.title = "Post" }
+        if !locked { postButton.title = "Tweet" }
     }
 
     private func presentPostFailure(_ error: any Error) {

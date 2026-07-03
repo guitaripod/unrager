@@ -32,6 +32,7 @@ final class SettingsViewController: UIViewController {
     private let imagesSwitch = UISwitch()
     private let filterSwitch = UISwitch()
     private let markSeenSwitch = UISwitch()
+    private let officialComposeSwitch = UISwitch()
     private let profileButton = UIButton(configuration: .gray())
     private let notificationsSwitch = UISwitch()
     private let bannerSoundSwitch = UISwitch()
@@ -99,6 +100,9 @@ final class SettingsViewController: UIViewController {
         filterSwitch.isOn = AppSettings.filterEnabled
         filterSwitch.addTarget(self, action: #selector(filterChanged), for: .valueChanged)
 
+        officialComposeSwitch.isOn = AppSettings.composeViaOfficialApp
+        officialComposeSwitch.addTarget(self, action: #selector(officialComposeChanged), for: .valueChanged)
+
         stack.addArrangedSubview(section("Server", card: card([
             labeledFieldRow("Server URL", serverField),
             navRow("Test connection", icon: "bolt.horizontal") { [weak self] in self?.testConnection() },
@@ -124,6 +128,10 @@ final class SettingsViewController: UIViewController {
             toggleRow("Load images", imagesSwitch),
             toggleRow("Track seen tweets", markSeenSwitch),
         ]), footnote: "Reports tweets you scroll past on Following and Mentions to the server's read tracker and dims them on reload."))
+
+        stack.addArrangedSubview(section("Composing", card: card([
+            toggleRow("Tweet with the X app", officialComposeSwitch),
+        ]), footnote: "On: the Tweet and reply buttons open the official X app with your text prefilled (and copied to the clipboard) — no developer account, no cost. Off: posts through the server's OAuth client."))
 
         stack.addArrangedSubview(notificationsSection())
 
@@ -476,6 +484,11 @@ final class SettingsViewController: UIViewController {
     @objc private func filterChanged() {
         AppSettings.filterEnabled = filterSwitch.isOn
         SessionSync.patchFilterEnabled(filterSwitch.isOn)
+        Haptics.selection()
+    }
+
+    @objc private func officialComposeChanged() {
+        AppSettings.composeViaOfficialApp = officialComposeSwitch.isOn
         Haptics.selection()
     }
 

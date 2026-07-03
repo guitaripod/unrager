@@ -25,6 +25,9 @@ final class ThreadViewController: UIViewController {
     /// notification is about, not the conversation root. Cleared after the
     /// first scroll. False for feed-opened threads (focal already at top).
     private var scrollToFocalOnLoad = false
+    /// Holds the focal at the top across async ancestor-image height changes
+    /// after a notification/permalink open, until the user first drags.
+    private var pendingFocalScroll = false
     private var selfHandle: String?
     private var cursor: String?
     private var exhausted = false
@@ -318,6 +321,7 @@ final class ThreadViewController: UIViewController {
             guard let self else { return }
             if self.scrollToFocalOnLoad, !ancestors.isEmpty {
                 self.scrollToFocalOnLoad = false
+                self.pendingFocalScroll = true
                 self.scrollFocalToTop()
             } else if shouldPinFocal, let anchorBefore {
                 self.pinFocal(toScreenY: anchorBefore)
@@ -326,15 +330,25 @@ final class ThreadViewController: UIViewController {
         didRenderFocal = true
     }
 
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        if pendingFocalScroll { scrollFocalToTop() }
+    }
+
     /// Brings the focal tweet to the top of the viewport (used when a thread is
     /// opened by id from a notification, so ancestors sit above it off-screen).
+    /// Re-applied on every layout pass while `pendingFocalScroll` holds, so
+    /// ancestor images loading in and growing can't leave the focal scrolled
+    /// past; the user's first drag releases the pin.
     private func scrollFocalToTop() {
         guard let focalID, let indexPath = dataSource.indexPath(for: focalID),
               let attributes = collectionView.layoutAttributesForItem(at: indexPath) else { return }
         let maxOffset = max(0, collectionView.contentSize.height - collectionView.bounds.height
             + collectionView.adjustedContentInset.bottom)
         let target = min(max(0, attributes.frame.minY - collectionView.adjustedContentInset.top), maxOffset)
-        collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: false)
+        if abs(collectionView.contentOffset.y - target) > 0.5 {
+            collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: false)
+        }
     }
 
     /// The focal cell's top in the collection's content space minus the current
@@ -611,6 +625,10 @@ final class ThreadViewController: UIViewController {
 }
 
 extension ThreadViewController: UICollectionViewDelegate {
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        pendingFocalScroll = false
+    }
+
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         collectionView.deselectItem(at: indexPath, animated: false)
         guard let id = dataSource.itemIdentifier(for: indexPath), id != focalID,

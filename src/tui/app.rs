@@ -1504,6 +1504,27 @@ mod tests {
     }
 
     #[test]
+    fn rage_filter_only_applies_to_home() {
+        let cache_tmp = NamedTempFile::new().unwrap();
+        let mut cache = FilterCache::open(cache_tmp.path(), "test_hash".to_string()).unwrap();
+        cache.put("1", FilterDecision::Hide);
+
+        let mut page = make_page(vec![make_tweet("1", "rage on a profile")]);
+        let kind = SourceKind::User {
+            handle: "someone".into(),
+        };
+        let mut counted = HashSet::new();
+        let hidden = filter_incoming_page(
+            &mut page,
+            &kind,
+            FeedMode::All,
+            on_filter(Some(&cache), true, &mut counted),
+        );
+        assert_eq!(hidden, 0, "profiles are never rage-filtered");
+        assert_eq!(page.tweets.len(), 1);
+    }
+
+    #[test]
     fn filter_pipeline_combined() {
         let cache_tmp = NamedTempFile::new().unwrap();
         let mut cache = FilterCache::open(cache_tmp.path(), "test_hash".to_string()).unwrap();

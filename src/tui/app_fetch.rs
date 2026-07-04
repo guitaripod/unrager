@@ -274,8 +274,9 @@ impl App {
                 if matches!(kind, SourceKind::Home { following: true }) {
                     page.tweets.sort_by_key(|t| std::cmp::Reverse(t.created_at));
                 }
-                let filter_active =
-                    matches!(self.filter_mode, FilterMode::On) && self.filter_classifier.is_some();
+                let filter_active = matches!(self.filter_mode, FilterMode::On)
+                    && self.filter_classifier.is_some()
+                    && matches!(kind, SourceKind::Home { .. });
                 let cold_start_following = !silent
                     && self.source.tweets.is_empty()
                     && matches!(kind, SourceKind::Home { following: true });
@@ -1261,7 +1262,10 @@ pub fn filter_incoming_page(
         });
     }
     let mut hidden = 0;
-    if matches!(filter.mode, FilterMode::On) && filter.has_classifier {
+    if matches!(filter.mode, FilterMode::On)
+        && filter.has_classifier
+        && matches!(kind, SourceKind::Home { .. })
+    {
         if let Some(cache) = filter.cache {
             page.tweets.retain(|t| {
                 if matches!(cache.get(&t.rest_id), Some(FilterDecision::Hide)) {

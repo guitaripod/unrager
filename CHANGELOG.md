@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **The rage filter now only touches the Home feeds — profiles, search, mentions, bookmarks, and likers are never filtered.** In the TUI the classifier was hiding Hide-verdict tweets on every source, so opening someone's profile or a search could silently drop posts (and burn GPU classifying them). The filter is meant to de-rage the algorithmic For You / Following timelines; deliberate visits now always load complete and unfiltered, matching the native apps which were already Home-only.
+
 ## [0.21.0] — 2026-07-03
 
 - **The iOS app now reposts, quote-tweets, and bookmarks.** The action row under every tweet gained a repost button (with a Repost / Undo repost / Quote menu, green while reposted, optimistic count) and a bookmark button (filled while saved), joining reply, like, and a new dedicated share button; the views count sits at the end as plain text. Repost, quote (opens the composer with the quoted post attached), and bookmark all write back so a second tap and cell reuse show the true state. The Bookmarks tab opens your full bookmarks list by default and still filters by keyword. All of this is powered by new server endpoints (`POST/DELETE /api/tweets/{id}/retweet` and `/bookmark`) — and the server now warms X's request-signing key on startup with retries so these stricter mutations don't intermittently fail.

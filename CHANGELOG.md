@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+## [0.21.1] — 2026-07-04
+
 - **iOS: postcards save without crashing and export with clean, correctly-drawn text — and they now show quote tweets and up to four photos.** Save, Copy, and Share previously rasterized the card through a throwaway off-screen window, which crashed the app under the scene-based lifecycle and produced warped, scrambled text in the image that did come out; the export now renders the layer directly, deterministically, off any window. Emoji resolve asynchronously before rendering (no more blocking the interface, and the live preview shows the same flat Twemoji art the export does), a quoted tweet renders as an inset card with its author, text, and photos, media lays out like X (side-by-side pair, one-plus-pair, or a 2×2 grid instead of a max of two stacked photos), and two new themes — Paper and Ember — join the picker.
 - **The rage filter now only touches the Home feeds — profiles, search, mentions, bookmarks, and likers are never filtered.** In the TUI the classifier was hiding Hide-verdict tweets on every source, so opening someone's profile or a search could silently drop posts (and burn GPU classifying them). The filter is meant to de-rage the algorithmic For You / Following timelines; deliberate visits now always load complete and unfiltered, matching the native apps which were already Home-only.
 
@@ -202,7 +204,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.21.0...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.21.1...HEAD
+[0.21.1]: https://github.com/guitaripod/unrager/releases/tag/0.21.1
 [0.21.0]: https://github.com/guitaripod/unrager/releases/tag/0.21.0
 [0.20.0]: https://github.com/guitaripod/unrager/releases/tag/0.20.0
 [0.19.2]: https://github.com/guitaripod/unrager/releases/tag/0.19.2

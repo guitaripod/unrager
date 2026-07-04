@@ -5,6 +5,9 @@ import UIKit
 /// the postcard look can be picked without touching the app's appearance. The
 /// background is either a solid fill (`backgroundEnd == nil`) or a top→bottom
 /// vertical gradient.
+///
+/// Raw values persist in `UserDefaults` (see `PostcardStore`), so new cases
+/// are appended — never inserted — and `ordered` handles presentation order.
 enum PostcardTheme: Int, CaseIterable, Sendable {
     case glass
     case synthwave
@@ -13,9 +16,13 @@ enum PostcardTheme: Int, CaseIterable, Sendable {
     case blueprint
     case arcade
     case matchApp
+    case paper
+    case ember
 
-    /// Picker order, lowest first. Match-the-app trails the curated presets.
-    static var ordered: [PostcardTheme] { allCases.sorted { $0.rawValue < $1.rawValue } }
+    /// Picker order: curated presets first, Match-the-app trailing.
+    static var ordered: [PostcardTheme] {
+        allCases.filter { $0 != .matchApp } + [.matchApp]
+    }
 
     var title: String {
         switch self {
@@ -26,6 +33,8 @@ enum PostcardTheme: Int, CaseIterable, Sendable {
         case .blueprint: return "Blueprint"
         case .arcade: return "Arcade"
         case .matchApp: return "Match App"
+        case .paper: return "Paper"
+        case .ember: return "Ember"
         }
     }
 
@@ -39,6 +48,8 @@ enum PostcardTheme: Int, CaseIterable, Sendable {
         case .blueprint: return UIColor(rgb: 0x072B5C)
         case .arcade: return .black
         case .matchApp: return DesignSystem.Color.background
+        case .paper: return UIColor(rgb: 0xFBF8F1)
+        case .ember: return UIColor(rgb: 0x1A1210)
         }
     }
 
@@ -49,7 +60,8 @@ enum PostcardTheme: Int, CaseIterable, Sendable {
         case .synthwave: return UIColor(rgb: 0x5A1A66)
         case .cutout: return UIColor(rgb: 0xE6D0AA)
         case .moss: return UIColor(rgb: 0x2C3A2E)
-        case .blueprint, .arcade, .matchApp: return nil
+        case .ember: return UIColor(rgb: 0x3B1D12)
+        case .blueprint, .arcade, .matchApp, .paper: return nil
         }
     }
 
@@ -62,6 +74,8 @@ enum PostcardTheme: Int, CaseIterable, Sendable {
         case .blueprint: return UIColor(rgb: 0xF0F4F8)
         case .arcade: return UIColor(rgb: 0x39FF14)
         case .matchApp: return DesignSystem.Color.label
+        case .paper: return UIColor(rgb: 0x2B2620)
+        case .ember: return UIColor(rgb: 0xF5E3D3)
         }
     }
 
@@ -74,6 +88,8 @@ enum PostcardTheme: Int, CaseIterable, Sendable {
         case .blueprint: return UIColor(rgb: 0x7AA4D0)
         case .arcade: return UIColor(rgb: 0x3D8E3A)
         case .matchApp: return DesignSystem.Color.secondaryLabel
+        case .paper: return UIColor(rgb: 0x8A8073)
+        case .ember: return UIColor(rgb: 0xB08A72)
         }
     }
 
@@ -86,6 +102,8 @@ enum PostcardTheme: Int, CaseIterable, Sendable {
         case .blueprint: return UIColor(rgb: 0x22D3EE)
         case .arcade: return UIColor(rgb: 0xFF00FF)
         case .matchApp: return DesignSystem.Color.accent
+        case .paper: return UIColor(rgb: 0xB4552D)
+        case .ember: return UIColor(rgb: 0xFF7A3C)
         }
     }
 
@@ -93,8 +111,8 @@ enum PostcardTheme: Int, CaseIterable, Sendable {
     /// luminance-sensitive chrome in the picker.
     var isDark: Bool {
         switch self {
-        case .synthwave, .moss, .blueprint, .arcade: return true
-        case .glass, .cutout: return false
+        case .synthwave, .moss, .blueprint, .arcade, .ember: return true
+        case .glass, .cutout, .paper: return false
         case .matchApp: return false
         }
     }

@@ -4,12 +4,10 @@ import UnragerKit
 /// A single tweet rendered as a shareable postcard, mirroring the TUI's
 /// `screenshot.rs` look: a vertical accent bar down the left edge, generous
 /// padding, an avatar + name/handle header, the body in a large editorial
-/// font, optional photo media, an optional metrics row, and an `unrager`
-/// watermark bottom-right. The view sizes its own height to fit its content at
-/// a fixed render width; `render(scale:)` rasterizes it to a crisp `UIImage`.
-///
-/// `UILabel`/`UITextView` draw color emoji natively, so — unlike the TUI's
-/// `ab_glyph` rasterizer — no emoji compositing is needed here.
+/// font, photo media in a grid, an inset quoted tweet, an optional metrics
+/// row, and an `unrager` watermark bottom-right. The view sizes its own height
+/// to fit its content at a fixed render width; `render(scale:)` rasterizes it
+/// to a crisp `UIImage`.
 final class PostcardView: UIView {
     struct Options {
         var showsDisplayName: Bool = true
@@ -23,6 +21,7 @@ final class PostcardView: UIView {
         let tweet: Tweet
         let avatar: UIImage?
         let photos: [UIImage]
+        var quotedPhotos: [UIImage] = []
     }
 
     /// Logical render width. At scale 3 this yields a ~1620px-wide PNG —
@@ -37,12 +36,15 @@ final class PostcardView: UIView {
         static let headerGap: CGFloat = 14
         static let bodyGap: CGFloat = 20
         static let mediaGap: CGFloat = 18
-        static let mediaSpacing: CGFloat = 10
+        static let mediaSpacing: CGFloat = 8
+        static let quoteGap: CGFloat = 18
+        static let quotePadding: CGFloat = 14
         static let metricsGap: CGFloat = 20
         static let watermarkGap: CGFloat = 22
         static let mediaCorner: CGFloat = 16
         static let blockGap: CGFloat = 22
-        static let maxPhotos = 2
+        static let maxPhotos = 4
+        static let maxQuotePhotos = 2
     }
 
     private let theme: PostcardTheme
@@ -65,8 +67,6 @@ final class PostcardView: UIView {
         translatesAutoresizingMaskIntoConstraints = false
         build(entries: entries)
     }
-
-    private var bodyLabels: [UILabel] = []
 
     /// Single-tweet convenience — the default, unchanged-behavior path.
     ///
@@ -145,7 +145,8 @@ final class PostcardView: UIView {
         }
     }
 
-    /// One tweet's vertical column: header, body, media, optional metrics.
+    /// One tweet's vertical column: header, body, media, quoted tweet, optional
+    /// metrics.
     private func makeBlock(entry: Entry) -> UIView {
         let block = UIStackView()
         block.axis = .vertical
@@ -159,6 +160,10 @@ final class PostcardView: UIView {
         if !entry.photos.isEmpty {
             block.setCustomSpacing(Metrics.mediaGap, after: block.arrangedSubviews.last!)
             block.addArrangedSubview(makeMedia(photos: Array(entry.photos.prefix(Metrics.maxPhotos))))
+        }
+        if let quoted = entry.tweet.quotedTweet {
+            block.setCustomSpacing(Metrics.quoteGap, after: block.arrangedSubviews.last!)
+            block.addArrangedSubview(makeQuote(tweet: quoted, photos: entry.quotedPhotos))
         }
         if options.showsMetrics, let metrics = makeMetrics(tweet: entry.tweet) {
             block.setCustomSpacing(Metrics.metricsGap, after: block.arrangedSubviews.last!)
@@ -186,30 +191,16 @@ final class PostcardView: UIView {
         nameRow.spacing = 5
         nameRow.alignment = .center
 
-        if options.showsDisplayName {
-            let name = UILabel()
-            name.text = tweet.author.name
-            name.font = .systemFont(ofSize: 19, weight: .bold)
-            name.textColor = theme.text
-            name.numberOfLines = 2
-            name.lineBreakMode = .byWordWrapping
-            name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            nameRow.addArrangedSubview(name)
-            if tweet.author.verified {
-                nameRow.addArrangedSubview(makeVerifiedBadge())
-            }
-        } else {
-            let handle = UILabel()
-            handle.text = "@\(tweet.author.handle)"
-            handle.font = .systemFont(ofSize: 19, weight: .bold)
-            handle.textColor = theme.text
-            handle.numberOfLines = 2
-            handle.lineBreakMode = .byWordWrapping
-            handle.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            nameRow.addArrangedSubview(handle)
-            if tweet.author.verified {
-                nameRow.addArrangedSubview(makeVerifiedBadge())
-            }
+        let title = UILabel()
+        title.text = options.showsDisplayName ? tweet.author.name : "@\(tweet.author.handle)"
+        title.font = .systemFont(ofSize: 19, weight: .bold)
+        title.textColor = theme.text
+        title.numberOfLines = 2
+        title.lineBreakMode = .byWordWrapping
+        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        nameRow.addArrangedSubview(title)
+        if tweet.author.verified {
+            nameRow.addArrangedSubview(makeVerifiedBadge())
         }
         nameRow.addArrangedSubview(UIView())
 
@@ -270,14 +261,18 @@ final class PostcardView: UIView {
 
     private func makeBody(tweet: Tweet) -> UIView? {
         let text = TweetText.displayText(for: tweet, stripLeadingMentions: true)
+        return makeTextLabel(text, size: 22, lineSpacing: 4)
+    }
+
+    private func makeTextLabel(_ text: String, size: CGFloat, lineSpacing: CGFloat) -> UILabel? {
         guard !text.isEmpty else { return nil }
         let label = UILabel()
         label.numberOfLines = 0
         label.lineBreakMode = .byWordWrapping
         label.textColor = theme.text
         let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 4
-        let font = UIFont.systemFont(ofSize: 22, weight: .regular)
+        paragraph.lineSpacing = lineSpacing
+        let font = UIFont.systemFont(ofSize: size, weight: .regular)
         let body = NSMutableAttributedString(string: text, attributes: [
             .font: font,
             .foregroundColor: theme.text,
@@ -285,34 +280,117 @@ final class PostcardView: UIView {
         ])
         TwemojiText.substituteCachedEmoji(in: body, font: font)
         label.attributedText = body
-        bodyLabels.append(label)
         return label
     }
 
     // MARK: - Media
 
+    /// A photo grid mirroring X's layouts: one photo keeps its own aspect,
+    /// two sit side by side, three put the first full-width above a pair, and
+    /// four form a 2×2 grid. Grid cells crop to a uniform aspect so rows stay
+    /// level.
     private func makeMedia(photos: [UIImage]) -> UIView {
         let stack = UIStackView()
         stack.axis = .vertical
         stack.spacing = Metrics.mediaSpacing
         stack.alignment = .fill
-        for photo in photos {
-            stack.addArrangedSubview(makePhoto(photo))
+        switch photos.count {
+        case 1:
+            stack.addArrangedSubview(makePhoto(photos[0]))
+        case 2:
+            stack.addArrangedSubview(makePhotoRow([photos[0], photos[1]], aspect: 1.0))
+        case 3:
+            stack.addArrangedSubview(makePhoto(photos[0]))
+            stack.addArrangedSubview(makePhotoRow([photos[1], photos[2]], aspect: 16.0 / 9.0))
+        default:
+            stack.addArrangedSubview(makePhotoRow([photos[0], photos[1]], aspect: 4.0 / 3.0))
+            stack.addArrangedSubview(makePhotoRow([photos[2], photos[3]], aspect: 4.0 / 3.0))
         }
         return stack
     }
 
+    private func makePhotoRow(_ photos: [UIImage], aspect: CGFloat) -> UIView {
+        let row = UIStackView(arrangedSubviews: photos.map { makePhotoCell($0, aspect: aspect) })
+        row.axis = .horizontal
+        row.spacing = Metrics.mediaSpacing
+        row.distribution = .fillEqually
+        return row
+    }
+
+    private func makePhotoCell(_ photo: UIImage, aspect: CGFloat) -> UIView {
+        let view = makePhotoView(photo)
+        view.heightAnchor.constraint(equalTo: view.widthAnchor, multiplier: 1 / aspect).isActive = true
+        return view
+    }
+
     private func makePhoto(_ photo: UIImage) -> UIView {
+        let view = makePhotoView(photo)
+        let ratio = photo.size.height > 0 ? photo.size.width / photo.size.height : 16.0 / 9.0
+        let clamped = min(max(ratio, 0.6), 2.0)
+        view.heightAnchor.constraint(equalTo: view.widthAnchor, multiplier: 1 / clamped).isActive = true
+        return view
+    }
+
+    private func makePhotoView(_ photo: UIImage) -> UIImageView {
         let view = UIImageView(image: photo)
         view.translatesAutoresizingMaskIntoConstraints = false
         view.clipsToBounds = true
         view.contentMode = .scaleAspectFill
         view.layer.cornerRadius = Metrics.mediaCorner
         view.layer.cornerCurve = .continuous
-        let ratio = photo.size.height > 0 ? photo.size.width / photo.size.height : 16.0 / 9.0
-        let clamped = min(max(ratio, 0.6), 2.0)
-        view.heightAnchor.constraint(equalTo: view.widthAnchor, multiplier: 1 / clamped).isActive = true
         return view
+    }
+
+    // MARK: - Quote
+
+    /// The quoted tweet as an inset, outlined card: a compact author line,
+    /// smaller body text, and up to two photos.
+    private func makeQuote(tweet: Tweet, photos: [UIImage]) -> UIView {
+        let column = UIStackView()
+        column.axis = .vertical
+        column.spacing = 0
+        column.alignment = .fill
+        column.isLayoutMarginsRelativeArrangement = true
+        column.layoutMargins = UIEdgeInsets(
+            top: Metrics.quotePadding, left: Metrics.quotePadding,
+            bottom: Metrics.quotePadding, right: Metrics.quotePadding)
+
+        let author = UILabel()
+        let name = NSMutableAttributedString(
+            string: tweet.author.name,
+            attributes: [
+                .font: UIFont.systemFont(ofSize: 15, weight: .semibold),
+                .foregroundColor: theme.text,
+            ])
+        name.append(NSAttributedString(
+            string: "  @\(tweet.author.handle)",
+            attributes: [
+                .font: UIFont.systemFont(ofSize: 14, weight: .regular),
+                .foregroundColor: theme.secondaryText,
+            ]))
+        author.attributedText = name
+        author.numberOfLines = 1
+        column.addArrangedSubview(author)
+
+        let text = TweetText.displayText(for: tweet, stripLeadingMentions: true)
+        if let body = makeTextLabel(text, size: 17, lineSpacing: 3) {
+            column.setCustomSpacing(8, after: author)
+            column.addArrangedSubview(body)
+        }
+        if !photos.isEmpty, let last = column.arrangedSubviews.last {
+            column.setCustomSpacing(12, after: last)
+            column.addArrangedSubview(makeMedia(photos: Array(photos.prefix(Metrics.maxQuotePhotos))))
+        }
+
+        let card = UIView()
+        card.layer.cornerRadius = 14
+        card.layer.cornerCurve = .continuous
+        card.layer.borderWidth = 1
+        card.layer.borderColor = theme.secondaryText.withAlphaComponent(0.35).cgColor
+        card.backgroundColor = theme.text.withAlphaComponent(0.04)
+        card.addManaged(column)
+        column.pinEdges(to: card)
+        return card
     }
 
     // MARK: - Metrics
@@ -354,60 +432,39 @@ final class PostcardView: UIView {
 
     // MARK: - Emoji
 
-    /// Synchronously resolves every Twemoji image the bodies need (awaiting CDN
-    /// fetches via a detached task with a bounded wait), then re-substitutes so
-    /// the about-to-rasterize labels carry attachments. The postcard renders
-    /// once on a user action and is off any scroll path, so the brief wait is
-    /// acceptable here — the feed never takes this path. The `TwemojiCache`
-    /// fetch actor doesn't hop to the main actor, so blocking main on the
-    /// semaphore can't deadlock.
-    private func resolveBodyEmoji() {
-        let graphemes = Set(entries.flatMap { $0.tweet.text.emojiGraphemes() })
-        guard !graphemes.isEmpty else { return }
-        let needsFetch = graphemes.contains { TwemojiCache.shared.cachedImage(for: $0) == nil }
-        if needsFetch {
-            let semaphore = DispatchSemaphore(value: 0)
-            Task.detached {
-                for grapheme in graphemes {
-                    _ = await TwemojiCache.shared.image(for: grapheme)
-                }
-                semaphore.signal()
+    /// Awaits every Twemoji image the entries' bodies (and quoted bodies) need,
+    /// so a `PostcardView` built afterwards substitutes them all as cache hits
+    /// and both the preview and the export carry flat Twemoji art. Misses that
+    /// can't be fetched (offline) simply keep the native glyph.
+    @MainActor
+    static func prefetchEmoji(entries: [Entry]) async {
+        var graphemes: Set<String> = []
+        for entry in entries {
+            graphemes.formUnion(entry.tweet.text.emojiGraphemes())
+            if let quoted = entry.tweet.quotedTweet {
+                graphemes.formUnion(quoted.text.emojiGraphemes())
             }
-            _ = semaphore.wait(timeout: .now() + 4)
         }
-        let font = UIFont.systemFont(ofSize: 22, weight: .regular)
-        for label in bodyLabels {
-            guard let current = label.attributedText else { continue }
-            let mutable = NSMutableAttributedString(attributedString: current)
-            TwemojiText.substituteCachedEmoji(in: mutable, font: font)
-            label.attributedText = mutable
+        for grapheme in graphemes {
+            _ = await TwemojiCache.shared.image(for: grapheme)
         }
     }
 
     // MARK: - Render
 
-    /// Lays out at the fixed render width, then rasterizes to a `UIImage` at the
-    /// given scale (use 3 for crisp share output). Resolves the bodies' Twemoji
-    /// images first so the exported PNG carries flat Twemoji art (most visibly
-    /// flags) rather than the system glyphs.
+    /// Lays out at the fixed render width, then rasterizes to a `UIImage` at
+    /// the given scale (use 3 for crisp share output) via `layer.render(in:)` —
+    /// fully deterministic and window-free, so nothing behind the sheet can
+    /// bleed in and text draws exactly as laid out. Call
+    /// `prefetchEmoji(entries:)` before constructing the view so the exported
+    /// PNG carries flat Twemoji art rather than the system glyphs.
     func render(scale: CGFloat) -> UIImage {
-        resolveBodyEmoji()
+        translatesAutoresizingMaskIntoConstraints = true
         let targetSize = systemLayoutSizeFitting(
             CGSize(width: Self.renderWidth, height: UIView.layoutFittingCompressedSize.height),
             withHorizontalFittingPriority: .required,
             verticalFittingPriority: .fittingSizeLevel)
-
-        // Host in a throwaway off-screen window so `drawHierarchy` captures only
-        // this card. Off-window, `afterScreenUpdates: true` can bleed the live
-        // screen behind the sheet (the thread) into the image — which made the
-        // export look broken. Added and torn down within this call stack, so the
-        // window never actually appears.
-        let host = UIWindow(frame: CGRect(origin: .zero, size: targetSize))
-        host.windowLevel = UIWindow.Level.normal - 1
-        host.backgroundColor = .clear
-        host.isHidden = false
         frame = CGRect(origin: .zero, size: targetSize)
-        host.addSubview(self)
         setNeedsLayout()
         layoutIfNeeded()
 
@@ -415,10 +472,8 @@ final class PostcardView: UIView {
         format.scale = scale
         format.opaque = true
         let renderer = UIGraphicsImageRenderer(size: targetSize, format: format)
-        let image = renderer.image { _ in
-            drawHierarchy(in: CGRect(origin: .zero, size: targetSize), afterScreenUpdates: true)
+        return renderer.image { context in
+            layer.render(in: context.cgContext)
         }
-        removeFromSuperview()
-        return image
     }
 }

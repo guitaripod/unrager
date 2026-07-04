@@ -13,6 +13,8 @@ final class PostcardViewController: UIViewController {
 
     private var avatar: UIImage?
     private var photos: [UIImage] = []
+    private var quotedPhotos: [UIImage] = []
+    private var exporting = false
     private var threadEntries: [PostcardView.Entry]?
     private var threadLoading = false
 
@@ -229,8 +231,11 @@ final class PostcardViewController: UIViewController {
             let scale = max(self.traitCollection.displayScale, 2)
             async let avatar = Self.loadAvatar(self.tweet, scale: scale)
             async let photos = Self.loadPhotos(self.tweet, scale: scale)
+            async let quotedPhotos = Self.loadQuotedPhotos(self.tweet, scale: scale)
             self.avatar = await avatar
             self.photos = await photos
+            self.quotedPhotos = await quotedPhotos
+            await PostcardView.prefetchEmoji(entries: self.activeEntries)
             self.loadingIndicator.stopAnimating()
             self.rebuildPreview()
         }
@@ -242,11 +247,11 @@ final class PostcardViewController: UIViewController {
         return await ImageLoader.image(for: url, pointSize: CGSize(width: 120, height: 120), scale: scale)
     }
 
-    /// Loads up to two photo (or video-poster) images, preferring the direct X
+    /// Loads up to four photo (or video-poster) images, preferring the direct X
     /// CDN URL and falling back to the server media proxy — the same path the
     /// feed uses. Videos contribute their poster frame; polls/cards are skipped.
     @MainActor
-    private static func loadPhotos(_ tweet: Tweet, scale: CGFloat) async -> [UIImage] {
+    private static func loadPhotos(_ tweet: Tweet, scale: CGFloat, limit: Int = 4) async -> [UIImage] {
         guard AppSettings.imagesEnabled else { return [] }
         let targets: [URL] = tweet.media.enumerated().compactMap { index, media in
             switch media.kind {
@@ -257,7 +262,7 @@ final class PostcardViewController: UIViewController {
             }
         }
         var images: [UIImage] = []
-        for url in targets.prefix(2) {
+        for url in targets.prefix(limit) {
             if let image = await ImageLoader.image(for: url, pointSize: CGSize(width: 1080, height: 1080), scale: scale) {
                 images.append(image)
             }
@@ -265,12 +270,18 @@ final class PostcardViewController: UIViewController {
         return images
     }
 
+    @MainActor
+    private static func loadQuotedPhotos(_ tweet: Tweet, scale: CGFloat) async -> [UIImage] {
+        guard let quoted = tweet.quotedTweet else { return [] }
+        return await loadPhotos(quoted, scale: scale, limit: 2)
+    }
+
     // MARK: - Preview
 
     /// The blocks the postcard renders: the full root→focal chain when Thread is
     /// on and fetched, else just the focal tweet (default, unchanged behavior).
     private var activeEntries: [PostcardView.Entry] {
-        let single = PostcardView.Entry(tweet: tweet, avatar: avatar, photos: photos)
+        let single = PostcardView.Entry(tweet: tweet, avatar: avatar, photos: photos, quotedPhotos: quotedPhotos)
         return (options.showsThread ? threadEntries : nil) ?? [single]
     }
 
@@ -328,11 +339,14 @@ final class PostcardViewController: UIViewController {
     /// Screenshot-QA hook: render the export and write it to Documents so the
     /// rasterized result (not the live preview) can be inspected.
     func debugSaveExport() {
-        let image = renderedImage()
-        guard let data = image.pngData(),
-              let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
-        try? data.write(to: dir.appendingPathComponent("postcard-export.png"))
-        AppLogger.shared.info("postcard export \(Int(image.size.width))x\(Int(image.size.height)) saved", category: .app)
+        Task { [weak self] in
+            guard let self else { return }
+            let image = await self.renderedImage()
+            guard let data = image.pngData(),
+                  let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+            try? data.write(to: dir.appendingPathComponent("postcard-export.png"))
+            AppLogger.shared.info("postcard export \(Int(image.size.width))x\(Int(image.size.height)) saved", category: .app)
+        }
     }
     #endif
 
@@ -365,8 +379,11 @@ final class PostcardViewController: UIViewController {
         for tweet in chain {
             async let avatar = loadAvatar(tweet, scale: Self.renderScale)
             async let photos = loadPhotos(tweet, scale: Self.renderScale)
-            entries.append(PostcardView.Entry(tweet: tweet, avatar: await avatar, photos: await photos))
+            async let quotedPhotos = loadQuotedPhotos(tweet, scale: Self.renderScale)
+            entries.append(PostcardView.Entry(
+                tweet: tweet, avatar: await avatar, photos: await photos, quotedPhotos: await quotedPhotos))
         }
+        await PostcardView.prefetchEmoji(entries: entries)
         return entries
     }
 
@@ -385,43 +402,75 @@ final class PostcardViewController: UIViewController {
         return chain.reversed()
     }
 
-    private func renderedImage() -> UIImage {
-        let card = PostcardView(entries: activeEntries, theme: theme, options: options)
+    /// Renders the export from a fresh full-width card. Awaits the Twemoji
+    /// prefetch first so the rasterized labels substitute every emoji as a
+    /// cache hit; the rasterization itself is synchronous and window-free.
+    private func renderedImage() async -> UIImage {
+        let entries = activeEntries
+        await PostcardView.prefetchEmoji(entries: entries)
+        let card = PostcardView(entries: entries, theme: theme, options: options)
         return card.render(scale: Self.renderScale)
     }
 
+    /// Serializes the export actions: renders once per tap, ignoring re-taps
+    /// while a render (emoji prefetch included) is still in flight.
+    private func withRenderedImage(_ handle: @escaping @MainActor (UIImage) -> Void) {
+        guard !exporting else { return }
+        exporting = true
+        controls.isUserInteractionEnabled = false
+        Task { [weak self] in
+            guard let self else { return }
+            let image = await self.renderedImage()
+            self.exporting = false
+            self.controls.isUserInteractionEnabled = true
+            handle(image)
+        }
+    }
+
     private func save() {
-        let image = renderedImage()
-        Task {
-            do {
-                try await Self.saveToPhotos(image)
-                Haptics.success()
-                toast("Saved to Photos")
-            } catch {
-                AppLogger.shared.warn("save postcard failed: \(error)", category: .media)
-                present(AlertFactory.error(error, title: "Couldn't save"), animated: true)
+        withRenderedImage { [weak self] image in
+            guard let self else { return }
+            Task {
+                do {
+                    try await Self.saveToPhotos(image)
+                    Haptics.success()
+                    self.toast("Saved to Photos")
+                } catch {
+                    AppLogger.shared.warn("save postcard failed: \(error)", category: .media)
+                    self.present(AlertFactory.error(error, title: "Couldn't save"), animated: true)
+                }
             }
         }
     }
 
     private func copyImage() {
-        UIPasteboard.general.image = renderedImage()
-        Haptics.success()
-        toast("Copied")
+        withRenderedImage { [weak self] image in
+            UIPasteboard.general.image = image
+            Haptics.success()
+            self?.toast("Copied")
+        }
     }
 
     private func share() {
-        let activity = UIActivityViewController(activityItems: [renderedImage()], applicationActivities: nil)
-        activity.popoverPresentationController?.barButtonItem = navigationItem.rightBarButtonItem
-        present(activity, animated: true)
+        withRenderedImage { [weak self] image in
+            guard let self else { return }
+            let activity = UIActivityViewController(activityItems: [image], applicationActivities: nil)
+            activity.popoverPresentationController?.barButtonItem = self.navigationItem.rightBarButtonItem
+            self.present(activity, animated: true)
+        }
     }
 
-    @MainActor
+    /// The change block must not inherit the caller's main-actor isolation:
+    /// Photos invokes it on its own background queue, and an isolated closure
+    /// trips the runtime's dispatch queue assertion (SIGTRAP). Keeping this
+    /// nonisolated with an explicitly `@Sendable` block keeps the runtime check
+    /// out of the picture.
     private static func saveToPhotos(_ image: UIImage) async throws {
         try await ensureAuthorized()
-        try await PHPhotoLibrary.shared().performChanges {
+        let changes: @Sendable () -> Void = {
             PHAssetChangeRequest.creationRequestForAsset(from: image)
         }
+        try await PHPhotoLibrary.shared().performChanges(changes)
     }
 
     private static func ensureAuthorized() async throws {

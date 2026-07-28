@@ -6,6 +6,10 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+## [0.22.0] — 2026-07-29
+
+- **X's own error codes now survive to the caller, so a client can tell "this request looks automated" from "no such post".** Every failure X named used to collapse into one opaque string — including code `226` (automated), `326` (account temporarily locked) and `63`/`64` (suspended), which arrive as a 200 carrying an `errors` array as often as they arrive as a 403. They now surface as a typed error carrying the code, and a block no longer triggers the browser-session re-extraction and immediate retry that a plain 403 does — retrying into a block is the one response that reliably makes it worse. The request headers also picked up the `Accept-Language` every browser sends, stopped sending `Origin` on GETs where a browser would not, and the User-Agent (shared with the bundle scraper now, so the two can't drift) is a current Firefox instead of one from 2024.
+- **GraphQL query IDs refresh from X again, and the ones shipped in the binary are current.** X replaced its logged-out landing page with a shell that never references the web bundle, so every scrape had been failing silently since — leaving installs pinned to whatever IDs they had cached, and fresh installs on IDs that were months old and drifting toward "operation not found" errors. The scraper now falls back to the login-flow route, which still serves the classic shell, and the built-in fallback table was refreshed against the live bundle. `unrager doctor` reports a healthy scraper again.
 - **`GET /api/notifications` now honors `?count=`, so a client can pull a deeper page of notifications in one request.** The page size was pinned at 40 no matter what a client asked for; it is now a parameter and still defaults to 40, so existing clients see no change.
 
 ## [0.21.1] — 2026-07-04
@@ -206,7 +210,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.21.1...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.22.0...HEAD
+[0.22.0]: https://github.com/guitaripod/unrager/releases/tag/0.22.0
 [0.21.1]: https://github.com/guitaripod/unrager/releases/tag/0.21.1
 [0.21.0]: https://github.com/guitaripod/unrager/releases/tag/0.21.0
 [0.20.0]: https://github.com/guitaripod/unrager/releases/tag/0.20.0

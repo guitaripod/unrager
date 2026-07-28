@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **`GET /api/notifications` now honors `?count=`, so a client can pull a deeper page of notifications in one request.** The page size was pinned at 40 no matter what a client asked for; it is now a parameter and still defaults to 40, so existing clients see no change.
+
 ## [0.21.1] — 2026-07-04
 
 - **iOS: postcards save without crashing and export with clean, correctly-drawn text — and they now show quote tweets and up to four photos.** Save, Copy, and Share previously rasterized the card through a throwaway off-screen window, which crashed the app under the scene-based lifecycle and produced warped, scrambled text in the image that did come out; the export now renders the layer directly, deterministically, off any window. Emoji resolve asynchronously before rendering (no more blocking the interface, and the live preview shows the same flat Twemoji art the export does), a quoted tweet renders as an inset card with its author, text, and photos, media lays out like X (side-by-side pair, one-plus-pair, or a 2×2 grid instead of a max of two stacked photos), and two new themes — Paper and Ember — join the picker.

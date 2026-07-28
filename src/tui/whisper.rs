@@ -444,27 +444,27 @@ fn build_heuristic_surge(entries: &[NotifEntry]) -> String {
     format!("surge: {}", parts.join(", "))
 }
 
-const NOTIFICATIONS_PAGE_SIZE: u32 = 40;
-
 pub async fn fetch_notifications(
     client: &GqlClient,
     cursor: Option<&str>,
+    count: u32,
 ) -> Result<notification::NotificationPage> {
     if crate::tui::demo::is_demo_mode() {
         return Ok(notification::NotificationPage::default());
     }
-    let response = fetch_notifications_raw(client, cursor).await?;
+    let response = fetch_notifications_raw(client, cursor, count).await?;
     notification::parse_notifications_timeline(&response)
 }
 
 pub async fn fetch_notifications_raw(
     client: &GqlClient,
     cursor: Option<&str>,
+    count: u32,
 ) -> Result<serde_json::Value> {
     use crate::gql::endpoints;
     use crate::gql::query_ids::Operation;
 
-    let variables = endpoints::notifications_timeline_variables(NOTIFICATIONS_PAGE_SIZE, cursor);
+    let variables = endpoints::notifications_timeline_variables(count, cursor);
     let features = endpoints::notifications_timeline_features();
     client
         .get(Operation::NotificationsTimeline, &variables, &features)

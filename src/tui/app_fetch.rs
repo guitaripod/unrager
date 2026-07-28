@@ -436,7 +436,7 @@ impl App {
             let timeout_dur = tokio::time::Duration::from_secs(15);
             let mut result = match tokio::time::timeout(
                 timeout_dur,
-                whisper::fetch_notifications(&client, cursor.as_deref()),
+                whisper::fetch_notifications(&client, cursor.as_deref(), 40),
             )
             .await
             {
@@ -450,7 +450,7 @@ impl App {
                 tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                 result = match tokio::time::timeout(
                     timeout_dur,
-                    whisper::fetch_notifications(&client, cursor.as_deref()),
+                    whisper::fetch_notifications(&client, cursor.as_deref(), 40),
                 )
                 .await
                 {
@@ -974,7 +974,7 @@ impl App {
             let client = self.client.clone();
             let tx = self.tx.clone();
             tokio::spawn(async move {
-                match whisper::fetch_notifications(&client, None).await {
+                match whisper::fetch_notifications(&client, None, 40).await {
                     Ok(page) => {
                         let _ = tx.send(Event::NotificationsLoaded {
                             notifications: page.notifications,

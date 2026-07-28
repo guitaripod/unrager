@@ -321,7 +321,8 @@ pub async fn notifications(
     State(state): State<Arc<AppState>>,
     Query(q): Query<PageQuery>,
 ) -> std::result::Result<Json<unrager_model::NotificationsPage>, ApiError> {
-    let page = whisper::fetch_notifications(&state.gql, q.cursor.as_deref()).await?;
+    let count = q.count.unwrap_or(40);
+    let page = whisper::fetch_notifications(&state.gql, q.cursor.as_deref(), count).await?;
     let notifications: Vec<unrager_model::Notification> = page
         .notifications
         .into_iter()

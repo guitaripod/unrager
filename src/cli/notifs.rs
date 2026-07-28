@@ -16,12 +16,12 @@ pub async fn run(args: Args) -> Result<()> {
     let client = common::build_gql_client().await?;
 
     if args.raw {
-        let response = whisper::fetch_notifications_raw(&client, None).await?;
+        let response = whisper::fetch_notifications_raw(&client, None, 40).await?;
         println!("{}", serde_json::to_string_pretty(&response)?);
         return Ok(());
     }
 
-    let page = whisper::fetch_notifications(&client, None).await?;
+    let page = whisper::fetch_notifications(&client, None, 40).await?;
 
     if args.json {
         let out: Vec<serde_json::Value> = page

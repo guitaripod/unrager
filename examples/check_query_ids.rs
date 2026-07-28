@@ -1,47 +1,20 @@
 //! Compares the scraped live query IDs against the hardcoded fallbacks in
-//! `src/gql/query_ids.rs`. Exits 0 when every known operation still maps to
-//! the same fallback id; exits 1 with a diff printed to stdout when any
+//! `src/gql/query_ids.rs`. Exits 0 when every operation still maps to the
+//! same fallback id; exits 1 with a diff printed to stdout when any
 //! operation has rotated.
+//!
+//! The expected table is read straight out of the library
+//! (`Operation::ALL` + `QueryIdStore::with_fallbacks`), so a newly added
+//! operation is watched the moment it lands — there is no second list to
+//! keep in sync.
 //!
 //! Invoked by the `.github/workflows/query-ids-watch.yml` cron so that a
 //! rotation opens a tracking issue before users start seeing failures.
 
 use std::collections::BTreeMap;
-use unrager::gql::{QueryId, scraper};
-
-const KNOWN_OPS: &[&str] = &[
-    "Viewer",
-    "TweetResultByRestId",
-    "TweetDetail",
-    "HomeTimeline",
-    "HomeLatestTimeline",
-    "UserByScreenName",
-    "UserTweets",
-    "UserTweetsAndReplies",
-    "SearchTimeline",
-    "Favoriters",
-    "NotificationsTimeline",
-    "FavoriteTweet",
-    "UnfavoriteTweet",
-    "CreateTweet",
-];
-
-const FALLBACKS: &[(&str, &str)] = &[
-    ("Viewer", "_8ClT24oZ8tpylf_OSuNdg"),
-    ("TweetResultByRestId", "fHLDP3qFEjnTqhWBVvsREg"),
-    ("TweetDetail", "QrLp7AR-eMyamw8D1N9l6A"),
-    ("HomeTimeline", "3tb-_5Lf7kdCZ1cFHmsEfg"),
-    ("HomeLatestTimeline", "eObmT5Nuapp04u8bYWf49Q"),
-    ("UserByScreenName", "IGgvgiOx4QZndDHuD3x9TQ"),
-    ("UserTweets", "naBcZ4al-iTCFBYGOAMzBQ"),
-    ("UserTweetsAndReplies", "YhE6S_TtdhVxLtpokXrRaA"),
-    ("SearchTimeline", "XN_HccZ9SU-miQVvwTAlFQ"),
-    ("Favoriters", "E-ZTxvWWIkmOKwYdNTEefg"),
-    ("NotificationsTimeline", "l6ovGrjBwVobgU4puBCycg"),
-    ("FavoriteTweet", "lI07N6Otwv1PhnEgXILM7A"),
-    ("UnfavoriteTweet", "ZYKSe-w7KEslx3JhSIk5LA"),
-    ("CreateTweet", "c50A_puUoQGK_4SXseYz3A"),
-];
+use unrager::gql::QueryIdStore;
+use unrager::gql::query_ids::Operation;
+use unrager::gql::scraper;
 
 #[tokio::main]
 async fn main() {
@@ -50,55 +23,58 @@ async fn main() {
         .build()
         .expect("build http client");
 
-    let scraped: Vec<QueryId> = match scraper::scrape(&http).await {
+    let scraped = match scraper::scrape(&http).await {
         Ok(r) => r.query_ids,
         Err(e) => {
             println!("SCRAPER_ERROR: {e}");
             println!("The main.js bundle could not be parsed. This usually means X");
-            println!("obfuscated the bundle format. The fallback IDs may still work");
-            println!("until X rotates them. Manually verify by running:");
+            println!("moved the client shell or obfuscated the bundle format. The");
+            println!("fallback IDs may still work until X rotates them. Manually");
+            println!("verify by running:");
             println!();
             println!("  cargo run --release -- doctor");
             println!();
-            println!("If the scraper is permanently broken, the regex in");
-            println!("src/gql/scraper.rs needs updating.");
+            println!("If the scraper is permanently broken, SHELL_URLS or the regexes");
+            println!("in src/gql/scraper.rs need updating.");
             std::process::exit(2);
         }
     };
 
-    let by_op: BTreeMap<&str, &str> = scraped
+    let live: BTreeMap<&str, &str> = scraped
         .iter()
         .map(|q| (q.operation.as_str(), q.id.as_str()))
         .collect();
 
-    let fallback_map: BTreeMap<&str, &str> = FALLBACKS.iter().copied().collect();
+    let fallbacks = QueryIdStore::with_fallbacks();
 
-    let mut rotated: Vec<(&str, &str, &str)> = Vec::new();
+    let mut rotated: Vec<(&str, String, &str)> = Vec::new();
     let mut missing: Vec<&str> = Vec::new();
-    for op in KNOWN_OPS {
-        let fallback = fallback_map
-            .get(op)
-            .copied()
-            .expect("every KNOWN_OPS entry is mirrored in FALLBACKS");
-        match by_op.get(op).copied() {
-            Some(live) if live == fallback => {}
-            Some(live) => rotated.push((op, fallback, live)),
-            None => missing.push(op),
+    for op in Operation::ALL {
+        let name = op.name();
+        let fallback = fallbacks
+            .get(*op)
+            .expect("every operation has a fallback id")
+            .id
+            .clone();
+        match live.get(name).copied() {
+            Some(id) if id == fallback => {}
+            Some(id) => rotated.push((name, fallback, id)),
+            None => missing.push(name),
         }
     }
 
     if rotated.is_empty() && missing.is_empty() {
         println!(
-            "OK: all {} known operations match fallbacks",
-            KNOWN_OPS.len()
+            "OK: all {} operations match fallbacks",
+            Operation::ALL.len()
         );
         return;
     }
 
     if !rotated.is_empty() {
         println!("ROTATED operations (fallback → live):");
-        for (op, fallback, live) in &rotated {
-            println!("  {op}: {fallback} → {live}");
+        for (op, fallback, id) in &rotated {
+            println!("  {op}: {fallback} → {id}");
         }
     }
 
@@ -111,7 +87,21 @@ async fn main() {
     }
 
     println!();
-    println!("To update the fallbacks, patch FALLBACK_QUERY_IDS in src/gql/query_ids.rs");
-    println!("and this example's FALLBACKS table, then ship a new release.");
+    println!("Paste into FALLBACK_QUERY_IDS in src/gql/query_ids.rs:");
+    for op in Operation::ALL {
+        let name = op.name();
+        let id = live
+            .get(name)
+            .copied()
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                fallbacks
+                    .get(*op)
+                    .expect("every operation has a fallback id")
+                    .id
+                    .clone()
+            });
+        println!("    ({name}, \"{id}\"),");
+    }
     std::process::exit(1);
 }

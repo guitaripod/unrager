@@ -272,6 +272,10 @@ pub fn delete_retweet_variables(tweet_id: &str) -> Value {
     json!({ "source_tweet_id": tweet_id, "dark_request": false })
 }
 
+pub fn delete_tweet_variables(tweet_id: &str) -> Value {
+    json!({ "tweet_id": tweet_id, "dark_request": false })
+}
+
 pub fn bookmark_variables(tweet_id: &str) -> Value {
     json!({ "tweet_id": tweet_id })
 }

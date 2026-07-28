@@ -16,7 +16,11 @@ const WEB_BEARER: &str = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz
 const GQL_BASE: &str = "https://x.com/i/api/graphql";
 const MIN_INTERVAL_LOW_MS: u64 = 300;
 const MIN_INTERVAL_HIGH_MS: u64 = 700;
-const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0";
+/// The browser this client claims to be. Shared with the bundle scraper so
+/// the anonymous fetch that supplies the request-signing key can never drift
+/// from the authenticated calls that use it.
+pub const USER_AGENT: &str =
+    "Mozilla/5.0 (X11; Linux x86_64; rv:153.0) Gecko/20100101 Firefox/153.0";
 const SESSION_REFRESH_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 
 /// The live session plus a generation counter bumped on every rotation, so a
@@ -704,13 +708,21 @@ impl GqlClient {
         );
         h.insert(reqwest::header::ACCEPT, HeaderValue::from_static("*/*"));
         h.insert(
+            reqwest::header::ACCEPT_LANGUAGE,
+            HeaderValue::from_static("en-US,en;q=0.5"),
+        );
+        h.insert(
             HeaderName::from_static("referer"),
             HeaderValue::from_static("https://x.com/"),
         );
-        h.insert(
-            HeaderName::from_static("origin"),
-            HeaderValue::from_static("https://x.com"),
-        );
+        // A same-origin GET is basic-tainted and carries no Origin; sending
+        // one anyway is a small inconsistency with the browser we claim to be.
+        if method != "GET" {
+            h.insert(
+                HeaderName::from_static("origin"),
+                HeaderValue::from_static("https://x.com"),
+            );
+        }
         if let Some(tid) = self.generate_transaction_id(method, path) {
             tracing::debug!(tid_len = tid.len(), "x-client-transaction-id generated");
             if let Ok(val) = HeaderValue::from_str(&tid) {
@@ -746,6 +758,19 @@ impl GqlClient {
             .and_then(|s| s.parse::<u64>().ok());
         let is_about = matches!(op, Operation::AboutAccountQuery);
 
+        // X's write budgets on this surface are undocumented. Recording what
+        // it actually reports is the only way to learn where the ceiling is
+        // before a tool walks into it.
+        if kind == RateLimitKind::Write {
+            tracing::info!(
+                op = op.name(),
+                remaining = remaining_hdr,
+                reset = reset_hdr,
+                status = status.as_u16(),
+                "write rate-limit headers"
+            );
+        }
+
         if status.as_u16() == 429 {
             let cooldown = compute_rate_limit_remaining(reset_hdr);
             if is_about {
@@ -780,10 +805,12 @@ impl GqlClient {
 
         let body = res.text().await?;
         if !status.is_success() {
-            return Err(Error::GraphqlStatus {
-                status: status.as_u16(),
-                body: truncate(&body, 400),
-            });
+            return Err(classify_api_error(Some(status.as_u16()), &body).unwrap_or(
+                Error::GraphqlStatus {
+                    status: status.as_u16(),
+                    body: truncate(&body, 400),
+                },
+            ));
         }
         let value: Value = serde_json::from_str(&body).map_err(|e| {
             Error::GraphqlShape(format!(
@@ -794,13 +821,39 @@ impl GqlClient {
         if let Some(errors) = value.get("errors").and_then(Value::as_array)
             && !errors.is_empty()
         {
-            return Err(Error::GraphqlShape(format!(
-                "graphql errors: {}",
-                truncate(&errors[0].to_string(), 400)
-            )));
+            return Err(
+                classify_api_error(None, &body).unwrap_or(Error::GraphqlShape(format!(
+                    "graphql errors: {}",
+                    truncate(&errors[0].to_string(), 400)
+                ))),
+            );
         }
         Ok(value)
     }
+}
+
+/// Lifts X's own `errors` array into a typed error, keeping the numeric
+/// code. X answers an automation block with a 200 and an `errors` array as
+/// readily as with a 403, so both paths come through here — and the code is
+/// what lets a caller tell a block it must stop for from a post that was
+/// already gone.
+fn classify_api_error(status: Option<u16>, body: &str) -> Option<Error> {
+    let value: Value = serde_json::from_str(body).ok()?;
+    let first = value.get("errors")?.as_array()?.first()?;
+    let code = first
+        .get("code")
+        .and_then(Value::as_i64)
+        .or_else(|| first.pointer("/extensions/code").and_then(Value::as_i64));
+    let message = first
+        .get("message")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| truncate(&first.to_string(), 300));
+    Some(Error::GraphqlApi {
+        status,
+        code,
+        message,
+    })
 }
 
 impl GqlClient {
@@ -900,11 +953,22 @@ fn needs_query_id_refresh(e: &Error) -> bool {
     )
 }
 
+/// Whether a failure is worth re-extracting the browser session for. An
+/// automation block also arrives as a 403, but re-reading the cookie store
+/// and immediately retrying is the worst possible response to one — it adds
+/// a write to an account X has just told us to leave alone — so blocks are
+/// excluded here and left for the caller to stop on.
 fn is_auth_failure(e: &Error) -> bool {
+    if e.is_automation_block() {
+        return false;
+    }
     matches!(
         e,
         Error::GraphqlStatus {
             status: 401 | 403,
+            ..
+        } | Error::GraphqlApi {
+            status: Some(401 | 403),
             ..
         }
     )

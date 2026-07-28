@@ -56,9 +56,10 @@ impl From<Error> for ApiError {
             Error::RateLimited { .. } => {
                 ApiError::new(StatusCode::TOO_MANY_REQUESTS, "rate_limited", message)
             }
-            Error::Http(_) | Error::GraphqlStatus { .. } | Error::GraphqlShape(_) => {
-                ApiError::new(StatusCode::BAD_GATEWAY, "upstream", message)
-            }
+            Error::Http(_)
+            | Error::GraphqlStatus { .. }
+            | Error::GraphqlApi { .. }
+            | Error::GraphqlShape(_) => ApiError::new(StatusCode::BAD_GATEWAY, "upstream", message),
             _ => ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", message),
         }
     }

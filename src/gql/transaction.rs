@@ -330,7 +330,7 @@ fn extract_ondemand_url(html: &str) -> Option<String> {
         return Some(ondemand_url(&hash));
     }
     let chunk_id = ondemand_chunk_id_re().captures(html)?.get(1)?.as_str();
-    let hash_re = Regex::new(&format!(r#"[^\d]{chunk_id}:\s*"([0-9a-f]{{5,12}})""#)).ok()?;
+    let hash_re = Regex::new(&format!(r#"[^\d]{chunk_id}:\s*"([0-9a-f]{{5,16}})""#)).ok()?;
     let hash = hash_re.captures(html)?.get(1)?.as_str();
     Some(ondemand_url(hash))
 }

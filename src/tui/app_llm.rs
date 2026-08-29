@@ -68,7 +68,7 @@ impl App {
             FilterMode::Off => FilterMode::On,
         };
         if matches!(self.filter_mode, FilterMode::Off) {
-            let drained: Vec<Tweet> = self.pending_classification.drain(..).collect();
+            let drained = std::mem::take(&mut self.pending_classification);
             for t in drained {
                 if !self.source.tweets.iter().any(|x| x.rest_id == t.rest_id) {
                     self.source.tweets.push(t);

@@ -133,10 +133,15 @@ impl AboutStore {
 /// `Ok(Some(_))` — X returned a profile with usable fields.
 /// `Ok(None)` — X returned a result but no `about_profile` block (user
 ///   hasn't set anything). Cache this so we don't refetch every page.
-/// `Err(())` — transport, rate-limit, or parse failure. **Don't** cache:
+/// `Err(AboutUnavailable)` — transport, rate-limit, or parse failure. **Don't** cache:
 ///   we'd otherwise mistake a 429 for "this user has no location" and
 ///   hide their flag for the entire negative-TTL window.
-pub type FetchOutcome = std::result::Result<Option<AboutProfile>, ()>;
+/// Marker error for an about lookup that failed transiently and must stay
+/// retryable rather than being cached as a negative result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AboutUnavailable;
+
+pub type FetchOutcome = std::result::Result<Option<AboutProfile>, AboutUnavailable>;
 
 #[derive(Clone)]
 pub struct AboutFetcher {
@@ -158,7 +163,7 @@ impl AboutFetcher {
     pub async fn fetch(&self, screen_name: &str) -> FetchOutcome {
         let _permit = match self.sem.acquire().await {
             Ok(p) => p,
-            Err(_) => return Err(()),
+            Err(_) => return Err(AboutUnavailable),
         };
         fetch_one(&self.client, screen_name).await
     }
@@ -179,11 +184,11 @@ impl AboutFetcher {
             return Ok(entry.clone());
         }
         if self.client.about_rate_limit_remaining().is_some() {
-            return Err(());
+            return Err(AboutUnavailable);
         }
         let _permit = match self.sem.acquire().await {
             Ok(p) => p,
-            Err(_) => return Err(()),
+            Err(_) => return Err(AboutUnavailable),
         };
         if let Some(entry) = store.lock().await.get(rest_id) {
             return Ok(entry.clone());
@@ -208,7 +213,7 @@ async fn fetch_one(client: &GqlClient, screen_name: &str) -> FetchOutcome {
         Ok(v) => v,
         Err(e) => {
             tracing::debug!("AboutAccountQuery failed for {screen_name}: {e}");
-            return Err(());
+            return Err(AboutUnavailable);
         }
     };
     match about::parse(&response) {
@@ -216,7 +221,7 @@ async fn fetch_one(client: &GqlClient, screen_name: &str) -> FetchOutcome {
         Ok(_) => Ok(None),
         Err(e) => {
             tracing::debug!("AboutAccountQuery parse failed for {screen_name}: {e}");
-            Err(())
+            Err(AboutUnavailable)
         }
     }
 }

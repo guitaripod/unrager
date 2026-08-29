@@ -938,7 +938,7 @@ impl App {
         self.about_inflight.remove(&rest_id);
         match result {
             Ok(profile) => self.about.put(&rest_id, profile),
-            Err(()) => {
+            Err(_) => {
                 // Transport / rate-limit / parse failure. Do not poison
                 // the cache — leave the entry untracked so a future feed
                 // load can retry once the limit clears.

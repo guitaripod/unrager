@@ -33,7 +33,7 @@ pub async fn about(
         .await
     {
         Ok(profile) => view_for(profile),
-        Err(()) => AboutView::deferred(),
+        Err(_) => AboutView::deferred(),
     };
     Ok(Json(view))
 }

@@ -16,6 +16,19 @@ use unrager::gql::QueryIdStore;
 use unrager::gql::query_ids::Operation;
 use unrager::gql::scraper;
 
+/// Live values observed by `query-ids-watch` on 2026-05-04. The two operations
+/// reported missing from the scraped bundle keep their previous fallbacks.
+const FALLBACKS: [(&str, &str); 10] = [
+    ("TweetResultByRestId", "R4GaE7QczPF2R7wRxgu70w"),
+    ("TweetDetail", "B3ZxDiQ__9OXTkCCuAp79w"),
+    ("HomeTimeline", "jYMvLJJjGjO3aKWY3bP5HA"),
+    ("HomeLatestTimeline", "iCyHMXVutL66dZyvMtyChA"),
+    ("UserTweets", "Ob0lCmufQqqLTwh_Wck5XA"),
+    ("UserTweetsAndReplies", "ZwPWNGjv3bLoyXggSfIXIw"),
+    ("SearchTimeline", "BqWLX1Tjvgh6eSZWEMH_kw"),
+    ("CreateTweet", "Qkq4oPdZYuNB_Qw3TDuFqQ"),
+];
+
 #[tokio::main]
 async fn main() {
     let http = reqwest::Client::builder()

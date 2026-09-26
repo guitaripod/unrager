@@ -3,340 +3,286 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>unrager — a calm Twitter/X client for the terminal</title>
-  <meta name="description" content="A calm Twitter/X client for the terminal. A local LLM drops rage-bait before it reaches your eyes.">
-  <meta name="color-scheme" content="dark">
-  <meta name="theme-color" content="#0f1419">
+  <title>unrager — take the rage out of your x.com timeline</title>
+  <meta name="description" content="A browser extension that removes rage-bait from your x.com timeline, judged by a model running on your own computer. Works with Ollama, LM Studio, vLLM, llama.cpp and SGLang.">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#e7eeeb" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0e2129" media="(prefers-color-scheme: dark)">
 
-  <meta property="og:title" content="unrager">
-  <meta property="og:description" content="A calm Twitter/X client for the terminal. A local LLM drops rage-bait before it reaches your eyes.">
+  <meta property="og:title" content="unrager: keep x.com, lose the rage">
+  <meta property="og:description" content="A browser extension that removes rage-bait from your x.com timeline, judged by a model running on your own computer.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://unrager.com/">
   <meta property="og:image" content="https://unrager.com/og.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="unrager">
-  <meta name="twitter:description" content="A calm Twitter/X client for the terminal. A local LLM drops rage-bait before it reaches your eyes.">
+  <meta name="twitter:title" content="unrager: keep x.com, lose the rage">
+  <meta name="twitter:description" content="A browser extension that removes rage-bait from your x.com timeline, judged by a model running on your own computer.">
   <meta name="twitter:image" content="https://unrager.com/og.png">
 
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2212%22%20fill%3D%22%230f1419%22%2F%3E%3Ctext%20x%3D%2232%22%20y%3D%2244%22%20font-size%3D%2240%22%20text-anchor%3D%22middle%22%20fill%3D%22%231D9BF0%22%20font-family%3D%22ui-monospace%2Cmonospace%22%20font-weight%3D%22700%22%3Eu%3C%2Ftext%3E%3C%2Fsvg%3E">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2032%2032%22%3E%3Crect%20x%3D%220.5%22%20y%3D%220.5%22%20width%3D%2231%22%20height%3D%2231%22%20rx%3D%227%22%20fill%3D%22%231B6B80%22%2F%3E%3Cpath%20d%3D%22M5%2016.5%20Q7.4%203.5%209.8%2016.5%20Q12%2026.5%2014.2%2016.5%20Q15.6%2011%2017%2016.5%20L27%2016.5%22%20fill%3D%22none%22%20stroke%3D%22%23fff%22%20stroke-width%3D%222.6%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Recursive:wght,CASL,MONO@300..900,0..1,0..1&display=swap">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <main class="wrap">
+  <header class="top wrap">
+    <a class="brand" href="/" aria-label="unrager home">
+      <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect x="0.5" y="0.5" width="31" height="31" rx="7"/><path d="M5 16.5 Q7.4 3.5 9.8 16.5 Q12 26.5 14.2 16.5 Q15.6 11 17 16.5 L27 16.5"/></svg>
+      <span>unrager</span>
+    </a>
+    <nav class="top-links" aria-label="Site">
+      <a href="#install">Install</a>
+      <a href="#questions">Questions</a>
+      <a href="https://github.com/guitaripod/unrager">GitHub</a>
+    </nav>
+  </header>
 
-    <header class="hero">
-      <h1 class="wordmark">unrager</h1>
-      <p class="tagline">
-        A calm Twitter/X client for the terminal. A local LLM drops
-        rage-bait before it reaches your eyes.
-      </p>
-
-      <div class="install" aria-label="install">
-        <pre class="cmd"><code><span class="prompt">$</span> curl -fsSL <span class="url">unrager.com/install.sh</span> | bash</code><button class="copy" type="button" aria-label="copy install command" data-copy="curl -fsSL https://unrager.com/install.sh | bash"><span class="copy-glyph">⧉</span></button></pre>
-        <p class="sub">macOS · Linux · or <code>cargo install unrager</code></p>
+  <main>
+    <section class="hero wrap" aria-labelledby="headline">
+      <div class="hero-copy">
+        <h1 id="headline"><span>Keep x.com.</span> <span>Lose the rage.</span></h1>
+        <p class="lede">unrager is a browser extension that removes rage-bait from your Home timeline. A model on your own computer reads each post first, against rules you write, and nothing is sent anywhere else.</p>
+        <div class="cta">
+          <a class="button" href="#install">Install unrager</a>
+          <a class="quiet-link" href="https://github.com/guitaripod/unrager">Source on GitHub</a>
+        </div>
+        <p class="fineprint">Free and open source. Runs on Ollama, LM Studio, vLLM, llama.cpp or SGLang, in Chrome, Brave, Edge, Vivaldi or Arc on macOS and Linux.</p>
       </div>
 
-      <nav class="actions">
-        <a class="btn primary" href="https://github.com/guitaripod/unrager">github<span aria-hidden="true"> →</span></a>
-        <a class="btn" href="https://github.com/guitaripod/unrager/releases">releases</a>
-      </nav>
-
-      <p class="stat" hidden>
-        <button class="stat-trigger" type="button" aria-expanded="false" aria-controls="downloads-popover">
-          <strong id="install-count">—</strong><span class="stat-label">downloads</span>
-        </button>
-        <span class="stat-popover" id="downloads-popover" role="tooltip">
-          <span class="stat-popover-title">what this counts</span>
-          <span class="stat-popover-body">HTTP requests that fetched the binary, not unique people. Updating with <code>cargo install --force</code> or re-running the install script counts again.</span>
-          <span class="stat-popover-rows">
-            <span class="stat-popover-row">
-              <span class="stat-popover-key">crates.io</span>
-              <span class="stat-popover-val" id="dl-crates">—</span>
+      <figure class="demo" aria-label="An x.com Home timeline with unrager: calm posts stay, rage-bait posts fold away as they arrive, and the extension's badge counts them">
+        <div class="browser">
+          <div class="browser-bar" aria-hidden="true">
+            <span class="lights"><i></i><i></i><i></i></span>
+            <span class="address">x.com/home</span>
+            <span class="ext" title="unrager">
+              <svg class="mark" viewBox="0 0 32 32"><rect x="0.5" y="0.5" width="31" height="31" rx="7"/><path d="M5 16.5 Q7.4 3.5 9.8 16.5 Q12 26.5 14.2 16.5 Q15.6 11 17 16.5 L27 16.5"/></svg>
+              <b class="badge" id="demo-badge" hidden>0</b>
             </span>
-            <span class="stat-popover-row">
-              <span class="stat-popover-key">GitHub releases</span>
-              <span class="stat-popover-val" id="dl-gh">—</span>
-            </span>
-          </span>
-          <span class="stat-popover-foot">
-            <span class="stat-popover-note">tarballs only · SHA256SUMS excluded</span>
-            <span class="stat-popover-when">updated <span id="dl-updated">just now</span></span>
-          </span>
-        </span>
-      </p>
-    </header>
-
-    <figure class="shot" aria-roledescription="carousel" aria-label="tour of unrager's screens">
-      <div class="slides" role="group" aria-live="polite">
-        <figure class="slide is-active" data-caption="thread · split-pane reply chain with inline kitty-graphics media · rage filter ate 12 (top-bar −12)">
-          <img src="/detail.png" alt="unrager in Ghostty: Following feed on the left with author-avatar chips, a focal tweet expanded on the right with an inline screenshot and threaded replies, rage-filter hidden-count visible in the header" width="1800" height="1060" fetchpriority="high">
-        </figure>
-        <figure class="slide" data-caption="ask gemma · local LLM streams a reply summary while Vim INSERT mode composes underneath">
-          <img src="/ask.png" alt="ask pane on the right showing a bullet-list gemma summary of the focal tweet's replies, with the Vim composer in INSERT mode pinned at the bottom" width="1800" height="1060" loading="lazy">
-        </figure>
-        <figure class="slide" data-caption="brief · LLM dossier of someone's recent timeline (no other client has this)">
-          <img src="/brief.png" alt="profile brief — a third-person analysis of @FFmpeg's recent posts streamed from the local LLM" width="1800" height="1060" loading="lazy">
-        </figure>
-        <figure class="slide" data-caption="notifications · likes, replies, polls — actor avatars on every line">
-          <img src="/notifications.png" alt="notifications pane with author avatars next to every notification line, beside a live home feed" width="1800" height="1060" loading="lazy">
-        </figure>
-        <figure class="slide" data-caption="help · every keybinding and leader sequence, one glyph at a time">
-          <img src="/help.png" alt="scrollable help overlay covering navigation, leader, sources, and read-tracking bindings" width="1800" height="1060" loading="lazy">
-        </figure>
-
-        <div class="slide-progress" aria-hidden="true"><div class="slide-progress-fill"></div></div>
-      </div>
-
-      <button type="button" class="slide-nav prev" aria-label="previous screen">
-        <span aria-hidden="true">‹</span>
-      </button>
-      <button type="button" class="slide-nav next" aria-label="next screen">
-        <span aria-hidden="true">›</span>
-      </button>
-
-      <figcaption class="slide-caption" aria-live="polite">thread · split-pane reply chain with inline kitty-graphics media · rage filter ate 12 (top-bar −12)</figcaption>
-
-      <div class="slide-dots" role="tablist" aria-label="jump to screen">
-        <button role="tab" type="button" aria-selected="true" aria-label="thread detail with media"></button>
-        <button role="tab" type="button" aria-selected="false" aria-label="ask gemma + vim composer"></button>
-        <button role="tab" type="button" aria-selected="false" aria-label="profile brief"></button>
-        <button role="tab" type="button" aria-selected="false" aria-label="notifications with actor avatars"></button>
-        <button role="tab" type="button" aria-selected="false" aria-label="help overlay"></button>
-      </div>
-    </figure>
-
-    <section class="features" aria-labelledby="features-heading">
-      <h2 id="features-heading" class="rule">─── what it does ───────────────────────</h2>
-      <dl>
-        <div class="feat">
-          <dt>rage filter</dt>
-          <dd>Every tweet classified by a local Ollama model against your rubric. Matches are physically removed — not collapsed, not grayed, gone. Verdicts cache to SQLite; edit the rubric and the cache invalidates.</dd>
+          </div>
+          <div class="x-tabs" aria-hidden="true"><span class="is-on">For you</span><span>Following</span></div>
+          <ol class="feed" id="demo-feed" aria-hidden="true"></ol>
         </div>
-        <div class="feat">
-          <dt>terminal-native</dt>
-          <dd>ratatui + crossterm. Inline photos, video posters, GIF frames via the kitty graphics protocol on Ghostty, Kitty, WezTerm. Falls back to glyphs elsewhere.</dd>
-        </div>
-        <div class="feat">
-          <dt>author avatars</dt>
-          <dd>Every feed row carries a square kitty-graphics chip of the poster; profile headers pin a larger one beside name, handle, and follower counts. Postcard screenshots (<kbd>S</kbd>/<kbd>C</kbd>) composite the chip in too. Disk-cached at <code>~/.cache/unrager/avatars/</code> with LRU pruning — X rotates the URL on every photo change, so the cache self-invalidates. Toggle feed chips with <kbd>&lt;space&gt; a</kbd>.</dd>
-        </div>
-        <div class="feat">
-          <dt>free reads</dt>
-          <dd>Browser cookies → X's own GraphQL endpoints, the same path the web client uses. No API key, no cost, no rate tier.</dd>
-        </div>
-        <div class="feat">
-          <dt>write via OAuth</dt>
-          <dd>Tweet &amp; reply through the official X API v2 with your own registered client. Auto-likes on reply. Your identity, your rate limits.</dd>
-        </div>
-        <div class="feat">
-          <dt>four LLM hooks, one model</dt>
-          <dd><strong>Filter</strong> classifies tweets. <strong>Translate</strong> (<kbd>T</kbd>) rewrites foreign-language posts in English. <strong>Ask</strong> (<kbd>A</kbd>) opens an inline gemma chat about the selected post with thread context auto-attached. <strong>Brief</strong> (<kbd>B</kbd>) generates a short profile analysis from someone's timeline. All the same local Ollama. Nothing leaves your machine.</dd>
-        </div>
-        <div class="feat">
-          <dt>Vim-mode composing</dt>
-          <dd>Every text input — reply, ask, command palette — is a miniature Vim editor. Insert / Normal, <kbd>hjkl</kbd>, <kbd>w</kbd>/<kbd>b</kbd>, <kbd>dd</kbd>/<kbd>dw</kbd>, counts, <kbd>^</kbd>/<kbd>$</kbd>. Status line shows the mode and a live character count.</dd>
-        </div>
-        <div class="feat">
-          <dt>serve anywhere</dt>
-          <dd>Optional HTTP API server. Pair with Tailscale and read every feed from the native iOS app — the server does the X work, the app stays a thin native client.</dd>
-        </div>
-      </dl>
+        <label class="reveal">
+          <input type="checkbox" role="switch" id="demo-reveal">
+          <span>Show what it hid</span>
+        </label>
+      </figure>
     </section>
 
-    <footer class="foot">
-      <div class="foot-line">
-        <a href="https://github.com/guitaripod/unrager">github.com/guitaripod/unrager</a>
-        <span class="dot" aria-hidden="true">·</span>
-        <span class="muted">GPL-3.0</span>
-        <span class="dot" aria-hidden="true">·</span>
-        <span class="muted">not affiliated with X Corp</span>
+    <section class="how wrap" aria-labelledby="how-heading">
+      <h2 id="how-heading">How it works</h2>
+      <div class="current" aria-hidden="true">
+        <svg viewBox="0 0 1000 60" preserveAspectRatio="none"><path d="M0 30 C 40 -12, 70 -12, 110 30 S 180 72, 220 30 S 290 4, 330 30 S 400 48, 440 30 S 520 22, 560 30 L 1000 30"/></svg>
       </div>
-    </footer>
+      <ol class="stops">
+        <li>
+          <h3>X sends your timeline</h3>
+          <p>You open x.com as usual. The extension reads the posts X already sent your browser. It asks X for nothing extra.</p>
+        </li>
+        <li>
+          <h3>Your model reads each post</h3>
+          <p>unrager, running quietly on your computer, asks your model whether each post is one of the topics you'd rather not see.</p>
+        </li>
+        <li>
+          <h3>The rage-bait never shows</h3>
+          <p>Posts it says to hide are removed from the page, usually before you've scrolled to them. Everything else stays exactly as X made it.</p>
+        </li>
+      </ol>
+    </section>
 
+    <section class="install wrap" id="install" aria-labelledby="install-heading">
+      <h2 id="install-heading">Install</h2>
+      <p class="section-lede">About five minutes, most of it downloading a model.</p>
+
+      <ol class="steps">
+        <li class="step">
+          <div class="step-head">
+            <span class="step-n" aria-hidden="true">1</span>
+            <h3>Run a model</h3>
+          </div>
+          <div class="step-body">
+            <div class="tabs" role="tablist" aria-label="Where your model runs">
+              <button role="tab" id="tab-ollama" aria-controls="panel-ollama" aria-selected="true" type="button">Ollama</button>
+              <button role="tab" id="tab-other" aria-controls="panel-other" aria-selected="false" tabindex="-1" type="button">LM Studio, vLLM, llama.cpp, SGLang</button>
+            </div>
+            <div class="tab-panel" role="tabpanel" id="panel-ollama" aria-labelledby="tab-ollama">
+              <p>Install <a href="https://ollama.com">Ollama</a>, then pull the default model:</p>
+              <div class="code"><code>ollama pull gemma4</code><button class="copy" type="button" data-copy="ollama pull gemma4">Copy</button></div>
+              <p class="note">That's all: unrager finds Ollama on its usual port.</p>
+            </div>
+            <div class="tab-panel" role="tabpanel" id="panel-other" aria-labelledby="tab-other" hidden>
+              <p>Any server that speaks the OpenAI chat API works. Start it with an instruction-tuned model; small ones (4 to 12B) are plenty.</p>
+              <p>In step 2, <code>unrager setup</code> looks for it on the usual ports and prints the lines to put in <code>filter.toml</code>, which look like this:</p>
+              <pre class="code block"><code>[llm]
+backend = "openai"
+host = "http://localhost:1234"
+model = "qwen3-8b"
+timeout_seconds = 120</code></pre>
+              <p class="note">Save them, then run <code>unrager setup</code> once more. The file is in <code>~/.config/unrager/</code> on Linux and <code>~/Library/Application Support/unrager/</code> on macOS.</p>
+            </div>
+          </div>
+        </li>
+
+        <li class="step">
+          <div class="step-head">
+            <span class="step-n" aria-hidden="true">2</span>
+            <h3>Install unrager</h3>
+          </div>
+          <div class="step-body">
+            <div class="code"><code>curl -fsSL https://unrager.com/install.sh | bash</code><button class="copy" type="button" data-copy="curl -fsSL https://unrager.com/install.sh | bash">Copy</button></div>
+            <p>It installs one program, then runs <code>unrager setup</code>: that checks your model answers, starts unrager in the background so it comes back after a restart, and unpacks the extension. Prefer Rust? <code>cargo install unrager</code>, then <code>unrager setup</code>.</p>
+          </div>
+        </li>
+
+        <li class="step">
+          <div class="step-head">
+            <span class="step-n" aria-hidden="true">3</span>
+            <h3>Add the extension</h3>
+          </div>
+          <div class="step-body">
+            <ol class="substeps">
+              <li>Open <code>chrome://extensions</code>. It works in every Chromium browser.</li>
+              <li>Turn on <b>Developer mode</b>.</li>
+              <li>Click <b>Load unpacked</b>, press <kbd>Ctrl</kbd> <kbd>L</kbd> (<kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>G</kbd> on a Mac) and paste the folder setup printed.</li>
+            </ol>
+            <p>Then open x.com. Posts that match your rules disappear as they load, and the unrager icon counts them.</p>
+          </div>
+        </li>
+      </ol>
+      <p class="after">Later, <code>unrager update</code> updates everything; the extension's popup then asks you to reload it. <code>unrager doctor</code> tells you what's wrong if anything is.</p>
+    </section>
+
+    <section class="rules wrap" aria-labelledby="rules-heading">
+      <div class="rules-copy">
+        <h2 id="rules-heading">You write the rules</h2>
+        <p>unrager starts with a list of the usual suspects: electoral politics, culture-war fights, doom, engagement farming, crypto shilling. Change any of it from the extension's popup, in plain words.</p>
+        <p>A post is hidden when a topic is the point of it, not when it mentions one in passing, so a physicist's joke about the election stays. The model also drops what you'd mute on sight: ratio bait, subtweets, "RT if you agree".</p>
+        <p>Curious what it caught? <b>Show hidden posts</b> brings them back, dimmed and labelled, until you switch it off.</p>
+      </div>
+      <figure class="popup-mock" aria-label="The extension's popup: 12 posts hidden, 148 checked, and the list of topics that get hidden">
+        <div class="pm-top"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect x="0.5" y="0.5" width="31" height="31" rx="7"/><path d="M5 16.5 Q7.4 3.5 9.8 16.5 Q12 26.5 14.2 16.5 Q15.6 11 17 16.5 L27 16.5"/></svg><b>unrager</b></div>
+        <div class="pm-status">
+          <p class="pm-headline">12 posts hidden</p>
+          <p class="pm-detail">148 posts checked on this tab.</p>
+        </div>
+        <p class="pm-switch"><span>Pause filtering</span><i></i></p>
+        <p class="pm-switch"><span>Show hidden posts</span><i></i></p>
+        <div class="pm-panel">
+          <p class="pm-summary is-open">What gets hidden</p>
+          <ul class="pm-topics">
+            <li><span>american electoral politics, presidents, congress, partisan fights</span><b>Remove</b></li>
+            <li><span>economic fearmongering: tariff panic, inflation doom, market-crash prophecies</span><b>Remove</b></li>
+            <li><span>rage-bait reply farming, ratio threads, inflammatory hot takes</span><b>Remove</b></li>
+            <li><span>crypto and NFT shilling, pump-and-dump hype</span><b>Remove</b></li>
+          </ul>
+          <p class="pm-add"><span>Add a topic</span><b>Add</b></p>
+          <p class="pm-save"><b>Save rules</b></p>
+        </div>
+        <p class="pm-summary pm-last">Settings</p>
+      </figure>
+    </section>
+
+    <section class="questions wrap" id="questions" aria-labelledby="questions-heading">
+      <h2 id="questions-heading">Questions</h2>
+      <div class="qa">
+        <details>
+          <summary>Does anything leave my computer?</summary>
+          <p>No. The extension hands posts to unrager on <code>localhost</code>, and unrager hands them to your model. There's no account and no telemetry. The background server setup installs never reads your X login and never talks to X, and it refuses requests from web pages, so a site you visit can't use it.</p>
+        </details>
+        <details>
+          <summary>What if my model is off, or slow?</summary>
+          <p>X works as usual. unrager fails open: a post stays visible until its verdict arrives, a failed check is never remembered, and unrager asks again shortly. The toolbar badge shows <code>!</code> while posts can't be checked, and the popup says what to run.</p>
+        </details>
+        <details>
+          <summary>Which models work?</summary>
+          <p>The default is gemma4 on Ollama. Any instruction-tuned model that can answer HIDE or KEEP will do, served by Ollama or by anything that speaks the OpenAI chat API: LM Studio, vLLM, llama.cpp's llama-server, SGLang, llama-swap. Faster is better, since posts show until they're judged; on a GPU that's usually well before you scroll to them.</p>
+        </details>
+        <details>
+          <summary>Can the model run on a different computer?</summary>
+          <p>Yes. Run <code>unrager setup --bind 0.0.0.0:7777</code> on the machine with the GPU, then enter its address under Settings in the extension's popup. Keep that to a private network such as Tailscale: unrager has no login of its own.</p>
+        </details>
+        <details>
+          <summary>Which browsers and systems?</summary>
+          <p>Chromium browsers (Chrome, Brave, Edge, Vivaldi, Arc) on macOS and Linux. Firefox, Safari and Windows aren't supported yet.</p>
+        </details>
+        <details>
+          <summary>Why load it unpacked instead of from the Chrome Web Store?</summary>
+          <p>It isn't listed yet. Loading it unpacked takes three clicks once; after that, <code>unrager update</code> keeps it current.</p>
+        </details>
+        <details>
+          <summary>Does it filter replies, search and profiles too?</summary>
+          <p>No, only your Home timeline, For you and Following. When you open a profile, a thread or a search, you went looking, so you see all of it.</p>
+        </details>
+      </div>
+    </section>
+
+    <section class="more wrap" aria-labelledby="more-heading">
+      <h2 id="more-heading">Also in the box</h2>
+      <div class="more-grid">
+        <figure class="term" aria-label="The terminal client: the Following timeline, twelve posts filtered out">
+          <div class="term-bar" aria-hidden="true"><span class="lights"><i></i><i></i><i></i></span><span class="term-title">unrager</span></div>
+          <div class="term-screen" aria-hidden="true">
+            <p class="t-top"><span class="t-brand">unrager</span> home: Following <span class="t-filter">−12</span> <span class="t-mode">◇</span> <span class="t-notes">2n</span></p>
+            <div class="t-pane">
+              <span class="t-pane-title">home: Following</span>
+          <div class="t-row is-selected">
+            <p class="t-meta"><b class="h-gold">@mira_bakes</b> <span class="t-check">✓</span> <span class="t-dim">·</span> 2m<span class="t-stats">↳ 4  ♥ 38  ◉ 1.2K</span></p>
+            <p class="t-text">Day 3 of the new sourdough starter. It smells like green apples, which I'm told is good news.</p>
+          </div>
+          <div class="t-row">
+            <p class="t-meta"><b class="h-foam">@kestrel_dev</b> <span class="t-check">✓</span> <span class="t-dim">·</span> 16m<span class="t-stats">↳ 11  ♥ 205  ◉ 8.4K</span></p>
+            <p class="t-text">Shipped v2 of my tiny CLI. Startup went from 180 ms to 9 ms by deleting one dependency.</p>
+          </div>
+          <div class="t-row">
+            <p class="t-meta"><b class="h-iris">@harborlight</b> <span class="t-check">✓</span> <span class="t-dim">·</span> 23m <span class="t-media">▶</span><span class="t-stats">↳ 2  ♥ 91  ◉ 3.1K</span></p>
+            <p class="t-text">Morning ferry. The fog was sitting right on the water and nobody said a word.</p>
+          </div>
+          <div class="t-row">
+            <p class="t-meta"><b class="h-love">@ada_plots</b> <span class="t-check">✓</span> <span class="t-dim">·</span> 41m<span class="t-stats">↳ 7  ♥ 132  ◉ 5.6K</span></p>
+            <p class="t-text">The new paper on sparse attention is unusually readable. My notes are in the thread.</p>
+          </div>
+          <div class="t-row">
+            <p class="t-meta"><b class="h-leaf">@tomas_climbs</b> <span class="t-check">✓</span> <span class="t-dim">·</span> 58m <span class="t-image">▣</span><span class="t-stats">↳ 3  ♥ 64  ◉ 2.2K</span></p>
+            <p class="t-text">Finally sent the route I've been falling off since April. Hands shredded, heart full.</p>
+          </div>
+          <div class="t-row">
+            <p class="t-meta"><b class="h-rose">@priya_maps</b> <span class="t-check">✓</span> <span class="t-dim">·</span> 1h<span class="t-stats">↳ 9  ♥ 310  ◉ 12K</span></p>
+            <p class="t-text">Made a map of every bench in my neighborhood. There are 212. I have sat on 40.</p>
+          </div>
+          <div class="t-row">
+            <p class="t-meta"><b class="h-pine">@owen_repairs</b> <span class="t-check">✓</span> <span class="t-dim">·</span> 2h<span class="t-stats">↳ 5  ♥ 88  ◉ 2.9K</span></p>
+            <p class="t-text">Fixed a 1974 radio with one capacitor and a lot of patience. It found a jazz station first try.</p>
+          </div>
+            </div>
+            <p class="t-status"><span class="t-normal">NORMAL</span> 1/58 <span class="t-dim">? for help</span><span class="t-clock"><b>9:41 AM</b> · Sat, Sep 27</span></p>
+          </div>
+        </figure>
+        <div class="more-copy">
+          <h3>A terminal client</h3>
+          <p>unrager began as an X client for the terminal, and it's still here: run <code>unrager</code> for your timeline with the same filter, threads in a split pane, inline images in Ghostty, Kitty and WezTerm, and a local model that translates posts and explains threads. Every text box is a small Vim editor.</p>
+          <h3>An iPhone app and a CLI</h3>
+          <p>The extension can't reach X's own iPhone app, so there's a native one you build from source, served by <code>unrager setup --apps</code>. And a command line for reading and posting. The <a href="https://github.com/guitaripod/unrager#also-in-the-box">README</a> has the details.</p>
+        </div>
+      </div>
+    </section>
   </main>
 
-  <script>
-    document.querySelectorAll('.copy').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        try {
-          await navigator.clipboard.writeText(btn.dataset.copy);
-          const g = btn.querySelector('.copy-glyph');
-          const prev = g.textContent;
-          g.textContent = '✓';
-          btn.classList.add('ok');
-          setTimeout(() => { g.textContent = prev; btn.classList.remove('ok'); }, 1200);
-        } catch (_) { /* noop */ }
-      });
-    });
+  <footer class="foot wrap">
+    <p>unrager is free software under the GPL-3.0. It is not affiliated with X Corp.</p>
+    <p class="foot-links">
+      <a href="https://github.com/guitaripod/unrager">GitHub</a>
+      <a href="https://github.com/guitaripod/unrager/releases">Releases</a>
+      <a href="https://github.com/guitaripod/unrager/blob/master/CHANGELOG.md">Changelog</a>
+    </p>
+    <details class="downloads" id="downloads" hidden>
+      <summary><span id="download-count">0</span> downloads</summary>
+      <p>Requests that fetched a release: <span id="dl-crates">0</span> from crates.io and <span id="dl-gh">0</span> from GitHub, counted <span id="dl-updated">just now</span>. Each update counts again, so this counts downloads, not people.</p>
+    </details>
+  </footer>
 
-    (async () => {
-      try {
-        const r = await fetch('/api/downloads', { headers: { 'Accept': 'application/json' } });
-        if (!r.ok) return;
-        const d = await r.json();
-        if (typeof d.total !== 'number' || d.total <= 0) return;
-        const el = document.getElementById('install-count');
-        const wrap = document.querySelector('.stat');
-        const trigger = wrap?.querySelector('.stat-trigger');
-        const popover = wrap?.querySelector('.stat-popover');
-        if (!el || !wrap || !trigger || !popover) return;
-
-        const target = d.total;
-        const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        const fmt = n => n.toLocaleString('en-US');
-
-        const crates = d.sources?.crates_io?.count;
-        const gh = d.sources?.github_releases?.count;
-        const setVal = (id, n) => {
-          const e = document.getElementById(id);
-          if (e) e.textContent = typeof n === 'number' ? fmt(n) : '—';
-        };
-        setVal('dl-crates', crates);
-        setVal('dl-gh', gh);
-
-        const relTime = (iso) => {
-          const t = (Date.now() - new Date(iso).getTime()) / 1000;
-          if (!isFinite(t) || t < 0) return 'just now';
-          if (t < 60) return 'just now';
-          if (t < 3600) {
-            const m = Math.round(t / 60);
-            return `${m} min ago`;
-          }
-          if (t < 86400) {
-            const h = Math.round(t / 3600);
-            return `${h} hr ago`;
-          }
-          const days = Math.round(t / 86400);
-          return `${days} day${days === 1 ? '' : 's'} ago`;
-        };
-        const when = document.getElementById('dl-updated');
-        if (when && d.updated_at) when.textContent = relTime(d.updated_at);
-
-        const close = () => {
-          wrap.classList.remove('is-open');
-          trigger.setAttribute('aria-expanded', 'false');
-        };
-        const open = () => {
-          wrap.classList.add('is-open');
-          trigger.setAttribute('aria-expanded', 'true');
-        };
-        const toggle = () => (wrap.classList.contains('is-open') ? close() : open());
-
-        trigger.addEventListener('click', (e) => {
-          e.stopPropagation();
-          toggle();
-        });
-        trigger.addEventListener('keydown', (e) => {
-          if (e.key === 'Escape') close();
-        });
-        document.addEventListener('click', (e) => {
-          if (!wrap.contains(e.target)) close();
-        });
-        document.addEventListener('keydown', (e) => {
-          if (e.key === 'Escape') close();
-        });
-
-        if (reduce) {
-          el.textContent = fmt(target);
-          wrap.hidden = false;
-          return;
-        }
-
-        el.textContent = '0';
-        wrap.hidden = false;
-        const duration = Math.min(1200, 400 + target * 2);
-        const start = performance.now();
-        const ease = t => 1 - Math.pow(1 - t, 3);
-        const tick = now => {
-          const t = Math.min(1, (now - start) / duration);
-          el.textContent = fmt(Math.round(target * ease(t)));
-          if (t < 1) requestAnimationFrame(tick);
-        };
-        requestAnimationFrame(tick);
-      } catch (_) { /* noop */ }
-    })();
-
-    (() => {
-      const shot = document.querySelector('.shot');
-      if (!shot) return;
-      const slides = Array.from(shot.querySelectorAll('.slide'));
-      const dots = Array.from(shot.querySelectorAll('.slide-dots button'));
-      const caption = shot.querySelector('.slide-caption');
-      const progress = shot.querySelector('.slide-progress-fill');
-      const prevBtn = shot.querySelector('.slide-nav.prev');
-      const nextBtn = shot.querySelector('.slide-nav.next');
-      const DWELL = 5200;
-      let idx = 0;
-      let timer = null;
-      let startedAt = 0;
-      let remaining = DWELL;
-      let paused = false;
-
-      const show = (i, { restart = true } = {}) => {
-        idx = (i + slides.length) % slides.length;
-        slides.forEach((s, j) => s.classList.toggle('is-active', j === idx));
-        dots.forEach((d, j) => d.setAttribute('aria-selected', j === idx ? 'true' : 'false'));
-        if (caption) caption.textContent = slides[idx].dataset.caption || '';
-        if (restart) scheduleNext(DWELL);
-      };
-
-      const scheduleNext = (ms) => {
-        clearTimeout(timer);
-        remaining = ms;
-        startedAt = performance.now();
-        progress.style.transition = 'none';
-        progress.style.width = '0%';
-        // Force reflow so the transition re-triggers on the next frame.
-        void progress.offsetWidth;
-        progress.style.transition = `width ${ms}ms linear`;
-        progress.style.width = '100%';
-        timer = setTimeout(() => show(idx + 1), ms);
-      };
-
-      const pause = () => {
-        if (paused) return;
-        paused = true;
-        shot.classList.add('is-paused');
-        clearTimeout(timer);
-        const elapsed = performance.now() - startedAt;
-        remaining = Math.max(800, DWELL - elapsed);
-        const styles = getComputedStyle(progress);
-        progress.style.transition = 'none';
-        progress.style.width = styles.width;
-      };
-
-      const resume = () => {
-        if (!paused) return;
-        paused = false;
-        shot.classList.remove('is-paused');
-        scheduleNext(remaining);
-      };
-
-      prevBtn.addEventListener('click', () => show(idx - 1));
-      nextBtn.addEventListener('click', () => show(idx + 1));
-      dots.forEach((d, j) => d.addEventListener('click', () => show(j)));
-
-      shot.addEventListener('mouseenter', pause);
-      shot.addEventListener('mouseleave', resume);
-      shot.addEventListener('focusin', pause);
-      shot.addEventListener('focusout', resume);
-
-      document.addEventListener('keydown', (e) => {
-        if (e.target.matches('input, textarea')) return;
-        if (e.key === 'ArrowLeft') { show(idx - 1); e.preventDefault(); }
-        if (e.key === 'ArrowRight') { show(idx + 1); e.preventDefault(); }
-      });
-
-      // Respect reduced-motion: freeze on first slide, disable autoplay.
-      const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      if (reduce) {
-        progress.style.display = 'none';
-      } else {
-        show(0);
-      }
-    })();
-  </script>
+  <script src="/site.js" defer></script>
 </body>
 </html>

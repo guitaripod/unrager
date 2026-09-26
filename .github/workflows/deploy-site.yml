@@ -41,11 +41,9 @@ jobs:
         run: |
           SHA="${GITHUB_SHA::8}"
           sed -i "s|href=\"/style\.css\"|href=\"/style.css?v=$SHA\"|" index.html
-          for img in detail ask compose search notifications profile help; do
-            sed -i "s|src=\"/$img\.png\"|src=\"/$img.png?v=$SHA\"|" index.html
-          done
+          sed -i "s|src=\"/site\.js\"|src=\"/site.js?v=$SHA\"|" index.html
           sed -i "s|https://unrager\.com/og\.png|https://unrager.com/og.png?v=$SHA|g" index.html
-          grep -oE '(href|src|content)="[^"]*(style|og|detail|ask|compose|search|notifications|profile|help)\.[a-z]+[^"]*"' index.html | head -20
+          grep -oE '(href|src|content)="[^"]*(style|site|og)\.[a-z]+[^"]*"' index.html
 
       - name: Deploy to Cloudflare Pages
         working-directory: site

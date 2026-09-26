@@ -208,6 +208,11 @@ fn browser_matches_pin(browser: &Browser, pin: &str) -> bool {
     browser.label.eq_ignore_ascii_case(pin)
 }
 
+/// Finds a logged-in x.com session in the installed browsers. The cookie
+/// file copy, its sqlite read and the key derivation and decryption run on
+/// the blocking pool, and each browser's keyring secrets are fetched once
+/// even when several of its profiles qualify, so a session refresh neither
+/// stalls the runtime nor repeats keyring round trips.
 async fn extract_session_from_browser() -> Result<XSession> {
     let candidates = candidate_paths()?;
     let pin = pinned_browser();
@@ -227,6 +232,8 @@ async fn extract_session_from_browser() -> Result<XSession> {
     tracing::debug!("checking {} candidate cookie paths", candidates.len());
 
     let mut tried = Vec::new();
+    let mut passwords_by_browser: std::collections::HashMap<&'static str, Vec<Vec<u8>>> =
+        std::collections::HashMap::new();
     for Candidate { browser, path } in &candidates {
         if let Some(pin) = &pin {
             if !browser_matches_pin(browser, pin) {
@@ -237,7 +244,12 @@ async fn extract_session_from_browser() -> Result<XSession> {
             continue;
         }
         tried.push(format!("{} ({})", browser.label, path.display()));
-        let encrypted = match read_encrypted_cookies(path) {
+        let owned_path = path.clone();
+        let read = tokio::task::spawn_blocking(move || read_encrypted_cookies(&owned_path))
+            .await
+            .map_err(|e| Error::Config(format!("cookie read task: {e}")))
+            .and_then(|r| r);
+        let encrypted = match read {
             Ok(rows) if rows.len() == COOKIE_NAMES.len() => rows,
             Ok(_) => {
                 tracing::debug!("{} {} has no .x.com session", browser.label, path.display());
@@ -252,12 +264,23 @@ async fn extract_session_from_browser() -> Result<XSession> {
                 continue;
             }
         };
-        let passwords = backend::candidate_passwords(browser).await;
+        let passwords = match passwords_by_browser.get(browser.label) {
+            Some(passwords) => passwords.clone(),
+            None => {
+                let passwords = backend::candidate_passwords(browser).await;
+                passwords_by_browser.insert(browser.label, passwords.clone());
+                passwords
+            }
+        };
         if passwords.is_empty() {
             tracing::debug!("{} has no candidate passwords", browser.label);
             continue;
         }
-        match decrypt_all(&encrypted, &passwords) {
+        let decrypted = tokio::task::spawn_blocking(move || decrypt_all(&encrypted, &passwords))
+            .await
+            .map_err(|e| Error::Config(format!("cookie decrypt task: {e}")))
+            .and_then(|r| r);
+        match decrypted {
             Ok(session) => {
                 tracing::debug!("loaded session from {} {}", browser.label, path.display());
                 return Ok(session);

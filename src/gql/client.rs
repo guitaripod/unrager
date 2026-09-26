@@ -321,7 +321,10 @@ impl GqlClient {
             Method::Post => "POST",
         };
         let path = format!("/i/api/graphql/{}/{}", qid.id, op.name());
-        let has_transaction = self.generate_transaction_id(method_str, &path).is_some();
+        let has_transaction = self
+            .transaction_key
+            .lock()
+            .is_ok_and(|material| material.is_some());
         tracing::debug!(
             op = op.name(),
             method = method_str,

@@ -2,7 +2,7 @@ use crate::server::error::ApiError;
 use crate::server::llm;
 use crate::server::state::AppState;
 use crate::tui::ask;
-use crate::tui::filter::{FilterCache, FilterDecision};
+use crate::tui::filter::{ChatRequest, FilterCache, FilterDecision, LlmConfig};
 use async_stream::stream;
 use axum::extract::{Query, State};
 use axum::response::Sse;
@@ -59,7 +59,9 @@ pub async fn filter_stream(
                 Err(_) => continue,
             };
             let text = llm::tweet_as_prompt_text(&tweet);
-            let decision = llm::classify_one(&ollama, system.clone(), text).await;
+            let Some(decision) = llm::classify_one(&ollama, system.clone(), text).await else {
+                continue;
+            };
             {
                 let mut cache = state_clone.filter_cache.lock().await;
                 persist_verdict(&mut cache, &rubric_snapshot, &id, decision);
@@ -161,15 +163,13 @@ pub async fn ask_context_stream(
     );
 
     let ollama = cfg.ollama.clone();
-    let body = serde_json::json!({
-        "model": ollama.model,
-        "messages": messages,
-        "stream": true,
-        "think": true,
-        "keep_alive": ollama.keep_alive,
-        "options": { "temperature": 0.3, "num_predict": 2048 },
-    });
-    Ok(stream_body(ollama, body, "ask"))
+    let req = ChatRequest {
+        messages,
+        thinking: true,
+        temperature: 0.3,
+        max_tokens: 2048,
+    };
+    Ok(stream_body(ollama, req, "ask"))
 }
 
 fn prompt_entry(e: unrager_model::AskContextEntry) -> ask::PromptEntry {
@@ -238,30 +238,28 @@ pub async fn translate_stream(
 }
 
 fn stream_tokens(
-    ollama: crate::tui::filter::OllamaConfig,
+    ollama: LlmConfig,
     system: String,
     user: String,
     label: &'static str,
 ) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
-    let body = serde_json::json!({
-        "model": ollama.model,
-        "messages": [
-            { "role": "system", "content": system },
-            { "role": "user", "content": user },
+    let req = ChatRequest {
+        messages: vec![
+            serde_json::json!({ "role": "system", "content": system }),
+            serde_json::json!({ "role": "user", "content": user }),
         ],
-        "stream": true,
-        "think": false,
-        "keep_alive": ollama.keep_alive,
-        "options": { "temperature": 0, "num_predict": 1024 },
-    });
-    stream_body(ollama, body, label)
+        thinking: false,
+        temperature: 0.0,
+        max_tokens: 1024,
+    };
+    stream_body(ollama, req, label)
 }
 
-/// Streams a fully-built Ollama chat body as a `TokenEvent` SSE response —
-/// the shared core of the single-shot streams and the conversational ask.
+/// Streams a fully-built chat request as a `TokenEvent` SSE response — the
+/// shared core of the single-shot streams and the conversational ask.
 fn stream_body(
-    ollama: crate::tui::filter::OllamaConfig,
-    body: serde_json::Value,
+    ollama: LlmConfig,
+    req: ChatRequest,
     label: &'static str,
 ) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
     let (tx, mut rx) = token_channel();
@@ -269,7 +267,7 @@ fn stream_body(
     tokio::spawn(async move {
         let _ = ollama
             .stream_chat(
-                body,
+                req,
                 label,
                 move |token| {
                     let _ = tx.send(token.to_string());

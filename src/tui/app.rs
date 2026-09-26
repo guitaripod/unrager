@@ -1202,7 +1202,8 @@ mod tests {
         let cfg = crate::tui::filter::FilterConfig {
             drop_topics: vec![],
             extra_guidance: String::new(),
-            ollama: crate::tui::filter::OllamaConfig {
+            ollama: crate::tui::filter::LlmConfig {
+                backend: crate::tui::filter::LlmBackend::Ollama,
                 model: "test".into(),
                 host: "http://127.0.0.1:1".into(),
                 timeout_seconds: 1,
@@ -1923,7 +1924,8 @@ mod tests {
         let cfg = crate::tui::filter::FilterConfig {
             drop_topics: vec![],
             extra_guidance: String::new(),
-            ollama: crate::tui::filter::OllamaConfig {
+            ollama: crate::tui::filter::LlmConfig {
+                backend: crate::tui::filter::LlmBackend::Ollama,
                 model: "test".into(),
                 host: "http://127.0.0.1:1".into(),
                 timeout_seconds: 1,
@@ -1948,11 +1950,33 @@ mod tests {
         );
         assert_eq!(app.pending_classification.len(), 2);
 
-        app.handle_tweet_classified("uncached_new".into(), FilterDecision::Keep);
+        app.handle_tweet_classified("uncached_new".into(), Some(FilterDecision::Keep));
 
         assert_eq!(app.source.tweets.len(), 2);
         assert_eq!(app.source.tweets[0].rest_id, "uncached_new");
         assert_eq!(app.source.tweets[1].rest_id, "cached_keep");
+    }
+
+    #[tokio::test]
+    async fn failed_classification_shows_the_tweet_but_is_never_cached() {
+        let (mut app, _rx, _tmp) = dummy_app();
+        let cache_tmp = NamedTempFile::new().unwrap();
+        app.filter_cache = Some(FilterCache::open(cache_tmp.path(), "h".into()).unwrap());
+        app.filter_mode = crate::tui::filter::FilterMode::On;
+        app.source = crate::tui::source::Source::new(SourceKind::Home { following: true });
+        app.pending_classification
+            .push(make_tweet("backend_down", "classifier never answered"));
+        app.filter_inflight.insert("backend_down".into());
+
+        app.handle_tweet_classified("backend_down".into(), None);
+
+        assert_eq!(app.source.tweets.len(), 1, "fails open: the tweet is shown");
+        assert!(app.pending_classification.is_empty());
+        assert!(!app.filter_inflight.contains("backend_down"));
+        assert!(
+            !app.filter_cache.as_ref().unwrap().contains("backend_down"),
+            "a failure must not be cached as KEEP, or it would never be retried"
+        );
     }
 
     #[tokio::test]
@@ -1965,7 +1989,8 @@ mod tests {
         let cfg = crate::tui::filter::FilterConfig {
             drop_topics: vec![],
             extra_guidance: String::new(),
-            ollama: crate::tui::filter::OllamaConfig {
+            ollama: crate::tui::filter::LlmConfig {
+                backend: crate::tui::filter::LlmBackend::Ollama,
                 model: "test".into(),
                 host: "http://127.0.0.1:1".into(),
                 timeout_seconds: 1,

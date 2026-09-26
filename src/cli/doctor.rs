@@ -1,9 +1,8 @@
 use crate::auth::chromium;
 use crate::config;
 use crate::error::Result;
-use crate::tui::filter::FilterConfig;
+use crate::tui::filter::{ChatRequest, FilterConfig, LlmBackend};
 use clap::Parser;
-use serde::Deserialize;
 
 #[derive(Debug, Parser)]
 pub struct Args {
@@ -16,7 +15,7 @@ pub async fn run(_args: Args) -> Result<()> {
 
     print_cookies(&mut report);
     print_query_ids(&mut report).await;
-    print_ollama_and_gemma4(&mut report).await;
+    print_llm_backend(&mut report).await;
 
     println!();
     if report.errors > 0 {
@@ -107,18 +106,7 @@ fn print_cookies(report: &mut Report) {
     }
 }
 
-#[derive(Deserialize)]
-struct TagsResponse {
-    #[serde(default)]
-    models: Vec<TagsModel>,
-}
-
-#[derive(Deserialize)]
-struct TagsModel {
-    name: String,
-}
-
-async fn print_ollama_and_gemma4(report: &mut Report) {
+async fn print_llm_backend(report: &mut Report) {
     let filter_cfg = match load_filter_cfg() {
         Ok(c) => c,
         Err(e) => {
@@ -127,63 +115,106 @@ async fn print_ollama_and_gemma4(report: &mut Report) {
             return;
         }
     };
-    let host = filter_cfg.ollama.host.trim_end_matches('/');
-    let configured = &filter_cfg.ollama.model;
+    let ollama = &filter_cfg.ollama;
+    let host = ollama.host.trim_end_matches('/');
+    let configured = &ollama.model;
+    let label = match ollama.backend {
+        LlmBackend::Ollama => "ollama",
+        LlmBackend::SgLang => "sglang",
+    };
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3))
-        .build()
-        .unwrap_or_default();
-
-    let resp = client.get(format!("{host}/api/tags")).send().await;
-    let models = match resp {
-        Ok(r) if r.status().is_success() => match r.json::<TagsResponse>().await {
-            Ok(t) => t.models.into_iter().map(|m| m.name).collect::<Vec<_>>(),
-            Err(e) => {
-                println!("✗ ollama      reachable at {host} but response malformed: {e}");
-                report.errors += 1;
-                return;
+    let models = match ollama.list_models().await {
+        Ok(m) => m,
+        Err(e) => {
+            println!("✗ {label:<9}not reachable at {host}: {e}");
+            match ollama.backend {
+                LlmBackend::Ollama => {
+                    println!(
+                        "              → install: curl -fsSL https://ollama.com/install.sh | sh"
+                    );
+                    println!("              → start:   ollama serve");
+                }
+                LlmBackend::SgLang => {
+                    println!(
+                        "              → check the SGLang (or llama-swap) process is up and `host` in filter.toml points at it"
+                    );
+                }
             }
-        },
-        Ok(r) => {
-            println!(
-                "✗ ollama      reachable at {host} but returned {}",
-                r.status()
-            );
-            report.errors += 1;
-            return;
-        }
-        Err(_) => {
-            println!("✗ ollama      not reachable at {host}");
-            println!("              → install: curl -fsSL https://ollama.com/install.sh | sh");
-            println!("              → start:   ollama serve");
             report.errors += 1;
             return;
         }
     };
 
     println!(
-        "✓ ollama      reachable at {host} ({} model(s))",
+        "✓ {label:<9}reachable at {host} ({} model(s))",
         models.len()
     );
 
-    let gemma4: Vec<&String> = models.iter().filter(|n| n.starts_with("gemma4")).collect();
-    if gemma4.is_empty() {
-        println!("✗ gemma4      no gemma4 model installed");
-        println!("              → ollama pull gemma4");
-        report.errors += 1;
-        return;
-    }
-
-    if models.iter().any(|n| n == configured) {
-        println!("✓ gemma4      configured model {configured} is installed");
-    } else {
-        let fallback = gemma4[0];
-        println!(
-            "! gemma4      configured model {configured} not installed; filter will fall back to {fallback}"
-        );
-        println!("              → fix: ollama pull gemma4");
-        report.warnings += 1;
+    match ollama.backend {
+        LlmBackend::Ollama => {
+            let gemma4: Vec<&String> = models.iter().filter(|n| n.starts_with("gemma4")).collect();
+            if gemma4.is_empty() {
+                println!("✗ gemma4      no gemma4 model installed");
+                println!("              → ollama pull gemma4");
+                report.errors += 1;
+                return;
+            }
+            if models.iter().any(|n| n == configured) {
+                println!("✓ gemma4      configured model {configured} is installed");
+            } else {
+                let fallback = gemma4[0];
+                println!(
+                    "! gemma4      configured model {configured} not installed; filter will fall back to {fallback}"
+                );
+                println!("              → fix: ollama pull gemma4");
+                report.warnings += 1;
+            }
+        }
+        LlmBackend::SgLang => {
+            if !models.iter().any(|n| n == configured) {
+                println!("✗ sglang      configured model {configured:?} not in {models:?}");
+                println!(
+                    "              → fix: `model` in filter.toml must match the server's served-model-name"
+                );
+                report.errors += 1;
+                return;
+            }
+            println!("✓ sglang      configured model {configured} is available");
+            println!(
+                "              running a real generation to check for coherent output (a cold model can take a while to load)…"
+            );
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .unwrap_or_default();
+            let req = ChatRequest {
+                messages: vec![
+                    serde_json::json!({"role": "user", "content": "Say the word banana three times, nothing else."}),
+                ],
+                thinking: false,
+                temperature: 0.0,
+                max_tokens: 16,
+            };
+            match ollama.chat_with_client(req, &client).await {
+                Ok(reply) if reply.content.to_ascii_lowercase().contains("banana") => {
+                    println!("✓ sglang      generation looks coherent");
+                }
+                Ok(reply) => {
+                    println!(
+                        "! sglang      generation returned unexpected output: {:?}",
+                        reply.content
+                    );
+                    println!(
+                        "              → possible NVFP4/Blackwell issue: https://github.com/sgl-project/sglang/issues/18954"
+                    );
+                    report.warnings += 1;
+                }
+                Err(e) => {
+                    println!("✗ sglang      generation failed: {e}");
+                    report.errors += 1;
+                }
+            }
+        }
     }
 }
 

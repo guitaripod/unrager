@@ -1303,7 +1303,7 @@ pub fn spawn_update_check(tx: EventTx) {
 mod store_tests {
     use super::*;
     use crate::store::feed::FeedStore;
-    use crate::tui::filter::{Classifier, FilterConfig, OllamaConfig};
+    use crate::tui::filter::{Classifier, FilterConfig, LlmBackend, LlmConfig};
     use crate::tui::source::Source;
     use crate::tui::test_util::{dummy_app, make_tweet};
 
@@ -1311,7 +1311,8 @@ mod store_tests {
         FilterConfig {
             drop_topics: vec![],
             extra_guidance: String::new(),
-            ollama: OllamaConfig {
+            ollama: LlmConfig {
+                backend: LlmBackend::Ollama,
                 model: "test".into(),
                 host: "http://127.0.0.1:1".into(),
                 timeout_seconds: 1,

@@ -2,7 +2,7 @@ use crate::error::Result;
 use crate::gql::GqlClient;
 use crate::parse::notification;
 use crate::tui::event::{Event, EventTx};
-use crate::tui::filter::OllamaConfig;
+use crate::tui::filter::{ChatRequest, LlmConfig};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -496,13 +496,8 @@ POSITIVE|your async tweet is spreading -- mostly positive\n\
 MIXED|your take is getting debated -- split reactions\n\
 NEGATIVE|you're getting ratio'd -- mostly hostile quotes";
 
-use crate::tui::filter::OllamaChatResponse;
-
-pub fn whisper_llm_async(entry: NotifEntry, ollama: OllamaConfig, tx: EventTx) {
+pub fn whisper_llm_async(entry: NotifEntry, ollama: LlmConfig, tx: EventTx) {
     tokio::spawn(async move {
-        let http = ollama.build_client();
-        let url = ollama.chat_url();
-
         let verb = match entry.kind {
             NotifKind::Reply => "replied to",
             NotifKind::Quote => "quoted",
@@ -518,34 +513,20 @@ pub fn whisper_llm_async(entry: NotifEntry, ollama: OllamaConfig, tx: EventTx) {
             entry.actor_handle, verb, snippet
         );
 
-        let body = serde_json::json!({
-            "model": ollama.model,
-            "messages": [
-                { "role": "system", "content": WHISPER_SYSTEM_PROMPT },
-                { "role": "user", "content": prompt },
+        let req = ChatRequest {
+            messages: vec![
+                serde_json::json!({ "role": "system", "content": WHISPER_SYSTEM_PROMPT }),
+                serde_json::json!({ "role": "user", "content": prompt }),
             ],
-            "stream": false,
-            "think": false,
-            "keep_alive": ollama.keep_alive,
-            "options": { "temperature": 0.3, "num_predict": 60 },
-        });
+            thinking: false,
+            temperature: 0.3,
+            max_tokens: 60,
+        };
 
-        let text = match http.post(&url).json(&body).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                match resp.json::<OllamaChatResponse>().await {
-                    Ok(r) => r.message.content.trim().to_lowercase(),
-                    Err(e) => {
-                        warn!("whisper llm parse failed: {e}");
-                        build_heuristic_whisper(&entry)
-                    }
-                }
-            }
-            Ok(resp) => {
-                warn!("whisper llm http status {}", resp.status());
-                build_heuristic_whisper(&entry)
-            }
+        let text = match ollama.chat(req).await {
+            Ok(reply) => reply.content.trim().to_lowercase(),
             Err(e) => {
-                warn!("whisper llm http error: {e}");
+                warn!("whisper llm failed: {e}");
                 build_heuristic_whisper(&entry)
             }
         };
@@ -554,11 +535,8 @@ pub fn whisper_llm_async(entry: NotifEntry, ollama: OllamaConfig, tx: EventTx) {
     });
 }
 
-pub fn surge_llm_async(entries: Vec<NotifEntry>, ollama: OllamaConfig, tx: EventTx) {
+pub fn surge_llm_async(entries: Vec<NotifEntry>, ollama: LlmConfig, tx: EventTx) {
     tokio::spawn(async move {
-        let http = ollama.build_client();
-        let url = ollama.chat_url();
-
         let mut prompt = String::from("Recent reactions to the user's tweet:\n");
         for e in &entries {
             let kind_str = match e.kind {
@@ -573,29 +551,22 @@ pub fn surge_llm_async(entries: Vec<NotifEntry>, ollama: OllamaConfig, tx: Event
             prompt.push_str(&format!("- @{} {}\n", e.actor_handle, kind_str));
         }
 
-        let body = serde_json::json!({
-            "model": ollama.model,
-            "messages": [
-                { "role": "system", "content": SURGE_SYSTEM_PROMPT },
-                { "role": "user", "content": prompt },
+        let req = ChatRequest {
+            messages: vec![
+                serde_json::json!({ "role": "system", "content": SURGE_SYSTEM_PROMPT }),
+                serde_json::json!({ "role": "user", "content": prompt }),
             ],
-            "stream": false,
-            "think": false,
-            "keep_alive": ollama.keep_alive,
-            "options": { "temperature": 0, "num_predict": 80 },
-        });
+            thinking: false,
+            temperature: 0.0,
+            max_tokens: 80,
+        };
 
-        let (summary, sentiment) = match http.post(&url).json(&body).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                match resp.json::<OllamaChatResponse>().await {
-                    Ok(r) => parse_surge_response(&r.message.content),
-                    Err(e) => {
-                        warn!("surge llm parse failed: {e}");
-                        (build_heuristic_surge(&entries), Sentiment::Mixed)
-                    }
-                }
+        let (summary, sentiment) = match ollama.chat(req).await {
+            Ok(reply) => parse_surge_response(&reply.content),
+            Err(e) => {
+                warn!("surge llm failed: {e}");
+                (build_heuristic_surge(&entries), Sentiment::Mixed)
             }
-            _ => (build_heuristic_surge(&entries), Sentiment::Mixed),
         };
 
         let _ = tx.send(Event::WhisperSurgeReady { summary, sentiment });

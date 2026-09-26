@@ -3,6 +3,7 @@ use crate::model::Tweet;
 use crate::tui::event::{Event, EventTx};
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::Path;
@@ -56,14 +57,32 @@ pub struct FilterConfig {
     pub drop_topics: Vec<String>,
     #[serde(default)]
     pub extra_guidance: String,
-    pub ollama: OllamaConfig,
+    pub ollama: LlmConfig,
+}
+
+/// Which local LLM server a `LlmConfig` talks to. Exactly one is active per
+/// process, chosen once from `filter.toml` at startup — a small closed set
+/// selected by data, not a plugin system needing runtime dispatch, hence a
+/// plain enum rather than a trait (which would force `async fn` off plain
+/// functions and boxed-future overhead for zero benefit here).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LlmBackend {
+    #[default]
+    Ollama,
+    SgLang,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OllamaConfig {
+pub struct LlmConfig {
+    #[serde(default)]
+    pub backend: LlmBackend,
     pub model: String,
     pub host: String,
     pub timeout_seconds: u64,
+    /// Ollama-only model-residency control; simply never written into an
+    /// SGLang request body. SGLang/llama-swap manage their own model
+    /// lifecycle server-side (e.g. llama-swap's `ttl`).
     #[serde(default = "default_keep_alive")]
     pub keep_alive: String,
 }
@@ -72,9 +91,46 @@ fn default_keep_alive() -> String {
     "10s".to_string()
 }
 
-impl OllamaConfig {
+/// A backend-neutral chat request. `thinking` and `max_tokens` are translated
+/// into whatever field names/shapes each backend's wire format actually uses
+/// by `LlmConfig::build_body` — callers never see `think` vs
+/// `chat_template_kwargs.enable_thinking`, or `num_predict` vs `max_tokens`.
+#[derive(Debug, Clone)]
+pub struct ChatRequest {
+    pub messages: Vec<Value>,
+    pub thinking: bool,
+    pub temperature: f32,
+    pub max_tokens: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChatReply {
+    pub content: String,
+}
+
+impl LlmConfig {
     pub fn chat_url(&self) -> String {
-        format!("{}/api/chat", self.host.trim_end_matches('/'))
+        let base = self.host.trim_end_matches('/');
+        match self.backend {
+            LlmBackend::Ollama => format!("{base}/api/chat"),
+            LlmBackend::SgLang => format!("{base}/v1/chat/completions"),
+        }
+    }
+
+    fn models_url(&self) -> String {
+        let base = self.host.trim_end_matches('/');
+        match self.backend {
+            LlmBackend::Ollama => format!("{base}/api/tags"),
+            LlmBackend::SgLang => format!("{base}/v1/models"),
+        }
+    }
+
+    /// SGLang/Qwen3 has no defined multimodal message shape here; vision
+    /// (image-attached ask turns) stays Ollama-only rather than inventing an
+    /// OpenAI-style `content: [{type:"image_url", ...}]` shape nobody asked
+    /// for.
+    pub fn supports_vision(&self) -> bool {
+        matches!(self.backend, LlmBackend::Ollama)
     }
 
     pub fn build_client(&self) -> reqwest::Client {
@@ -91,9 +147,101 @@ impl OllamaConfig {
             .unwrap_or_else(|_| reqwest::Client::new())
     }
 
+    /// Build the wire body for `req`, backend-specific. Confirmed live against
+    /// a real SGLang/Qwen3 server: `chat_template_kwargs` must be a top-level
+    /// field (NOT nested under an `extra_body` wrapper — that's an
+    /// OpenAI-Python-SDK-only client-side convention, not part of the wire
+    /// format) for `enable_thinking` to actually take effect.
+    fn build_body(&self, req: &ChatRequest, stream: bool) -> Value {
+        match self.backend {
+            LlmBackend::Ollama => serde_json::json!({
+                "model": self.model,
+                "messages": req.messages,
+                "stream": stream,
+                "think": req.thinking,
+                "keep_alive": self.keep_alive,
+                "options": { "temperature": req.temperature, "num_predict": req.max_tokens },
+            }),
+            LlmBackend::SgLang => serde_json::json!({
+                "model": self.model,
+                "messages": req.messages,
+                "stream": stream,
+                "temperature": req.temperature,
+                "max_tokens": req.max_tokens,
+                "chat_template_kwargs": { "enable_thinking": req.thinking },
+            }),
+        }
+    }
+
+    /// One-shot, non-streaming chat call using a freshly built client (the
+    /// configured `timeout_seconds`).
+    pub async fn chat(&self, req: ChatRequest) -> std::result::Result<ChatReply, String> {
+        let http = self.build_client();
+        self.chat_with_client(req, &http).await
+    }
+
+    /// Same as `chat`, but against a caller-supplied client — used by
+    /// `unrager doctor`'s SGLang smoke test, which needs a much longer
+    /// timeout than normal classification traffic (a cold SGLang model can
+    /// take well over a minute to load before its first reply).
+    pub(crate) async fn chat_with_client(
+        &self,
+        req: ChatRequest,
+        http: &reqwest::Client,
+    ) -> std::result::Result<ChatReply, String> {
+        let url = self.chat_url();
+        let body = self.build_body(&req, false);
+        let resp = http
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("request failed: {e}"))?;
+        let status = resp.status();
+        if !status.is_success() {
+            let preview = resp.text().await.unwrap_or_default();
+            let trimmed: String = preview.chars().take(200).collect();
+            return Err(format!("http {}: {trimmed}", status.as_u16()));
+        }
+        match self.backend {
+            LlmBackend::Ollama => {
+                let r: OllamaChatResponse = resp.json().await.map_err(|e| format!("parse: {e}"))?;
+                Ok(ChatReply {
+                    content: r.message.content,
+                })
+            }
+            LlmBackend::SgLang => {
+                let r: OpenAiChatResponse = resp.json().await.map_err(|e| format!("parse: {e}"))?;
+                let content = r
+                    .choices
+                    .into_iter()
+                    .next()
+                    .map(|c| c.message.content)
+                    .unwrap_or_default();
+                Ok(ChatReply { content })
+            }
+        }
+    }
+
     pub async fn stream_chat(
         &self,
-        body: serde_json::Value,
+        req: ChatRequest,
+        label: &str,
+        on_token: impl FnMut(&str),
+        on_thinking: impl FnMut(&str),
+    ) -> std::result::Result<Option<String>, String> {
+        let body = self.build_body(&req, true);
+        match self.backend {
+            LlmBackend::Ollama => self.stream_ndjson(body, label, on_token, on_thinking).await,
+            LlmBackend::SgLang => self.stream_sse(body, label, on_token, on_thinking).await,
+        }
+    }
+
+    /// Ollama's native `/api/chat` streaming shape: one complete JSON object
+    /// per line (NDJSON), terminated by a `"done": true` field.
+    async fn stream_ndjson(
+        &self,
+        body: Value,
         label: &str,
         mut on_token: impl FnMut(&str),
         mut on_thinking: impl FnMut(&str),
@@ -132,7 +280,7 @@ impl OllamaConfig {
                     if line.trim().is_empty() {
                         continue;
                     }
-                    match serde_json::from_str::<serde_json::Value>(&line) {
+                    match serde_json::from_str::<Value>(&line) {
                         Ok(parsed) => {
                             if let Some(c) =
                                 parsed.pointer("/message/content").and_then(|v| v.as_str())
@@ -170,6 +318,148 @@ impl OllamaConfig {
 
         Ok(done_reason)
     }
+
+    /// SGLang/OpenAI-compatible streaming shape: Server-Sent Events, each
+    /// chunk `data: {...}\n\n`, terminated by a literal `data: [DONE]` line.
+    /// Confirmed live against a real SGLang server — content deltas can be
+    /// empty strings mid-stream, and `finish_reason` arrives on the last
+    /// content-bearing chunk rather than a separate empty one.
+    async fn stream_sse(
+        &self,
+        body: Value,
+        label: &str,
+        mut on_token: impl FnMut(&str),
+        mut on_thinking: impl FnMut(&str),
+    ) -> std::result::Result<Option<String>, String> {
+        use futures::TryStreamExt;
+        use tokio::io::AsyncBufReadExt;
+        use tokio::io::BufReader;
+        use tokio_util::io::StreamReader;
+
+        let http = self.build_streaming_client();
+        let url = self.chat_url();
+
+        let response = http
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("request failed: {e}"))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let preview = response.text().await.unwrap_or_default();
+            let trimmed: String = preview.chars().take(200).collect();
+            tracing::warn!(label, status = status.as_u16(), body = %trimmed, "sglang http error");
+            return Err(format!("http {}: {trimmed}", status.as_u16()));
+        }
+
+        let stream = response.bytes_stream().map_err(std::io::Error::other);
+        let reader = StreamReader::new(stream);
+        let mut lines = BufReader::new(reader).lines();
+        let mut done_reason: Option<String> = None;
+
+        loop {
+            match lines.next_line().await {
+                Ok(Some(line)) => match parse_sse_data_line(&line) {
+                    SseLine::Token(t) => on_token(&t),
+                    SseLine::Thinking(t) => on_thinking(&t),
+                    SseLine::Done(reason) => {
+                        done_reason = reason;
+                        break;
+                    }
+                    SseLine::Ignore => {}
+                },
+                Ok(None) => break,
+                Err(e) => {
+                    return Err(format!("stream error: {e}"));
+                }
+            }
+        }
+
+        Ok(done_reason)
+    }
+
+    /// List model names/ids the backend currently knows about. Ollama:
+    /// `GET /api/tags` -> `{models:[{name}]}`. SGLang (OpenAI-compatible):
+    /// `GET /v1/models` -> `{data:[{id}]}`.
+    pub async fn list_models(&self) -> std::result::Result<Vec<String>, String> {
+        let url = self.models_url();
+        let resp = self
+            .build_client()
+            .get(&url)
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await
+            .map_err(|e| format!("request failed: {e}"))?;
+        if !resp.status().is_success() {
+            return Err(format!("http {}", resp.status().as_u16()));
+        }
+        match self.backend {
+            LlmBackend::Ollama => {
+                let tags: OllamaTagsResponse =
+                    resp.json().await.map_err(|e| format!("parse: {e}"))?;
+                Ok(tags.models.into_iter().map(|m| m.name).collect())
+            }
+            LlmBackend::SgLang => {
+                let list: OpenAiModelsResponse =
+                    resp.json().await.map_err(|e| format!("parse: {e}"))?;
+                Ok(list.data.into_iter().map(|m| m.id).collect())
+            }
+        }
+    }
+}
+
+/// One line's effect while parsing an OpenAI-compatible SSE chat stream.
+#[derive(Debug, PartialEq)]
+enum SseLine {
+    Token(String),
+    Thinking(String),
+    Done(Option<String>),
+    Ignore,
+}
+
+/// Pure parser for one raw line of an SGLang/OpenAI-compatible SSE stream —
+/// factored out of `stream_sse` so the trickiest new logic here is unit
+/// testable without a live server.
+fn parse_sse_data_line(line: &str) -> SseLine {
+    let line = line.trim();
+    if line.is_empty() {
+        return SseLine::Ignore;
+    }
+    let Some(rest) = line.strip_prefix("data:") else {
+        return SseLine::Ignore;
+    };
+    let rest = rest.trim();
+    if rest == "[DONE]" {
+        return SseLine::Done(None);
+    }
+    let Ok(parsed) = serde_json::from_str::<Value>(rest) else {
+        return SseLine::Ignore;
+    };
+    if let Some(t) = parsed
+        .pointer("/choices/0/delta/content")
+        .and_then(|v| v.as_str())
+    {
+        if !t.is_empty() {
+            return SseLine::Token(t.to_string());
+        }
+    }
+    if let Some(t) = parsed
+        .pointer("/choices/0/delta/reasoning_content")
+        .and_then(|v| v.as_str())
+    {
+        if !t.is_empty() {
+            return SseLine::Thinking(t.to_string());
+        }
+    }
+    if let Some(reason) = parsed
+        .pointer("/choices/0/finish_reason")
+        .and_then(|v| v.as_str())
+    {
+        return SseLine::Done(Some(reason.to_string()));
+    }
+    SseLine::Ignore
 }
 
 impl FilterConfig {
@@ -193,6 +483,12 @@ impl FilterConfig {
         Ok(cfg)
     }
 
+    /// Hashes the rubric AND the backend/model, so switching `[ollama]
+    /// backend`/`model` in `filter.toml` auto-invalidates cached verdicts
+    /// instead of silently serving a different model's HIDE/KEEP calls as if
+    /// the new one produced them. Uses the same invalidation mechanism as a
+    /// rubric edit (orphaned rows, later swept by the retention prune) — no
+    /// schema change, no explicit delete path.
     pub fn rubric_hash(&self) -> String {
         let mut topics: Vec<String> = self
             .drop_topics
@@ -210,6 +506,10 @@ impl FilterConfig {
         hasher.update(self.extra_guidance.trim().as_bytes());
         hasher.update(b"---\n");
         hasher.update(PROMPT_VERSION.as_bytes());
+        hasher.update(b"---\n");
+        hasher.update(format!("{:?}", self.ollama.backend).as_bytes());
+        hasher.update(b"\n");
+        hasher.update(self.ollama.model.as_bytes());
         let digest = hasher.finalize();
         hex16(&digest[..8])
     }
@@ -385,6 +685,22 @@ impl FilterCache {
         self.mem.insert(tweet_id.to_string(), decision);
     }
 
+    /// Persist a verdict only while `rubric_snapshot` still matches this
+    /// cache's live rubric. A concurrent rubric edit rekeys the shared cache
+    /// mid-request; writing under a stale snapshot would poison the new
+    /// rubric's cache for the whole retention window. Shared by the SSE
+    /// filter stream and the batch `/api/classify` route.
+    pub fn put_if_current_rubric(
+        &mut self,
+        rubric_snapshot: &str,
+        tweet_id: &str,
+        decision: FilterDecision,
+    ) {
+        if self.rubric_hash == rubric_snapshot {
+            self.put(tweet_id, decision);
+        }
+    }
+
     #[cfg(test)]
     pub fn contains(&self, tweet_id: &str) -> bool {
         self.mem.contains_key(tweet_id)
@@ -419,7 +735,7 @@ fn load_verdicts(conn: &Connection, rubric_hash: &str) -> Result<HashMap<String,
 
 pub struct Classifier {
     http: reqwest::Client,
-    ollama: OllamaConfig,
+    ollama: LlmConfig,
     sem: Arc<Semaphore>,
     system_prompt: Arc<RwLock<Arc<String>>>,
 }
@@ -461,41 +777,47 @@ impl Classifier {
     }
 
     pub async fn init(&mut self) -> Result<()> {
-        let url = format!("{}/api/tags", self.ollama.host.trim_end_matches('/'));
-        let resp = self
-            .http
-            .get(&url)
-            .timeout(Duration::from_secs(2))
-            .send()
+        let available = self
+            .ollama
+            .list_models()
             .await
-            .map_err(|e| Error::Config(format!("ollama /api/tags: {e}")))?;
-        if !resp.status().is_success() {
-            return Err(Error::Config(format!("ollama status {}", resp.status())));
+            .map_err(|e| Error::Config(format!("{:?} models: {e}", self.ollama.backend)))?;
+        match self.ollama.backend {
+            LlmBackend::Ollama => {
+                if available.is_empty() {
+                    return Err(Error::Config(
+                        "ollama has no models installed (run `ollama pull gemma4`)".into(),
+                    ));
+                }
+                if available.iter().any(|n| n == &self.ollama.model) {
+                    tracing::info!("filter using configured model {}", self.ollama.model);
+                    return Ok(());
+                }
+                let fallback = pick_fallback_model(&available).ok_or_else(|| {
+                    Error::Config(
+                        "no gemma4 model installed in ollama (run `ollama pull gemma4`)".into(),
+                    )
+                })?;
+                tracing::warn!(
+                    "configured model {:?} not installed; falling back to {:?}",
+                    self.ollama.model,
+                    fallback
+                );
+                self.ollama.model = fallback;
+                Ok(())
+            }
+            LlmBackend::SgLang => {
+                if available.iter().any(|n| n == &self.ollama.model) {
+                    tracing::info!("filter using configured sglang model {}", self.ollama.model);
+                    Ok(())
+                } else {
+                    Err(Error::Config(format!(
+                        "configured model {:?} not found on sglang server (available: {available:?})",
+                        self.ollama.model
+                    )))
+                }
+            }
         }
-        let tags: OllamaTagsResponse = resp
-            .json()
-            .await
-            .map_err(|e| Error::Config(format!("ollama /api/tags parse: {e}")))?;
-        let available: Vec<String> = tags.models.into_iter().map(|m| m.name).collect();
-        if available.is_empty() {
-            return Err(Error::Config(
-                "ollama has no models installed (run `ollama pull gemma4`)".into(),
-            ));
-        }
-        if available.iter().any(|n| n == &self.ollama.model) {
-            tracing::info!("filter using configured model {}", self.ollama.model);
-            return Ok(());
-        }
-        let fallback = pick_fallback_model(&available).ok_or_else(|| {
-            Error::Config("no gemma4 model installed in ollama (run `ollama pull gemma4`)".into())
-        })?;
-        tracing::warn!(
-            "configured model {:?} not installed; falling back to {:?}",
-            self.ollama.model,
-            fallback
-        );
-        self.ollama.model = fallback;
-        Ok(())
     }
 
     pub fn classify_async(&self, payload: TweetPayload, tx: EventTx) {
@@ -532,15 +854,15 @@ impl Classifier {
 #[derive(Clone)]
 pub struct ClassifierHandle {
     http: reqwest::Client,
-    ollama: OllamaConfig,
+    ollama: LlmConfig,
     sem: Arc<Semaphore>,
     system_prompt: Arc<RwLock<Arc<String>>>,
 }
 
 impl ClassifierHandle {
     /// Classify one tweet and return the verdict directly (no event channel).
-    /// Shares the concurrency semaphore so it never overwhelms Ollama.
-    pub async fn classify(&self, rest_id: &str, text: &str) -> FilterDecision {
+    /// Shares the concurrency semaphore so it never overwhelms the backend.
+    pub async fn classify(&self, rest_id: &str, text: &str) -> Option<FilterDecision> {
         let _permit = self.sem.acquire().await.ok();
         let prompt = current_system_prompt(&self.system_prompt);
         classify_once(&self.http, &self.ollama, &prompt, rest_id, text).await
@@ -552,9 +874,12 @@ impl ClassifierHandle {
     }
 
     /// Quick liveness probe so the ingest worker skips classification entirely
-    /// (rather than eating a full timeout per tweet) when Ollama is unreachable.
+    /// (rather than eating a full timeout per tweet) when the backend is
+    /// unreachable. Deliberately a cheap models-list GET for both backends,
+    /// never a real generation — SGLang can take the better part of a minute
+    /// to cold-start a model, which would make a "quick" probe anything but.
     pub async fn is_alive(&self) -> bool {
-        let url = format!("{}/api/tags", self.ollama.host.trim_end_matches('/'));
+        let url = self.ollama.models_url();
         matches!(
             self.http.get(&url).timeout(Duration::from_secs(2)).send().await,
             Ok(r) if r.status().is_success()
@@ -562,52 +887,43 @@ impl ClassifierHandle {
     }
 }
 
+/// `None` when the backend never produced an answer (unreachable, timed out,
+/// malformed reply). Callers show the tweet but must not cache anything: a
+/// cold-loading model or a restart would otherwise pin a fake KEEP onto every
+/// tweet in flight for the whole retention window.
 async fn classify_once(
     http: &reqwest::Client,
-    ollama: &OllamaConfig,
+    ollama: &LlmConfig,
     system_prompt: &str,
     rest_id: &str,
     text: &str,
-) -> FilterDecision {
+) -> Option<FilterDecision> {
     let started = std::time::Instant::now();
-    let url = ollama.chat_url();
-    let body = serde_json::json!({
-        "model": ollama.model,
-        "messages": [
-            { "role": "system", "content": system_prompt },
-            { "role": "user", "content": text },
+    let req = ChatRequest {
+        messages: vec![
+            serde_json::json!({ "role": "system", "content": system_prompt }),
+            serde_json::json!({ "role": "user", "content": text }),
         ],
-        "stream": false,
-        "think": false,
-        "keep_alive": ollama.keep_alive,
-        "options": { "temperature": 0, "num_predict": 3 },
-    });
+        thinking: false,
+        temperature: 0.0,
+        max_tokens: 3,
+    };
     debug!(rest_id, text_len = text.len(), "filter dispatch");
-    match http.post(&url).json(&body).send().await {
-        Ok(resp) if resp.status().is_success() => match resp.json::<OllamaChatResponse>().await {
-            Ok(r) => {
-                let parsed = parse_verdict(&r.message.content);
-                debug!(
-                    rest_id,
-                    raw = %r.message.content,
-                    parsed = ?parsed,
-                    elapsed_ms = started.elapsed().as_millis() as u64,
-                    "filter verdict",
-                );
-                parsed
-            }
-            Err(e) => {
-                warn!("filter parse failed for {rest_id}: {e}");
-                FilterDecision::Keep
-            }
-        },
-        Ok(resp) => {
-            warn!("filter http status {} for {rest_id}", resp.status());
-            FilterDecision::Keep
+    match ollama.chat_with_client(req, http).await {
+        Ok(reply) => {
+            let parsed = parse_verdict(&reply.content);
+            debug!(
+                rest_id,
+                raw = %reply.content,
+                parsed = ?parsed,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "filter verdict",
+            );
+            Some(parsed)
         }
         Err(e) => {
-            warn!("filter http error for {rest_id}: {e}");
-            FilterDecision::Keep
+            warn!("filter classify failed for {rest_id}: {e}");
+            None
         }
     }
 }
@@ -633,58 +949,60 @@ struct OllamaTagsModel {
     name: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct OpenAiChatResponse {
+    #[serde(default)]
+    choices: Vec<OpenAiChoice>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiChoice {
+    message: OpenAiMessage,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiMessage {
+    #[serde(default)]
+    content: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiModelsResponse {
+    #[serde(default)]
+    data: Vec<OpenAiModelEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiModelEntry {
+    id: String,
+}
+
 fn pick_fallback_model(available: &[String]) -> Option<String> {
     available.iter().find(|n| n.starts_with("gemma4")).cloned()
 }
 
-pub fn translate_async(rest_id: String, text: String, ollama: OllamaConfig, tx: EventTx) {
+pub fn translate_async(rest_id: String, text: String, ollama: LlmConfig, tx: EventTx) {
     tokio::spawn(async move {
-        let http = ollama.build_client();
-        let url = ollama.chat_url();
-        let body = serde_json::json!({
-            "model": ollama.model,
-            "messages": [
-                { "role": "system", "content": "Translate the following to English. Output ONLY the translation, nothing else." },
-                { "role": "user", "content": text },
+        let req = ChatRequest {
+            messages: vec![
+                serde_json::json!({ "role": "system", "content": "Translate the following to English. Output ONLY the translation, nothing else." }),
+                serde_json::json!({ "role": "user", "content": text }),
             ],
-            "stream": false,
-            "think": false,
-            "keep_alive": ollama.keep_alive,
-            "options": { "temperature": 0, "num_predict": 512 },
-        });
-        match http.post(&url).json(&body).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                match resp.json::<OllamaChatResponse>().await {
-                    Ok(r) => {
-                        let translated = r.message.content.trim().to_string();
-                        let _ = tx.send(Event::TweetTranslated {
-                            rest_id,
-                            translated,
-                        });
-                    }
-                    Err(e) => {
-                        warn!("translate parse failed for {rest_id}: {e}");
-                        let _ = tx.send(Event::TweetTranslateFailed {
-                            rest_id,
-                            err: format!("malformed response: {e}"),
-                        });
-                    }
-                }
-            }
-            Ok(resp) => {
-                let status = resp.status();
-                warn!("translate http status {status} for {rest_id}");
-                let _ = tx.send(Event::TweetTranslateFailed {
+            thinking: false,
+            temperature: 0.0,
+            max_tokens: 512,
+        };
+        match ollama.chat(req).await {
+            Ok(reply) => {
+                let translated = reply.content.trim().to_string();
+                let _ = tx.send(Event::TweetTranslated {
                     rest_id,
-                    err: format!("http {}", status.as_u16()),
+                    translated,
                 });
             }
             Err(e) => {
-                warn!("translate http error for {rest_id}: {e}");
-                let _ = tx.send(Event::TweetTranslateFailed {
-                    rest_id,
-                    err: format!("ollama unreachable: {e}"),
-                });
+                warn!("translate failed for {rest_id}: {e}");
+                let _ = tx.send(Event::TweetTranslateFailed { rest_id, err: e });
             }
         }
     });
@@ -729,16 +1047,31 @@ mod tests {
         }
     }
 
+    fn ollama_cfg() -> LlmConfig {
+        LlmConfig {
+            backend: LlmBackend::Ollama,
+            model: "gemma4:latest".into(),
+            host: "http://localhost:11434".into(),
+            timeout_seconds: 20,
+            keep_alive: "30s".into(),
+        }
+    }
+
+    fn sglang_cfg() -> LlmConfig {
+        LlmConfig {
+            backend: LlmBackend::SgLang,
+            model: "pennyroyal".into(),
+            host: "http://localhost:8081".into(),
+            timeout_seconds: 20,
+            keep_alive: "30s".into(),
+        }
+    }
+
     fn cfg(topics: Vec<&str>, guidance: &str) -> FilterConfig {
         FilterConfig {
             drop_topics: topics.into_iter().map(String::from).collect(),
             extra_guidance: guidance.into(),
-            ollama: OllamaConfig {
-                model: "gemma4:latest".into(),
-                host: "http://localhost:11434".into(),
-                timeout_seconds: 20,
-                keep_alive: "30s".into(),
-            },
+            ollama: ollama_cfg(),
         }
     }
 
@@ -760,6 +1093,24 @@ mod tests {
     fn rubric_hash_changes_on_guidance_edit() {
         let a = cfg(vec!["war"], "keep humor");
         let b = cfg(vec!["war"], "hide everything");
+        assert_ne!(a.rubric_hash(), b.rubric_hash());
+    }
+
+    #[test]
+    fn rubric_hash_changes_on_backend_change() {
+        let mut a = cfg(vec!["war"], "");
+        let mut b = a.clone();
+        a.ollama.backend = LlmBackend::Ollama;
+        b.ollama.backend = LlmBackend::SgLang;
+        assert_ne!(a.rubric_hash(), b.rubric_hash());
+    }
+
+    #[test]
+    fn rubric_hash_changes_on_model_change() {
+        let mut a = cfg(vec!["war"], "");
+        let mut b = a.clone();
+        a.ollama.model = "gemma4:latest".into();
+        b.ollama.model = "gemma3:latest".into();
         assert_ne!(a.rubric_hash(), b.rubric_hash());
     }
 
@@ -848,6 +1199,7 @@ mod tests {
         let parsed: FilterConfig = toml::from_str(FilterConfig::default_content()).unwrap();
         assert!(!parsed.drop_topics.is_empty());
         assert_eq!(parsed.ollama.model, "gemma4:latest");
+        assert_eq!(parsed.ollama.backend, LlmBackend::Ollama);
         assert!(parsed.rubric_hash().chars().count() == 16);
     }
 
@@ -880,6 +1232,10 @@ mod tests {
         hasher.update(b"");
         hasher.update(b"---\n");
         hasher.update(b"v1-different");
+        hasher.update(b"---\n");
+        hasher.update(format!("{:?}", LlmBackend::Ollama).as_bytes());
+        hasher.update(b"\n");
+        hasher.update(b"gemma4:latest");
         let alt = hex16(&hasher.finalize()[..8]);
         assert_ne!(baseline, alt);
     }
@@ -967,5 +1323,131 @@ mod tests {
         cache.rekey("hash-a".into()).unwrap();
         assert_eq!(cache.rubric_hash(), "hash-a");
         assert_eq!(cache.get("tweet1"), Some(FilterDecision::Hide));
+    }
+
+    #[test]
+    fn put_if_current_rubric_persists_when_matching() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut cache = FilterCache::open(tmp.path(), "hash-a".into()).unwrap();
+        cache.put_if_current_rubric("hash-a", "tweet1", FilterDecision::Hide);
+        assert_eq!(cache.get("tweet1"), Some(FilterDecision::Hide));
+    }
+
+    #[test]
+    fn put_if_current_rubric_drops_when_stale() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut cache = FilterCache::open(tmp.path(), "hash-a".into()).unwrap();
+        cache.rekey("hash-b".into()).unwrap();
+        cache.put_if_current_rubric("hash-a", "tweet1", FilterDecision::Hide);
+        assert!(!cache.contains("tweet1"));
+    }
+
+    #[test]
+    fn supports_vision_is_ollama_only() {
+        assert!(ollama_cfg().supports_vision());
+        assert!(!sglang_cfg().supports_vision());
+    }
+
+    #[test]
+    fn chat_url_dispatches_by_backend() {
+        assert_eq!(ollama_cfg().chat_url(), "http://localhost:11434/api/chat");
+        assert_eq!(
+            sglang_cfg().chat_url(),
+            "http://localhost:8081/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn models_url_dispatches_by_backend() {
+        assert_eq!(ollama_cfg().models_url(), "http://localhost:11434/api/tags");
+        assert_eq!(sglang_cfg().models_url(), "http://localhost:8081/v1/models");
+    }
+
+    fn sample_request() -> ChatRequest {
+        ChatRequest {
+            messages: vec![serde_json::json!({"role": "user", "content": "hi"})],
+            thinking: false,
+            temperature: 0.0,
+            max_tokens: 3,
+        }
+    }
+
+    #[test]
+    fn build_body_ollama_shape() {
+        let body = ollama_cfg().build_body(&sample_request(), false);
+        assert_eq!(body["model"], "gemma4:latest");
+        assert_eq!(body["think"], false);
+        assert_eq!(body["keep_alive"], "30s");
+        assert_eq!(body["options"]["temperature"], 0.0);
+        assert_eq!(body["options"]["num_predict"], 3);
+        assert!(body.get("chat_template_kwargs").is_none());
+    }
+
+    #[test]
+    fn build_body_sglang_shape_puts_thinking_toggle_top_level() {
+        // Confirmed against a real SGLang/Qwen3 server: this must be a
+        // top-level `chat_template_kwargs` field, not nested under
+        // `extra_body` (that's an OpenAI-Python-SDK client-side convention,
+        // not part of the actual wire format).
+        let mut req = sample_request();
+        req.thinking = true;
+        let body = sglang_cfg().build_body(&req, true);
+        assert_eq!(body["model"], "pennyroyal");
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["max_tokens"], 3);
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], true);
+        assert!(body.get("think").is_none());
+        assert!(body.get("keep_alive").is_none());
+        assert!(body.get("extra_body").is_none());
+    }
+
+    #[test]
+    fn parse_sse_data_line_token() {
+        let line = r#"data: {"choices":[{"delta":{"content":"hi","reasoning_content":null}}]}"#;
+        assert_eq!(parse_sse_data_line(line), SseLine::Token("hi".into()));
+    }
+
+    #[test]
+    fn parse_sse_data_line_thinking() {
+        let line =
+            r#"data: {"choices":[{"delta":{"content":"","reasoning_content":"pondering"}}]}"#;
+        assert_eq!(
+            parse_sse_data_line(line),
+            SseLine::Thinking("pondering".into())
+        );
+    }
+
+    #[test]
+    fn parse_sse_data_line_empty_content_is_ignored() {
+        let line = r#"data: {"choices":[{"delta":{"content":"","reasoning_content":null}}]}"#;
+        assert_eq!(parse_sse_data_line(line), SseLine::Ignore);
+    }
+
+    #[test]
+    fn parse_sse_data_line_finish_reason_is_done() {
+        let line =
+            r#"data: {"choices":[{"delta":{"reasoning_content":null},"finish_reason":"stop"}]}"#;
+        assert_eq!(
+            parse_sse_data_line(line),
+            SseLine::Done(Some("stop".into()))
+        );
+    }
+
+    #[test]
+    fn parse_sse_data_line_done_sentinel() {
+        assert_eq!(parse_sse_data_line("data: [DONE]"), SseLine::Done(None));
+    }
+
+    #[test]
+    fn parse_sse_data_line_blank_and_non_data_lines_are_ignored() {
+        assert_eq!(parse_sse_data_line(""), SseLine::Ignore);
+        assert_eq!(parse_sse_data_line("   "), SseLine::Ignore);
+        assert_eq!(parse_sse_data_line(": keep-alive comment"), SseLine::Ignore);
+        assert_eq!(parse_sse_data_line("event: ping"), SseLine::Ignore);
+    }
+
+    #[test]
+    fn parse_sse_data_line_malformed_json_is_ignored() {
+        assert_eq!(parse_sse_data_line("data: not json"), SseLine::Ignore);
     }
 }

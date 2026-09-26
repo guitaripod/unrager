@@ -13,6 +13,7 @@ pub async fn get_filter(
         "drop_topics": cfg.drop_topics,
         "extra_guidance": cfg.extra_guidance,
         "ollama": {
+            "backend": cfg.ollama.backend,
             "model": cfg.ollama.model,
             "host": cfg.ollama.host,
         },

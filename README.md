@@ -79,11 +79,13 @@ drop_topics = [
 extra_guidance = "Keep technical, scientific, art, music, sports tweets..."
 
 [ollama]
+# backend = "sglang"    # "ollama" (default) or "sglang" — talk to a local
+                         # SGLang/OpenAI-compatible server instead
 model = "gemma4:latest"
 host = "http://localhost:11434"
 ```
 
-Toggle with `<space> r`. The status bar shows `−N` when the filter is actively hiding tweets, or `filter off · doctor` when Ollama isn't reachable or no `gemma4` model is installed — the hint points at `unrager doctor`, which explains why.
+Toggle with `<space> r`. The status bar shows `−N` when the filter is actively hiding tweets, or `filter off · doctor` when the configured backend isn't reachable or the configured model isn't installed — the hint points at `unrager doctor`, which explains why.
 
 ## Reading threads
 
@@ -307,6 +309,10 @@ cd linux && cargo run -p unrager-gtk
 
 Inline photos fill the tweet column at their true aspect (Compact/Standard/Large media setting), video and GIFs show a poster with a play badge, every screen has loading/empty/error states, and right-clicking any image opens a native copy/save menu. See [`linux/README.md`](linux/README.md) for the full rundown.
 
+## Browser companion
+
+[`browser/extension/`](browser/extension/) is a small unpacked Chromium extension (Chrome, Vivaldi, Brave, Edge) that brings the same rage filter to the official x.com web app — no separate client, no lost features. Run `unrager serve`, open `chrome://extensions` (or `vivaldi://extensions`), enable **Developer mode**, **Load unpacked**, and pick the `browser/extension` folder. It watches the `HomeTimeline`/`HomeLatestTimeline` GraphQL responses X's own page already fetches (nothing extra is requested from X), sends each tweet to `unrager serve`'s `POST /api/classify` — same rubric, same verdict cache as the TUI — and hides whatever comes back HIDE. It never delays the page's own render, and fails open: if the server is down or the model is still loading, tweets stay visible and are asked about again shortly. `window.__unrager_status()` in the page console shows what it has classified and hidden. The default endpoint is `http://localhost:7777/api/classify`; to point it elsewhere, open the extension's service-worker console and run `chrome.storage.local.set({ endpoint: "http://100.x.y.z:7777/api/classify" })`.
+
 ## More
 
 - **Inline media** — photos, video posters, and GIF first-frames render inside the terminal via the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) on Ghostty, Kitty, and WezTerm. Multiple images side-by-side. Toggle with `I`. Falls back to `▣`/`▶`/`↻` glyphs elsewhere.
@@ -332,7 +338,7 @@ Inline photos fill the tweet column at their true aspect (Compact/Standard/Large
 | Command | Purpose |
 |---|---|
 | `unrager whoami` | Confirm which account your cookies belong to |
-| `unrager doctor` | Check cookies, Ollama, and gemma4 setup |
+| `unrager doctor` | Check cookies and the configured LLM backend (Ollama/gemma4 or SGLang) |
 | `unrager update` | Self-update to the latest release |
 | `unrager read <id\|url>` | Fetch a single tweet |
 | `unrager thread <id\|url>` | Full conversation thread |
@@ -365,7 +371,7 @@ All accept `-n <count>`, `--json`, `--max-pages <n>`.
 - **macOS** (stores the cookie key in your login Keychain) or **Linux** with a Secret Service provider (`kwalletd6` on KDE, `gnome-keyring` on GNOME)
 - **Chromium-family browser** logged into X — auto-detected: Vivaldi, Chrome, Chromium, Brave, Edge (all channels), Opera, Arc. Override with `UNRAGER_COOKIES_PATH`.
 - **Rust 1.85+** (edition 2024) — only if building from source
-- **Ollama** (optional) — for the rage filter and translation. Default model `gemma4:latest`, configurable in `filter.toml`.
+- **Ollama** (optional) — for the rage filter and translation. Default model `gemma4:latest`, configurable in `filter.toml`. A local [SGLang](https://github.com/sgl-project/sglang) (or other OpenAI-compatible) server works too — set `backend = "sglang"` in `filter.toml`.
 - **X developer account** (optional) — only for posting. OAuth 2.0 Native App + pay-per-use credits at [console.x.com](https://console.x.com).
 
 </details>

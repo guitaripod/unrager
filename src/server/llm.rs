@@ -5,7 +5,7 @@ use crate::model::Tweet;
 use crate::parse::timeline;
 use crate::parse::tweet as parse_tweet;
 use crate::tui::filter::{
-    FilterConfig, FilterDecision, OllamaChatResponse, OllamaConfig, build_system_prompt,
+    ChatRequest, FilterConfig, FilterDecision, LlmConfig, build_system_prompt,
 };
 use crate::tui::source;
 use std::sync::Arc;
@@ -16,30 +16,27 @@ pub fn classify_system_prompt(cfg: &FilterConfig) -> String {
 }
 
 pub async fn classify_one(
-    ollama: &OllamaConfig,
+    ollama: &LlmConfig,
     system_prompt: Arc<String>,
     text: String,
-) -> FilterDecision {
+) -> Option<FilterDecision> {
     use crate::tui::filter::parse_verdict;
     let http = ollama.build_client();
-    let url = ollama.chat_url();
-    let body = serde_json::json!({
-        "model": ollama.model,
-        "messages": [
-            { "role": "system", "content": *system_prompt },
-            { "role": "user", "content": text },
+    let req = ChatRequest {
+        messages: vec![
+            serde_json::json!({ "role": "system", "content": *system_prompt }),
+            serde_json::json!({ "role": "user", "content": text }),
         ],
-        "stream": false,
-        "think": false,
-        "keep_alive": ollama.keep_alive,
-        "options": { "temperature": 0, "num_predict": 3 },
-    });
-    match http.post(&url).json(&body).send().await {
-        Ok(resp) if resp.status().is_success() => match resp.json::<OllamaChatResponse>().await {
-            Ok(r) => parse_verdict(&r.message.content),
-            Err(_) => FilterDecision::Keep,
-        },
-        _ => FilterDecision::Keep,
+        thinking: false,
+        temperature: 0.0,
+        max_tokens: 3,
+    };
+    match ollama.chat_with_client(req, &http).await {
+        Ok(reply) => Some(parse_verdict(&reply.content)),
+        Err(e) => {
+            tracing::warn!("sse filter classify failed: {e}");
+            None
+        }
     }
 }
 

@@ -19,6 +19,10 @@ pub struct AppState {
     /// instance — verdicts it computes warm the cache the SSE filter reads.
     pub filter_cache: Arc<Mutex<FilterCache>>,
     pub classifier: Mutex<Classifier>,
+    /// A cheaply-cloneable handle to the same classifier, shared with route
+    /// handlers so `/api/classify` doesn't need to lock `classifier` just to
+    /// clone a handle out of it on every request.
+    pub classifier_handle: crate::tui::filter::ClassifierHandle,
     pub seen: Mutex<SeenStore>,
     pub session: Mutex<SessionState>,
     /// Read handle on the materialized Home buffer (`feed.db`). The ingest
@@ -59,6 +63,7 @@ impl AppState {
         let filter_cache = FilterCache::open(&filter_db, filter_config.rubric_hash())?;
         let mut classifier = Classifier::new(&filter_config);
         let _ = classifier.init().await;
+        let classifier_handle = classifier.handle();
 
         let seen_db = cache_dir.join("seen.db");
         let seen = SeenStore::open(&seen_db)?;
@@ -77,6 +82,7 @@ impl AppState {
             filter_config: Mutex::new(filter_config),
             filter_cache: Arc::new(Mutex::new(filter_cache)),
             classifier: Mutex::new(classifier),
+            classifier_handle,
             seen: Mutex::new(seen),
             session: Mutex::new(state),
             feed: Mutex::new(feed),

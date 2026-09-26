@@ -1,4 +1,5 @@
 pub mod about;
+pub mod classify;
 pub mod compose;
 pub mod config;
 pub mod engage;

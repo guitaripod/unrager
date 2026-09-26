@@ -134,6 +134,7 @@ fn router(state: Arc<AppState>) -> Router {
             "/config/filter",
             get(routes::config::get_filter).patch(routes::config::patch_filter),
         )
+        .route("/classify", post(routes::classify::classify))
         .route("/media/{tweet_id}/{index}", get(routes::media::proxy))
         .route("/sse/filter", get(sse::filter_stream))
         .route(

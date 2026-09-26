@@ -130,11 +130,16 @@ impl App {
         }
     }
 
-    pub(super) fn handle_tweet_classified(&mut self, rest_id: String, verdict: FilterDecision) {
+    pub(super) fn handle_tweet_classified(
+        &mut self,
+        rest_id: String,
+        verdict: Option<FilterDecision>,
+    ) {
         self.filter_inflight.remove(&rest_id);
-        if let Some(cache) = self.filter_cache.as_mut() {
-            cache.put(&rest_id, verdict);
+        if let (Some(cache), Some(v)) = (self.filter_cache.as_mut(), verdict) {
+            cache.put(&rest_id, v);
         }
+        let verdict = verdict.unwrap_or(FilterDecision::Keep);
         self.filter_verdicts
             .insert(rest_id.clone(), FilterState::Classified(verdict));
         let mut removed_from_source = false;

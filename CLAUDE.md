@@ -76,6 +76,7 @@ The native clients talk to `unrager serve` over HTTP/SSE (pair with Tailscale). 
 Build/run: `cd ios && xcodegen generate && xcodebuild -scheme Unrager -destination 'generic/platform=iOS Simulator' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build`, then `xcrun simctl install booted …`. Screenshot QA via `xcrun simctl io <udid> screenshot` driving the `UNRAGER_SCREEN` router. **Not App Store apps** (uses the user's X session) — sideload: `ios/scripts/provision.py` mints an ad-hoc profile (Midgar dist cert + device UDID via the ASC API), `ios/scripts/install-device.sh` builds + ad-hoc-signs + installs via `devicectl`. The iPhone Air's UDID is `00008150-00096C392208401C`; the Mac's Tailscale addr is `100.127.250.64` / `macbook.taila1a09.ts.net`.
 
 - `linux/` — native GNOME desktop client (GTK4 + libadwaita via relm4), the Linux peer of the Apple apps. A **separate cargo workspace** (heavy GTK system deps, Linux-GUI-only, so it stays out of the root `--workspace`/CI; depends on `unrager-model` by path). `linux/core` (`unrager-gtk-core`) is the GTK-free, unit-tested port of `UnragerKit`: typed HTTP/SSE `ApiClient` over `unrager-model`, a `ServeManager` that auto-spawns/reuses a local `unrager serve`, `AppSettings` (XDG TOML), a size-rotated file logger (`~/.cache/unrager-gtk/unrager.log`), and byte-parity `Format` helpers. `linux/app` (`unrager-gtk`) is the relm4 UI (shell + feed/thread/profile/search/settings). Build/run: `cd linux && cargo run -p unrager-gtk` (needs `gtk4`+`libadwaita` dev packages); headless tests: `cargo test -p unrager-gtk-core`. Its own CI is `.github/workflows/gtk.yml`. Has its own `linux/README.md`.
+- `browser/extension/` — unpacked Chromium MV3 extension that filters the official x.com web app. `page-hook.js` runs in `"world": "MAIN"` and observes X's GraphQL `HomeTimeline`/`HomeLatestTimeline` responses (X uses **XMLHttpRequest**, fetch is hooked too) and `postMessage`s the body; `timeline.js` is the JS port of the timeline/tweet walk (builds the same classification text as the TUI, maps retweets to the original's id for DOM matching); `content.js` (isolated world) asks `background.js` for verdicts and hides `[data-testid=cellInnerDiv]` cells with `display:none` (never removes React-owned nodes); `background.js` POSTs to `unrager serve`'s `POST /api/classify` (`src/server/routes/classify.rs`, batch ≤100, reuses the shared `FilterCache` + `ClassifierHandle`, omits tweets the backend failed on). x.com's CSP blocks page-context fetch to localhost, hence the service-worker hop. Tampermonkey was tried first and abandoned: its userScripts gating silently never injected in Vivaldi.
 
 When changing the server's `/api/*` contract, update the matching `UnragerKit` model/`APIClient` and the decoding tests in `UnragerKit/Tests/`, **and** the `linux/core` client + its `linux/core/tests/conformance.rs` (the Rust side reuses `unrager-model`, so most shapes track automatically — but the gap structs in `linux/core/src/models.rs` and the SSE/error handling must stay in sync).
 
@@ -156,20 +157,19 @@ If you write a commit and find no `[Unreleased]` bullet matches it, that is the 
 
 `T` translates the selected tweet to English via Ollama (same model/host as the filter). Translations are ephemeral (in-memory HashMap, cleared on source switch). Press `T` again to revert. The Ollama prompt is a zero-temperature `num_predict: 512` generation with a simple "translate to English" instruction. No caching, no semaphore — it's user-initiated and one-at-a-time.
 
-## Ollama shared infrastructure
+## LLM backend infrastructure (Ollama + SGLang)
 
-`OllamaConfig` in `filter.rs` is the central type for all Ollama interactions. It provides:
-- `chat_url()` — builds the `/api/chat` URL
-- `build_client()` — creates a reqwest client with the configured timeout
-- `build_streaming_client()` — same but with `max(timeout, 180s)` for streaming
-- `stream_chat()` — generic NDJSON streaming core with token/thinking callbacks, used by both ask and brief
-- `OllamaChatResponse` — shared deserialization type for non-streaming responses
+`LlmConfig` in `filter.rs` (TOML table `[ollama]`, kept for compatibility) is the central type for every LLM call — filter, translate, ask, brief, whisper. `backend = "ollama"` (default) or `"sglang"` (any OpenAI-compatible `/v1/chat/completions` server, e.g. SGLang behind llama-swap). It provides:
+- `ChatRequest { messages, thinking, temperature, max_tokens }` — backend-neutral; `build_body` translates it (`think`/`options.num_predict` for Ollama, top-level `chat_template_kwargs.enable_thinking`/`max_tokens` for SGLang — confirmed live that `extra_body` nesting is an SDK convention, not wire format)
+- `chat()` / `chat_with_client()` — one-shot, parses `{message:{content}}` vs `{choices:[{message}]}`
+- `stream_chat()` — dispatches to NDJSON (Ollama) or SSE `data:`/`[DONE]` (SGLang, parsed by the pure, tested `parse_sse_data_line`)
+- `list_models()` (`/api/tags` vs `/v1/models`), `supports_vision()` (Ollama only — ask skips image attach otherwise), `build_client()`/`build_streaming_client()`
 
-New Ollama features should use these helpers rather than building clients and parsing responses manually.
+`rubric_hash` folds in backend + model, so switching either invalidates cached verdicts. Ollama-only residency calls (`ask::preload`/`unload`, `keep_alive`) are no-ops on SGLang. New LLM features must go through `ChatRequest` + these helpers, never hand-built JSON bodies.
 
 ## Filter
 
-Ollama `POST /api/chat` with `think: false`, `temperature: 0`, `num_predict: 3`. Prompt is a one-shot HIDE/KEEP classifier built from `filter.toml` topics. Verdicts cache to sqlite keyed by `(tweet_id, rubric_hash)` — editing the rubric invalidates automatically. If Ollama is down, filter silently disables.
+One-shot HIDE/KEEP classifier (`thinking: false`, `temperature: 0`, `max_tokens: 3`) built from `filter.toml` topics. Verdicts cache to sqlite keyed by `(tweet_id, rubric_hash)` — editing the rubric (or backend/model) invalidates automatically. `classify_once` returns `None` when the backend never answered (unreachable, timeout, malformed reply): every caller shows the tweet but must NOT cache anything, or a cold-loading model pins fake KEEPs for the 7-day retention window. If the backend is down, the filter silently fails open.
 
 ## Media
 

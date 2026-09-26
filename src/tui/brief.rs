@@ -1,7 +1,7 @@
 use crate::gql::GqlClient;
 use crate::model::Tweet;
 use crate::tui::event::{Event, EventTx};
-use crate::tui::filter::OllamaConfig;
+use crate::tui::filter::{ChatRequest, LlmConfig};
 use crate::tui::source;
 use chrono::{DateTime, Utc};
 use serde_json::json;
@@ -106,7 +106,7 @@ impl BriefView {
 
 pub fn start(
     client: Arc<GqlClient>,
-    ollama: OllamaConfig,
+    ollama: LlmConfig,
     handle: String,
     prefetched: Option<Vec<Tweet>>,
     tx: EventTx,
@@ -312,23 +312,21 @@ fn build_user_prompt(handle: &str, tweets: &[Tweet], span: &str) -> String {
 }
 
 async fn stream_ollama_with(
-    ollama: &OllamaConfig,
+    ollama: &LlmConfig,
     handle: &str,
     user_prompt: String,
     num_predict: u32,
     tx: &EventTx,
 ) {
-    let body = json!({
-        "model": ollama.model,
-        "messages": [
-            { "role": "system", "content": SYSTEM_PROMPT },
-            { "role": "user", "content": user_prompt },
+    let req = ChatRequest {
+        messages: vec![
+            json!({ "role": "system", "content": SYSTEM_PROMPT }),
+            json!({ "role": "user", "content": user_prompt }),
         ],
-        "stream": true,
-        "think": true,
-        "keep_alive": ollama.keep_alive,
-        "options": { "temperature": 0.5, "num_predict": num_predict },
-    });
+        thinking: true,
+        temperature: 0.5,
+        max_tokens: num_predict,
+    };
 
     let h = handle.to_string();
     let tx2 = tx.clone();
@@ -337,7 +335,7 @@ async fn stream_ollama_with(
 
     let result = ollama
         .stream_chat(
-            body,
+            req,
             "brief",
             |token| {
                 output_chars += token.len();

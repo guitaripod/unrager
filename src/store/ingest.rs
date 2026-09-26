@@ -235,8 +235,10 @@ async fn run_cycle(
             None if classify_enabled => {
                 let text = filter::build_classification_text(tweet);
                 let v = classifier.classify(&tweet.rest_id, &text).await;
-                filter_cache.lock().await.put(&tweet.rest_id, v);
-                Some(v)
+                if let Some(v) = v {
+                    filter_cache.lock().await.put(&tweet.rest_id, v);
+                }
+                v
             }
             None => None,
         };

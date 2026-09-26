@@ -1,7 +1,7 @@
 use crate::model::{MediaKind, Tweet};
 use crate::tui::editor::VimEditor;
 use crate::tui::event::{Event, EventTx};
-use crate::tui::filter::OllamaConfig;
+use crate::tui::filter::{ChatRequest, LlmBackend, LlmConfig};
 use crate::tui::source::PaneState;
 use base64::Engine;
 use serde_json::{Value, json};
@@ -197,23 +197,35 @@ pub enum Role {
     Assistant,
 }
 
-pub fn preload(ollama: OllamaConfig) {
+pub fn preload(ollama: LlmConfig) {
+    if ollama.backend != LlmBackend::Ollama {
+        return;
+    }
     tokio::spawn(async move {
         warm_model(&ollama, "10m").await;
     });
 }
 
-pub fn unload(ollama: OllamaConfig) {
+pub fn unload(ollama: LlmConfig) {
+    if ollama.backend != LlmBackend::Ollama {
+        return;
+    }
     tokio::spawn(async move {
         warm_model(&ollama, "0s").await;
     });
 }
 
-pub async fn unload_blocking(ollama: &OllamaConfig) {
+pub async fn unload_blocking(ollama: &LlmConfig) {
+    if ollama.backend != LlmBackend::Ollama {
+        return;
+    }
     warm_model(ollama, "0s").await;
 }
 
-async fn warm_model(ollama: &OllamaConfig, keep_alive: &str) {
+/// Ollama-only model-residency nudge (`/api/generate` + `keep_alive`); the
+/// three call sites above already gate on `backend == Ollama`, so this never
+/// fires a doomed request at an SGLang server.
+async fn warm_model(ollama: &LlmConfig, keep_alive: &str) {
     let Ok(http) = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
@@ -244,7 +256,7 @@ async fn warm_model(ollama: &OllamaConfig, keep_alive: &str) {
 }
 
 pub fn send(
-    ollama: OllamaConfig,
+    ollama: LlmConfig,
     tweet: Tweet,
     replies: Vec<Tweet>,
     thread: Option<ThreadContext>,
@@ -261,7 +273,11 @@ pub fn send(
             has_thread = thread.is_some(),
             "ask stream start"
         );
-        let images = fetch_images(&tweet).await;
+        let images = if ollama.supports_vision() {
+            fetch_images(&tweet).await
+        } else {
+            Vec::new()
+        };
         if !images.is_empty() {
             debug!(tweet_id = %tweet_id, count = images.len(), "ask images attached");
         }
@@ -411,21 +427,19 @@ pub async fn fetch_images(tweet: &Tweet) -> Vec<String> {
     out
 }
 
-async fn stream_ollama(ollama: &OllamaConfig, tweet_id: &str, messages: Vec<Value>, tx: &EventTx) {
-    let body = json!({
-        "model": ollama.model,
-        "messages": messages,
-        "stream": true,
-        "think": true,
-        "keep_alive": ollama.keep_alive,
-        "options": { "temperature": 0.3, "num_predict": 2048 },
-    });
+async fn stream_ollama(ollama: &LlmConfig, tweet_id: &str, messages: Vec<Value>, tx: &EventTx) {
+    let req = ChatRequest {
+        messages,
+        thinking: true,
+        temperature: 0.3,
+        max_tokens: 2048,
+    };
 
     let tid = tweet_id.to_string();
     let tx2 = tx.clone();
     let result = ollama
         .stream_chat(
-            body,
+            req,
             "ask",
             |token| {
                 let _ = tx2.send(Event::AskToken {

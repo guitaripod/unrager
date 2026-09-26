@@ -21,6 +21,14 @@ drop_topics = [
 extra_guidance = "KEEP technical, scientific, art, music, sports, personal-life, and humor tweets that only mention these topics in passing. KEEP genuine AI research, product announcements, and thoughtful critique. HIDE if the topic IS the point of the tweet."
 
 [ollama]
+# backend = "sglang"    # "ollama" (default) or "sglang" — talk to a local
+                         # SGLang/OpenAI-compatible server instead of Ollama.
+                         # `host` then points at that server (e.g. SGLang's
+                         # default http://localhost:30000, or a llama-swap
+                         # front door), and `model` must match the server's
+                         # served-model-name. Raise timeout_seconds to ~120:
+                         # a model that has to cold-load takes well over 20s
+                         # to answer its first request.
 model = "gemma4:latest"
 host = "http://localhost:11434"
 timeout_seconds = 20

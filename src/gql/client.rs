@@ -605,8 +605,15 @@ impl GqlClient {
         );
     }
 
+    /// The session to scrape the signed-in shell with, if this client has
+    /// one (a filter-only server runs with an empty session).
+    fn scrape_session(&self) -> Option<XSession> {
+        let (session, _) = self.session_snapshot();
+        (!session.auth_token.is_empty()).then_some(session)
+    }
+
     async fn try_warm_transaction_key(&self) -> bool {
-        match scraper::scrape(&self.http).await {
+        match scraper::scrape(&self.http, self.scrape_session().as_ref()).await {
             Ok(result) => {
                 {
                     let mut guard = match self.store.lock() {
@@ -635,7 +642,7 @@ impl GqlClient {
     }
 
     async fn refresh_query_ids(&self) -> Result<()> {
-        let result = scraper::scrape(&self.http).await?;
+        let result = scraper::scrape(&self.http, self.scrape_session().as_ref()).await?;
         let snapshot = {
             let mut guard = self
                 .store

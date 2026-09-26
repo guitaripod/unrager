@@ -35,22 +35,22 @@ macro_rules! operations {
 }
 
 operations! {
-    (Viewer, "5XShkXk2oO2J7SYmTu6pvw"),
-    (TweetResultByRestId, "LkId5Akr61BS6BmOIcffRg"),
-    (TweetDetail, "559hs_YZNV4IgA3Z6zIIuw"),
-    (HomeTimeline, "3tb-_5Lf7kdCZ1cFHmsEfg"),
-    (HomeLatestTimeline, "eObmT5Nuapp04u8bYWf49Q"),
-    (UserByScreenName, "Gb-d6r0vxPOADdG62OEBpQ"),
-    (UserTweets, "eoJ5zbv51Z_KVl81v9PmLQ"),
-    (UserTweetsAndReplies, "wc5DRl4VaW5lSqJ8YbftZQ"),
-    (SearchTimeline, "BGd0T_j7oVwlW5U79tO_0A"),
-    (BookmarkSearchTimeline, "dzUkTX927TOSBQ3Jin7QqQ"),
-    (Bookmarks, "tUVliYsHyxrQIT4HXUWNdA"),
-    (Favoriters, "E-ZTxvWWIkmOKwYdNTEefg"),
-    (Followers, "vJijlO_CM7dyGFNjDd7iqQ"),
-    (BlueVerifiedFollowers, "cg6WLW39UujWMeX77xBnOA"),
-    (Following, "b8XpwALENnJdFSHchkK6rw"),
-    (NotificationsTimeline, "l6ovGrjBwVobgU4puBCycg"),
+    (Viewer, "9t128XgFic52jPUEkJMf6w"),
+    (TweetResultByRestId, "Xl0tsHf4AzflMRjbw9e70A"),
+    (TweetDetail, "zoF7_t363wZyzylk-BLfZQ"),
+    (HomeTimeline, "og4a4SdSF3WiQkkwaPCdPg"),
+    (HomeLatestTimeline, "OQPHTgwczzp9RMAPt6BH9A"),
+    (UserByScreenName, "KybxDj9RrADIITXlGG8kpw"),
+    (UserTweets, "jeAA-59Y9FL7FmjgBNIVPw"),
+    (UserTweetsAndReplies, "wI-ubAWfScnG6odLK4XgCg"),
+    (SearchTimeline, "auLkqtmHqYEpRvflfvLhyQ"),
+    (BookmarkSearchTimeline, "rbwiGBFqb93lmG7mw_OYZQ"),
+    (Bookmarks, "-dgKZ58Dr9YSJYrcgEb5KA"),
+    (Favoriters, "a2IHRwTdhkcv0Zt0mI-Vrg"),
+    (Followers, "fVGYs5W9kNUuoUrZwYZQpQ"),
+    (BlueVerifiedFollowers, "DWeIe6l1rsZMqHPbbWXtig"),
+    (Following, "-Mn4uN7C-vxXBwUKtSwS6A"),
+    (NotificationsTimeline, "MSUPE4KwuxyghDO60Bv5uQ"),
     (FavoriteTweet, "lI07N6Otwv1PhnEgXILM7A"),
     (UnfavoriteTweet, "ZYKSe-w7KEslx3JhSIk5LA"),
     (CreateRetweet, "mbRO74GrOvSfRcJnlMapnQ"),
@@ -58,7 +58,7 @@ operations! {
     (DeleteTweet, "nxpZCY2K-I6QoFHAHeojFQ"),
     (CreateBookmark, "aoDbu3RHznuiSkQ9aNM67Q"),
     (DeleteBookmark, "Wlmlj2-xzyS1GN3a6cj-mQ"),
-    (AboutAccountQuery, "XRqGa7EeokUU5kppkh13EA"),
+    (AboutAccountQuery, "TzOG2twZEfhr9KmClvVVqA"),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,12 +142,17 @@ impl QueryIdStore {
         }
     }
 
+    /// Writes the cache through a temporary file and a rename, so the TUI,
+    /// the server and `doctor` (which all refresh it) never read a half-written
+    /// file and silently fall back to the built-in ids.
     pub fn save_cached(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let json = serde_json::to_vec_pretty(self)?;
-        std::fs::write(path, json)?;
+        let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+        std::fs::write(&tmp, json)?;
+        std::fs::rename(&tmp, path)?;
         tracing::debug!(
             "wrote {} query ids to cache at {}",
             self.entries.len(),

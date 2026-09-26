@@ -23,7 +23,7 @@ async fn main() {
         .build()
         .expect("build http client");
 
-    let scraped = match scraper::scrape(&http).await {
+    let scraped = match scraper::scrape(&http, None).await {
         Ok(r) => r.query_ids,
         Err(e) => {
             println!("SCRAPER_ERROR: {e}");
@@ -34,7 +34,7 @@ async fn main() {
             println!();
             println!("  cargo run --release -- doctor");
             println!();
-            println!("If the scraper is permanently broken, SHELL_URLS or the regexes");
+            println!("If the scraper is permanently broken, ANONYMOUS_SHELL_URLS or the regexes");
             println!("in src/gql/scraper.rs need updating.");
             std::process::exit(2);
         }

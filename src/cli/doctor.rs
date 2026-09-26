@@ -146,68 +146,71 @@ async fn print_query_ids(report: &mut Report) {
         }
     }
 
-    let store = crate::gql::QueryIdStore::with_fallbacks_and_cache(&cache_path);
-    let cached_age = std::fs::metadata(&cache_path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.elapsed().ok());
-
-    match cached_age {
-        Some(age) if age.as_secs() < 86400 => {
-            let hours = age.as_secs() / 3600;
-            println!("✓ query ids   cache is {hours}h old (fresh)");
-        }
-        Some(age) => {
-            let days = age.as_secs() / 86400;
-            println!(
-                "! query ids   cache is {days}d old — may be stale; will refresh on next API call"
-            );
-            report.warnings += 1;
-        }
-        None => {
-            println!("! query ids   no cache file — using hardcoded fallbacks");
-            report.warnings += 1;
-        }
-    }
-
+    let session = chromium::load_session().await.ok();
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .unwrap_or_default();
-    match crate::gql::scraper::scrape(&http).await {
+    match crate::gql::scraper::scrape(&http, session.as_ref()).await {
         Ok(result) => {
-            let known_ops: Vec<&str> = [
+            let core = [
                 "HomeTimeline",
                 "HomeLatestTimeline",
                 "UserTweets",
                 "SearchTimeline",
                 "TweetDetail",
-            ]
-            .into_iter()
-            .collect();
-            let matched = result
+            ];
+            let found = result.query_ids.len();
+            let core_found = result
                 .query_ids
                 .iter()
-                .filter(|q| known_ops.contains(&q.operation.as_str()))
+                .filter(|q| core.contains(&q.operation.as_str()))
                 .count();
+            let mut store = crate::gql::QueryIdStore::with_fallbacks_and_cache(&cache_path);
+            store.merge_iter(result.query_ids);
+            let refreshed = if store.save_cached(&cache_path).is_ok() {
+                ", cache refreshed"
+            } else {
+                ""
+            };
             println!(
-                "✓ query ids   scraper found {} ids ({matched} known operations)",
-                result.query_ids.len()
+                "✓ query ids   {found} fetched from x.com ({core_found}/{} core operations){refreshed}",
+                core.len()
             );
             if result.transaction_material.is_some() {
                 println!("✓ transaction key material extracted");
             } else {
                 println!("! transaction key material not available (header will be omitted)");
+                report.warnings += 1;
             }
-            let _ = store;
         }
         Err(e) => {
-            println!("! query ids   scraper failed: {e}");
-            println!("              → cached/fallback ids will be used; may go stale");
+            println!("! query ids   couldn't fetch fresh ones from x.com: {e}");
+            match std::fs::metadata(&cache_path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+            {
+                Some(age) => println!(
+                    "              → using ids cached {} ago; they keep working until X rotates them",
+                    rough_age(age)
+                ),
+                None => println!("              → using the ids built into this version"),
+            }
             println!(
-                "              → manual override: add [query_ids] section to config.toml with OperationName = \"queryId\""
+                "              → if requests start failing, add a [query_ids] section to config.toml with OperationName = \"queryId\""
             );
             report.warnings += 1;
         }
+    }
+}
+
+/// "40m", "5h", "3d": how stale a cache is, at the precision anyone needs.
+fn rough_age(age: std::time::Duration) -> String {
+    let secs = age.as_secs();
+    match secs {
+        s if s < 3600 => format!("{}m", s / 60),
+        s if s < 86400 => format!("{}h", s / 3600),
+        s => format!("{}d", s / 86400),
     }
 }

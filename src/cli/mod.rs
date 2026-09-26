@@ -95,12 +95,12 @@ pub enum Command {
 
     #[cfg(feature = "tui")]
     #[command(
-        about = "Launch the TUI against a bundled offline feed (no X cookies needed, just a terminal and optionally Ollama)"
+        about = "Launch the TUI against a bundled offline feed (no X cookies needed, just a terminal and optionally a local LLM)"
     )]
     Demo(demo::Args),
 
     #[cfg(feature = "tui")]
-    #[command(about = "Check cookies, Ollama, and gemma4 setup")]
+    #[command(about = "Check cookies and the LLM backend (Ollama or SGLang)")]
     Doctor(doctor::Args),
 
     #[command(about = "Update unrager to the latest release")]

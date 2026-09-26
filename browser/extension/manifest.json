@@ -2,6 +2,7 @@
   "manifest_version": 3,
   "name": "unrager",
   "version": "1.0.0",
+  "minimum_chrome_version": "111",
   "description": "Hides rage-bait on x.com with the same local-LLM rubric as the unrager TUI, via unrager serve's /api/classify.",
   "permissions": ["storage"],
   "host_permissions": ["http://localhost/*", "http://127.0.0.1/*"],

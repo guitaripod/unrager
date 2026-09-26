@@ -2,7 +2,7 @@ use crate::server::error::ApiError;
 use crate::server::llm;
 use crate::server::state::AppState;
 use crate::tui::ask;
-use crate::tui::filter::{ChatRequest, FilterCache, FilterDecision, LlmConfig};
+use crate::tui::filter::{self, ChatRequest, FilterCache, FilterDecision, LlmConfig};
 use async_stream::stream;
 use axum::extract::{Query, State};
 use axum::response::Sse;
@@ -36,12 +36,9 @@ pub async fn filter_stream(
     let state_clone = state.clone();
 
     tokio::spawn(async move {
-        let cfg = state_clone.filter_config.lock().await.clone();
-        let ollama = cfg.ollama.clone();
-        let system = Arc::new(llm::classify_system_prompt(&cfg));
-        let rubric_snapshot = cfg.rubric_hash();
+        let rubric_snapshot = state_clone.filter_config.lock().await.rubric_hash();
+        let classifier = state_clone.classifier_handle.clone();
         for id in ids {
-            // cache hit?
             {
                 let cache = state_clone.filter_cache.lock().await;
                 if let Some(d) = cache.get(&id) {
@@ -58,8 +55,8 @@ pub async fn filter_stream(
                 Ok(t) => t,
                 Err(_) => continue,
             };
-            let text = llm::tweet_as_prompt_text(&tweet);
-            let Some(decision) = llm::classify_one(&ollama, system.clone(), text).await else {
+            let text = filter::build_classification_text(&tweet);
+            let Some(decision) = classifier.classify(&id, &text).await else {
                 continue;
             };
             {
@@ -135,7 +132,11 @@ pub async fn ask_context_stream(
     let tweet = llm::fetch_tweet(&state.gql, &req.tweet_id).await?;
     let cfg = state.filter_config.lock().await.clone();
 
-    let images = ask::fetch_images(&tweet).await;
+    let images = if cfg.ollama.supports_vision() {
+        ask::fetch_images(&tweet).await
+    } else {
+        Vec::new()
+    };
     let ctx = ask::PromptContext {
         ancestors: req.ancestors.into_iter().map(prompt_entry).collect(),
         siblings: req.siblings.into_iter().map(prompt_entry).collect(),

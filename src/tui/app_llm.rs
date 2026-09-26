@@ -11,12 +11,12 @@ use crate::tui::focus::{self, FocusEntry};
 use crate::tui::source::SourceKind;
 use std::path::Path;
 
-/// Formats a human-facing status line for an Ollama-backed feature failure.
+/// Formats a human-facing status line for an LLM-backed feature failure.
 /// When the error looks like a connection problem, appends a pointer at
 /// `unrager doctor` so users know where to look; other errors (parse, HTTP)
 /// are surfaced verbatim.
-pub(super) fn ollama_error_hint(feature: &str, err: &str) -> String {
-    let looks_unreachable = err.contains("ollama unreachable")
+pub(super) fn llm_error_hint(feature: &str, err: &str) -> String {
+    let looks_unreachable = err.starts_with("request failed")
         || err.contains("connection")
         || err.contains("Connection")
         || err.contains("connect")
@@ -24,7 +24,7 @@ pub(super) fn ollama_error_hint(feature: &str, err: &str) -> String {
         || err.contains("timed out")
         || err.contains("timeout");
     if looks_unreachable {
-        format!("{feature} failed · ollama down · run `unrager doctor`")
+        format!("{feature} failed · model server down · run `unrager doctor`")
     } else {
         format!("{feature} failed · {err}")
     }
@@ -60,7 +60,7 @@ impl App {
     pub fn toggle_filter(&mut self) {
         if self.filter_classifier.is_none() {
             self.filter_mode = FilterMode::Off;
-            self.set_status("filter unavailable (ollama down)");
+            self.set_status("filter unavailable (model server down)");
             return;
         }
         self.filter_mode = match self.filter_mode {
@@ -336,7 +336,7 @@ impl App {
     pub(super) fn handle_tweet_translate_failed(&mut self, rest_id: String, err: String) {
         self.translation_inflight.remove(&rest_id);
         tracing::warn!(rest_id = %rest_id, "translate failed: {err}");
-        self.set_status(ollama_error_hint("translate", &err));
+        self.set_status(llm_error_hint("translate", &err));
     }
 
     pub(super) fn open_ask_for_selected(&mut self) {
@@ -577,7 +577,7 @@ impl App {
         {
             if let Some(err) = &error {
                 tracing::warn!(tweet_id = %tweet_id, "ask stream error: {err}");
-                self.set_status(ollama_error_hint("ask", err));
+                self.set_status(llm_error_hint("ask", err));
             } else {
                 self.set_status("ask done");
             }
@@ -733,7 +733,7 @@ impl App {
         }
         if let Some(err) = error {
             tracing::warn!(handle = %handle, "profile error: {err}");
-            self.set_status(ollama_error_hint("profile aborted", &err));
+            self.set_status(llm_error_hint("profile aborted", &err));
         } else {
             self.set_status("profile complete");
         }
@@ -749,33 +749,33 @@ mod tests {
 
     #[test]
     fn hint_connection_error_mentions_doctor() {
-        let msg = ollama_error_hint("translate", "ollama unreachable: dns error");
+        let msg = llm_error_hint("translate", "request failed: dns error");
         assert!(msg.contains("run `unrager doctor`"));
-        assert!(msg.contains("ollama down"));
+        assert!(msg.contains("model server down"));
     }
 
     #[test]
     fn hint_timeout_mentions_doctor() {
-        let msg = ollama_error_hint("ask", "request failed: operation timed out");
+        let msg = llm_error_hint("ask", "request failed: operation timed out");
         assert!(msg.contains("run `unrager doctor`"));
     }
 
     #[test]
     fn hint_connection_refused_mentions_doctor() {
-        let msg = ollama_error_hint("ask", "request failed: Connection refused (os error 111)");
+        let msg = llm_error_hint("ask", "request failed: Connection refused (os error 111)");
         assert!(msg.contains("run `unrager doctor`"));
     }
 
     #[test]
     fn hint_non_connection_error_surfaces_verbatim() {
-        let msg = ollama_error_hint("translate", "malformed response: expected value at line 1");
+        let msg = llm_error_hint("translate", "malformed response: expected value at line 1");
         assert!(!msg.contains("run `unrager doctor`"));
         assert!(msg.contains("malformed response"));
     }
 
     #[test]
     fn hint_http_status_surfaces_verbatim() {
-        let msg = ollama_error_hint("ask", "http 500: internal server error");
+        let msg = llm_error_hint("ask", "http 500: internal server error");
         assert!(!msg.contains("run `unrager doctor`"));
         assert!(msg.contains("http 500"));
     }

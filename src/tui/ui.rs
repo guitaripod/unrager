@@ -4813,7 +4813,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect, scroll: u16) {
         ]),
         Line::from(vec![
             Span::styled("  filter off · doctor ", Style::default().fg(t.text_muted)),
-            Span::raw("filter disabled — run `unrager doctor` to set up Ollama"),
+            Span::raw("filter disabled — run `unrager doctor` to set up the LLM backend"),
         ]),
         Line::from(vec![
             Span::styled("  ◇  ", Style::default().fg(t.accent)),

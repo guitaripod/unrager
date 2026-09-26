@@ -21,7 +21,7 @@ Your home feed, minus the tweets the LLM quietly ate. The `−N` in the status b
 
 ## What is this
 
-`unrager` is a Rust TUI for reading Twitter/X without the engagement-optimized rage. It connects through the same GraphQL endpoints the web client uses (no API key, no cost), and pipes every incoming tweet through a local [Ollama](https://ollama.com) model that classifies it against your personal rubric. Tweets that match are physically removed from the feed before rendering — they never existed.
+`unrager` is a Rust TUI for reading Twitter/X without the engagement-optimized rage. It connects through the same GraphQL endpoints the web client uses (no API key, no cost), and pipes every incoming tweet through a local [Ollama](https://ollama.com) (or SGLang) model that classifies it against your personal rubric. Tweets that match are physically removed from the feed before rendering — they never existed.
 
 Everything intelligent runs locally: the **rage filter** classifies each tweet, **translate** (`T`) turns foreign-language posts into English, **ask** (`A`) lets gemma explain / counter / summarize a post, and **brief** (`B`) writes a short profile analysis from someone's recent timeline. One Ollama process, one gemma model, four features. No cloud round-trips, no provider keys, no token bills, no data leaving your machine.
 
@@ -63,7 +63,7 @@ curl -fsSL https://unrager.com/install.sh | bash -s -- --uninstall
 
 Works on macOS (Apple Silicon + Intel) and Linux (x86_64 + aarch64). On Windows, use WSL2 with a Linux browser — the native Windows build path isn't wired up (Chromium cookie decryption on Windows uses DPAPI, which unrager doesn't implement; PRs welcome). Builds from source via `cargo install --path .` on any Unix platform with Rust 1.85+.
 
-The TUI reads cookies from your logged-in browser automatically (Vivaldi, Chrome, Brave, Edge, Opera, Arc). If you're logged into x.com in more than one of them, pin the source with `cookie_browser = "Vivaldi"` in `config.toml` (or the `UNRAGER_BROWSER` env var) and unrager uses only that browser — never silently falling back to another. The filter enables itself when Ollama is reachable and disables silently when it isn't.
+The TUI reads cookies from your logged-in browser automatically (Vivaldi, Chrome, Brave, Edge, Opera, Arc). If you're logged into x.com in more than one of them, pin the source with `cookie_browser = "Vivaldi"` in `config.toml` (or the `UNRAGER_BROWSER` env var) and unrager uses only that browser — never silently falling back to another. The filter enables itself when its LLM backend is reachable and disables silently when it isn't.
 
 ## The rage filter
 
@@ -265,7 +265,7 @@ Over Tailscale (or your LAN), set an ACL so only your own devices can hit the po
 
 The API surface (`/api/*`): all seven sources, tweet detail + thread, profile + likers, compose/reply, like, media proxy (photos, videos, gifs, link cards, polls, YouTube, X broadcasts), and filter/ask/brief/translate streaming over SSE, plus session + filter-config persistence and seen-tracking — feature parity with the TUI.
 
-While `unrager serve` is running it owns the filter + seen caches; the TUI detects the lockfile (`~/.cache/unrager/server.lock`) — run one or the other.
+`unrager serve` and the TUI can run side by side (e.g. serve as an always-on user service): whichever starts first owns the background Home ingest (`~/.cache/unrager/feed.db.writer.lock`) and the other reads from it, and both share the same filter verdict cache.
 
 ## Native apps (iOS + macOS + Linux)
 

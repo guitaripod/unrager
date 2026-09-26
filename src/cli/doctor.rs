@@ -126,7 +126,7 @@ async fn print_llm_backend(report: &mut Report) {
     let models = match ollama.list_models().await {
         Ok(m) => m,
         Err(e) => {
-            println!("✗ {label:<9}not reachable at {host}: {e}");
+            println!("✗ {label:<12}not reachable at {host}: {e}");
             match ollama.backend {
                 LlmBackend::Ollama => {
                     println!(
@@ -146,7 +146,7 @@ async fn print_llm_backend(report: &mut Report) {
     };
 
     println!(
-        "✓ {label:<9}reachable at {host} ({} model(s))",
+        "✓ {label:<12}reachable at {host} ({} model(s))",
         models.len()
     );
 

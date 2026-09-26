@@ -155,7 +155,7 @@ If you write a commit and find no `[Unreleased]` bullet matches it, that is the 
 
 ## Translation
 
-`T` translates the selected tweet to English via Ollama (same model/host as the filter). Translations are ephemeral (in-memory HashMap, cleared on source switch). Press `T` again to revert. The Ollama prompt is a zero-temperature `num_predict: 512` generation with a simple "translate to English" instruction. No caching, no semaphore — it's user-initiated and one-at-a-time.
+`T` translates the selected tweet to English via the filter's LLM backend (same `[ollama]` config). Translations are ephemeral (in-memory HashMap, cleared on source switch). Press `T` again to revert. The prompt is a zero-temperature `max_tokens: 512` generation with a simple "translate to English" instruction. No caching, no semaphore — it's user-initiated and one-at-a-time.
 
 ## LLM backend infrastructure (Ollama + SGLang)
 

@@ -308,6 +308,12 @@ pub(super) const EMPTY_APPEND_LIMIT: u32 = 5;
 /// it never hangs below the target.
 pub(super) const INITIAL_RENDER_TARGET: usize = 25;
 
+/// How often a tick redraws while nothing animates: often enough for the
+/// clock's seconds, relative timestamps, expiring status messages and
+/// read-dimming, a quarter of the tick rate otherwise spent repainting an
+/// unchanged screen.
+const IDLE_REDRAW_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
 impl App {
     pub async fn new(tx: EventTx, is_dark: bool) -> Result<Self> {
         let client = Arc::new(common::build_gql_client().await?);
@@ -725,7 +731,7 @@ impl App {
     }
 
     pub fn handle_event(&mut self, event: Event, terminal: &mut DefaultTerminal) -> Result<()> {
-        if !matches!(event, Event::Render) {
+        if !matches!(event, Event::Render | Event::Tick) {
             self.dirty = true;
         }
         match event {
@@ -753,12 +759,20 @@ impl App {
             }
             Event::Tick => {
                 self.last_tick = Instant::now();
-                if self.is_any_loading() {
+                let animating = self.is_any_loading();
+                if animating {
                     self.spinner_frame = self.spinner_frame.wrapping_add(1);
                 }
                 self.tick_status();
                 self.mark_current_seen();
                 self.drain_about_pending();
+                if animating
+                    || self
+                        .last_render_at
+                        .is_none_or(|t| t.elapsed() >= IDLE_REDRAW_INTERVAL)
+                {
+                    self.dirty = true;
+                }
             }
             Event::Key(key) => self.handle_key(key),
             Event::Resize(_, _) => {

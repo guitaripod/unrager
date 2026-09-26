@@ -113,7 +113,208 @@ fn prepend_selection_marker(line: &mut Line<'static>, active: bool, highlight_bg
     line.spans.insert(0, marker);
 }
 
-fn render_scrollable(
+/// A scrollable pane's items, built on demand and at most once per frame, so
+/// a frame only lays out what it shows (plus what it measures to keep the
+/// selection in view) instead of every tweet the feed has ever loaded.
+struct LazyItems<F: FnMut(usize) -> PaneItem> {
+    build: F,
+    count: usize,
+    built: HashMap<usize, Vec<Line<'static>>>,
+}
+
+impl<F: FnMut(usize) -> PaneItem> LazyItems<F> {
+    fn new(count: usize, build: F) -> Self {
+        Self {
+            build,
+            count,
+            built: HashMap::new(),
+        }
+    }
+
+    /// Rows item `i` occupies, counting the divider below all but the last.
+    fn block(&mut self, i: usize) -> usize {
+        let build = &mut self.build;
+        let lines = self.built.entry(i).or_insert_with(|| build(i).lines).len();
+        lines + usize::from(i + 1 < self.count)
+    }
+
+    fn take(&mut self, i: usize) -> Vec<Line<'static>> {
+        match self.built.remove(&i) {
+            Some(lines) => lines,
+            None => (self.build)(i).lines,
+        }
+    }
+}
+
+/// Where a pane's viewport starts: the first item it shows and how many of
+/// that item's rows are scrolled off the top.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Viewport {
+    top: usize,
+    offset: usize,
+}
+
+/// The viewport whose top is `rows` rows above the start of item `anchor`,
+/// clamped at the first item.
+fn viewport_above(anchor: usize, rows: usize, block: &mut impl FnMut(usize) -> usize) -> Viewport {
+    let mut need = rows;
+    let mut top = anchor;
+    while need > 0 && top > 0 {
+        top -= 1;
+        let b = block(top);
+        if b >= need {
+            return Viewport {
+                top,
+                offset: b - need,
+            };
+        }
+        need -= b;
+    }
+    Viewport { top, offset: 0 }
+}
+
+/// Moves `prev` just enough to keep item `sel` (`sel_h` rows tall) at least a
+/// margin away from the pane's edges, then pulls it up if it would leave
+/// empty rows below the last item. Only measures items between the old
+/// viewport and the selection, and at most a screenful around either, so
+/// its cost doesn't grow with the length of the feed.
+fn scroll_to_selection(
+    count: usize,
+    sel: usize,
+    sel_h: usize,
+    height: usize,
+    prev: Viewport,
+    block: &mut impl FnMut(usize) -> usize,
+) -> Viewport {
+    const SCROLL_MARGIN: usize = 8;
+    let margin = SCROLL_MARGIN.min(height.saturating_sub(sel_h) / 2);
+    let mut view = Viewport {
+        top: prev.top.min(count - 1),
+        offset: if prev.top < count { prev.offset } else { 0 },
+    };
+
+    let rows_above_sel = if sel < view.top {
+        None
+    } else {
+        let mut rows = 0usize;
+        let mut i = view.top;
+        while i < sel && rows <= height + view.offset {
+            rows += block(i);
+            i += 1;
+        }
+        (i == sel).then(|| rows as isize - view.offset as isize)
+    };
+    match rows_above_sel {
+        Some(rows) if rows >= margin as isize && rows as usize + sel_h + margin <= height => {}
+        Some(rows) if rows >= margin as isize => {
+            view = if sel_h >= height {
+                Viewport {
+                    top: sel,
+                    offset: 0,
+                }
+            } else {
+                viewport_above(sel, height - sel_h - margin, block)
+            };
+        }
+        None if sel >= view.top => {
+            view = if sel_h >= height {
+                Viewport {
+                    top: sel,
+                    offset: 0,
+                }
+            } else {
+                viewport_above(sel, height - sel_h - margin, block)
+            };
+        }
+        _ => view = viewport_above(sel, margin, block),
+    }
+
+    let mut shown = 0usize;
+    let mut i = view.top;
+    while i < count && shown < height + view.offset {
+        shown += block(i);
+        i += 1;
+    }
+    let shown = shown.saturating_sub(view.offset);
+    if i == count && shown < height {
+        let deficit = height - shown;
+        view = if view.offset >= deficit {
+            Viewport {
+                top: view.top,
+                offset: view.offset - deficit,
+            }
+        } else {
+            viewport_above(view.top, deficit - view.offset, block)
+        };
+    }
+    view
+}
+
+fn render_scrollable<F: FnMut(usize) -> PaneItem>(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    mut items: LazyItems<F>,
+    state: &mut PaneState,
+    selected: Option<usize>,
+    active: bool,
+) {
+    let block = block_with_focus(title, active);
+    let inner = block.inner(area);
+    let count = items.count;
+    if count == 0 {
+        frame.render_widget(block, area);
+        return;
+    }
+    let height = inner.height as usize;
+
+    let sel = selected.unwrap_or(0).min(count - 1);
+    let sel_h = items.block(sel) - usize::from(sel + 1 < count);
+    let view = scroll_to_selection(
+        count,
+        sel,
+        sel_h,
+        height,
+        Viewport {
+            top: state.top,
+            offset: state.top_offset,
+        },
+        &mut |i| items.block(i),
+    );
+    state.top = view.top;
+    state.top_offset = view.offset;
+
+    let hl_bg = highlight_bg(active);
+    let row_width = inner.width;
+    let mut flat: Vec<Line<'static>> = Vec::with_capacity(height + view.offset);
+    let mut i = view.top;
+    while i < count && flat.len() < height + view.offset {
+        let mut lines = items.take(i);
+        if selected == Some(i) {
+            for line in lines.iter_mut() {
+                apply_line_bg(line, hl_bg);
+                prepend_selection_marker(line, active, hl_bg);
+                pad_line_to_width(line, row_width, hl_bg);
+            }
+        }
+        flat.extend(lines);
+        if i + 1 < count {
+            flat.push(Line::from(Span::styled(
+                "─".repeat(row_width as usize),
+                Style::default().fg(th().divider),
+            )));
+        }
+        i += 1;
+    }
+
+    let offset = view.offset.min(u16::MAX as usize) as u16;
+    let para = Paragraph::new(flat).block(block).scroll((offset, 0));
+    frame.render_widget(para, area);
+}
+
+/// [`render_scrollable`] for a pane whose items are already built (the short
+/// notification and liker lists).
+fn render_scrollable_items(
     frame: &mut Frame,
     area: Rect,
     title: &str,
@@ -122,77 +323,19 @@ fn render_scrollable(
     selected: Option<usize>,
     active: bool,
 ) {
-    let block = block_with_focus(title, active);
-    let inner = block.inner(area);
-    let inner_h = inner.height;
-
-    const ITEM_GAP: u16 = 1;
-    let n_items = items.len();
-    let mut spans: Vec<(u16, u16)> = Vec::with_capacity(n_items);
-    let mut cursor: u16 = 0;
-    for (i, item) in items.iter().enumerate() {
-        let h = item.lines.len() as u16;
-        spans.push((cursor, h));
-        cursor = cursor.saturating_add(h);
-        if i + 1 < n_items {
-            cursor = cursor.saturating_add(ITEM_GAP);
-        }
-    }
-    let total_h = cursor;
-
-    let sel = selected.unwrap_or(0).min(items.len().saturating_sub(1));
-    let (sel_start, sel_h) = spans.get(sel).copied().unwrap_or((0, 0));
-    let sel_end = sel_start.saturating_add(sel_h);
-
-    const SCROLL_MARGIN: u16 = 8;
-    let mut scroll = state.scroll;
-    if inner_h > 0 {
-        let margin = SCROLL_MARGIN.min(inner_h.saturating_sub(sel_h) / 2);
-        let desired_top = sel_start.saturating_sub(margin);
-        let desired_bottom = sel_end.saturating_add(margin);
-        if desired_top < scroll {
-            scroll = desired_top;
-        }
-        if desired_bottom > scroll.saturating_add(inner_h) {
-            scroll = if sel_h >= inner_h {
-                sel_start
-            } else {
-                desired_bottom.saturating_sub(inner_h)
-            };
-        }
-    }
-    let max_scroll = total_h.saturating_sub(inner_h);
-    if scroll > max_scroll {
-        scroll = max_scroll;
-    }
-    state.scroll = scroll;
-
-    let hl_bg = highlight_bg(active);
-    let row_width = inner.width;
-
-    let mut flat: Vec<Line<'static>> = Vec::with_capacity(total_h as usize);
-    for (i, item) in items.into_iter().enumerate() {
-        let is_selected = selected == Some(i);
-        let bg = if is_selected { Some(hl_bg) } else { None };
-        let mut item_lines = item.lines;
-        for line in item_lines.iter_mut() {
-            if let Some(bg) = bg {
-                apply_line_bg(line, bg);
-                prepend_selection_marker(line, active, bg);
-                pad_line_to_width(line, row_width, bg);
-            }
-        }
-        flat.extend(item_lines);
-        if i + 1 < n_items {
-            flat.push(Line::from(Span::styled(
-                "─".repeat(row_width as usize),
-                Style::default().fg(th().divider),
-            )));
-        }
-    }
-
-    let para = Paragraph::new(flat).block(block).scroll((state.scroll, 0));
-    frame.render_widget(para, area);
+    let count = items.len();
+    let mut items: Vec<Option<PaneItem>> = items.into_iter().map(Some).collect();
+    render_scrollable(
+        frame,
+        area,
+        title,
+        LazyItems::new(count, |i| {
+            items[i].take().unwrap_or_else(|| PaneItem::new(Vec::new()))
+        }),
+        state,
+        selected,
+        active,
+    );
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -621,27 +764,23 @@ fn draw_source_list(
     let wrap_width = (area.width as usize).saturating_sub(4);
     let selected = source.selected();
 
-    let mut items: Vec<PaneItem> = Vec::with_capacity(source.tweets.len() + 1);
-    let header_offset = if let Some(profile) = source.profile_user.as_ref() {
-        items.push(PaneItem::new(profile_header_lines(
-            profile, ctx, wrap_width,
-        )));
-        1
-    } else {
-        0
-    };
-    items.extend(source.tweets.iter().map(|t| {
-        let is_seen = ctx.seen.is_seen(&t.rest_id);
-        let is_expanded = ctx.expanded.contains(&t.rest_id);
-        let lines = tweet_lines(t, ctx, is_seen, false, wrap_width, is_expanded);
-        PaneItem::new(lines)
-    }));
-
+    let header_offset = usize::from(source.profile_user.is_some());
+    let count = source.tweets.len() + header_offset;
+    let tweets = &source.tweets;
+    let profile = source.profile_user.as_ref();
     render_scrollable(
         frame,
         area,
         &title,
-        items,
+        LazyItems::new(count, |i| match (profile, i.checked_sub(header_offset)) {
+            (Some(profile), None) => PaneItem::new(profile_header_lines(profile, ctx, wrap_width)),
+            (_, index) => {
+                let t = &tweets[index.unwrap_or(i)];
+                let is_seen = ctx.seen.is_seen(&t.rest_id);
+                let is_expanded = ctx.expanded.contains(&t.rest_id);
+                PaneItem::new(tweet_lines(t, ctx, is_seen, false, wrap_width, is_expanded))
+            }
+        }),
         &mut source.state,
         Some(selected + header_offset),
         active,
@@ -1110,7 +1249,7 @@ fn draw_notifications_detail(
             PaneItem::new(lines)
         })
         .collect();
-    render_scrollable(
+    render_scrollable_items(
         frame,
         area,
         title,
@@ -1393,7 +1532,7 @@ fn draw_likers_detail(
         })
         .collect();
 
-    render_scrollable(
+    render_scrollable_items(
         frame,
         area,
         &title,
@@ -2037,45 +2176,47 @@ fn draw_tweet_detail(
         focal_lines.push(Line::from(""));
         focal_lines.extend(analytics_lines(&detail.tweet));
     }
-    let mut items: Vec<PaneItem> = Vec::with_capacity(1 + detail.replies.len());
-    items.push(PaneItem::new(focal_lines));
-
-    for tw in &detail.replies {
-        let is_seen = ctx.seen.is_seen(&tw.rest_id);
-        let is_expanded = ctx.expanded.contains(&tw.rest_id);
-        let is_new = detail.new_reply_ids.contains(&tw.rest_id);
-        let mut lines = tweet_lines(tw, ctx, is_seen, true, wrap_width, is_expanded);
-        if is_new {
-            if let Some(first) = lines.first_mut() {
-                first
-                    .spans
-                    .insert(0, Span::styled("● ", Style::default().fg(th().success)));
-            }
-        }
-        if let Some(thread) = ctx.inline_threads.get(&tw.rest_id) {
-            append_inline_thread(&mut lines, thread, ctx, wrap_width);
-        }
-        items.push(PaneItem::new(lines));
-    }
-
-    if detail.replies.is_empty() && detail.loading {
-        items.push(PaneItem::new(vec![Line::from(Span::styled(
-            "  loading replies…",
-            Style::default().fg(th().warning),
-        ))]));
-    }
-    if let Some(err) = &detail.error {
-        items.push(PaneItem::new(vec![Line::from(Span::styled(
-            format!("  error: {err}"),
-            Style::default().fg(th().error),
-        ))]));
-    }
-
+    let replies = &detail.replies;
+    let new_reply_ids = &detail.new_reply_ids;
+    let loading_row = replies.is_empty() && detail.loading;
+    let error = detail.error.as_deref();
+    let count = 1 + replies.len() + usize::from(loading_row) + usize::from(error.is_some());
+    let mut focal_lines = Some(focal_lines);
     render_scrollable(
         frame,
         thread_area,
         &title,
-        items,
+        LazyItems::new(count, |i| {
+            if i == 0 {
+                return PaneItem::new(focal_lines.take().unwrap_or_default());
+            }
+            if let Some(tw) = replies.get(i - 1) {
+                let is_seen = ctx.seen.is_seen(&tw.rest_id);
+                let is_expanded = ctx.expanded.contains(&tw.rest_id);
+                let mut lines = tweet_lines(tw, ctx, is_seen, true, wrap_width, is_expanded);
+                if new_reply_ids.contains(&tw.rest_id) {
+                    if let Some(first) = lines.first_mut() {
+                        first
+                            .spans
+                            .insert(0, Span::styled("● ", Style::default().fg(th().success)));
+                    }
+                }
+                if let Some(thread) = ctx.inline_threads.get(&tw.rest_id) {
+                    append_inline_thread(&mut lines, thread, ctx, wrap_width);
+                }
+                return PaneItem::new(lines);
+            }
+            if loading_row && i == replies.len() + 1 {
+                return PaneItem::new(vec![Line::from(Span::styled(
+                    "  loading replies…",
+                    Style::default().fg(th().warning),
+                ))]);
+            }
+            PaneItem::new(vec![Line::from(Span::styled(
+                format!("  error: {}", error.unwrap_or_default()),
+                Style::default().fg(th().error),
+            ))])
+        }),
         &mut detail.state,
         Some(selected),
         active,
@@ -3974,7 +4115,7 @@ pub fn emit_media_placements(app: &mut App, terminal_width: u16) {
     let feed_avatars_on = app.feed_avatars && app.media.is_kitty();
     let avatar_cols = feed_avatar_cols(cell);
 
-    for tweet in app.source.tweets.iter() {
+    for tweet in visible_window(&app.source.tweets, app.source.selected(), pane_h) {
         if feed_avatars_on && let Some(id) = ready_avatar_id(&app.media, &tweet.author) {
             to_place.push((id, avatar_cols, FEED_AVATAR_ROWS));
         }
@@ -4020,7 +4161,8 @@ pub fn emit_media_placements(app: &mut App, terminal_width: u16) {
             max_rows,
             &mut to_place,
         );
-        for reply in &detail.replies {
+        let selected_reply = detail.selected().saturating_sub(1);
+        for reply in visible_window(&detail.replies, selected_reply, pane_h) {
             if feed_avatars_on && let Some(id) = ready_avatar_id(&app.media, &reply.author) {
                 to_place.push((id, avatar_cols, FEED_AVATAR_ROWS));
             }
@@ -4079,6 +4221,16 @@ pub fn emit_media_placements(app: &mut App, terminal_width: u16) {
     for (id, cols, rows) in to_place {
         app.media.place(id, cols, rows);
     }
+}
+
+/// The items that can be on screen in a pane `rows` tall with `selected`
+/// in view: every item takes at least a row, so none further than that from
+/// the selection can show. Placing media for these alone keeps the per-frame
+/// work independent of how long the feed has grown.
+fn visible_window<T>(items: &[T], selected: usize, rows: usize) -> &[T] {
+    let start = selected.saturating_sub(rows).min(items.len());
+    let end = selected.saturating_add(rows + 1).min(items.len());
+    &items[start..end]
 }
 
 fn ready_avatar_id(registry: &MediaRegistry, author: &crate::model::User) -> Option<u32> {
@@ -5279,11 +5431,125 @@ fn draw_compose_overlay(frame: &mut Frame, area: Rect, app: &App) {
 #[cfg(test)]
 mod tests {
     use super::{
-        card_image_max_cols, card_image_max_rows, collect_placements_for_tweet,
-        image_cells_for_card, image_max_cols, render_changelog_inline, strip_leading_mentions,
-        wrap_text,
+        Viewport, card_image_max_cols, card_image_max_rows, collect_placements_for_tweet,
+        image_cells_for_card, image_max_cols, render_changelog_inline, scroll_to_selection,
+        strip_leading_mentions, wrap_text,
     };
     use ratatui::style::Style;
+
+    /// The absolute-row scrolling `render_scrollable` used before it went
+    /// lazy: every item's height known, the selection kept a margin from the
+    /// edges, the viewport clamped so no empty rows show below the last item.
+    fn eager_scroll(heights: &[usize], sel: usize, inner_h: usize, prev: usize) -> usize {
+        let mut starts = Vec::new();
+        let mut cursor = 0;
+        for (i, h) in heights.iter().enumerate() {
+            starts.push(cursor);
+            cursor += h + usize::from(i + 1 < heights.len());
+        }
+        let (sel_start, sel_h) = (starts[sel], heights[sel]);
+        let margin = 8usize.min(inner_h.saturating_sub(sel_h) / 2);
+        let mut scroll = prev;
+        let desired_top = sel_start.saturating_sub(margin);
+        let desired_bottom = sel_start + sel_h + margin;
+        if desired_top < scroll {
+            scroll = desired_top;
+        }
+        if desired_bottom > scroll + inner_h {
+            scroll = if sel_h >= inner_h {
+                sel_start
+            } else {
+                desired_bottom - inner_h
+            };
+        }
+        scroll.min(cursor.saturating_sub(inner_h))
+    }
+
+    fn absolute(heights: &[usize], view: Viewport) -> usize {
+        (0..view.top)
+            .map(|i| heights[i] + usize::from(i + 1 < heights.len()))
+            .sum::<usize>()
+            + view.offset
+    }
+
+    #[test]
+    fn lazy_scrolling_lands_where_eager_scrolling_did() {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move |bound: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % bound as u64) as usize
+        };
+        for _ in 0..200 {
+            let count = 1 + next(60);
+            let heights: Vec<usize> = (0..count).map(|_| 1 + next(14)).collect();
+            let inner_h = 3 + next(45);
+            let mut eager = 0;
+            let mut view = Viewport { top: 0, offset: 0 };
+            let mut sel = 0;
+            for _ in 0..80 {
+                sel = match next(4) {
+                    0 => next(count),
+                    1 => (sel + 1).min(count - 1),
+                    2 => sel.saturating_sub(1),
+                    _ => count - 1,
+                };
+                eager = eager_scroll(&heights, sel, inner_h, eager);
+                let block = |i: usize| heights[i] + usize::from(i + 1 < count);
+                view = scroll_to_selection(count, sel, heights[sel], inner_h, view, &mut { block });
+                assert_eq!(
+                    absolute(&heights, view),
+                    eager,
+                    "heights {heights:?}, pane {inner_h}, selection {sel}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_feed_scrolls_to_a_selection_deep_in_a_long_feed() {
+        use crate::tui::test_util::{dummy_app, make_tweet};
+        let (mut app, _rx, _dir) = dummy_app();
+        app.source.tweets = (0..500)
+            .map(|i| make_tweet(&i.to_string(), &format!("post number {i:03}")))
+            .collect();
+        app.source.render_floor_met = true;
+        app.source.state.selected = 420;
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|f| super::draw(f, &mut app)).unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(screen.contains("post number 420"));
+        assert!(!screen.contains("post number 000"));
+        assert!(app.source.state.top > 400 && app.source.state.top <= 420);
+    }
+
+    #[test]
+    fn lazy_scrolling_measures_only_around_the_viewport() {
+        let count = 100_000;
+        let mut measured = std::collections::HashSet::new();
+        let mut block = |i: usize| {
+            measured.insert(i);
+            4
+        };
+        let view = scroll_to_selection(
+            count,
+            count - 1,
+            3,
+            40,
+            Viewport { top: 0, offset: 0 },
+            &mut block,
+        );
+        assert!(view.top > count - 20);
+        assert!(measured.len() < 40, "measured {} items", measured.len());
+    }
 
     /// Regression: a card's kitty placement must be sized through the same
     /// path its renderer uses. Article/LinkCard render at the narrower

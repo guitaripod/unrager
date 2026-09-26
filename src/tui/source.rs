@@ -13,14 +13,19 @@ const PAGE_SIZE: u32 = 40;
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PaneState {
     pub selected: usize,
+    /// Line offset for panes that scroll freely (the ask conversation).
     pub scroll: u16,
+    /// For item lists: the first item shown and how many of its rows are
+    /// scrolled off the top, kept by `ui::render_scrollable`.
+    pub top: usize,
+    pub top_offset: usize,
 }
 
 impl PaneState {
     pub fn with_selected(selected: usize) -> Self {
         Self {
             selected,
-            scroll: 0,
+            ..Self::default()
         }
     }
 }

@@ -99,7 +99,7 @@ pub async fn ask_stream(
     let cfg = state.filter_config.lock().await.clone();
 
     Ok(stream_tokens(
-        cfg.ollama.clone(),
+        cfg.llm.clone(),
         llm::ask_system_prompt(preset).to_string(),
         llm::tweet_as_prompt_text(&tweet),
         "ask",
@@ -132,7 +132,7 @@ pub async fn ask_context_stream(
     let tweet = llm::fetch_tweet(&state.gql, &req.tweet_id).await?;
     let cfg = state.filter_config.lock().await.clone();
 
-    let images = if cfg.ollama.supports_vision() {
+    let images = if cfg.llm.supports_vision() {
         ask::fetch_images(&tweet).await
     } else {
         Vec::new()
@@ -163,14 +163,14 @@ pub async fn ask_context_stream(
         "ask context stream start"
     );
 
-    let ollama = cfg.ollama.clone();
+    let llm = cfg.llm.clone();
     let req = ChatRequest {
         messages,
         thinking: true,
         temperature: 0.3,
         max_tokens: 2048,
     };
-    Ok(stream_body(ollama, req, "ask"))
+    Ok(stream_body(llm, req, "ask"))
 }
 
 fn prompt_entry(e: unrager_model::AskContextEntry) -> ask::PromptEntry {
@@ -210,7 +210,7 @@ pub async fn brief_stream(
     );
 
     Ok(stream_tokens(
-        cfg.ollama.clone(),
+        cfg.llm.clone(),
         llm::brief_system_prompt().to_string(),
         user,
         "brief",
@@ -231,7 +231,7 @@ pub async fn translate_stream(
     let cfg = state.filter_config.lock().await.clone();
 
     Ok(stream_tokens(
-        cfg.ollama.clone(),
+        cfg.llm.clone(),
         llm::translate_system_prompt().to_string(),
         tweet.text.clone(),
         "translate",
@@ -239,7 +239,7 @@ pub async fn translate_stream(
 }
 
 fn stream_tokens(
-    ollama: LlmConfig,
+    llm: LlmConfig,
     system: String,
     user: String,
     label: &'static str,
@@ -253,20 +253,20 @@ fn stream_tokens(
         temperature: 0.0,
         max_tokens: 1024,
     };
-    stream_body(ollama, req, label)
+    stream_body(llm, req, label)
 }
 
 /// Streams a fully-built chat request as a `TokenEvent` SSE response — the
 /// shared core of the single-shot streams and the conversational ask.
 fn stream_body(
-    ollama: LlmConfig,
+    llm: LlmConfig,
     req: ChatRequest,
     label: &'static str,
 ) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
     let (tx, mut rx) = token_channel();
 
     tokio::spawn(async move {
-        let _ = ollama
+        let _ = llm
             .stream_chat(
                 req,
                 label,

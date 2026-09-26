@@ -5,29 +5,38 @@ pub mod sse;
 pub mod state;
 
 use axum::Router;
-use axum::http::{StatusCode, Uri};
-use axum::response::IntoResponse;
+use axum::extract::{Request, State};
+use axum::http::{HeaderValue, StatusCode, Uri, header};
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use state::AppState;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tower_http::compression::CompressionLayer;
-use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 pub use error::ApiError;
 
-pub async fn serve(addr: SocketAddr) -> crate::error::Result<()> {
-    let state = Arc::new(AppState::build().await?);
-    let warm_client = state.gql.clone();
-    tokio::spawn(async move { warm_client.warm_transaction_key().await });
+pub async fn serve(addr: SocketAddr, filter_only: bool) -> crate::error::Result<()> {
+    let state = Arc::new(AppState::build(filter_only).await?);
+    if !filter_only {
+        let warm_client = state.gql.clone();
+        tokio::spawn(async move { warm_client.warm_transaction_key().await });
+    }
     write_lockfile(&state)?;
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    spawn_ingest(&state, shutdown_rx).await;
+    if state.x_session_loaded {
+        spawn_ingest(&state, shutdown_rx).await;
+    }
     let app = router(state.clone());
 
-    tracing::info!("unrager server listening on http://{addr}");
+    if filter_only {
+        tracing::info!("unrager filter server listening on http://{addr} (filter only)");
+    } else {
+        tracing::info!("unrager server listening on http://{addr}");
+    }
 
     let listener = TcpListener::bind(addr)
         .await
@@ -73,9 +82,66 @@ async fn spawn_ingest(state: &Arc<AppState>, shutdown_rx: tokio::sync::watch::Re
     }
 }
 
-fn router(state: Arc<AppState>) -> Router {
-    let api: Router<Arc<AppState>> = Router::new()
+/// Everything the browser extension needs. Always served, including under
+/// `--filter-only`.
+fn filter_routes() -> Router<Arc<AppState>> {
+    Router::new()
         .route("/health", get(routes::health::health))
+        .route("/classify", post(routes::classify::classify))
+        .route("/filter/status", get(routes::classify::status))
+        .route(
+            "/config/filter",
+            get(routes::config::get_filter).patch(routes::config::patch_filter),
+        )
+}
+
+async fn reject_when_filter_only(
+    State(state): State<Arc<AppState>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if state.filter_only {
+        return ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "filter_only",
+            "this unrager server runs with --filter-only (all the browser extension needs); \
+             run `unrager setup --apps` to serve the iPhone app too",
+        )
+        .into_response();
+    }
+    next.run(request).await
+}
+
+/// Browsers attach `Origin` to every cross-site request and to any
+/// non-GET same-site one. The browser extension's requests carry its own
+/// extension origin and the native apps send none, so anything else is a web
+/// page trying to drive this server through its visitor's browser (post as
+/// them, rewrite their rules) and is refused.
+async fn reject_web_origins(request: Request, next: Next) -> Response {
+    match request.headers().get(header::ORIGIN) {
+        Some(origin) if !is_extension_origin(origin) => ApiError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden_origin",
+            "unrager only answers its browser extension and the iPhone app, not web pages",
+        )
+        .into_response(),
+        _ => next.run(request).await,
+    }
+}
+
+fn is_extension_origin(origin: &HeaderValue) -> bool {
+    let origin = origin.to_str().unwrap_or_default();
+    [
+        "chrome-extension://",
+        "moz-extension://",
+        "safari-web-extension://",
+    ]
+    .iter()
+    .any(|scheme| origin.starts_with(scheme))
+}
+
+fn router(state: Arc<AppState>) -> Router {
+    let app_routes: Router<Arc<AppState>> = Router::new()
         .route("/whoami", get(routes::whoami::whoami))
         .route("/sources/home", get(routes::timeline::home))
         .route("/sources/user/{handle}", get(routes::timeline::user))
@@ -130,11 +196,6 @@ fn router(state: Arc<AppState>) -> Router {
             "/session",
             get(routes::session::get).patch(routes::session::patch),
         )
-        .route(
-            "/config/filter",
-            get(routes::config::get_filter).patch(routes::config::patch_filter),
-        )
-        .route("/classify", post(routes::classify::classify))
         .route("/media/{tweet_id}/{index}", get(routes::media::proxy))
         .route("/sse/filter", get(sse::filter_stream))
         .route(
@@ -142,14 +203,19 @@ fn router(state: Arc<AppState>) -> Router {
             get(sse::ask_stream).post(sse::ask_context_stream),
         )
         .route("/sse/brief", get(sse::brief_stream))
-        .route("/sse/translate", get(sse::translate_stream));
+        .route("/sse/translate", get(sse::translate_stream))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            reject_when_filter_only,
+        ));
+    let api = filter_routes().merge(app_routes);
 
     Router::new()
         .nest("/api", api)
         .fallback(fallback)
         .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
         .layer(CompressionLayer::new())
-        .layer(CorsLayer::permissive())
+        .layer(middleware::from_fn(reject_web_origins))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
@@ -198,4 +264,45 @@ async fn wait_for_shutdown() {
         _ = term => {}
     }
     tracing::info!("shutdown signal received");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use tower::Service;
+
+    async fn status_for(origin: Option<&str>) -> StatusCode {
+        let mut app = Router::new()
+            .route("/api/health", get(|| async { "ok" }))
+            .layer(middleware::from_fn(reject_web_origins));
+        let mut request = axum::http::Request::builder().uri("/api/health");
+        if let Some(origin) = origin {
+            request = request.header(header::ORIGIN, origin);
+        }
+        app.call(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status()
+    }
+
+    #[tokio::test]
+    async fn web_pages_are_refused_but_the_extension_and_apps_are_not() {
+        assert_eq!(status_for(None).await, StatusCode::OK);
+        assert_eq!(
+            status_for(Some("chrome-extension://abcdefghijklmnopabcdefghijklmnop")).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            status_for(Some("moz-extension://1234")).await,
+            StatusCode::OK
+        );
+        for origin in ["https://evil.example", "null", "http://localhost:7777"] {
+            assert_eq!(
+                status_for(Some(origin)).await,
+                StatusCode::FORBIDDEN,
+                "{origin}"
+            );
+        }
+    }
 }

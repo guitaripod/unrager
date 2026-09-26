@@ -1,6 +1,6 @@
-// Pure walk over X's HomeTimeline GraphQL JSON — a port of
-// src/parse/timeline.rs + src/parse/tweet.rs with the same field names, so the
-// two stay easy to fix together when X changes its response shape.
+/// Pure walk over X's HomeTimeline GraphQL JSON — a port of
+/// src/parse/timeline.rs + src/parse/tweet.rs with the same field names, so the
+/// two stay easy to fix together when X changes its response shape.
 const unragerTimeline = (() => {
   const MAX_TEXT_CHARS = 500;
 
@@ -47,21 +47,21 @@ const unragerTimeline = (() => {
     return Array.from(s).slice(0, MAX_TEXT_CHARS).join("");
   }
 
+  /// A retweet's own id never appears in the DOM: X renders the original
+  /// tweet, whose permalink is what a cell can be matched on.
+  function domIdOf(node) {
+    const original = unwrap(
+      node.legacy.retweeted_status_result && node.legacy.retweeted_status_result.result
+    );
+    return original && original.rest_id ? original.rest_id : node.rest_id;
+  }
+
   function collectTweet(itemContent, out) {
     if (!itemContent || itemContent.itemType !== "TimelineTweet") return;
     if (itemContent.promotedMetadata != null) return;
     const node = unwrap(itemContent.tweet_results && itemContent.tweet_results.result);
     if (!node || node.__typename !== "Tweet" || !node.legacy) return;
-    // A retweet's own id never appears in the DOM: X renders the original
-    // tweet, whose permalink is what a cell can be matched on.
-    const original = unwrap(
-      node.legacy.retweeted_status_result && node.legacy.retweeted_status_result.result
-    );
-    out.push({
-      id: node.rest_id,
-      domId: original && original.rest_id ? original.rest_id : node.rest_id,
-      text: classificationText(node),
-    });
+    out.push({ id: node.rest_id, domId: domIdOf(node), text: classificationText(node) });
   }
 
   function collectFromEntry(entry, out) {

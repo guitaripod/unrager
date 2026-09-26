@@ -1,164 +1,242 @@
 <p align="center">
   <h1 align="center">unrager</h1>
   <p align="center">
-    A calm Twitter/X client for the terminal — with native iOS, macOS, and Linux apps.<br>
-    Local LLM drops rage-bait before it reaches your eyes.
+    Take the rage out of your x.com timeline.<br>
+    A model on your own computer reads every post first and quietly removes the rage-bait.
   </p>
   <p align="center">
     <a href="https://crates.io/crates/unrager"><img src="https://img.shields.io/crates/v/unrager?style=flat-square&label=crates.io&logo=rust&color=orange" alt="crates.io"></a>
     <a href="https://unrager.com"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Funrager.com%2Fapi%2Fbadge&style=flat-square&cacheSeconds=300" alt="installs"></a>
     <a href="https://github.com/guitaripod/unrager/actions"><img src="https://img.shields.io/github/actions/workflow/status/guitaripod/unrager/ci.yml?branch=master&style=flat-square&label=ci" alt="CI"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square" alt="GPL-3.0 License"></a>
-    <img src="https://img.shields.io/badge/rust-1.85%2B-orange?style=flat-square&logo=rust" alt="Rust 1.85+">
   </p>
 </p>
 
 <p align="center">
-  <img src="assets/hero.gif" alt="unrager home feed with rage filter active, scrolling into a thread, then asking gemma to explain the focal post" width="800">
+  <img src="assets/extension.png" alt="An x.com Home timeline with the unrager extension and Show hidden posts on: four calm posts, two rage-bait posts dimmed and labelled Hidden by unrager, and the toolbar badge counting them" width="520">
 </p>
 
-Your home feed, minus the tweets the LLM quietly ate. The `−N` in the status bar is all that remains of them. Everything LLM-shaped — filter, translate, explain, summarize — runs on your machine via Ollama. Nothing leaves your box.
+unrager is a browser extension for the x.com you already use. As X loads your Home timeline, a language model running on your computer reads each post and hides the ones that match your rules: the outrage, the ratio bait, the doom and the engagement farming. You keep X's own app, your account and every feature; you lose the posts that exist to make you angry.
 
-## What is this
+Nothing leaves your computer. The extension talks to unrager on `localhost`, unrager talks to your model, and the model never sees anything but the post it's judging. It works with [Ollama](https://ollama.com) out of the box, or with any server that speaks the OpenAI chat API: LM Studio, vLLM, llama.cpp, SGLang, llama-swap.
 
-`unrager` is a Rust TUI for reading Twitter/X without the engagement-optimized rage. It connects through the same GraphQL endpoints the web client uses (no API key, no cost), and pipes every incoming tweet through a local [Ollama](https://ollama.com) (or SGLang) model that classifies it against your personal rubric. Tweets that match are physically removed from the feed before rendering — they never existed.
+## Install
 
-Everything intelligent runs locally: the **rage filter** classifies each tweet, **translate** (`T`) turns foreign-language posts into English, **ask** (`A`) lets gemma explain / counter / summarize a post, and **brief** (`B`) writes a short profile analysis from someone's recent timeline. One Ollama process, one gemma model, four features. No cloud round-trips, no provider keys, no token bills, no data leaving your machine.
+You need a Chromium browser (Chrome, Brave, Edge, Vivaldi or Arc) on macOS or Linux, and a model to run.
 
-Every text input (reply, ask, command palette) is a **Vim-mode editor** — Insert/Normal modes, `hjkl`, `w`/`b`, `dd`/`dw`, counts, `^`/`$`. If that's your muscle memory, composing here feels native.
-
-It also has a CLI for one-shot reads and an OAuth 2.0 write path for posting.
-
-```
-unrager               # TUI
-unrager home -n 20    # one-shot CLI
-unrager tweet "..."   # post via official API
-```
-
-And it's not just the terminal: `unrager serve` exposes the same feeds over an HTTP/SSE API that **native iOS, macOS, and Linux apps** read — the server does all the X work, the clients stay thin. Pair over Tailscale and read your filtered feed from your phone or desktop. See [Native apps](#native-apps-ios--macos--linux).
-
-## How auth works
-
-Reading uses your existing browser login. On startup, unrager reads two cookies — `auth_token` and `ct0` — from whichever Chromium-family browser you're logged into x.com with, decrypts them in memory using your OS credential store (macOS Keychain, Linux Secret Service — or Chromium’s keyring-less basic store), and hands them to X's GraphQL endpoints the same way the web client does. Nothing is written to disk, nothing is logged, nothing leaves your machine. The whole path is under [`src/auth/`](src/auth/) — ~300 lines, open-source, cargo-auditable.
-
-Writing is the other story: `unrager tweet` / `reply` go through the official X API v2 with **your own** OAuth 2.0 PKCE client. unrager never sees your password, your read cookies aren't used for writes, and posts are attributed to your developer client (not a shared one). No writes until you run `unrager auth login`.
-
-## Quick start
+**1. Get a model.** The simplest is [Ollama](https://ollama.com): install it, then
 
 ```sh
-curl -fsSL https://unrager.com/install.sh | bash
-unrager
-
-# optional: enable the rage filter
 ollama pull gemma4
 ```
 
-Want to poke around without setting up X cookies? Run `unrager demo` — it launches the TUI against a bundled offline feed of 15 tweets designed to exercise the filter. No cookies, no network, just a terminal (and optionally Ollama to see the filter drop roughly five of them).
+Already running LM Studio, vLLM, llama.cpp or SGLang? Skip this; step 2 finds it. See [Using another model server](#using-another-model-server).
 
-Uninstall:
+**2. Install unrager.**
 
 ```sh
+curl -fsSL https://unrager.com/install.sh | bash
+```
+
+The installer runs `unrager setup`, which checks that your model answers, starts unrager in the background (a systemd user service on Linux, a launch agent on macOS, so it comes back after a restart), and unpacks the extension. Run `unrager setup` again any time; it's safe to repeat.
+
+**3. Add the extension to your browser**, once:
+
+1. open `chrome://extensions` (it works in every Chromium browser)
+2. turn on **Developer mode**
+3. click **Load unpacked**, press <kbd>Ctrl</kbd>+<kbd>L</kbd> (<kbd>⌘</kbd><kbd>⇧</kbd><kbd>G</kbd> on macOS) and paste the folder `unrager setup` printed:
+   - Linux: `~/.local/share/unrager/browser-extension`
+   - macOS: `~/Library/Application Support/unrager/browser-extension`
+
+Open x.com. Posts that match your rules disappear from For you and Following as they load, and the unrager icon counts them.
+
+<details>
+<summary><strong>Other ways to install</strong></summary>
+
+With Rust 1.85 or newer:
+
+```sh
+cargo install unrager
+unrager setup
+```
+
+Leaner builds without the extension's server, for the terminal client or scripts only:
+
+```sh
+UNRAGER_FLAVOR=tui curl -fsSL https://unrager.com/install.sh | bash   # terminal client + CLI
+UNRAGER_FLAVOR=cli curl -fsSL https://unrager.com/install.sh | bash   # CLI only
+cargo install unrager --no-default-features --features tui            # same, from source
+```
+
+The installer also takes `UNRAGER_INSTALL_DIR` (default `~/.local/bin`) and `UNRAGER_NO_SETUP=1` to skip running `unrager setup`. Windows isn't supported; WSL2 runs the terminal client.
+
+</details>
+
+### Updating
+
+```sh
+unrager update
+```
+
+downloads the new release, restarts the background server on it and refreshes the unpacked extension. The extension's popup then offers **Reload extension** to finish; click it (or ↻ on its card at `chrome://extensions`). If you installed with cargo, `cargo install unrager --force && unrager setup` does the same.
+
+### Uninstalling
+
+```sh
+unrager setup --uninstall     # stops the background server, removes the unpacked extension
 curl -fsSL https://unrager.com/install.sh | bash -s -- --uninstall
 ```
 
-Works on macOS (Apple Silicon + Intel) and Linux (x86_64 + aarch64). On Windows, use WSL2 with a Linux browser — the native Windows build path isn't wired up (Chromium cookie decryption on Windows uses DPAPI, which unrager doesn't implement; PRs welcome). Builds from source via `cargo install --path .` on any Unix platform with Rust 1.85+.
+then remove the unrager card from `chrome://extensions`.
 
-The TUI reads cookies from your logged-in browser automatically (Vivaldi, Chrome, Brave, Edge, Opera, Arc). If you're logged into x.com in more than one of them, pin the source with `cookie_browser = "Vivaldi"` in `config.toml` (or the `UNRAGER_BROWSER` env var) and unrager uses only that browser — never silently falling back to another. The filter enables itself when its LLM backend is reachable and disables silently when it isn't.
+## Using it
 
-## The rage filter
+<p align="center">
+  <img src="assets/popup.png" alt="The unrager popup: 12 posts hidden and 148 checked on this tab, the pause and show-hidden switches, and the editable list of topics that get hidden" width="340">
+</p>
 
-Every tweet is classified by a local LLM against a user-editable rubric (`~/.config/unrager/filter.toml`). Matching tweets are physically removed — not collapsed, not grayed out, gone. Verdicts cache to SQLite keyed by `(tweet_id, rubric_hash)`, so reloads are instant and editing the rubric invalidates automatically.
+Click the unrager icon for its popup:
+
+- **Status** says whether the filter is working on this tab, how many posts it hid, and, when something's wrong, what to run to fix it (unrager isn't running, the model isn't answering, a tab needs a reload, an update needs finishing).
+- **Pause filtering** shows X exactly as it is until you switch it back on.
+- **Show hidden posts** brings hidden posts back, dimmed and labelled *Hidden by unrager*, so you can check the model's judgment.
+- **What gets hidden** is your rules: add, edit or remove topics and save. Open x.com tabs are checked again under the new rules right away.
+- **Settings** points the extension at unrager on another computer, such as the desktop with the GPU (see [Running the model on another computer](#running-the-model-on-another-computer)).
+
+The toolbar badge shows how many posts were hidden on the current tab, `off` while paused and `!` when posts can't be checked.
+
+Only your Home timeline (For you and Following) is filtered. Profiles, search, threads and notifications are always shown in full: the filter exists for the feed you didn't choose, not for the places you went looking.
+
+## Your rules
+
+The rules live in `filter.toml` (Linux `~/.config/unrager/`, macOS `~/Library/Application Support/unrager/`), which the popup edits for you. A post is hidden when one of the topics *is the point* of it, not when it only mentions one in passing:
 
 ```toml
 drop_topics = [
     "american electoral politics, presidents, congress, partisan fights",
     "war, military conflict, battlefield footage, casualty counts",
-    "gender wars, men-vs-women discourse, trad-vs-feminist fights",
+    "economic fearmongering: tariff panic, inflation doom, market-crash prophecies",
+    "crypto and NFT shilling, pump-and-dump hype, rug-pull drama",
     # add your own
 ]
-extra_guidance = "Keep technical, scientific, art, music, sports tweets..."
-
-[ollama]
-# backend = "sglang"    # "ollama" (default) or "sglang" — talk to a local
-                         # SGLang/OpenAI-compatible server instead
-model = "gemma4:latest"
-host = "http://localhost:11434"
+extra_guidance = "KEEP technical, scientific, art, music, sports, personal-life, and humor tweets that only mention these topics in passing."
 ```
 
-Toggle with `<space> r`. The status bar shows `−N` when the filter is actively hiding tweets, or `filter off · doctor` when the configured backend isn't reachable or the configured model isn't installed — the hint points at `unrager doctor`, which explains why.
+On top of the topics, the model always hides what you'd mute on sight: subtweets, ratio bait, "RT if you agree" engagement farming, and outrage with no information in it. It keeps spicy opinions and sharp critique as long as there's something there besides an invitation to be angry.
 
-## Reading threads
+Each verdict is cached per post, so scrolling back is instant and nothing is judged twice. Changing the rules or the model throws the cache out automatically.
+
+## Using another model server
+
+Any server with an OpenAI-compatible `/v1/chat/completions` endpoint works. Set it under `[llm]` in `filter.toml`:
+
+```toml
+[llm]
+backend = "openai"
+host = "http://localhost:1234"   # LM Studio 1234, vLLM 8000, llama-server 8080, SGLang 30000
+model = "qwen3-8b"               # an id from the server's /v1/models
+timeout_seconds = 120            # a model that has to load first is slow to answer
+# api_key = "..."                # only if the server was started with one
+```
+
+If the model you configured isn't reachable, `unrager setup` and `unrager doctor` look for servers on those usual ports and print the lines to paste. Both also send the model one real request, since a server can list a model it can't actually run.
+
+Any instruction-tuned model that can answer HIDE or KEEP will do; small ones (4–12B) are plenty, and faster is better, since posts show until their verdict arrives. For Ollama, the default is:
+
+```toml
+[llm]
+backend = "ollama"
+host = "http://localhost:11434"
+model = "gemma4:latest"
+timeout_seconds = 20
+keep_alive = "10s"   # how long Ollama keeps the model loaded; "5m" keeps it warm between sessions
+```
+
+### Running the model on another computer
+
+Run unrager on the machine with the GPU and let it listen beyond `localhost`, ideally only on a private network like Tailscale (unrager has no login of its own):
+
+```sh
+unrager setup --bind 0.0.0.0:7777
+```
+
+Then, in the extension's popup on the other computer, open **Settings** and enter that machine's address, e.g. `http://100.101.102.103:7777`. The browser asks once for permission to reach it.
+
+## Troubleshooting
+
+`unrager doctor` checks everything the extension needs (the model, the background server, the unpacked extension) and prints a fix for anything that's wrong. The popup covers the rest from the browser's side.
+
+- **Posts aren't being hidden.** Open the popup. If it says *Reload this tab*, the tab was open before the extension was added or updated. If the badge shows `!`, unrager or the model isn't answering; `unrager doctor` says which.
+- **Something was hidden that shouldn't have been.** Turn on *Show hidden posts* to see what the model hid, then sharpen the topic or add a line to *Anything else the model should know*. Small models misjudge more; a bigger or better-tuned one is the other lever.
+- **Logs.** The background server logs to `journalctl --user -u unrager-serve` (Linux) or `~/Library/Logs/unrager-serve.log` (macOS), and every unrager process writes to `~/.cache/unrager/unrager.log.<date>` (macOS: `~/Library/Caches/unrager/`). On x.com, `window.__unrager_status()` in the page console shows what the extension did on that tab.
+
+If the model isn't answering, X keeps working as usual: unrager fails open. Posts stay visible until their verdict arrives, a failed check is never remembered, and those posts are asked about again shortly.
+
+## Privacy
+
+- The extension reads only the Home timeline responses X already sends your browser. It requests nothing extra from X and changes nothing X sends; it only hides posts on your screen.
+- Post text goes from the extension to unrager on your computer, and from unrager to your model. There's no account, no telemetry, and no server of ours in the loop.
+- The background server `unrager setup` installs runs in filter-only mode: it never reads your X login and never talks to X.
+- The server answers only the extension and the iPhone app. Requests from web pages are refused, so a site you visit can't use it through your browser.
+
+## Also in the box
+
+The extension is the main way to use unrager, but it grew out of a terminal client for X, and that's all still here: the same filter in a keyboard-driven timeline, an iPhone app for when you're away from the desk, and a CLI.
+
+### The terminal client
 
 <p align="center">
-  <img src="assets/detail.png" alt="split pane showing a tweet with replies sorted by likes" width="800">
+  <img src="assets/terminal.png" alt="unrager's terminal client: the Following timeline in a terminal, twelve posts filtered out (−12 in the top bar)" width="600">
 </p>
+
+Run `unrager` for a Twitter/X client in your terminal: your Home timeline with the rage filter, threads in a split pane, inline images on kitty-graphics terminals (Ghostty, Kitty, WezTerm), notifications, profiles, search, and a local model that translates (`T`), explains (`A`) and briefs you on an account (`B`). Every text input is a small Vim editor. `unrager demo` tries it against a bundled offline feed, no X login needed.
+
+It reads through the same GraphQL endpoints x.com uses, with the login cookies of your Chromium browser (Vivaldi, Chrome, Brave, Edge, Opera, Arc), decrypted in memory with your OS credential store and never written anywhere. If you're logged in with more than one browser, pin one with `cookie_browser = "Vivaldi"` in `config.toml` (or `UNRAGER_BROWSER`). Posting goes through the official X API with your own OAuth client; see [Posting](#posting).
+
+<details>
+<summary><strong>Reading threads</strong></summary>
 
 `Enter` opens a tweet into a split detail pane. The focal tweet and all its replies form one scrollable list. Push deeper into any reply with `Enter`, pop back with `Esc`. Press `s` to cycle reply sort order — newest, likes, replies, retweets, views — it persists across sessions. `X` expands inline thread replies without leaving the current view.
 
 The left pane stays live. `Tab` swaps focus between panes, `,`/`.` adjusts the split width.
 
-## Composing (Vim-mode everywhere)
+</details>
 
-<p align="center">
-  <img src="assets/compose.png" alt="reply composer open over the home feed, with the vim insert-mode indicator and a 24/280 character counter at the bottom" width="800">
-</p>
+<details>
+<summary><strong>Composing (Vim-mode everywhere)</strong></summary>
 
-Every text input in the TUI — reply (`r`), ask-gemma input (`A`), command palette (`:`) — is a miniature Vim editor. Insert/Normal modes, `hjkl` motion, `w`/`b` word jumps, `dd`/`dw`, counts, `^`/`$`, everything a two-minute muscle-memory habit expects. The status line at the bottom of each pane shows `INSERT` or `NORMAL` and the live character counter (`24/280`).
+Every text input in the TUI — reply (`r`), ask input (`A`), command palette (`:`) — is a miniature Vim editor. Insert/Normal modes, `hjkl` motion, `w`/`b` word jumps, `dd`/`dw`, counts, `^`/`$`. The status line at the bottom of each pane shows `INSERT` or `NORMAL` and the live character counter (`24/280`).
 
-Submit (`Enter` in insert mode) doesn't post over the X GraphQL write endpoint — that path errors out on most accounts in a way unrager can't route around. Instead, the composed text is copied to your clipboard and the parent tweet opens in your browser. Paste, send, done. The full Vim editor experience inside the terminal; the actual post happens in the place X is happiest about. Press `Esc` twice (Insert → Normal → exit) to close the editor — your draft is kept in memory until you leave the parent tweet's detail pane, so an accidental close doesn't lose your text.
+Submit (`Enter` in insert mode) doesn't post over the X GraphQL write endpoint — that path errors out on most accounts in a way unrager can't route around. Instead, the composed text is copied to your clipboard and the parent tweet opens in your browser. Paste, send, done. Press `Esc` twice (Insert → Normal → exit) to close the editor — your draft is kept in memory until you leave the parent tweet's detail pane, so an accidental close doesn't lose your text.
 
-Submitting a reply with `r` auto-likes the tweet you're replying to — that happens the moment you hit Enter, before the browser opens, so the reciprocal-like etiquette stays intact. The like is gated the same way `o` is: skipped if it's your own tweet, already liked, or X is write-rate-limiting you.
+Submitting a reply with `r` auto-likes the tweet you're replying to — that happens the moment you hit Enter, before the browser opens. The like is skipped if it's your own tweet, already liked, or X is write-rate-limiting you.
 
-## Search and translation
+</details>
 
-<p align="center">
-  <img src="assets/search.png" alt="search results for nvidia with multilingual content and translation" width="800">
-</p>
+<details>
+<summary><strong>Search, translate and ask</strong></summary>
 
-`:search nvidia` pulls live results in every language. Press `T` on any tweet to translate it to English via the same local Ollama instance. Press `T` again to revert. Translations are ephemeral — in memory only.
+`:search nvidia` pulls live results in every language. Press `T` on any tweet to translate it to English with your model; `T` again reverts. Translations live in memory only.
 
-## Ask gemma about a post
-
-<p align="center">
-  <img src="assets/ask.png" alt="ask pane open next to the home feed, gemma streaming an inline explanation of the selected post, with preset chips Explain / Replies / Counter / ELI5 / Entities at the bottom" width="800">
-</p>
-
-Press `A` on any tweet to open an ask pane powered by your local Ollama gemma model (the same one used for the rage filter and translation). The post is pinned to the top, a chip row exposes preset prompts (`1` Explain · `2` Replies · `3` Counter · `4` ELI5 · `5` Entities) that fire with a single keystroke when the input is empty, and the reply streams inline token-by-token. Gemma4's vision is used automatically — up to four photos on the post are base64-attached to the first turn. When you open the pane from the detail view, the loaded replies are pulled into context, so `2 Replies` actually summarizes the thread; and when you `A` a reply inside a thread, the thread's root post and the other replies are included as context so gemma sees the conversation, not just the isolated reply. The pane title shows what's in scope (`ask · @handle · 2 imgs · 14 replies · ready`). Conversations live only in memory. Thinking is enabled for the chat path since replies benefit from reasoning; filter and translate keep thinking off for speed.
+Press `A` on any tweet to open an ask pane on the same model. The post is pinned to the top, a chip row exposes preset prompts (`1` Explain, `2` Replies, `3` Counter, `4` ELI5, `5` Entities) that fire with a single keystroke when the input is empty, and the reply streams inline. On Ollama with a vision model like gemma4, up to four photos on the post are attached to the first turn. Opened from a thread, the loaded replies come along as context, so `2 Replies` actually summarizes the thread. `B` writes a short brief on the selected author from their recent timeline.
 
 The command palette supports `:home`, `:user <handle>`, `:search <query>`, `:mentions`, `:notifs`, `:bookmarks`, and `:read <id|url>`. History navigates with `]`/`[`.
 
-## Notifications
+</details>
 
-<p align="center">
-  <img src="assets/notifications.png" alt="notifications view showing likes, replies, retweets, and follows" width="800">
-</p>
+<details>
+<summary><strong>Notifications and profiles</strong></summary>
 
-Press `n` or `:notifs` to open notifications as a detail pane without losing your place in the source timeline. Likes, retweets, follows, and quotes come from the main notifications feed; replies are merged from the mentions endpoint. Type icons stay vivid for scanning, handles keep their palette color. Press `x` to expand a snippet, `Enter` to open the target tweet in a stacked detail view on top. Esc pops back to the notifications list; Esc again pops back to the source timeline.
+Press `n` or `:notifs` to open notifications as a detail pane without losing your place. Likes, retweets, follows and quotes come from the notifications feed; replies are merged from mentions. `x` expands a snippet, `Enter` opens the target tweet on top, `Esc` pops back. An unread badge (`Nn`) appears in the header on other views.
 
-<p align="center">
-  <img src="assets/notifications-detail.png" alt="notifications with split detail pane showing a threaded conversation" width="800">
-</p>
+`p` opens the profile of whoever your cursor is on — the selected tweet's author, the notification actor, or your own profile. The header pins an avatar, name, handle and follower counts, plus what X's about-profile lookup exposes: country flag and "based in", where the account was created, join date, verification date and past username changes. The country flag also rides next to the handle in every feed row. Your own profile renders with full metrics and an analytics block. `R` toggles tweets and replies, `<space> o` originals only.
 
-Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at the top of the list. Read tracking is separate from tweet seen state.
-
-## Profile view
-
-<p align="center">
-  <img src="assets/profile.png" alt="own profile showing tweets with full metrics and expanded bodies" width="800">
-</p>
-
-`p` opens the profile of whoever your cursor is on — the selected tweet's author, the notification actor, or your own profile if nothing's selected. The header pins a kitty-graphics avatar, display name, handle, and follower / following counts; on non-kitty terminals (or while the image is downloading) it falls back to a text-only header. When X exposes an `about_profile` block (via the `AboutAccountQuery` endpoint), the header also surfaces the country flag + `based in <country>`, the location source ("via United States App Store" / "via Web"), `joined <Mon YYYY>`, blue-verification start date, the X affiliate badge handle, and the number of past username changes. The country flag also rides next to the handle in every feed row — in the TUI and, via `unrager serve`, in the iOS, macOS, and Linux apps. Your own profile renders with full metrics forced visible — including an analytics block on the focal tweet (views, likes, retweets, replies, quotes, bookmarks, engagement rate). `:user <handle>` opens anyone's timeline. Press `R` to toggle between their tweets and replies. `<space> o` switches between all tweets and originals only (hides replies, quotes, retweets).
-
-## Help overlay
-
-<p align="center">
-  <img src="assets/help.png" alt="scrollable help overlay showing iconography section" width="800">
-</p>
-
-`?` opens a scrollable help overlay with every keybinding and an iconography reference for all the glyphs used in the interface. Scroll with `j`/`k`, any other key closes it.
+</details>
 
 <details>
 <summary><strong>Key bindings</strong></summary>
+
+`?` opens a scrollable help overlay with every binding and the meaning of every glyph.
 
 | Key | Action |
 |---|---|
@@ -183,7 +261,7 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 | `<space> r` | Toggle rage filter |
 | `R` | Toggle tweets / replies on user profile |
 | `T` | Translate selected tweet to English (toggle) |
-| `A` | Ask gemma about the selected post |
+| `A` | Ask the model about the selected post |
 | `B` | Deep profile brief on the selected author |
 | `f` | Like / unlike |
 | `x` | Expand / collapse tweet body |
@@ -211,75 +289,41 @@ Unread badge (`Nn`) appears in the header when on other views. Auto-refreshes at
 
 </details>
 
-## Install modes
+<details>
+<summary><strong>Everything else</strong></summary>
 
-`unrager` is modular. Pick the install you want — you can always re-install with a different flavor later.
+- **Inline media** — photos, video posters, and GIF first-frames render inside the terminal via the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) on Ghostty, Kitty, and WezTerm. Multiple images side-by-side. Toggle with `I`. Falls back to `▣`/`▶`/`↻` glyphs elsewhere.
+- **Author avatars** — every feed row, detail focal, reply, and inline thread carries a square kitty-graphics chip of the poster's avatar; profile headers pin a larger one. Avatars cache at `~/.cache/unrager/avatars/` (LRU-pruned to 50 MB, self-invalidating since X rotates the URL on every photo change). Toggle feed chips with `<space> a`.
+- **Inline cards** — YouTube links, X Articles, X Broadcasts (with a red `● LIVE` badge while running), generic link previews, and polls render as bordered preview cards. `m` opens the source URL in your browser.
+- **Originals mode** — `V` on home feeds hides replies, quotes, and retweets. `◇` appears in the status bar. Persists across sessions.
+- **Read tracking** — tweets mark as read on cursor. For You hides already-seen tweets and deduplicates across pages. `u` jumps to next unread.
+- **Theme engine** — built-in `x-dark` (X brand colors over a Rosé Pine surface palette) and `x-light` (X brand over Solarized Light). Swap live with `:theme x-dark|x-light|auto` or toggle with `Z`; the choice persists.
+- **Color-hashed handles** — FNV-1a hash into a per-theme 20-color palette, consistent across every mention.
+- **Share** — `y` copies a [fixupx](https://fixupx.com) embed URL, `o` opens in browser, `m` downloads every attachment on the selected tweet and opens it (QuickLook / QuickTime on macOS, `xdg-open` on Linux). Cache lives under `~/.cache/unrager/media/<tweet_id>/`.
+- **Postcard** — `S` (or `C`) rasterizes the focal tweet to a PNG with one of six themes (`glass`, `synthwave`, `cutout`, `moss`, `blueprint`, `arcade`), "match TUI", or a custom two-color theme. `s` saves to `~/.cache/unrager/screenshots/`, `y` copies. `T` captures the whole reply chain as one tall image; `n` toggles display names, `m` the metrics row. Color emoji render as full-color [Twemoji](https://github.com/jdecked/twemoji) images (the newest set is resolved at runtime and cached under `~/.cache/unrager/emoji/`), at 2× density.
+- **Configurable browser** — `config.toml` supports a `{}` URL placeholder for Chromium `--app={}` kiosk mode.
+- **Digital clock overlay** — optional floating clock with big block-character digits, configured under `[clock]` in `config.toml`.
+- **Session persistence** — source, selection, toggles, split width, feed mode, reply sort all survive restarts.
+- **Feed buffer** — Home is served from a small local SQLite buffer that a background worker keeps fresh and pre-classified, so the terminal client and the iPhone app open instantly. See [Configuration](#configuration).
 
-### Oneliner (prebuilt binary)
+</details>
 
-```sh
-# TUI + CLI (default) — the primary product
-curl -fsSL https://unrager.com/install.sh | bash
+### The iPhone app
 
-# TUI + HTTP API server — for the native iOS / macOS / Linux apps over Tailscale
-UNRAGER_FLAVOR=full curl -fsSL https://unrager.com/install.sh | bash
+The extension can't reach X's own iPhone app, so there's a native one: [`ios/`](ios/) (UIKit, iOS 26), a thin client over the API `unrager serve` exposes, with every feed, thread and profile and the same filter, ask, brief and translate. It uses your X session, so it isn't a store app; you build and sideload it yourself.
 
-# CLI only (no TUI) — scripts, pipelines, CI
-UNRAGER_FLAVOR=cli curl -fsSL https://unrager.com/install.sh | bash
-```
-
-Re-run the installer with a different `UNRAGER_FLAVOR` to switch — it replaces the binary in place. The installer also supports `UNRAGER_INSTALL_DIR` (default `~/.local/bin`) and `--uninstall`.
-
-### From source
-
-```sh
-# TUI + CLI (default)
-cargo install unrager
-
-# TUI + HTTP API server
-cargo install unrager --features server
-
-# CLI only
-cargo install unrager --no-default-features
-```
-
-Approximate release-build sizes: full **23 MB**, TUI-only **15 MB**, CLI-only **12 MB**. Feature flags gate:
-
-| Feature | What it pulls | What you lose without it |
-|---|---|---|
-| `tui` (default) | ratatui, crossterm, image, termbg | bare `unrager` can't launch; `user`/`notifs`/`doctor` subcommands hidden |
-| `server` (default, implies `tui`) | axum, tower, tower-http | `unrager serve` — the HTTP API the native iOS / macOS / Linux apps talk to |
-
-Upgrading later: `cargo install unrager --force` — no uninstall step, cargo replaces the binary in place.
-
-## Serving the API (native clients)
-
-`unrager serve` (requires the `server` feature, on by default) exposes the HTTP API that the native [iOS](ios/), [macOS](macos/), and [Linux](linux/) apps talk to. The server does all the X work — cookie/OAuth auth, GraphQL, the rage filter, ask/brief/translate over Ollama — so the clients stay thin native UIs.
+It needs the full server rather than the extension's filter-only one, reachable from your phone:
 
 ```sh
-unrager serve                          # bind 127.0.0.1:7777
-unrager serve --bind 0.0.0.0:7777      # reach across Tailscale / LAN from your phone
+unrager setup --apps --bind 0.0.0.0:7777
 ```
 
-Over Tailscale (or your LAN), set an ACL so only your own devices can hit the port. The server expects the network to be the trust boundary — there is no app-level auth. Point the app at the server's host/port in its settings.
+Then point the app at the server in its settings. The server expects the network to be the trust boundary (there's no app-level login), so keep it to a private network like Tailscale with an ACL for your own devices.
 
-The API surface (`/api/*`): all seven sources, tweet detail + thread, profile + likers, compose/reply, like, media proxy (photos, videos, gifs, link cards, polls, YouTube, X broadcasts), and filter/ask/brief/translate streaming over SSE, plus session + filter-config persistence and seen-tracking — feature parity with the TUI.
+<details>
+<summary><strong>Building the iPhone app</strong></summary>
 
-`unrager serve` and the TUI can run side by side (e.g. serve as an always-on user service): whichever starts first owns the background Home ingest (`~/.cache/unrager/feed.db.writer.lock`) and the other reads from it, and both share the same filter verdict cache.
-
-## Native apps (iOS + macOS + Linux)
-
-Three native clients ship in the repo — all thin UIs over the same `/api/*` contract `unrager serve` exposes. None is an App Store / store-published app (unrager uses *your* X session): you build and run them yourself. Point each at your server in its settings (or bake a `UNRAGER_DEFAULT_SERVER` default for your tailnet) and read every feed, thread, and profile — with the rage filter, ask, brief, and translate intact.
-
-| Client | Stack | Lives in |
-|---|---|---|
-| iPhone | UIKit, iOS 26 Liquid Glass | [`ios/`](ios/) |
-| Mac | AppKit, macOS 26 | [`macos/`](macos/) |
-| Linux desktop | GTK4 + libadwaita (relm4) | [`linux/`](linux/) |
-
-### iOS + macOS
-
-The Apple apps share the [`UnragerKit`](UnragerKit/) Swift package (Codable models, the typed async/await `APIClient` with SSE, image pipeline, logging). Sideload with your own Apple Developer account:
+The app's models, typed async/await `APIClient` with SSE, image pipeline and logging live in the [`UnragerKit`](UnragerKit/) Swift package. Sideload with your own Apple Developer account:
 
 ```sh
 # build the project (XcodeGen + a local Swift package; no Xcode account needed)
@@ -295,51 +339,20 @@ python3 scripts/provision.py --udid <UDID> --serial <DIST_CERT_SERIAL> --name "i
 UDID=<UDID> ./scripts/install-device.sh     # build → ad-hoc sign → devicectl install + launch
 ```
 
-macOS builds with `cd macos && xcodegen generate && xcodebuild ...`; distribute the Mac app as a notarized DMG (Developer ID).
+</details>
 
-### Linux
-
-A native GNOME desktop client — GTK4 / libadwaita via [relm4](https://relm4.org), the Linux peer of the Apple apps. It's a separate cargo workspace ([`linux/`](linux/), kept out of the root build since it pulls heavy GTK system deps) that reuses the byte-exact [`unrager-model`](crates/unrager-model) wire types. On launch it reuses a running local `unrager serve` or spawns its own, so a single command gets you a window:
-
-```sh
-# system deps — Arch:  sudo pacman -S gtk4 libadwaita
-#                Debian/Ubuntu:  sudo apt install libgtk-4-dev libadwaita-1-dev build-essential
-cd linux && cargo run -p unrager-gtk
-```
-
-Inline photos fill the tweet column at their true aspect (Compact/Standard/Large media setting), video and GIFs show a poster with a play badge, every screen has loading/empty/error states, and right-clicking any image opens a native copy/save menu. See [`linux/README.md`](linux/README.md) for the full rundown.
-
-## Browser companion
-
-[`browser/extension/`](browser/extension/) is a small unpacked Chromium extension (Chrome, Vivaldi, Brave, Edge) that brings the same rage filter to the official x.com web app — no separate client, no lost features. Run `unrager serve`, open `chrome://extensions` (or `vivaldi://extensions`), enable **Developer mode**, **Load unpacked**, and pick the `browser/extension` folder. It watches the `HomeTimeline`/`HomeLatestTimeline` GraphQL responses X's own page already fetches (nothing extra is requested from X), sends each tweet to `unrager serve`'s `POST /api/classify` — same rubric, same verdict cache as the TUI — and hides whatever comes back HIDE. It never delays the page's own render, and fails open: if the server is down or the model is still loading, tweets stay visible and are asked about again shortly. `window.__unrager_status()` in the page console shows what it has classified and hidden. The default endpoint is `http://localhost:7777/api/classify`; to point it elsewhere, open the extension's service-worker console and run `chrome.storage.local.set({ endpoint: "http://100.x.y.z:7777/api/classify" })`.
-
-## More
-
-- **Inline media** — photos, video posters, and GIF first-frames render inside the terminal via the [kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) on Ghostty, Kitty, and WezTerm. Multiple images side-by-side. Toggle with `I`. Falls back to `▣`/`▶`/`↻` glyphs elsewhere.
-- **Author avatars** — every feed row, detail focal, reply, and inline thread carries a square kitty-graphics chip of the poster's avatar; profile headers pin a larger one beside the name. Avatars cache at `~/.cache/unrager/avatars/` (LRU-pruned to 50 MB, self-invalidating since X rotates the URL on every photo change). Postcard screenshots composite the chip in too. Toggle feed chips with `<space> a`; disabling skips downloads and suppresses screenshot avatars. Kitty-only — halfblock and disabled terminals fall back to the no-gutter layout.
-- **Inline cards** — YouTube links, X Articles, X Broadcasts (with a red `● LIVE` badge while running), generic link previews (any brand), and polls render as bordered preview cards with cover image, title, description, and metadata. `m` opens the source URL in your browser.
-- **Originals mode** — `V` on home feeds hides replies, quotes, and retweets. `◇` appears in the status bar. Persists across sessions.
-- **Notifications view** — press `n` or `:notifs` to browse notifications in a dedicated feed. Enter opens the target tweet or navigates to the actor's profile. Ambient whisper continues in the status bar independently.
-- **Read tracking** — tweets mark as read on cursor. For You feed hides already-seen tweets and deduplicates across pages. `u` jumps to next unread.
-- **Theme engine** — built-in `x-dark` (X.com brand colors layered over a Rosé Pine surface palette) and `x-light` (X.com brand over Solarized Light). Swap live with `:theme x-dark|x-light|auto` or toggle with `Z`. The choice persists across sessions. The Twitter blue, like-pink, retweet-green, and quote-purple are real X brand hex values; greys, borders, and the ribbon palette come from Rosé Pine / Solarized so the TUI sits comfortably inside those terminals.
-- **Color-hashed handles** — FNV-1a hash into a per-theme 20-color palette, consistent across every mention in every tweet body.
-- **Zebra striping** — alternating row backgrounds drawn from the active theme.
-- **Share** — `y` copies a [fixupx](https://fixupx.com) embed URL, `o` opens in browser, `m` downloads every attachment on the selected tweet (all photos, GIFs, and video MP4s). On macOS images go to QuickLook (`qlmanage -p`) — space/Esc closes and focus returns to the terminal — while videos open in QuickTime Player via an osascript wrapper that polls for the document close and reactivates the spawning terminal, so Cmd+W alone gets you back to unrager. Linux uses `xdg-open` for everything. Cache lives under `~/.cache/unrager/media/<tweet_id>/`.
-- **Postcard** — `S` (or `C`) opens a theme picker for rasterizing the focal tweet to a PNG. Six distinctive presets (`glass`, `synthwave`, `cutout`, `moss`, `blueprint`, `arcade`), a "match TUI" option, or tune a custom theme from two hex colors (bg + accent; text auto-picked from bg luminance). Commit with `s` (save to `~/.cache/unrager/screenshots/`) or `y` (copy PNG to system clipboard). Press `T` in the modal to capture the entire reply chain — root tweet down to the focal — as one tall image with a continuous accent bar and hairline dividers between blocks. Press `n` to toggle between handle-only (default) and `Display Name @handle` rendering. Press `m` to toggle the metrics row (replies / RTs / likes / views / quotes / bookmarks) — off by default for a cleaner postcard look. Both toggles persist in `session.json`. Every color emoji in the card — country flags, faces, ZWJ sequences like 👨‍👩‍👧‍👦, skin-tone variants, keycaps — renders as a full-color image composited onto the character grid (`ab_glyph` only rasterizes monochrome outlines, so the bundled fonts can't draw color emoji themselves). The PNGs are pulled on demand from the maintained [Twemoji](https://github.com/jdecked/twemoji) set, whose version is resolved to the newest release at runtime so the **latest** Unicode emoji always render — not just whatever a build-time-bundled font happens to know — and cached under `~/.cache/unrager/emoji/`. Anything offline, 404, or newer than the set falls back to the monospace outline. Renders at 2× density (~1400px wide, retina-sharp) with 22pt editorial-feel typography. Media images are composited beneath the text; videos are skipped. Watermark sits bottom-right in muted color.
-- **Configurable browser** — `config.toml` supports `{}` URL placeholder for Chromium `--app={}` kiosk mode. `cookie_browser = "Vivaldi"` (or `UNRAGER_BROWSER`) pins cookie extraction to a single browser so a stale login in another never gets picked up.
-- **Digital clock overlay** — optional floating clock with big block-character digits. Every element is toggleable via `[clock]` in `config.toml` (see below) — time, date, seconds, 12/24h, position, accent color, border. Set `enabled = false` to hide completely.
-- **Session persistence** — source, selection, toggles, split width, feed mode, reply sort all survive restarts.
+### The CLI
 
 <details>
-<summary><strong>CLI</strong></summary>
-
-### Read-only (no cost, no API key)
+<summary><strong>Commands</strong></summary>
 
 | Command | Purpose |
 |---|---|
+| `unrager setup` | Check the model, run unrager in the background, unpack the extension (`--apps` for the iPhone app, `--bind`, `--no-service`, `--uninstall`) |
+| `unrager doctor` | Check the model, the background server, the extension and your X login |
+| `unrager update` | Update to the latest release (restarts the server and refreshes the extension) |
+| `unrager serve` | Run the server by hand (`--filter-only` for just the extension, `--bind`) |
 | `unrager whoami` | Confirm which account your cookies belong to |
-| `unrager doctor` | Check cookies and the configured LLM backend (Ollama/gemma4 or SGLang) |
-| `unrager update` | Self-update to the latest release |
 | `unrager read <id\|url>` | Fetch a single tweet |
 | `unrager thread <id\|url>` | Full conversation thread |
 | `unrager home [--following]` | Home timeline |
@@ -349,11 +362,9 @@ Inline photos fill the tweet column at their true aspect (Compact/Standard/Large
 | `unrager bookmarks "<query>"` | Search bookmarks |
 | `unrager notifs` | Recent notifications |
 
-All accept `-n <count>`, `--json`, `--max-pages <n>`.
+The read commands accept `-n <count>`, `--json`, `--max-pages <n>`.
 
-### Write (requires OAuth 2.0 + credits)
-
-| Command | Purpose |
+| Command (official X API, pay-per-use) | Purpose |
 |---|---|
 | `unrager auth login` | OAuth 2.0 PKCE flow (free) |
 | `unrager auth status` | Show token state |
@@ -363,43 +374,37 @@ All accept `-n <count>`, `--json`, `--max-pages <n>`.
 
 </details>
 
-## Setup
+## Configuration
 
 <details>
-<summary><strong>Requirements</strong></summary>
+<summary><strong>Files</strong></summary>
 
-- **macOS** (stores the cookie key in your login Keychain) or **Linux** with a Secret Service provider (`kwalletd6` on KDE, `gnome-keyring` on GNOME)
-- **Chromium-family browser** logged into X — auto-detected: Vivaldi, Chrome, Chromium, Brave, Edge (all channels), Opera, Arc. Override with `UNRAGER_COOKIES_PATH`.
-- **Rust 1.85+** (edition 2024) — only if building from source
-- **Ollama** (optional) — for the rage filter and translation. Default model `gemma4:latest`, configurable in `filter.toml`. A local [SGLang](https://github.com/sgl-project/sglang) (or other OpenAI-compatible) server works too — set `backend = "sglang"` in `filter.toml`.
-- **X developer account** (optional) — only for posting. OAuth 2.0 Native App + pay-per-use credits at [console.x.com](https://console.x.com).
-
-</details>
-
-<details>
-<summary><strong>Configuration</strong></summary>
-
-Config paths are platform-native: Linux uses `~/.config/unrager/` + `~/.cache/unrager/`, macOS uses `~/Library/Application Support/unrager/` + `~/Library/Caches/unrager/`.
+Paths are platform-native: Linux uses `~/.config/unrager/`, `~/.cache/unrager/` and `~/.local/share/unrager/`; macOS uses `~/Library/Application Support/unrager/` and `~/Library/Caches/unrager/`.
 
 | File (Linux) | Purpose |
 |---|---|
-| `~/.config/unrager/config.toml` | General settings (browser command, theme, etc.) |
-| `~/.config/unrager/session.json` | TUI session (source, selection, toggles) |
+| `~/.config/unrager/filter.toml` | Your rules and the model to use (auto-created) |
+| `~/.config/unrager/config.toml` | General settings (browser command, theme, clock, feed buffer) |
+| `~/.config/unrager/session.json` | Terminal client session (source, selection, toggles) |
 | `~/.config/unrager/tokens.json` | OAuth 2.0 tokens (mode `0600`) |
-| `~/.config/unrager/filter.toml` | Rage filter rubric (auto-created) |
+| `~/.local/share/unrager/browser-extension/` | The unpacked extension `unrager setup` writes |
+| `~/.config/systemd/user/unrager-serve.service` | The background server `unrager setup` installs (macOS: `~/Library/LaunchAgents/com.unrager.serve.plist`) |
+| `~/.cache/unrager/filter.db` | Verdict cache (pruned after 7 days) |
 | `~/.cache/unrager/seen.db` | Read-tracking SQLite |
-| `~/.cache/unrager/filter.db` | Filter verdict cache |
-| `~/.cache/unrager/feed.db` | Materialized Home buffer — pre-fetched, pre-classified For You + Following (capped ring; `feed.db.writer.lock` guards the single writer) |
-| `~/.cache/unrager/about.db` | `AboutAccountQuery` cache (country flag + about_profile, keyed by rest_id; negative entries TTL 30d; shared by the TUI and `unrager serve`, which exposes it to the native clients via `GET /api/about/{rest_id}`) |
+| `~/.cache/unrager/feed.db` | Materialized Home buffer for the terminal client and the iPhone app (`feed.db.writer.lock` guards the single writer) |
+| `~/.cache/unrager/about.db` | Country flag and about-profile cache, shared by the terminal client and `unrager serve` |
 | `~/.cache/unrager/media/<tweet_id>/` | Downloaded attachments for `m` (external viewer) |
 | `~/.cache/unrager/screenshots/` | PNG screenshots written by `S` |
 | `~/.cache/unrager/avatars/<sha256>.bin` | Author-avatar disk cache (LRU-pruned to 50 MB) |
 | `~/.cache/unrager/emoji/<stem>.png` | Color emoji PNGs (Twemoji) composited into screenshots |
 | `~/.cache/unrager/mordor-user-<hash>.opus` | Sliced Mordor loop (generated from `[sound] source`) |
 
-### Feed buffer
+</details>
 
-Home (For You + Following) is served from a small local SQLite buffer that a background worker keeps fresh and pre-classified, so the app opens instantly instead of fetching X live on every launch. The worker runs inside `unrager serve` (so the iOS / macOS / Linux clients get it for free) or, when no server is running, inside the TUI itself; whichever process wins `feed.db.writer.lock` does the ingest and the rest read the shared buffer. It tops the buffer up toward the cap in the background and then parks (no fetching, no GPU classification) until the app is opened — polling briskly only while a client is actively using the feed — so the buffer is already large when you open the app, and a full, idle buffer costs nothing. The buffer is a capped ring; reaching its bottom is the end of what's cached. Every client shows an **"updated Nm ago"** freshness indicator (TUI footer; a pinned caption on iOS / macOS / Linux that ticks live), backed by `GET /api/feed/status`. Defaults are sane; override in `config.toml`:
+<details>
+<summary><strong>Feed buffer</strong></summary>
+
+The terminal client and the iPhone app serve Home (For You + Following) from a small local SQLite buffer that a background worker keeps fresh and pre-classified, so they open instantly instead of fetching X live. The worker runs inside a full `unrager serve` or, when none is running, inside the terminal client; whichever process wins `feed.db.writer.lock` does the ingest and the rest read the shared buffer. It fills toward the cap in the background, then parks (no fetching, no GPU) until a client opens the feed. Every client shows an "updated Nm ago" indicator backed by `GET /api/feed/status`. The extension doesn't use the buffer; it filters what x.com loads. Override in `config.toml`:
 
 ```toml
 [feed]
@@ -408,35 +413,30 @@ active_poll_secs = 180  # poll cadence while the app is open
 recent_poll_secs = 1200 # cadence while filling the buffer in the background
 ```
 
-### Theme
+</details>
+
+<details>
+<summary><strong>Theme</strong></summary>
 
 ```toml
 [theme]
 name = "auto"   # auto | x-dark | x-light
 ```
 
-`auto` follows the terminal background detected at startup (OSC 11). The `Z` key and `:theme <name>` command both override and persist whatever you pick. The clock's `accent` field accepts `"auto"` (default — follows the theme accent), an ANSI color name, a 256-color index, or a `#rrggbb` hex.
+`auto` follows the terminal background detected at startup (OSC 11). The `Z` key and `:theme <name>` command both override and persist whatever you pick.
 
-The Mordor wallpaper and fiery accents on the For You feed require *both* a dark theme and a dark terminal background. A light terminal suppresses them even if your theme is `x-dark`, so the cream that bleeds through transparent cells doesn't clash with the image. Terminal-background detection is done once at startup; if you switch your system between light and dark while unrager is running, re-run `:theme x-light` / `:theme x-dark` or restart to re-detect.
+The Mordor wallpaper and fiery accents on the For You feed require *both* a dark theme and a dark terminal background. Terminal-background detection is done once at startup; if you switch your system between light and dark while unrager is running, re-run `:theme x-light` / `:theme x-dark` or restart to re-detect.
 
-### Mordor-mode audio
+</details>
 
-Opt-in: set `UNRAGER_SOUND=1` AND configure an audio file — unrager then plays it on loop while Mordor mode is active and stops the instant you leave For You or switch to a light theme. There is no built-in fallback: if you don't configure a source, Mordor mode is silent. No audio libraries are linked into the binary — playback shells out to whichever of `ffplay`, `mpv`, `paplay`, `pw-play`, `afplay`, or `aplay` is on your `$PATH`.
+<details>
+<summary><strong>Mordor-mode audio</strong></summary>
 
-**To use your own audio, point at it in `config.toml`:**
+Opt-in: set `UNRAGER_SOUND=1` and configure an audio file — unrager then plays it on loop while Mordor mode is active and stops the instant you leave For You or switch to a light theme. There is no built-in fallback. No audio libraries are linked into the binary — playback shells out to whichever of `ffplay`, `mpv`, `paplay`, `pw-play`, `afplay`, or `aplay` is on your `$PATH`.
 
 ```toml
 [sound]
 source = "/path/to/your/audio.flac"   # any format ffmpeg can read
-```
-
-That's the whole minimum config. On next launch unrager slices, fades, downmixes, and encodes the file into a small Opus loop cached under `~/.cache/unrager/mordor-user-<hash>.opus` (~3 KB per second of audio). Requires `ffmpeg` on `$PATH` for the one-time encode.
-
-**All optional keys:**
-
-```toml
-[sound]
-source = "/path/to/your/audio.flac"
 start = "0:55"           # MM:SS, HH:MM:SS, or raw seconds (default: 0)
 end = "1:40"             # same formats — or use `duration` instead
 duration = 45            # seconds after `start` — ignored if `end` is set
@@ -444,20 +444,12 @@ fade_ms = 50             # fade-in/out at loop boundaries (default: 50)
 volume = 0.5             # 0.0–1.0 pre-master gain (default: 0.5)
 ```
 
-The cache key is a hash of the source path, its mtime, and every knob above, so editing any of them (or replacing the source file) invalidates the cache and re-encodes on the next launch. Stale encodes accumulate in `~/.cache/unrager/` — delete `mordor-user-*.opus` manually if you want to reclaim a few KB.
+On next launch unrager slices, fades, downmixes, and encodes the file into a small Opus loop cached under `~/.cache/unrager/mordor-user-<hash>.opus` (requires `ffmpeg` for the one-time encode). The cache key hashes the source path, its mtime and every knob above. Alternatively drop a pre-encoded file at `~/.config/unrager/mordor-sound.{opus,ogg,oga,flac,mp3,wav}`; it's used raw. `tail -f ~/.cache/unrager/unrager.log.$(date +%Y-%m-%d) | grep -i mordor` shows what was picked up.
 
-**Precedence** — unrager tries these in order, using the first that works:
+</details>
 
-1. `[sound] source = "..."` in `config.toml` (requires `ffmpeg` on `$PATH`)
-2. A pre-encoded file you dropped at `~/.config/unrager/mordor-sound.{opus,ogg,oga,flac,mp3,wav}` — used raw, no processing
-
-If `ffmpeg` is missing, or the configured `source` can't be found, or the encode fails, unrager logs a warning and falls through to the next option. If neither source is present, Mordor mode is silent.
-
-**Backend compatibility** — `ffplay`/`mpv` decode everything and get gapless looping via `-loop 0` / `--loop=inf`. `paplay` handles WAV/FLAC/Ogg (libsndfile), `afplay` handles WAV/MP3/FLAC (CoreAudio), `aplay`/`pw-play` are WAV-only. Players without native loop support run inside a shell `while :; do … done` with a small pulse between iterations.
-
-**Verifying it's working** — `tail -f ~/.cache/unrager/unrager.log.$(date +%Y-%m-%d) | grep -i mordor` while you toggle into For You. You should see `sound enabled backend=Ffplay format=Opus path=.../mordor-user-*.opus` when the config is picked up, `mordor loop started` on every Mordor entry, and `mordor loop stopped` on exit. If you see nothing, either `UNRAGER_SOUND=1` isn't set, no source is configured, or the encode failed — earlier log lines will say which.
-
-### Clock
+<details>
+<summary><strong>Clock</strong></summary>
 
 Every field has a default — omit `[clock]` entirely to get the defaults (enabled, top-right, time + date, 24h).
 
@@ -474,66 +466,42 @@ accent = "cyan"            # ANSI name, 0–255 index, or #rrggbb
 border = true              # only applies to the corner overlays
 ```
 
-`hour_format = "auto"` (the default) reads the OS locale via `sys-locale` — so `en_US`/`en_CA`/`en_AU`/`en_IN`/etc. see `3:15 PM`, while most of Europe/Asia see `15:15`. `date_format = "auto"` picks `%a, %b %-d` for 12h locales and `%a %-d %b` otherwise. Force either with `hour_format = "h12"` / `"h24"` or an explicit strftime string.
-
-`footer` / `header` render the clock right-aligned inside that row — one line of text, no box, no overlay. The four corner positions render as a floating overlay with an optional rounded border.
+`hour_format = "auto"` reads the OS locale, so `en_US` sees `3:15 PM` while most of Europe and Asia see `15:15`. `footer` / `header` render the clock right-aligned inside that row; the four corner positions render as a floating overlay.
 
 </details>
 
 <details>
-<summary><strong>Write path setup</strong></summary>
+<summary><strong>Query IDs</strong></summary>
 
-Posting uses the official X API v2 (not cookie auth), so your account is never at risk.
+The terminal client and the iPhone app's server call X's GraphQL operations by query IDs that X rotates when it deploys. unrager scrapes them from X's web bundle, caches them, and falls back to a built-in table; `unrager doctor` reports how fresh they are. If X changes its bundle faster than a release, override them in `config.toml`:
 
-The fast path:
+```toml
+[query_ids]
+HomeTimeline = "abc123"
+```
+
+</details>
+
+## Posting
+
+Posting from the terminal client's CLI uses the official X API v2 (not cookie auth) with your own OAuth 2.0 PKCE client, so posts are attributed to your developer client and your read cookies are never used for writes.
 
 ```sh
 unrager auth setup
 ```
 
-Interactive wizard — prints the X developer-portal URL, waits for you to register a Native App, prompts for the Client ID, writes it to `~/.config/unrager/config.toml`, then runs `auth login` at the end. One command, one paste.
+walks you through it: it prints the X developer-portal URL, waits for you to register a Native App (PKCE, callback `http://127.0.0.1:8765/callback`), stores the Client ID in `config.toml` (or use `UNRAGER_X_CLIENT_ID`), and runs `unrager auth login`. Load pay-per-use credits at [console.x.com](https://console.x.com), then `unrager tweet "hello from unrager"`.
 
-The manual path, if you'd rather do it by hand:
-
-1. Create a developer account at [developer.x.com](https://developer.x.com)
-2. Register a Native App (PKCE, no client secret)
-3. Set callback URL to `http://127.0.0.1:8765/callback`
-4. **Configure your Client ID** — either export it:
-   ```sh
-   export UNRAGER_X_CLIENT_ID=<your_client_id>
-   ```
-   or add it to `~/.config/unrager/config.toml`:
-   ```toml
-   [oauth]
-   client_id = "<your_client_id>"
-   ```
-   The env var wins when both are set. There is no embedded default — `auth login`, `tweet`, and `reply` fail with an explanatory error if neither is configured.
-5. Load pay-per-use credits at [console.x.com](https://console.x.com)
-6. `unrager auth login` — opens browser for the OAuth flow
-7. `unrager tweet "hello from unrager"`
-
-> **Why your own Client ID?** X enforces per-client rate limits and may flag traffic from many unrelated users sharing a single client. Read and TUI are unaffected — only `tweet` and `reply` go through OAuth.
-
-</details>
-
-## Architecture
+## How it fits together
 
 ```
-Reads:   browser cookies  ->  GraphQL (same endpoints as x.com)  ->  free, unlimited
-Writes:  OAuth 2.0 PKCE   ->  official X API v2                  ->  pay-per-use
-Filter:  tweet text        ->  local Ollama                       ->  HIDE/KEEP -> SQLite cache
-Media:   CDN fetch         ->  downscale 400px                    ->  kitty graphics transmit
+Extension:  x.com timeline response  ->  extension  ->  unrager (localhost:7777)  ->  your model  ->  HIDE / KEEP  ->  hidden on screen
+Terminal:   browser cookies  ->  X's GraphQL (same endpoints as x.com)  ->  filter  ->  terminal
+iPhone:     iPhone app  ->  unrager serve  ->  X's GraphQL  ->  filter
+Posting:    OAuth 2.0 PKCE  ->  official X API v2
 ```
 
-<details>
-<summary><strong>Security model</strong></summary>
-
-1. **Browser cookies** — read at runtime, decrypted in memory using the OS credential store (macOS Keychain, Linux Secret Service), never written to disk or logged
-2. **OAuth tokens** — `~/.config/unrager/tokens.json` mode `0600`, atomic writes
-3. **Client ID** — supplied by the user via `UNRAGER_X_CLIENT_ID` env var or `[oauth] client_id` in `config.toml`. No embedded default, so the app identity used against X is always your own.
-4. **Filter** — runs entirely locally, tweet text never leaves your machine
-
-</details>
+Verdicts are cached in SQLite per post and per rules-and-model, and shared by every part: a post the extension already judged is instant in the terminal client, and the other way around.
 
 ## Contributing
 
@@ -543,8 +511,10 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
+The extension is plain JavaScript in [`browser/extension/`](browser/extension/); `unrager setup` embeds that folder into the binary, so load it unpacked from there while working on it.
+
 ## Legal
 
-Not affiliated with X Corp. Uses X's web GraphQL endpoints the same way the web client does. Do not use this to scrape at scale or run bots.
+Not affiliated with X Corp. The extension only reads what x.com already sends your browser; the terminal client uses X's web GraphQL endpoints the same way the web client does. Don't use it to scrape at scale or run bots.
 
 Emoji graphics composited into postcard screenshots are from [Twemoji](https://github.com/jdecked/twemoji) (the maintained `jdecked/twemoji` fork), licensed [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/).

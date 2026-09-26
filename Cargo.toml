@@ -14,25 +14,26 @@ name = "unrager"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "A calm Twitter/X CLI with a local-LLM rage filter"
+description = "Takes the rage out of your x.com timeline with a local LLM: browser extension, terminal client and API server"
 license.workspace = true
 repository.workspace = true
 readme = "README.md"
-keywords = ["twitter", "x", "cli", "llm", "filter"]
+keywords = ["twitter", "x", "llm", "filter", "browser-extension"]
 categories = ["command-line-utilities"]
 include = [
     "src/**/*",
     "assets/NotoSansMono-*.ttf",
     "assets/IconsFallback-*.ttf",
     "assets/for-you-bg.png",
+    "browser/extension/**/*",
     "Cargo.toml",
     "README.md",
     "LICENSE",
 ]
 
 [features]
-default = ["tui"]
-# Classic terminal UI (ratatui). Disable for a CLI-only install.
+default = ["tui", "server"]
+# Terminal client (ratatui).
 tui = [
     "dep:ratatui",
     "dep:crossterm",
@@ -46,8 +47,9 @@ tui = [
     "dep:arboard",
     "dep:fs2",
 ]
-# HTTP API server for native clients (e.g. the iOS app). Pulls in axum.
-# Implies `tui` because the server reuses filter/seen/fetch helpers that live there.
+# `unrager serve` and `unrager setup`: the local server the browser extension
+# and the iPhone app talk to. Pulls in axum. Implies `tui` because the server
+# reuses filter/seen/fetch helpers that live there.
 server = [
     "tui",
     "dep:axum",
@@ -81,6 +83,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock"] }
 directories = "5"
 toml = "0.8"
+toml_edit = "0.22"
 url = "2"
 tempfile = "3"
 regex = "1"
@@ -110,7 +113,7 @@ arboard = { version = "3", default-features = false, features = ["image-data", "
 # --- Server (optional, default) ---
 axum = { version = "0.8", features = ["multipart", "macros"], optional = true }
 tower = { version = "0.5", optional = true }
-tower-http = { version = "0.6", features = ["cors", "compression-full", "trace", "fs"], optional = true }
+tower-http = { version = "0.6", features = ["compression-full", "trace", "fs"], optional = true }
 async-stream = { version = "0.3", optional = true }
 eventsource-stream = { version = "0.2", optional = true }
 fs2 = { version = "0.4", optional = true }

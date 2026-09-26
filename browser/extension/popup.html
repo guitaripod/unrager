@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="color-scheme" content="light dark">
+  <title>unrager</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="top">
+    <img src="icons/32.png" alt="" width="20" height="20">
+    <span class="name">unrager</span>
+    <span class="version" id="version"></span>
+  </header>
+
+  <section class="status" id="status" data-tone="checking" aria-live="polite">
+    <p class="headline" id="headline">Checking…</p>
+    <p class="detail" id="detail"></p>
+    <p class="fine" id="fine" hidden></p>
+    <div class="command" id="command" hidden>
+      <code id="command-text"></code>
+      <button type="button" id="command-copy">Copy</button>
+    </div>
+    <button type="button" class="action" id="action" hidden></button>
+  </section>
+
+  <section class="switches" aria-label="Filter">
+    <label class="switch">
+      <span>Pause filtering</span>
+      <input type="checkbox" role="switch" id="paused">
+    </label>
+    <label class="switch">
+      <span>Show hidden posts</span>
+      <input type="checkbox" role="switch" id="reveal">
+    </label>
+  </section>
+
+  <details class="panel" id="rules">
+    <summary>What gets hidden</summary>
+    <p class="hint" id="rules-hint">Posts mainly about one of these topics disappear. A post that only mentions one in passing stays.</p>
+    <ol class="topics" id="topics"></ol>
+    <form class="add" id="add-topic">
+      <input type="text" id="new-topic" placeholder="Add a topic" aria-label="New topic" autocomplete="off">
+      <button type="submit">Add</button>
+    </form>
+    <label class="field-label" for="guidance">Anything else the model should know</label>
+    <textarea id="guidance" rows="4" spellcheck="false"></textarea>
+    <div class="row">
+      <button type="button" class="primary" id="save-rules">Save rules</button>
+      <span class="note" id="rules-note" aria-live="polite"></span>
+    </div>
+  </details>
+
+  <details class="panel" id="settings">
+    <summary>Settings</summary>
+    <p class="model" id="model"></p>
+    <label class="field-label" for="server">unrager address</label>
+    <form class="add" id="server-form">
+      <input type="url" id="server" placeholder="http://localhost:7777" autocomplete="off" spellcheck="false">
+      <button type="submit">Save</button>
+    </form>
+    <p class="note" id="server-note" aria-live="polite"></p>
+  </details>
+
+  <script src="popup.js"></script>
+</body>
+</html>

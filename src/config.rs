@@ -260,6 +260,12 @@ pub fn config_dir() -> Result<PathBuf> {
     Ok(path)
 }
 
+pub fn data_dir() -> Result<PathBuf> {
+    let path = project_dirs()?.data_dir().to_path_buf();
+    ensure_private_dir(&path)?;
+    Ok(path)
+}
+
 fn ensure_private_dir(path: &Path) -> Result<()> {
     std::fs::create_dir_all(path)?;
     #[cfg(unix)]

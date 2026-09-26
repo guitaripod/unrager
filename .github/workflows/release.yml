@@ -52,20 +52,20 @@ jobs:
       matrix:
         include:
           # Linux x86_64
-          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, use_cross: false, flavor: full, features: "--features server" }
-          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, use_cross: false, flavor: tui,  features: "" }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, use_cross: false, flavor: full, features: "" }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, use_cross: false, flavor: tui,  features: "--no-default-features --features tui" }
           - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, use_cross: false, flavor: cli,  features: "--no-default-features" }
           # Linux aarch64 (cross)
-          - { os: ubuntu-22.04, target: aarch64-unknown-linux-gnu, use_cross: true,  flavor: full, features: "--features server" }
-          - { os: ubuntu-22.04, target: aarch64-unknown-linux-gnu, use_cross: true,  flavor: tui,  features: "" }
+          - { os: ubuntu-22.04, target: aarch64-unknown-linux-gnu, use_cross: true,  flavor: full, features: "" }
+          - { os: ubuntu-22.04, target: aarch64-unknown-linux-gnu, use_cross: true,  flavor: tui,  features: "--no-default-features --features tui" }
           - { os: ubuntu-22.04, target: aarch64-unknown-linux-gnu, use_cross: true,  flavor: cli,  features: "--no-default-features" }
           # macOS arm64
-          - { os: macos-14,     target: aarch64-apple-darwin,      use_cross: false, flavor: full, features: "--features server" }
-          - { os: macos-14,     target: aarch64-apple-darwin,      use_cross: false, flavor: tui,  features: "" }
+          - { os: macos-14,     target: aarch64-apple-darwin,      use_cross: false, flavor: full, features: "" }
+          - { os: macos-14,     target: aarch64-apple-darwin,      use_cross: false, flavor: tui,  features: "--no-default-features --features tui" }
           - { os: macos-14,     target: aarch64-apple-darwin,      use_cross: false, flavor: cli,  features: "--no-default-features" }
           # macOS x86_64
-          - { os: macos-14,     target: x86_64-apple-darwin,       use_cross: false, flavor: full, features: "--features server" }
-          - { os: macos-14,     target: x86_64-apple-darwin,       use_cross: false, flavor: tui,  features: "" }
+          - { os: macos-14,     target: x86_64-apple-darwin,       use_cross: false, flavor: full, features: "" }
+          - { os: macos-14,     target: x86_64-apple-darwin,       use_cross: false, flavor: tui,  features: "--no-default-features --features tui" }
           - { os: macos-14,     target: x86_64-apple-darwin,       use_cross: false, flavor: cli,  features: "--no-default-features" }
     runs-on: ${{ matrix.os }}
     steps:
@@ -148,6 +148,7 @@ jobs:
             ./unrager --help > /dev/null
             if [ "${{ matrix.flavor }}" = "full" ]; then
               ./unrager serve --help > /dev/null
+              ./unrager setup --help > /dev/null
             fi
             if [ "${{ matrix.flavor }}" != "cli" ]; then
               ./unrager whoami 2>&1 | grep -qE "no Chromium-family cookie store|no x.com session" && echo "whoami error path OK"
@@ -181,6 +182,7 @@ jobs:
           ./unrager --help > /dev/null
           if [ "${{ matrix.flavor }}" = "full" ]; then
             ./unrager serve --help > /dev/null
+            ./unrager setup --help > /dev/null
           fi
           if [ "${{ matrix.flavor }}" != "cli" ]; then
             ./unrager whoami 2>&1 | grep -qE "no Chromium-family cookie store|no x.com session|User interaction is not allowed" && echo "whoami error path OK"
@@ -261,11 +263,11 @@ jobs:
             echo "The oneliner installer supports three flavors via the \`UNRAGER_FLAVOR\` env var:"
             echo ""
             echo '```sh'
-            echo '# tui: TUI + CLI (default)'
+            echo '# full: browser extension + server, terminal client, CLI (default)'
             echo 'curl -fsSL https://unrager.com/install.sh | bash'
             echo ''
-            echo '# full: TUI + HTTP API server'
-            echo 'UNRAGER_FLAVOR=full curl -fsSL https://unrager.com/install.sh | bash'
+            echo '# tui: terminal client + CLI, no server or extension'
+            echo 'UNRAGER_FLAVOR=tui curl -fsSL https://unrager.com/install.sh | bash'
             echo ''
             echo '# cli: CLI only'
             echo 'UNRAGER_FLAVOR=cli curl -fsSL https://unrager.com/install.sh | bash'

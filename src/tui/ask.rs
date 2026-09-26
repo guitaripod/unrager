@@ -197,50 +197,50 @@ pub enum Role {
     Assistant,
 }
 
-pub fn preload(ollama: LlmConfig) {
-    if ollama.backend != LlmBackend::Ollama {
+pub fn preload(llm: LlmConfig) {
+    if llm.backend != LlmBackend::Ollama {
         return;
     }
     tokio::spawn(async move {
-        warm_model(&ollama, "10m").await;
+        warm_model(&llm, "10m").await;
     });
 }
 
-pub fn unload(ollama: LlmConfig) {
-    if ollama.backend != LlmBackend::Ollama {
+pub fn unload(llm: LlmConfig) {
+    if llm.backend != LlmBackend::Ollama {
         return;
     }
     tokio::spawn(async move {
-        warm_model(&ollama, "0s").await;
+        warm_model(&llm, "0s").await;
     });
 }
 
-pub async fn unload_blocking(ollama: &LlmConfig) {
-    if ollama.backend != LlmBackend::Ollama {
+pub async fn unload_blocking(llm: &LlmConfig) {
+    if llm.backend != LlmBackend::Ollama {
         return;
     }
-    warm_model(ollama, "0s").await;
+    warm_model(llm, "0s").await;
 }
 
 /// Ollama-only model-residency nudge (`/api/generate` + `keep_alive`); the
 /// three call sites above already gate on `backend == Ollama`, so this never
 /// fires a doomed request at an SGLang server.
-async fn warm_model(ollama: &LlmConfig, keep_alive: &str) {
+async fn warm_model(llm: &LlmConfig, keep_alive: &str) {
     let Ok(http) = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
     else {
         return;
     };
-    let url = format!("{}/api/generate", ollama.host.trim_end_matches('/'));
+    let url = format!("{}/api/generate", llm.host.trim_end_matches('/'));
     let body = json!({
-        "model": ollama.model,
+        "model": llm.model,
         "prompt": "",
         "keep_alive": keep_alive,
     });
     match http.post(&url).json(&body).send().await {
         Ok(resp) if resp.status().is_success() => {
-            debug!(keep_alive, model = %ollama.model, "ask model warm call ok");
+            debug!(keep_alive, model = %llm.model, "ask model warm call ok");
         }
         Ok(resp) => {
             debug!(
@@ -256,7 +256,7 @@ async fn warm_model(ollama: &LlmConfig, keep_alive: &str) {
 }
 
 pub fn send(
-    ollama: LlmConfig,
+    llm: LlmConfig,
     tweet: Tweet,
     replies: Vec<Tweet>,
     thread: Option<ThreadContext>,
@@ -273,7 +273,7 @@ pub fn send(
             has_thread = thread.is_some(),
             "ask stream start"
         );
-        let images = if ollama.supports_vision() {
+        let images = if llm.supports_vision() {
             fetch_images(&tweet).await
         } else {
             Vec::new()
@@ -293,7 +293,7 @@ pub fn send(
             replies: replies.iter().map(prompt_entry).collect(),
         };
         let messages = build_messages(&tweet.author.handle, &tweet.text, &ctx, &turns, images);
-        stream_ollama(&ollama, &tweet_id, messages, &tx).await;
+        stream_llm(&llm, &tweet_id, messages, &tx).await;
     });
 }
 
@@ -427,7 +427,7 @@ pub async fn fetch_images(tweet: &Tweet) -> Vec<String> {
     out
 }
 
-async fn stream_ollama(ollama: &LlmConfig, tweet_id: &str, messages: Vec<Value>, tx: &EventTx) {
+async fn stream_llm(llm: &LlmConfig, tweet_id: &str, messages: Vec<Value>, tx: &EventTx) {
     let req = ChatRequest {
         messages,
         thinking: true,
@@ -437,7 +437,7 @@ async fn stream_ollama(ollama: &LlmConfig, tweet_id: &str, messages: Vec<Value>,
 
     let tid = tweet_id.to_string();
     let tx2 = tx.clone();
-    let result = ollama
+    let result = llm
         .stream_chat(
             req,
             "ask",

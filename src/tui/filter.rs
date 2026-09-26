@@ -57,7 +57,9 @@ pub struct FilterConfig {
     pub drop_topics: Vec<String>,
     #[serde(default)]
     pub extra_guidance: String,
-    pub ollama: LlmConfig,
+    /// `[llm]` in `filter.toml`; `[ollama]` (the pre-1.0 name) still loads.
+    #[serde(alias = "ollama")]
+    pub llm: LlmConfig,
 }
 
 /// Which local LLM server a `LlmConfig` talks to. Exactly one is active per
@@ -68,23 +70,54 @@ pub struct FilterConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum LlmBackend {
+    /// Ollama's native `/api/chat` API.
     #[default]
     Ollama,
-    SgLang,
+    /// Any OpenAI-compatible `/v1/chat/completions` server: SGLang, vLLM,
+    /// llama.cpp's `llama-server`, LM Studio, llama-swap, Ollama's `/v1`.
+    OpenAi,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl LlmBackend {
+    /// The name `filter.toml` uses, stable across Rust renames (it feeds the
+    /// rubric hash, so it must not drift).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LlmBackend::Ollama => "ollama",
+            LlmBackend::OpenAi => "openai",
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
     #[serde(default)]
     pub backend: LlmBackend,
     pub model: String,
     pub host: String,
     pub timeout_seconds: u64,
-    /// Ollama-only model-residency control; simply never written into an
-    /// SGLang request body. SGLang/llama-swap manage their own model
-    /// lifecycle server-side (e.g. llama-swap's `ttl`).
+    /// Ollama-only model-residency control; never written into an
+    /// OpenAI-compatible request body (those servers manage their own model
+    /// lifecycle, e.g. llama-swap's `ttl`).
     #[serde(default = "default_keep_alive")]
     pub keep_alive: String,
+    /// Sent as `Authorization: Bearer …` when set, for servers started with
+    /// an API key (vLLM/llama-server `--api-key`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+}
+
+impl std::fmt::Debug for LlmConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LlmConfig")
+            .field("backend", &self.backend)
+            .field("model", &self.model)
+            .field("host", &self.host)
+            .field("timeout_seconds", &self.timeout_seconds)
+            .field("keep_alive", &self.keep_alive)
+            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 fn default_keep_alive() -> String {
@@ -113,7 +146,7 @@ impl LlmConfig {
         let base = self.host.trim_end_matches('/');
         match self.backend {
             LlmBackend::Ollama => format!("{base}/api/chat"),
-            LlmBackend::SgLang => format!("{base}/v1/chat/completions"),
+            LlmBackend::OpenAi => format!("{base}/v1/chat/completions"),
         }
     }
 
@@ -121,16 +154,23 @@ impl LlmConfig {
         let base = self.host.trim_end_matches('/');
         match self.backend {
             LlmBackend::Ollama => format!("{base}/api/tags"),
-            LlmBackend::SgLang => format!("{base}/v1/models"),
+            LlmBackend::OpenAi => format!("{base}/v1/models"),
         }
     }
 
-    /// SGLang/Qwen3 has no defined multimodal message shape here; vision
-    /// (image-attached ask turns) stays Ollama-only rather than inventing an
-    /// OpenAI-style `content: [{type:"image_url", ...}]` shape nobody asked
-    /// for.
+    /// Vision (image-attached ask turns) stays Ollama-only: OpenAI-compatible
+    /// servers disagree on multimodal message shapes and most local text
+    /// models have no vision tower anyway.
     pub fn supports_vision(&self) -> bool {
         matches!(self.backend, LlmBackend::Ollama)
+    }
+
+    /// Applies the configured API key, if any.
+    fn authorized(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match self.api_key.as_deref() {
+            Some(key) if !key.is_empty() => request.bearer_auth(key),
+            _ => request,
+        }
     }
 
     pub fn build_client(&self) -> reqwest::Client {
@@ -162,7 +202,7 @@ impl LlmConfig {
                 "keep_alive": self.keep_alive,
                 "options": { "temperature": req.temperature, "num_predict": req.max_tokens },
             }),
-            LlmBackend::SgLang => serde_json::json!({
+            LlmBackend::OpenAi => serde_json::json!({
                 "model": self.model,
                 "messages": req.messages,
                 "stream": stream,
@@ -181,9 +221,9 @@ impl LlmConfig {
     }
 
     /// Same as `chat`, but against a caller-supplied client — used by
-    /// `unrager doctor`'s SGLang smoke test, which needs a much longer
-    /// timeout than normal classification traffic (a cold SGLang model can
-    /// take well over a minute to load before its first reply).
+    /// `unrager doctor`'s generation smoke test, which needs a much longer
+    /// timeout than normal classification traffic (a model that has to
+    /// cold-load can take well over a minute to answer its first request).
     pub(crate) async fn chat_with_client(
         &self,
         req: ChatRequest,
@@ -191,8 +231,8 @@ impl LlmConfig {
     ) -> std::result::Result<ChatReply, String> {
         let url = self.chat_url();
         let body = self.build_body(&req, false);
-        let resp = http
-            .post(&url)
+        let resp = self
+            .authorized(http.post(&url))
             .json(&body)
             .send()
             .await
@@ -210,7 +250,7 @@ impl LlmConfig {
                     content: r.message.content,
                 })
             }
-            LlmBackend::SgLang => {
+            LlmBackend::OpenAi => {
                 let r: OpenAiChatResponse = resp.json().await.map_err(|e| format!("parse: {e}"))?;
                 let content = r
                     .choices
@@ -233,7 +273,7 @@ impl LlmConfig {
         let body = self.build_body(&req, true);
         match self.backend {
             LlmBackend::Ollama => self.stream_ndjson(body, label, on_token, on_thinking).await,
-            LlmBackend::SgLang => self.stream_sse(body, label, on_token, on_thinking).await,
+            LlmBackend::OpenAi => self.stream_sse(body, label, on_token, on_thinking).await,
         }
     }
 
@@ -254,8 +294,8 @@ impl LlmConfig {
         let http = self.build_streaming_client();
         let url = self.chat_url();
 
-        let response = http
-            .post(&url)
+        let response = self
+            .authorized(http.post(&url))
             .json(&body)
             .send()
             .await
@@ -319,7 +359,7 @@ impl LlmConfig {
         Ok(done_reason)
     }
 
-    /// SGLang/OpenAI-compatible streaming shape: Server-Sent Events, each
+    /// OpenAI-compatible streaming shape: Server-Sent Events, each
     /// chunk `data: {...}\n\n`, terminated by a literal `data: [DONE]` line.
     /// Confirmed live against a real SGLang server — content deltas can be
     /// empty strings mid-stream, and `finish_reason` arrives on the last
@@ -339,8 +379,8 @@ impl LlmConfig {
         let http = self.build_streaming_client();
         let url = self.chat_url();
 
-        let response = http
-            .post(&url)
+        let response = self
+            .authorized(http.post(&url))
             .json(&body)
             .send()
             .await
@@ -350,7 +390,7 @@ impl LlmConfig {
         if !status.is_success() {
             let preview = response.text().await.unwrap_or_default();
             let trimmed: String = preview.chars().take(200).collect();
-            tracing::warn!(label, status = status.as_u16(), body = %trimmed, "sglang http error");
+            tracing::warn!(label, status = status.as_u16(), body = %trimmed, "openai-compatible http error");
             return Err(format!("http {}: {trimmed}", status.as_u16()));
         }
 
@@ -380,15 +420,34 @@ impl LlmConfig {
         Ok(done_reason)
     }
 
+    /// Whether `models` (a `list_models` result) includes the configured
+    /// model. Ollama resolves an untagged name to `:latest`, so `gemma4`
+    /// matches a listed `gemma4:latest`.
+    pub fn is_served_by(&self, models: &[String]) -> bool {
+        match self.backend {
+            LlmBackend::Ollama => {
+                let wanted = ollama_tagged(&self.model);
+                models.iter().any(|m| ollama_tagged(m) == wanted)
+            }
+            LlmBackend::OpenAi => models.iter().any(|m| m == &self.model),
+        }
+    }
+
     /// List model names/ids the backend currently knows about. Ollama:
-    /// `GET /api/tags` -> `{models:[{name}]}`. SGLang (OpenAI-compatible):
+    /// `GET /api/tags` -> `{models:[{name}]}`. OpenAI-compatible:
     /// `GET /v1/models` -> `{data:[{id}]}`.
     pub async fn list_models(&self) -> std::result::Result<Vec<String>, String> {
+        self.list_models_within(Duration::from_secs(5)).await
+    }
+
+    pub async fn list_models_within(
+        &self,
+        timeout: Duration,
+    ) -> std::result::Result<Vec<String>, String> {
         let url = self.models_url();
         let resp = self
-            .build_client()
-            .get(&url)
-            .timeout(Duration::from_secs(5))
+            .authorized(self.build_client().get(&url))
+            .timeout(timeout)
             .send()
             .await
             .map_err(|e| format!("request failed: {e}"))?;
@@ -401,7 +460,7 @@ impl LlmConfig {
                     resp.json().await.map_err(|e| format!("parse: {e}"))?;
                 Ok(tags.models.into_iter().map(|m| m.name).collect())
             }
-            LlmBackend::SgLang => {
+            LlmBackend::OpenAi => {
                 let list: OpenAiModelsResponse =
                     resp.json().await.map_err(|e| format!("parse: {e}"))?;
                 Ok(list.data.into_iter().map(|m| m.id).collect())
@@ -419,7 +478,7 @@ enum SseLine {
     Ignore,
 }
 
-/// Pure parser for one raw line of an SGLang/OpenAI-compatible SSE stream —
+/// Pure parser for one raw line of an OpenAI-compatible SSE stream —
 /// factored out of `stream_sse` so the trickiest new logic here is unit
 /// testable without a live server.
 fn parse_sse_data_line(line: &str) -> SseLine {
@@ -483,7 +542,31 @@ impl FilterConfig {
         Ok(cfg)
     }
 
-    /// Hashes the rubric AND the backend/model, so switching `[ollama]
+    /// `raw` (the current `filter.toml`) with its rule keys replaced by this
+    /// config's, one topic per line. Everything else in the file — comments,
+    /// the `[llm]` table, keys this version doesn't know — survives an edit
+    /// made from an app or the browser extension.
+    pub fn write_rules_into(&self, raw: &str) -> Result<String> {
+        let mut doc: toml_edit::DocumentMut = raw.parse().map_err(|e| {
+            Error::Config(format!(
+                "filter.toml doesn't parse, so it wasn't changed: {e}"
+            ))
+        })?;
+        let mut topics = toml_edit::Array::new();
+        for topic in &self.drop_topics {
+            topics.push(topic.as_str());
+        }
+        for topic in topics.iter_mut() {
+            topic.decor_mut().set_prefix("\n    ");
+        }
+        topics.set_trailing("\n");
+        topics.set_trailing_comma(true);
+        doc["drop_topics"] = toml_edit::value(topics);
+        doc["extra_guidance"] = toml_edit::value(self.extra_guidance.as_str());
+        Ok(doc.to_string())
+    }
+
+    /// Hashes the rubric AND the backend/model, so switching `[llm]
     /// backend`/`model` in `filter.toml` auto-invalidates cached verdicts
     /// instead of silently serving a different model's HIDE/KEEP calls as if
     /// the new one produced them. Uses the same invalidation mechanism as a
@@ -507,9 +590,9 @@ impl FilterConfig {
         hasher.update(b"---\n");
         hasher.update(PROMPT_VERSION.as_bytes());
         hasher.update(b"---\n");
-        hasher.update(format!("{:?}", self.ollama.backend).as_bytes());
+        hasher.update(self.llm.backend.as_str().as_bytes());
         hasher.update(b"\n");
-        hasher.update(self.ollama.model.as_bytes());
+        hasher.update(self.llm.model.as_bytes());
         let digest = hasher.finalize();
         hex16(&digest[..8])
     }
@@ -735,7 +818,7 @@ fn load_verdicts(conn: &Connection, rubric_hash: &str) -> Result<HashMap<String,
 
 pub struct Classifier {
     http: reqwest::Client,
-    ollama: LlmConfig,
+    llm: LlmConfig,
     sem: Arc<Semaphore>,
     system_prompt: Arc<RwLock<Arc<String>>>,
 }
@@ -757,8 +840,8 @@ pub struct TweetPayload {
 impl Classifier {
     pub fn new(cfg: &FilterConfig) -> Self {
         Self {
-            http: cfg.ollama.build_client(),
-            ollama: cfg.ollama.clone(),
+            http: cfg.llm.build_client(),
+            llm: cfg.llm.clone(),
             sem: Arc::new(Semaphore::new(8)),
             system_prompt: Arc::new(RwLock::new(Arc::new(build_system_prompt(cfg)))),
         }
@@ -778,19 +861,19 @@ impl Classifier {
 
     pub async fn init(&mut self) -> Result<()> {
         let available = self
-            .ollama
+            .llm
             .list_models()
             .await
-            .map_err(|e| Error::Config(format!("{:?} models: {e}", self.ollama.backend)))?;
-        match self.ollama.backend {
+            .map_err(|e| Error::Config(format!("{} models: {e}", self.llm.backend.as_str())))?;
+        match self.llm.backend {
             LlmBackend::Ollama => {
                 if available.is_empty() {
                     return Err(Error::Config(
                         "ollama has no models installed (run `ollama pull gemma4`)".into(),
                     ));
                 }
-                if available.iter().any(|n| n == &self.ollama.model) {
-                    tracing::info!("filter using configured model {}", self.ollama.model);
+                if self.llm.is_served_by(&available) {
+                    tracing::info!("filter using configured model {}", self.llm.model);
                     return Ok(());
                 }
                 let fallback = pick_fallback_model(&available).ok_or_else(|| {
@@ -800,20 +883,20 @@ impl Classifier {
                 })?;
                 tracing::warn!(
                     "configured model {:?} not installed; falling back to {:?}",
-                    self.ollama.model,
+                    self.llm.model,
                     fallback
                 );
-                self.ollama.model = fallback;
+                self.llm.model = fallback;
                 Ok(())
             }
-            LlmBackend::SgLang => {
-                if available.iter().any(|n| n == &self.ollama.model) {
-                    tracing::info!("filter using configured sglang model {}", self.ollama.model);
+            LlmBackend::OpenAi => {
+                if self.llm.is_served_by(&available) {
+                    tracing::info!("filter using configured model {}", self.llm.model);
                     Ok(())
                 } else {
                     Err(Error::Config(format!(
-                        "configured model {:?} not found on sglang server (available: {available:?})",
-                        self.ollama.model
+                        "configured model {:?} is not served at {} (available: {available:?})",
+                        self.llm.model, self.llm.host
                     )))
                 }
             }
@@ -822,14 +905,14 @@ impl Classifier {
 
     pub fn classify_async(&self, payload: TweetPayload, tx: EventTx) {
         let http = self.http.clone();
-        let ollama = self.ollama.clone();
+        let llm = self.llm.clone();
         let sem = self.sem.clone();
         let system_prompt = self.system_prompt.clone();
         tokio::spawn(async move {
             let _permit = sem.acquire_owned().await.ok();
             let prompt = current_system_prompt(&system_prompt);
             let verdict =
-                classify_once(&http, &ollama, &prompt, &payload.rest_id, &payload.text).await;
+                classify_once(&http, &llm, &prompt, &payload.rest_id, &payload.text).await;
             let _ = tx.send(Event::TweetClassified {
                 rest_id: payload.rest_id,
                 verdict,
@@ -844,7 +927,7 @@ impl Classifier {
     pub fn handle(&self) -> ClassifierHandle {
         ClassifierHandle {
             http: self.http.clone(),
-            ollama: self.ollama.clone(),
+            llm: self.llm.clone(),
             sem: self.sem.clone(),
             system_prompt: self.system_prompt.clone(),
         }
@@ -854,7 +937,7 @@ impl Classifier {
 #[derive(Clone)]
 pub struct ClassifierHandle {
     http: reqwest::Client,
-    ollama: LlmConfig,
+    llm: LlmConfig,
     sem: Arc<Semaphore>,
     system_prompt: Arc<RwLock<Arc<String>>>,
 }
@@ -865,7 +948,13 @@ impl ClassifierHandle {
     pub async fn classify(&self, rest_id: &str, text: &str) -> Option<FilterDecision> {
         let _permit = self.sem.acquire().await.ok();
         let prompt = current_system_prompt(&self.system_prompt);
-        classify_once(&self.http, &self.ollama, &prompt, rest_id, text).await
+        classify_once(&self.http, &self.llm, &prompt, rest_id, text).await
+    }
+
+    /// The backend this handle classifies with, including the model an
+    /// Ollama fallback picked at init.
+    pub fn llm(&self) -> &LlmConfig {
+        &self.llm
     }
 
     #[cfg(test)]
@@ -876,12 +965,12 @@ impl ClassifierHandle {
     /// Quick liveness probe so the ingest worker skips classification entirely
     /// (rather than eating a full timeout per tweet) when the backend is
     /// unreachable. Deliberately a cheap models-list GET for both backends,
-    /// never a real generation — SGLang can take the better part of a minute
+    /// never a real generation — a cold model can take the better part of a minute
     /// to cold-start a model, which would make a "quick" probe anything but.
     pub async fn is_alive(&self) -> bool {
-        let url = self.ollama.models_url();
+        let url = self.llm.models_url();
         matches!(
-            self.http.get(&url).timeout(Duration::from_secs(2)).send().await,
+            self.llm.authorized(self.http.get(&url)).timeout(Duration::from_secs(2)).send().await,
             Ok(r) if r.status().is_success()
         )
     }
@@ -893,7 +982,7 @@ impl ClassifierHandle {
 /// tweet in flight for the whole retention window.
 async fn classify_once(
     http: &reqwest::Client,
-    ollama: &LlmConfig,
+    llm: &LlmConfig,
     system_prompt: &str,
     rest_id: &str,
     text: &str,
@@ -909,7 +998,7 @@ async fn classify_once(
         max_tokens: 3,
     };
     debug!(rest_id, text_len = text.len(), "filter dispatch");
-    match ollama.chat_with_client(req, http).await {
+    match llm.chat_with_client(req, http).await {
         Ok(reply) => {
             let parsed = parse_verdict(&reply.content);
             debug!(
@@ -977,11 +1066,19 @@ struct OpenAiModelEntry {
     id: String,
 }
 
+fn ollama_tagged(name: &str) -> std::borrow::Cow<'_, str> {
+    if name.contains(':') {
+        std::borrow::Cow::Borrowed(name)
+    } else {
+        std::borrow::Cow::Owned(format!("{name}:latest"))
+    }
+}
+
 fn pick_fallback_model(available: &[String]) -> Option<String> {
     available.iter().find(|n| n.starts_with("gemma4")).cloned()
 }
 
-pub fn translate_async(rest_id: String, text: String, ollama: LlmConfig, tx: EventTx) {
+pub fn translate_async(rest_id: String, text: String, llm: LlmConfig, tx: EventTx) {
     tokio::spawn(async move {
         let req = ChatRequest {
             messages: vec![
@@ -992,7 +1089,7 @@ pub fn translate_async(rest_id: String, text: String, ollama: LlmConfig, tx: Eve
             temperature: 0.0,
             max_tokens: 512,
         };
-        match ollama.chat(req).await {
+        match llm.chat(req).await {
             Ok(reply) => {
                 let translated = reply.content.trim().to_string();
                 let _ = tx.send(Event::TweetTranslated {
@@ -1054,16 +1151,18 @@ mod tests {
             host: "http://localhost:11434".into(),
             timeout_seconds: 20,
             keep_alive: "30s".into(),
+            api_key: None,
         }
     }
 
-    fn sglang_cfg() -> LlmConfig {
+    fn openai_cfg() -> LlmConfig {
         LlmConfig {
-            backend: LlmBackend::SgLang,
-            model: "pennyroyal".into(),
+            backend: LlmBackend::OpenAi,
+            model: "qwen3".into(),
             host: "http://localhost:8081".into(),
             timeout_seconds: 20,
             keep_alive: "30s".into(),
+            api_key: None,
         }
     }
 
@@ -1071,7 +1170,7 @@ mod tests {
         FilterConfig {
             drop_topics: topics.into_iter().map(String::from).collect(),
             extra_guidance: guidance.into(),
-            ollama: ollama_cfg(),
+            llm: ollama_cfg(),
         }
     }
 
@@ -1100,8 +1199,8 @@ mod tests {
     fn rubric_hash_changes_on_backend_change() {
         let mut a = cfg(vec!["war"], "");
         let mut b = a.clone();
-        a.ollama.backend = LlmBackend::Ollama;
-        b.ollama.backend = LlmBackend::SgLang;
+        a.llm.backend = LlmBackend::Ollama;
+        b.llm.backend = LlmBackend::OpenAi;
         assert_ne!(a.rubric_hash(), b.rubric_hash());
     }
 
@@ -1109,8 +1208,8 @@ mod tests {
     fn rubric_hash_changes_on_model_change() {
         let mut a = cfg(vec!["war"], "");
         let mut b = a.clone();
-        a.ollama.model = "gemma4:latest".into();
-        b.ollama.model = "gemma3:latest".into();
+        a.llm.model = "gemma4:latest".into();
+        b.llm.model = "gemma3:latest".into();
         assert_ne!(a.rubric_hash(), b.rubric_hash());
     }
 
@@ -1198,9 +1297,47 @@ mod tests {
     fn default_content_roundtrips() {
         let parsed: FilterConfig = toml::from_str(FilterConfig::default_content()).unwrap();
         assert!(!parsed.drop_topics.is_empty());
-        assert_eq!(parsed.ollama.model, "gemma4:latest");
-        assert_eq!(parsed.ollama.backend, LlmBackend::Ollama);
+        assert_eq!(parsed.llm.model, "gemma4:latest");
+        assert_eq!(parsed.llm.backend, LlmBackend::Ollama);
         assert!(parsed.rubric_hash().chars().count() == 16);
+    }
+
+    #[test]
+    fn default_openai_example_parses_once_uncommented() {
+        let example: String = DEFAULT_CONFIG
+            .lines()
+            .filter_map(|l| l.strip_prefix("#   "))
+            .map(|l| l.split(" #").next().unwrap_or(l).trim_end())
+            .filter(|l| !l.starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let llm: LlmConfig = toml::from_str(&example).unwrap();
+        assert_eq!(llm.backend, LlmBackend::OpenAi);
+        assert_eq!(llm.timeout_seconds, 120);
+    }
+
+    #[test]
+    fn writing_rules_keeps_comments_and_the_llm_table() {
+        let mut edited: FilterConfig = toml::from_str(DEFAULT_CONFIG).unwrap();
+        edited.drop_topics = vec!["war".into(), "tabs versus \"spaces\"".into()];
+        edited.extra_guidance = "keep sports".into();
+        let written = edited.write_rules_into(DEFAULT_CONFIG).unwrap();
+        assert!(written.contains("# unrager's rules"));
+        assert!(written.contains("# Any other server that speaks the OpenAI chat API"));
+        assert!(written.contains("keep_alive = \"10s\""));
+        assert!(
+            written.contains("drop_topics = [\n    \"war\",\n    'tabs versus \"spaces\"',\n]")
+        );
+        let reparsed: FilterConfig = toml::from_str(&written).unwrap();
+        assert_eq!(reparsed.drop_topics, edited.drop_topics);
+        assert_eq!(reparsed.extra_guidance, "keep sports");
+        assert_eq!(reparsed.llm.model, "gemma4:latest");
+    }
+
+    #[test]
+    fn writing_rules_refuses_a_broken_file() {
+        let cfg: FilterConfig = toml::from_str(DEFAULT_CONFIG).unwrap();
+        assert!(cfg.write_rules_into("drop_topics = [").is_err());
     }
 
     #[test]
@@ -1233,7 +1370,7 @@ mod tests {
         hasher.update(b"---\n");
         hasher.update(b"v1-different");
         hasher.update(b"---\n");
-        hasher.update(format!("{:?}", LlmBackend::Ollama).as_bytes());
+        hasher.update(b"ollama");
         hasher.update(b"\n");
         hasher.update(b"gemma4:latest");
         let alt = hex16(&hasher.finalize()[..8]);
@@ -1343,16 +1480,58 @@ mod tests {
     }
 
     #[test]
+    fn legacy_ollama_table_still_loads() {
+        let parsed: FilterConfig = toml::from_str(
+            "drop_topics = [\"war\"]\n[ollama]\nmodel = \"gemma4:latest\"\nhost = \"http://localhost:11434\"\ntimeout_seconds = 20\n",
+        )
+        .unwrap();
+        assert_eq!(parsed.llm.backend, LlmBackend::Ollama);
+        assert_eq!(parsed.llm.model, "gemma4:latest");
+    }
+
+    #[test]
+    fn llm_table_selects_an_openai_compatible_server() {
+        let parsed: FilterConfig = toml::from_str(
+            "drop_topics = [\"war\"]\n[llm]\nbackend = \"openai\"\nmodel = \"qwen3\"\nhost = \"http://localhost:8000\"\ntimeout_seconds = 120\napi_key = \"sk-local\"\n",
+        )
+        .unwrap();
+        assert_eq!(parsed.llm.backend, LlmBackend::OpenAi);
+        assert_eq!(parsed.llm.api_key.as_deref(), Some("sk-local"));
+        let written = toml::to_string_pretty(&parsed).unwrap();
+        assert!(written.contains("[llm]") && written.contains("backend = \"openai\""));
+    }
+
+    #[test]
+    fn api_key_is_sent_as_bearer_and_never_debug_printed() {
+        let mut cfg = openai_cfg();
+        cfg.api_key = Some("sk-secret".into());
+        let request = cfg
+            .authorized(reqwest::Client::new().get("http://localhost:8081/v1/models"))
+            .build()
+            .unwrap();
+        assert_eq!(
+            request.headers().get("authorization").unwrap(),
+            "Bearer sk-secret"
+        );
+        assert!(!format!("{cfg:?}").contains("sk-secret"));
+        let unkeyed = openai_cfg()
+            .authorized(reqwest::Client::new().get("http://localhost:8081/v1/models"))
+            .build()
+            .unwrap();
+        assert!(unkeyed.headers().get("authorization").is_none());
+    }
+
+    #[test]
     fn supports_vision_is_ollama_only() {
         assert!(ollama_cfg().supports_vision());
-        assert!(!sglang_cfg().supports_vision());
+        assert!(!openai_cfg().supports_vision());
     }
 
     #[test]
     fn chat_url_dispatches_by_backend() {
         assert_eq!(ollama_cfg().chat_url(), "http://localhost:11434/api/chat");
         assert_eq!(
-            sglang_cfg().chat_url(),
+            openai_cfg().chat_url(),
             "http://localhost:8081/v1/chat/completions"
         );
     }
@@ -1360,7 +1539,31 @@ mod tests {
     #[test]
     fn models_url_dispatches_by_backend() {
         assert_eq!(ollama_cfg().models_url(), "http://localhost:11434/api/tags");
-        assert_eq!(sglang_cfg().models_url(), "http://localhost:8081/v1/models");
+        assert_eq!(openai_cfg().models_url(), "http://localhost:8081/v1/models");
+    }
+
+    #[test]
+    fn untagged_ollama_names_match_latest() {
+        let listed = vec!["gemma4:latest".to_string(), "qwen3:8b".to_string()];
+        let mut cfg = ollama_cfg();
+        assert!(cfg.is_served_by(&listed));
+        cfg.model = "gemma4".into();
+        assert!(cfg.is_served_by(&listed));
+        cfg.model = "qwen3".into();
+        assert!(
+            !cfg.is_served_by(&listed),
+            "qwen3 means qwen3:latest, not qwen3:8b"
+        );
+        cfg.model = "qwen3:8b".into();
+        assert!(cfg.is_served_by(&listed));
+    }
+
+    #[test]
+    fn openai_model_ids_match_exactly() {
+        let mut cfg = openai_cfg();
+        assert!(cfg.is_served_by(&["qwen3".to_string()]));
+        cfg.model = "qwen3:latest".into();
+        assert!(!cfg.is_served_by(&["qwen3".to_string()]));
     }
 
     fn sample_request() -> ChatRequest {
@@ -1384,15 +1587,15 @@ mod tests {
     }
 
     #[test]
-    fn build_body_sglang_shape_puts_thinking_toggle_top_level() {
+    fn build_body_openai_shape_puts_thinking_toggle_top_level() {
         // Confirmed against a real SGLang/Qwen3 server: this must be a
         // top-level `chat_template_kwargs` field, not nested under
         // `extra_body` (that's an OpenAI-Python-SDK client-side convention,
         // not part of the actual wire format).
         let mut req = sample_request();
         req.thinking = true;
-        let body = sglang_cfg().build_body(&req, true);
-        assert_eq!(body["model"], "pennyroyal");
+        let body = openai_cfg().build_body(&req, true);
+        assert_eq!(body["model"], "qwen3");
         assert_eq!(body["stream"], true);
         assert_eq!(body["max_tokens"], 3);
         assert_eq!(body["chat_template_kwargs"]["enable_thinking"], true);

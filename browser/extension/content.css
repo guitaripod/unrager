@@ -1,0 +1,18 @@
+html:not([data-unrager-paused]):not([data-unrager-reveal]) [data-testid="cellInnerDiv"][data-unrager="hidden"] {
+  display: none !important;
+}
+
+html[data-unrager-reveal]:not([data-unrager-paused]) [data-testid="cellInnerDiv"][data-unrager="hidden"] > * {
+  opacity: 0.4;
+}
+
+html[data-unrager-reveal]:not([data-unrager-paused]) [data-testid="cellInnerDiv"][data-unrager="hidden"]::before {
+  content: "Hidden by unrager";
+  display: inline-block;
+  margin: 10px 16px 0;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #1d6f8b;
+  color: #ffffff;
+  font: 600 12px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}

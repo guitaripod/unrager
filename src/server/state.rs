@@ -13,6 +13,13 @@ use tokio::sync::Mutex;
 use unrager_model::SessionState;
 
 pub struct AppState {
+    /// `serve --filter-only`: no X session is loaded and only the filter
+    /// routes answer (what the browser extension needs).
+    pub filter_only: bool,
+    /// Whether browser cookies were loaded at startup. Without them the
+    /// background feed ingest stays off; X-backed routes still re-extract the
+    /// session on first use, so a keyring that unlocks later self-heals.
+    pub x_session_loaded: bool,
     pub gql: Arc<GqlClient>,
     pub filter_config: Mutex<FilterConfig>,
     /// `Arc` so the background ingest worker can share the exact same cache
@@ -47,8 +54,22 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub async fn build() -> Result<Self> {
-        let session = chromium::load_session().await?;
+    pub async fn build(filter_only: bool) -> Result<Self> {
+        let session = if filter_only {
+            None
+        } else {
+            match chromium::load_session().await {
+                Ok(session) => Some(session),
+                Err(e) => {
+                    tracing::warn!(
+                        "no X session ({e}); serving the filter, feed ingest off until restart"
+                    );
+                    None
+                }
+            }
+        };
+        let x_session_loaded = session.is_some();
+        let session = session.unwrap_or_default();
         let config_dir = config::config_dir()?;
         let cache_dir = config::cache_dir()?;
         let app_config = config::AppConfig::load(&config_dir);
@@ -78,6 +99,8 @@ impl AppState {
         let state: SessionState = load_session_state(&session_path).unwrap_or_default();
 
         Ok(Self {
+            filter_only,
+            x_session_loaded,
             gql,
             filter_config: Mutex::new(filter_config),
             filter_cache: Arc::new(Mutex::new(filter_cache)),

@@ -24,7 +24,7 @@ Always run the CI gate after making changes, without waiting to be asked. Then `
 ## Releasing a new version
 
 1. Roll the `## [Unreleased]` section in `CHANGELOG.md` into a new `## [X.Y.Z] — YYYY-MM-DD` entry, add a fresh empty `[Unreleased]`, and update the link refs at the bottom of the file
-2. Bump `version` in `Cargo.toml`
+2. Bump `version` in `Cargo.toml` **and** in `browser/extension/manifest.json` (a test fails when they differ; the extension's version is the crate version without any pre-release suffix)
 3. `cargo check` to update `Cargo.lock`
 4. Commit: `chore: bump version to X.Y.Z` (include the CHANGELOG edit in the same commit)
 5. Tag (no `v` prefix): `git tag X.Y.Z`
@@ -55,6 +55,8 @@ The crates.io step reads `CARGO_REGISTRY_TOKEN` from repo secrets. Each publish 
   - `session.rs` — session persistence (json)
   - `test_util.rs` — test-only App factory and tweet/page builders
 - `src/cli/` — one module per subcommand (whoami, home, read, etc.)
+  - `setup.rs` — `unrager setup`: runs `checks::llm`, installs the background service (systemd user unit / launchd agent; only files carrying `MANAGED_MARKER` are ever rewritten, a hand-written unit is just restarted), writes the extension embedded via `include_bytes!` (`EXTENSION_FILES`; tests fail if a file in `browser/extension/` or one the manifest/popup references isn't listed) to `data_dir/browser-extension`, and remembers `--apps`/`--bind` in `data_dir/setup.json`. `--refresh` (hidden) is what `unrager update` runs from the new binary: restart the installed service, rewrite an already-unpacked extension, change nothing else.
+  - `checks.rs` — the ✓/!/✗ checks shared by `doctor` and `setup`: model reachability + a real generation for OpenAI-compatible servers, probing common local model-server ports for a paste-ready `[llm]` snippet, `/api/health` of the running server, the unpacked extension's version
 - `src/auth/` — chromium cookie extraction + OAuth 2.0 PKCE
 - `src/gql/` — GraphQL client, query ID scraper, endpoint builders
 - `src/parse/` — response → Tweet/User structs
@@ -67,22 +69,31 @@ The crates.io step reads `CARGO_REGISTRY_TOKEN` from repo secrets. Each publish 
 
 ## iPhone app
 
-The iPhone app talks to `unrager serve` over HTTP/SSE (pair with Tailscale). It lives in the repo alongside the Rust crates. (The macOS and GNOME clients were removed once the browser extension took over the desktop.)
+The iPhone app talks to a full `unrager serve` (not `--filter-only`: `unrager setup --apps --bind 0.0.0.0:7777`) over HTTP/SSE, paired over Tailscale. It lives in the repo alongside the Rust crates. (The macOS and GNOME clients were removed once the browser extension took over the desktop.)
 
 - `UnragerKit/` — shared Swift package (XcodeGen-independent), Foundation/CoreGraphics only, no UIKit. Holds the byte-exact `Codable` models (matching the `/api/*` JSON, incl. the externally-tagged `MediaKind` and recursive `Tweet`), the typed `APIClient` (async/await + `AsyncThrowingStream` SSE), `URLSessionTransport`, `AppLogger` (file-based, `Library/Logs/unrager.log`), `AppSettings` (server URL + appearance), `Format`, and `ImagePipeline` (off-main ImageIO downsampling → `CGImage`). `swift build && swift test` from `UnragerKit/` verifies it standalone.
 - `ios/` — UIKit iPhone app (iOS 26, Liquid Glass). XcodeGen `project.yml` depending on `../UnragerKit`. MVVM + Combine, programmatic Auto Layout, `DesignSystem`/`Glass` tokens, compositional-layout + diffable feed (`FeedViewController`/`TweetCell`), Thread/Profile/Search/Notifications/Settings/Compose/StreamSheet. A `#if DEBUG` `UNRAGER_SCREEN` env router in `SceneDelegate` deep-navigates for screenshot QA; `UNRAGER_SERVER` env / `UNRAGER_DEFAULT_SERVER` Info.plist key sets the server.
 
 Build/run: `cd ios && xcodegen generate && xcodebuild -scheme Unrager -destination 'generic/platform=iOS Simulator' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build`, then `xcrun simctl install booted …`. Screenshot QA via `xcrun simctl io <udid> screenshot` driving the `UNRAGER_SCREEN` router. **Not App Store apps** (uses the user's X session) — sideload: `ios/scripts/provision.py` mints an ad-hoc profile (Midgar dist cert + device UDID via the ASC API), `ios/scripts/install-device.sh` builds + ad-hoc-signs + installs via `devicectl`. The iPhone Air's UDID is `00008150-00096C392208401C`; the Mac's Tailscale addr is `100.127.250.64` / `macbook.taila1a09.ts.net`.
 
-- `browser/extension/` — unpacked Chromium MV3 extension that filters the official x.com web app. `page-hook.js` runs in `"world": "MAIN"` and observes X's GraphQL `HomeTimeline`/`HomeLatestTimeline` responses (X uses **XMLHttpRequest**, fetch is hooked too) and `postMessage`s the body; `timeline.js` is the JS port of the timeline/tweet walk (builds the same classification text as the TUI, maps retweets to the original's id for DOM matching); `content.js` (isolated world) asks `background.js` for verdicts and hides `[data-testid=cellInnerDiv]` cells with `display:none` (never removes React-owned nodes); `background.js` POSTs to `unrager serve`'s `POST /api/classify` (`src/server/routes/classify.rs`, batch ≤100, reuses the shared `FilterCache` + `ClassifierHandle`, omits tweets the backend failed on). x.com's CSP blocks page-context fetch to localhost, hence the service-worker hop. Tampermonkey was tried first and abandoned: its userScripts gating silently never injected in Vivaldi.
-
 When changing the server's `/api/*` contract, update the matching `UnragerKit` model/`APIClient` and the decoding tests in `UnragerKit/Tests/`.
+
+## Browser extension
+
+`browser/extension/` is the main client: a Chromium MV3 extension that filters the official x.com web app, loaded unpacked from the folder `unrager setup` writes (its files are embedded in the binary, so they ship with every release).
+- `page-hook.js` runs in `"world": "MAIN"` and observes X's GraphQL `HomeTimeline`/`HomeLatestTimeline` responses (X uses **XMLHttpRequest**; fetch is hooked too) and `postMessage`s the body. It never delays or rewrites what X's page gets. `window.__unrager_status()` in the page console shows the tab's stats.
+- `timeline.js` is the JS port of the timeline/tweet walk: the same classification text as `filter::build_classification_text`, retweets mapped to the original's id for DOM matching.
+- `content.js` (isolated world) asks `background.js` for verdicts in chunks of 10, remembers up to 400 posts with their text so a resume or a rules change (`rulesChangedAt` in `chrome.storage.local`) can check them again, and marks HIDE cells `data-unrager="hidden"`; `content.css` hides them (never removes React-owned nodes) unless `<html>` carries `data-unrager-paused` or `data-unrager-reveal` (dimmed, "Hidden by unrager" pill). It reports hidden count and state to the badge and answers the popup's `stats` message. Posts the server leaves out are retried twice, 20 s apart.
+- `background.js` POSTs to `{server}/api/classify` (`server` in `chrome.storage.local`, default `http://localhost:7777`) and sets the per-tab badge. x.com's CSP blocks page-context fetch to localhost, hence the service-worker hop.
+- `popup.{html,css,js}` — status (reads `/api/health` + `/api/filter/status`, compares the server's version with the manifest's), pause, show hidden, the rules editor (`GET`/`PATCH /api/config/filter`), and the server address (non-localhost origins get an optional host permission on save).
+
+Server side: `POST /api/classify` (`src/server/routes/classify.rs`, batch ≤100, shared `FilterCache` + `ClassifierHandle`, omits posts the model failed on) and `GET /api/filter/status` (model state: `ready`/`model_missing`/`unreachable`). `unrager serve --filter-only` (what setup installs) loads no X session and answers only the filter routes; every other route returns 503 `filter_only`. A middleware refuses any request whose `Origin` isn't a browser-extension origin, so web pages can't drive the server (native clients send no `Origin`). Tampermonkey was tried first and abandoned: its userScripts gating silently never injected in Vivaldi.
 
 ## Key patterns
 
 **Async events**: background work (fetches, media downloads, filter classification) spawns via `tokio::spawn`, sends results back through `EventTx` as typed `Event` variants. App handles them in `handle_event`. Never block the render loop.
 
-**Semaphores**: media downloads use `Semaphore(4)`, filter classification uses `Semaphore(2)`. Prevents hammering Ollama or the CDN.
+**Semaphores**: media downloads use `Semaphore(4)`, filter classification uses `Semaphore(8)` (shared by every `ClassifierHandle`). Prevents hammering the model server or the CDN.
 
 **Physical removal**: filtered tweets are removed from `source.tweets` on Hide verdict, not hidden via a visibility projection. Keeps cursor math simple.
 
@@ -101,7 +112,9 @@ When debugging a silent failure — a fetch that seems stuck, missing data, a TU
 - `~/.config/unrager/session.json` — TUI state
 - `~/.config/unrager/tokens.json` — OAuth tokens (0600)
 - `~/.config/unrager/config.toml` — general settings (browser command, `cookie_browser` pin, query ID overrides)
-- `~/.config/unrager/filter.toml` — rage filter rubric (auto-created)
+- `~/.config/unrager/filter.toml` — rage filter rubric and `[llm]` model settings (auto-created from `src/tui/filter_default.toml`; rule edits over the API go through `FilterConfig::write_rules_into`, which keeps comments)
+- `~/.local/share/unrager/browser-extension/` — the unpacked extension `unrager setup` writes; `setup.json` beside it remembers setup's `--apps`/`--bind`
+- `~/.config/systemd/user/unrager-serve.service` (macOS: `~/Library/LaunchAgents/com.unrager.serve.plist`, log `~/Library/Logs/unrager-serve.log`) — the background server `unrager setup` installs
 - `~/.cache/unrager/unrager.log.YYYY-MM-DD` — rolling log file
 - `~/.cache/unrager/seen.db` — read tracking (auto-pruned to 2 days)
 - `~/.cache/unrager/filter.db` — filter verdict cache (auto-pruned to 7 days; rubric-hash invalidates the rest)
@@ -153,17 +166,17 @@ If you write a commit and find no `[Unreleased]` bullet matches it, that is the 
 
 ## Translation
 
-`T` translates the selected tweet to English via the filter's LLM backend (same `[ollama]` config). Translations are ephemeral (in-memory HashMap, cleared on source switch). Press `T` again to revert. The prompt is a zero-temperature `max_tokens: 512` generation with a simple "translate to English" instruction. No caching, no semaphore — it's user-initiated and one-at-a-time.
+`T` translates the selected tweet to English via the filter's LLM backend (same `[llm]` config). Translations are ephemeral (in-memory HashMap, cleared on source switch). Press `T` again to revert. The prompt is a zero-temperature `max_tokens: 512` generation with a simple "translate to English" instruction. No caching, no semaphore — it's user-initiated and one-at-a-time.
 
-## LLM backend infrastructure (Ollama + SGLang)
+## LLM backend infrastructure (Ollama + OpenAI-compatible)
 
-`LlmConfig` in `filter.rs` (TOML table `[ollama]`, kept for compatibility) is the central type for every LLM call — filter, translate, ask, brief, whisper. `backend = "ollama"` (default) or `"sglang"` (any OpenAI-compatible `/v1/chat/completions` server, e.g. SGLang behind llama-swap). It provides:
-- `ChatRequest { messages, thinking, temperature, max_tokens }` — backend-neutral; `build_body` translates it (`think`/`options.num_predict` for Ollama, top-level `chat_template_kwargs.enable_thinking`/`max_tokens` for SGLang — confirmed live that `extra_body` nesting is an SDK convention, not wire format)
+`LlmConfig` in `filter.rs` (TOML table `[llm]`; `[ollama]` still loads via a serde alias) is the central type for every LLM call — filter, translate, ask, brief, whisper. `backend = "ollama"` (default) or `"openai"` (any OpenAI-compatible `/v1/chat/completions` server: LM Studio, vLLM, llama-server, SGLang, llama-swap), with an optional `api_key` sent as a bearer token and redacted from `Debug`. It provides:
+- `ChatRequest { messages, thinking, temperature, max_tokens }` — backend-neutral; `build_body` translates it (`think`/`options.num_predict` for Ollama, top-level `chat_template_kwargs.enable_thinking`/`max_tokens` for OpenAI-compatible servers — confirmed live on SGLang that `extra_body` nesting is an SDK convention, not wire format)
 - `chat()` / `chat_with_client()` — one-shot, parses `{message:{content}}` vs `{choices:[{message}]}`
-- `stream_chat()` — dispatches to NDJSON (Ollama) or SSE `data:`/`[DONE]` (SGLang, parsed by the pure, tested `parse_sse_data_line`)
-- `list_models()` (`/api/tags` vs `/v1/models`), `supports_vision()` (Ollama only — ask skips image attach otherwise), `build_client()`/`build_streaming_client()`
+- `stream_chat()` — dispatches to NDJSON (Ollama) or SSE `data:`/`[DONE]` (parsed by the pure, tested `parse_sse_data_line`)
+- `list_models()` / `list_models_within()` (`/api/tags` vs `/v1/models`), `is_served_by()` (Ollama names without a tag mean `:latest`), `supports_vision()` (Ollama only — ask skips image attach otherwise), `build_client()`/`build_streaming_client()`
 
-`rubric_hash` folds in backend + model, so switching either invalidates cached verdicts. Ollama-only residency calls (`ask::preload`/`unload`, `keep_alive`) are no-ops on SGLang. New LLM features must go through `ChatRequest` + these helpers, never hand-built JSON bodies.
+`rubric_hash` folds in backend + model, so switching either invalidates cached verdicts. Ollama-only residency calls (`ask::preload`/`unload`, `keep_alive`) are no-ops on OpenAI-compatible servers. New LLM features must go through `ChatRequest` + these helpers, never hand-built JSON bodies.
 
 ## Filter
 
@@ -205,5 +218,7 @@ Each file does `impl App { ... }` — Rust allows splitting impl blocks across m
 Integration tests for App state transitions use `tui/test_util.rs` which provides `dummy_app()` (constructs an App with dummy GqlClient and channels), `make_tweet()`, and `make_page()`. Tests that trigger `tokio::spawn` (switch_source, push_tweet, engage, etc.) need `#[tokio::test]`. Pure state-mutation tests can use `#[test]`.
 
 ## Demos
+
+README images (`assets/extension.png`, `popup.png`, `terminal.png`) are rendered from the landing page's mocks, with mocked posts rather than real accounts: `python3 site/og/assets.py` (Playwright). `site/og/render.py` renders the Open Graph card from `site/og/template.html`; the deploy workflow reruns it.
 
 VHS tapes in `demos/`. Regenerate with `vhs demos/<tape>.tape`. Requires `vhs`, `ttyd`, `ffmpeg`. All tapes use `UNRAGER_DISABLE_KITTY=1` because VHS renders via xterm.js which doesn't support kitty graphics.

@@ -1079,9 +1079,9 @@ impl App {
             whisper::LlmRequest::None => {}
             whisper::LlmRequest::SingleWhisper(entry) => {
                 if !self.whisper.llm_inflight {
-                    if let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone()) {
+                    if let Some(llm) = self.filter_cfg.as_ref().map(|c| c.llm.clone()) {
                         self.whisper.llm_inflight = true;
-                        whisper::whisper_llm_async(entry, ollama, self.tx.clone());
+                        whisper::whisper_llm_async(entry, llm, self.tx.clone());
                     } else {
                         let text = whisper::build_heuristic_whisper(&entry);
                         self.whisper.push_entry(WhisperEntry {
@@ -1094,9 +1094,9 @@ impl App {
             }
             whisper::LlmRequest::SurgeSummary(surge_entries) => {
                 if !self.whisper.llm_inflight {
-                    if let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone()) {
+                    if let Some(llm) = self.filter_cfg.as_ref().map(|c| c.llm.clone()) {
                         self.whisper.llm_inflight = true;
-                        whisper::surge_llm_async(surge_entries, ollama, self.tx.clone());
+                        whisper::surge_llm_async(surge_entries, llm, self.tx.clone());
                     } else {
                         let text = whisper::build_heuristic_whisper(
                             surge_entries.first().unwrap_or(&NotifEntry {
@@ -1311,12 +1311,13 @@ mod store_tests {
         FilterConfig {
             drop_topics: vec![],
             extra_guidance: String::new(),
-            ollama: LlmConfig {
+            llm: LlmConfig {
                 backend: LlmBackend::Ollama,
                 model: "test".into(),
                 host: "http://127.0.0.1:1".into(),
                 timeout_seconds: 1,
                 keep_alive: "10s".into(),
+                api_key: None,
             },
         }
     }

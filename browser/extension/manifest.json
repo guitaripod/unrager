@@ -1,11 +1,26 @@
 {
   "manifest_version": 3,
   "name": "unrager",
-  "version": "1.0.0",
+  "version": "0.22.0",
   "minimum_chrome_version": "111",
-  "description": "Hides rage-bait on x.com with the same local-LLM rubric as the unrager TUI, via unrager serve's /api/classify.",
-  "permissions": ["storage"],
+  "description": "Removes rage-bait from your x.com timeline, judged by a model running on your own computer.",
+  "icons": {
+    "16": "icons/16.png",
+    "32": "icons/32.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  },
+  "action": {
+    "default_title": "unrager",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/16.png",
+      "32": "icons/32.png"
+    }
+  },
+  "permissions": ["storage", "activeTab"],
   "host_permissions": ["http://localhost/*", "http://127.0.0.1/*"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
   "background": {
     "service_worker": "background.js"
   },
@@ -19,6 +34,7 @@
     {
       "matches": ["https://x.com/*", "https://twitter.com/*"],
       "js": ["timeline.js", "content.js"],
+      "css": ["content.css"],
       "run_at": "document_start"
     }
   ]

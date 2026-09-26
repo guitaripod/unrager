@@ -931,9 +931,9 @@ impl App {
                 if matches!(
                     self.focus_stack.last(),
                     Some(FocusEntry::Ask(_) | FocusEntry::Brief(_))
-                ) && let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone())
+                ) && let Some(llm) = self.filter_cfg.as_ref().map(|c| c.llm.clone())
                 {
-                    ask::preload(ollama);
+                    ask::preload(llm);
                 }
             }
             Event::FocusLost => {
@@ -941,9 +941,9 @@ impl App {
                 if matches!(
                     self.focus_stack.last(),
                     Some(FocusEntry::Ask(_) | FocusEntry::Brief(_))
-                ) && let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone())
+                ) && let Some(llm) = self.filter_cfg.as_ref().map(|c| c.llm.clone())
                 {
-                    ask::unload(ollama);
+                    ask::unload(llm);
                 }
             }
         }
@@ -1202,12 +1202,13 @@ mod tests {
         let cfg = crate::tui::filter::FilterConfig {
             drop_topics: vec![],
             extra_guidance: String::new(),
-            ollama: crate::tui::filter::LlmConfig {
+            llm: crate::tui::filter::LlmConfig {
                 backend: crate::tui::filter::LlmBackend::Ollama,
                 model: "test".into(),
                 host: "http://127.0.0.1:1".into(),
                 timeout_seconds: 1,
                 keep_alive: "10s".into(),
+                api_key: None,
             },
         };
         app.filter_classifier = Some(crate::tui::filter::Classifier::new(&cfg));
@@ -1924,12 +1925,13 @@ mod tests {
         let cfg = crate::tui::filter::FilterConfig {
             drop_topics: vec![],
             extra_guidance: String::new(),
-            ollama: crate::tui::filter::LlmConfig {
+            llm: crate::tui::filter::LlmConfig {
                 backend: crate::tui::filter::LlmBackend::Ollama,
                 model: "test".into(),
                 host: "http://127.0.0.1:1".into(),
                 timeout_seconds: 1,
                 keep_alive: "10s".into(),
+                api_key: None,
             },
         };
         app.filter_classifier = Some(crate::tui::filter::Classifier::new(&cfg));
@@ -1989,12 +1991,13 @@ mod tests {
         let cfg = crate::tui::filter::FilterConfig {
             drop_topics: vec![],
             extra_guidance: String::new(),
-            ollama: crate::tui::filter::LlmConfig {
+            llm: crate::tui::filter::LlmConfig {
                 backend: crate::tui::filter::LlmBackend::Ollama,
                 model: "test".into(),
                 host: "http://127.0.0.1:1".into(),
                 timeout_seconds: 1,
                 keep_alive: "10s".into(),
+                api_key: None,
             },
         };
         app.filter_classifier = Some(crate::tui::filter::Classifier::new(&cfg));

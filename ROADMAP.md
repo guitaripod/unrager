@@ -10,13 +10,18 @@ Pre-launch and post-launch polish. Each item is a self-contained task an agent c
 
 These determine whether a new user's first 60 seconds end in "wow" or "uninstall." Every one of them is a known unknown until exercised on a clean machine.
 
-### [ ] Fresh-install smoke test on clean Linux
-**Goal:** confirm `curl -fsSL https://unrager.com/install.sh | bash` → `unrager demo` works end-to-end on a never-touched Ubuntu LTS.
-**How:** spin up a throwaway container (`docker run -it --rm ubuntu:24.04 bash`), install curl + bash, run the one-liner, then `unrager demo`. Record every point where something asked for a dependency, printed a scary warning, or silently hung. File each as a GitHub issue with `first-run` label.
+### [ ] Query ID scraper fails again
+**Goal:** `unrager doctor` reports a healthy scraper. As of 2026-09-27 it says "no main.*.js url found in any of 2 client shell routes": X changed its shell again, so the terminal client and the iPhone app's server run on cached/fallback IDs until they go stale. The extension is unaffected (it reads what x.com's own page fetches).
+**How:** find a route that still references the web bundle (or read the bundle URL from another asset), refresh `FALLBACK_QUERY_IDS`, and extend `examples/check_query_ids.rs` if the watch workflow missed it.
+**Done when:** doctor shows the scraper finding IDs and the fallback table matches the live bundle.
+
+### [ ] Fresh-install smoke test on a clean Linux desktop
+**Goal:** confirm `curl -fsSL https://unrager.com/install.sh | bash` → `unrager setup` → Load unpacked → x.com filtering works end-to-end on a never-touched Ubuntu LTS desktop with Ollama.
+**How:** a throwaway VM with a desktop session (systemd user services need one). Run the one-liner, pull gemma4, add the extension in Chrome, open x.com. Record every point where something asked for a dependency, printed a scary warning, or silently hung. File each as a GitHub issue with `first-run` label.
 **Done when:** either the flow works cleanly, or each rough edge has an issue.
 
 ### [ ] Fresh-install smoke test on clean macOS
-**Goal:** same as above, on macOS (Apple Silicon). A fresh user on a work laptop is the realistic target.
+**Goal:** same as above, on macOS (Apple Silicon), including the launch agent `unrager setup` installs and the ⌘⇧G path in Chrome's folder picker. A fresh user on a work laptop is the realistic target.
 **How:** a clean user account or a macOS VM. Same script, same note-taking.
 **Done when:** README's "Works on macOS" claim is verified, or the gaps are filed.
 
@@ -29,9 +34,19 @@ These determine whether a new user's first 60 seconds end in "wow" or "uninstall
 
 ## P1 — Reputation and trust
 
+### [ ] Chrome Web Store listing
+**Goal:** install the extension with one click instead of Developer mode + Load unpacked, and let the store keep it updated.
+**How:** needs Marcus's Chrome Web Store developer account. Pin the extension ID with a manifest `key`, write the privacy disclosure (post text goes only to localhost; optional host permissions exist for a remote unrager), reuse `assets/extension.png` and the popup for store screenshots, then have `unrager setup` link to the listing instead of unpacking (keep unpacking behind a flag for development).
+**Done when:** the listing is live and `unrager setup` points at it.
+
+### [ ] Firefox support
+**Goal:** the extension in Firefox (MV3, 128+ for `world: "MAIN"` content scripts).
+**How:** add `background.scripts` next to `service_worker` and `browser_specific_settings.gecko.id`, check `chrome.*` → `browser.*` compatibility (the popup and content script use promise-style APIs, which Firefox supports), allow the `moz-extension://` origin (already accepted by the server), and sign it through AMO.
+**Done when:** a signed build filters x.com in Firefox with the same popup.
+
 ### [ ] Site link check in a real paste context
 **Goal:** OG card renders on Twitter, Discord, and Slack previews; install snippet copy works; demo plays.
-**How:** paste the site URL into each platform's compose box, confirm the preview. Copy the install snippet from the site in a real browser, paste into a shell, confirm it's what you expect (no smart quotes, no zero-width chars). Open the carousel on mobile Safari and Firefox.
+**How:** paste the site URL into each platform's compose box, confirm the preview. Copy the install snippet from the site in a real browser, paste into a shell, confirm it's what you expect (no smart quotes, no zero-width chars). Watch the hero demo on mobile Safari and Firefox, and flip its Show what it hid switch.
 **Done when:** all three platform previews look right; install-copy yields a clean bash-executable string.
 
 ---

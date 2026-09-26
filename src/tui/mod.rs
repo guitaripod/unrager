@@ -87,8 +87,8 @@ async fn run_inner(terminal: &mut ratatui::DefaultTerminal, is_dark: bool) -> Re
         app.handle_event(event, terminal)?;
     }
 
-    if let Some(ollama) = app.filter_cfg.as_ref().map(|c| c.ollama.clone()) {
-        ask::unload_blocking(&ollama).await;
+    if let Some(llm) = app.filter_cfg.as_ref().map(|c| c.llm.clone()) {
+        ask::unload_blocking(&llm).await;
     }
     app.save_session();
     Ok(())

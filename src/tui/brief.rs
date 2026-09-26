@@ -106,7 +106,7 @@ impl BriefView {
 
 pub fn start(
     client: Arc<GqlClient>,
-    ollama: LlmConfig,
+    llm: LlmConfig,
     handle: String,
     prefetched: Option<Vec<Tweet>>,
     tx: EventTx,
@@ -204,7 +204,7 @@ pub fn start(
             sample: authored,
         });
 
-        stream_ollama_with(&ollama, &handle, prompt, 4096, &tx).await;
+        stream_llm_with(&llm, &handle, prompt, 4096, &tx).await;
     });
 }
 
@@ -311,8 +311,8 @@ fn build_user_prompt(handle: &str, tweets: &[Tweet], span: &str) -> String {
         .replace("{tweets}", sample_block.trim_end())
 }
 
-async fn stream_ollama_with(
-    ollama: &LlmConfig,
+async fn stream_llm_with(
+    llm: &LlmConfig,
     handle: &str,
     user_prompt: String,
     num_predict: u32,
@@ -333,7 +333,7 @@ async fn stream_ollama_with(
     let mut output_chars: usize = 0;
     let mut thinking_chars: usize = 0;
 
-    let result = ollama
+    let result = llm
         .stream_chat(
             req,
             "brief",

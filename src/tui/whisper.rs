@@ -496,7 +496,7 @@ POSITIVE|your async tweet is spreading -- mostly positive\n\
 MIXED|your take is getting debated -- split reactions\n\
 NEGATIVE|you're getting ratio'd -- mostly hostile quotes";
 
-pub fn whisper_llm_async(entry: NotifEntry, ollama: LlmConfig, tx: EventTx) {
+pub fn whisper_llm_async(entry: NotifEntry, llm: LlmConfig, tx: EventTx) {
     tokio::spawn(async move {
         let verb = match entry.kind {
             NotifKind::Reply => "replied to",
@@ -523,7 +523,7 @@ pub fn whisper_llm_async(entry: NotifEntry, ollama: LlmConfig, tx: EventTx) {
             max_tokens: 60,
         };
 
-        let text = match ollama.chat(req).await {
+        let text = match llm.chat(req).await {
             Ok(reply) => reply.content.trim().to_lowercase(),
             Err(e) => {
                 warn!("whisper llm failed: {e}");
@@ -535,7 +535,7 @@ pub fn whisper_llm_async(entry: NotifEntry, ollama: LlmConfig, tx: EventTx) {
     });
 }
 
-pub fn surge_llm_async(entries: Vec<NotifEntry>, ollama: LlmConfig, tx: EventTx) {
+pub fn surge_llm_async(entries: Vec<NotifEntry>, llm: LlmConfig, tx: EventTx) {
     tokio::spawn(async move {
         let mut prompt = String::from("Recent reactions to the user's tweet:\n");
         for e in &entries {
@@ -561,7 +561,7 @@ pub fn surge_llm_async(entries: Vec<NotifEntry>, ollama: LlmConfig, tx: EventTx)
             max_tokens: 80,
         };
 
-        let (summary, sentiment) = match ollama.chat(req).await {
+        let (summary, sentiment) = match llm.chat(req).await {
             Ok(reply) => parse_surge_response(&reply.content),
             Err(e) => {
                 warn!("surge llm failed: {e}");

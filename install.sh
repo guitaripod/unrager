@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO="guitaripod/unrager"
 INSTALL_DIR="${UNRAGER_INSTALL_DIR:-$HOME/.local/bin}"
-FLAVOR="${UNRAGER_FLAVOR:-tui}"
+FLAVOR="${UNRAGER_FLAVOR:-full}"
 
 err() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
 note() { printf '==> %s\n' "$*"; }
@@ -26,6 +26,9 @@ data_dirs() {
 uninstall() {
     local binary="$INSTALL_DIR/unrager"
     if [ -f "$binary" ]; then
+        if "$binary" setup --help >/dev/null 2>&1; then
+            "$binary" setup --uninstall || true
+        fi
         rm "$binary"
         note "removed $binary"
     else
@@ -33,7 +36,8 @@ uninstall() {
     fi
 
     printf '\nRemove config and cache directories? [y/N] '
-    read -r answer
+    answer=""
+    read -r answer < /dev/tty || true
     case "$answer" in
         [yY]*)
             while IFS= read -r dir; do
@@ -162,18 +166,25 @@ esac
 
 case "$FLAVOR" in
     full)
+        if [ "${UNRAGER_NO_SETUP:-}" != "1" ] && "$INSTALL_DIR/unrager" setup --help >/dev/null 2>&1; then
+            note "running unrager setup (skip it with UNRAGER_NO_SETUP=1)"
+            "$INSTALL_DIR/unrager" setup || true
+        fi
         cat <<EOF
 
-Next steps:
-  unrager                  launch the TUI
-  unrager serve            start the HTTP API server (for the iOS app) on :7777
-  unrager doctor           check cookies, Ollama, and filter setup
-  ollama pull gemma4       enable the local-LLM rage filter (optional)
-  unrager --help           all subcommands
+Next:
+  \`unrager setup\` ends with the last step: adding the extension to your
+  browser. It's safe to run again any time.
+  No model yet? Install Ollama from https://ollama.com, run
+      ollama pull gemma4
+  and then \`unrager setup\` again. LM Studio, vLLM, llama.cpp and SGLang work
+  too: \`unrager setup\` shows what to put in filter.toml.
 
-Want a leaner install? re-run with:
-  UNRAGER_FLAVOR=tui  curl -fsSL unrager.com/install.sh | bash   # default (~5 MB smaller)
-  UNRAGER_FLAVOR=cli  curl -fsSL unrager.com/install.sh | bash   # CLI only (~11 MB smaller)
+Also in the box:
+  unrager                  the terminal client
+  unrager doctor           check what is and isn't working
+  unrager update           update unrager, its server and the extension
+  unrager --help           every command
 
 EOF
         ;;
@@ -181,14 +192,13 @@ EOF
         cat <<EOF
 
 Next steps:
-  unrager                  launch the TUI against your X feed
-  unrager demo             launch the TUI against a bundled offline feed
-  unrager doctor           check cookies, Ollama, and filter setup
-  ollama pull gemma4       enable the local-LLM rage filter (optional)
-  unrager --help           all subcommands
+  unrager                  launch the terminal client against your X feed
+  unrager demo             launch it against a bundled offline feed
+  unrager doctor           check your X login and the model
+  ollama pull gemma4       give it a model for the rage filter
+  unrager --help           every command
 
-Want the HTTP API server (for the native iOS app) too? re-run with:
-  UNRAGER_FLAVOR=full curl -fsSL unrager.com/install.sh | bash
+Want the browser extension too? Re-run without UNRAGER_FLAVOR.
 
 EOF
         ;;
@@ -196,14 +206,12 @@ EOF
         cat <<EOF
 
 Next steps:
-  unrager doctor           check cookies and setup
-  unrager --help           all subcommands
+  unrager doctor           check your X login
+  unrager --help           every command
   unrager home --json      pipe a timeline to jq
   unrager auth login       set up OAuth for the write path
 
-Want the TUI too? re-run with:
-  UNRAGER_FLAVOR=tui  curl -fsSL unrager.com/install.sh | bash
-  UNRAGER_FLAVOR=full curl -fsSL unrager.com/install.sh | bash   # includes the HTTP API server
+Want the browser extension or the terminal client? Re-run without UNRAGER_FLAVOR.
 
 EOF
         ;;

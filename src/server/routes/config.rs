@@ -13,9 +13,9 @@ pub async fn get_filter(
         "drop_topics": cfg.drop_topics,
         "extra_guidance": cfg.extra_guidance,
         "ollama": {
-            "backend": cfg.ollama.backend,
-            "model": cfg.ollama.model,
-            "host": cfg.ollama.host,
+            "backend": cfg.llm.backend,
+            "model": cfg.llm.model,
+            "host": cfg.llm.host,
         },
     })))
 }
@@ -46,13 +46,15 @@ pub async fn patch_filter(
     if let Some(guidance) = patch.extra_guidance {
         updated.extra_guidance = guidance;
     }
-    let serialized =
-        toml::to_string_pretty(&updated).map_err(|e| ApiError::internal(e.to_string()))?;
     let toml_path = state.filter_toml_path.clone();
-    tokio::task::spawn_blocking(move || std::fs::write(&toml_path, serialized))
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(ApiError::from)?;
+    let rules = updated.clone();
+    tokio::task::spawn_blocking(move || -> std::result::Result<(), ApiError> {
+        let raw = std::fs::read_to_string(&toml_path).unwrap_or_default();
+        std::fs::write(&toml_path, rules.write_rules_into(&raw)?)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))??;
     state
         .filter_cache
         .lock()

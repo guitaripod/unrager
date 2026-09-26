@@ -77,9 +77,9 @@ impl App {
     pub(super) fn back_out(&mut self, can_quit: bool) {
         if let Some(popped) = self.focus_stack.pop() {
             if matches!(popped, FocusEntry::Ask(_) | FocusEntry::Brief(_))
-                && let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone())
+                && let Some(llm) = self.filter_cfg.as_ref().map(|c| c.llm.clone())
             {
-                ask::unload(ollama);
+                ask::unload(llm);
             }
             self.abandon_pending_navigation();
             if self.focus_stack.is_empty() {

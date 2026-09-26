@@ -1,7 +1,7 @@
 use crate::auth::chromium;
+use crate::cli::checks::{self, Report};
 use crate::config;
 use crate::error::Result;
-use crate::tui::filter::{ChatRequest, FilterConfig, LlmBackend};
 use clap::Parser;
 
 #[derive(Debug, Parser)]
@@ -10,30 +10,46 @@ pub struct Args {
     pub debug: bool,
 }
 
-pub async fn run(_args: Args) -> Result<()> {
-    let mut report = Report::default();
+/// What the first group of checks covers: everything the browser extension
+/// needs, or just the model in a build without the server.
+#[cfg(feature = "server")]
+const FILTER_GROUP: &str = "Browser extension";
+#[cfg(not(feature = "server"))]
+const FILTER_GROUP: &str = "Rage filter";
 
-    print_cookies(&mut report);
-    print_query_ids(&mut report).await;
-    print_llm_backend(&mut report).await;
+pub async fn run(_args: Args) -> Result<()> {
+    let mut filter = Report::default();
+    println!("{FILTER_GROUP}");
+    checks::llm(&mut filter).await;
+    #[cfg(feature = "server")]
+    {
+        checks::server(&mut filter).await;
+        checks::extension(&mut filter);
+    }
+
+    let mut client = Report::default();
+    println!();
+    println!("Terminal client and iPhone app");
+    print_cookies(&mut client);
+    print_query_ids(&mut client).await;
 
     println!();
-    if report.errors > 0 {
-        println!("some checks failed — follow the → hints above.");
+    if filter.errors > 0 {
+        println!("{FILTER_GROUP}: not working yet. Follow the → hints under it.");
         std::process::exit(1);
     }
-    if report.warnings > 0 {
-        println!("working, but with warnings — follow the → hints above to clean up.");
+    if client.errors > 0 {
+        println!(
+            "{FILTER_GROUP}: all set. The terminal client and iPhone app need the → fixes under them."
+        );
+        std::process::exit(1);
+    }
+    if filter.warnings + client.warnings > 0 {
+        println!("Working, with warnings: the → hints above clean them up.");
     } else {
-        println!("all good — unrager is fully set up.");
+        println!("All good: unrager is fully set up.");
     }
     Ok(())
-}
-
-#[derive(Default)]
-struct Report {
-    errors: usize,
-    warnings: usize,
 }
 
 fn print_cookies(report: &mut Report) {
@@ -103,118 +119,6 @@ fn print_cookies(report: &mut Report) {
             "                export UNRAGER_COOKIES_PATH=\"$HOME/.config/BraveSoftware/Brave-Browser/Default/Cookies\""
         );
         report.errors += 1;
-    }
-}
-
-async fn print_llm_backend(report: &mut Report) {
-    let filter_cfg = match load_filter_cfg() {
-        Ok(c) => c,
-        Err(e) => {
-            println!("✗ filter      filter.toml unreadable: {e}");
-            report.errors += 1;
-            return;
-        }
-    };
-    let ollama = &filter_cfg.ollama;
-    let host = ollama.host.trim_end_matches('/');
-    let configured = &ollama.model;
-    let label = match ollama.backend {
-        LlmBackend::Ollama => "ollama",
-        LlmBackend::SgLang => "sglang",
-    };
-
-    let models = match ollama.list_models().await {
-        Ok(m) => m,
-        Err(e) => {
-            println!("✗ {label:<12}not reachable at {host}: {e}");
-            match ollama.backend {
-                LlmBackend::Ollama => {
-                    println!(
-                        "              → install: curl -fsSL https://ollama.com/install.sh | sh"
-                    );
-                    println!("              → start:   ollama serve");
-                }
-                LlmBackend::SgLang => {
-                    println!(
-                        "              → check the SGLang (or llama-swap) process is up and `host` in filter.toml points at it"
-                    );
-                }
-            }
-            report.errors += 1;
-            return;
-        }
-    };
-
-    println!(
-        "✓ {label:<12}reachable at {host} ({} model(s))",
-        models.len()
-    );
-
-    match ollama.backend {
-        LlmBackend::Ollama => {
-            let gemma4: Vec<&String> = models.iter().filter(|n| n.starts_with("gemma4")).collect();
-            if gemma4.is_empty() {
-                println!("✗ gemma4      no gemma4 model installed");
-                println!("              → ollama pull gemma4");
-                report.errors += 1;
-                return;
-            }
-            if models.iter().any(|n| n == configured) {
-                println!("✓ gemma4      configured model {configured} is installed");
-            } else {
-                let fallback = gemma4[0];
-                println!(
-                    "! gemma4      configured model {configured} not installed; filter will fall back to {fallback}"
-                );
-                println!("              → fix: ollama pull gemma4");
-                report.warnings += 1;
-            }
-        }
-        LlmBackend::SgLang => {
-            if !models.iter().any(|n| n == configured) {
-                println!("✗ sglang      configured model {configured:?} not in {models:?}");
-                println!(
-                    "              → fix: `model` in filter.toml must match the server's served-model-name"
-                );
-                report.errors += 1;
-                return;
-            }
-            println!("✓ sglang      configured model {configured} is available");
-            println!(
-                "              running a real generation to check for coherent output (a cold model can take a while to load)…"
-            );
-            let client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(120))
-                .build()
-                .unwrap_or_default();
-            let req = ChatRequest {
-                messages: vec![
-                    serde_json::json!({"role": "user", "content": "Say the word banana three times, nothing else."}),
-                ],
-                thinking: false,
-                temperature: 0.0,
-                max_tokens: 16,
-            };
-            match ollama.chat_with_client(req, &client).await {
-                Ok(reply) if reply.content.to_ascii_lowercase().contains("banana") => {
-                    println!("✓ sglang      generation looks coherent");
-                }
-                Ok(reply) => {
-                    println!(
-                        "! sglang      generation returned unexpected output: {:?}",
-                        reply.content
-                    );
-                    println!(
-                        "              → possible NVFP4/Blackwell issue: https://github.com/sgl-project/sglang/issues/18954"
-                    );
-                    report.warnings += 1;
-                }
-                Err(e) => {
-                    println!("✗ sglang      generation failed: {e}");
-                    report.errors += 1;
-                }
-            }
-        }
     }
 }
 
@@ -306,9 +210,4 @@ async fn print_query_ids(report: &mut Report) {
             report.warnings += 1;
         }
     }
-}
-
-fn load_filter_cfg() -> Result<FilterConfig> {
-    let cfg_dir = config::config_dir()?;
-    FilterConfig::load_or_init(&cfg_dir.join("filter.toml"))
 }

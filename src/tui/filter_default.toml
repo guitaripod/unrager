@@ -1,5 +1,6 @@
-# unrager rage filter rubric.
-# Edit the topics freely; verdicts recache automatically when the rubric changes.
+# unrager's rules: posts mainly about one of these topics are hidden.
+# Edit them here or from the browser extension's popup; cached verdicts are
+# dropped automatically whenever the rules or the model change.
 
 drop_topics = [
     "american electoral politics, presidents, congress, partisan fights",
@@ -20,20 +21,30 @@ drop_topics = [
 ]
 extra_guidance = "KEEP technical, scientific, art, music, sports, personal-life, and humor tweets that only mention these topics in passing. KEEP genuine AI research, product announcements, and thoughtful critique. HIDE if the topic IS the point of the tweet."
 
-[ollama]
-# backend = "sglang"    # "ollama" (default) or "sglang" — talk to a local
-                         # SGLang/OpenAI-compatible server instead of Ollama.
-                         # `host` then points at that server (e.g. SGLang's
-                         # default http://localhost:30000, or a llama-swap
-                         # front door), and `model` must match the server's
-                         # served-model-name. Raise timeout_seconds to ~120:
-                         # a model that has to cold-load takes well over 20s
-                         # to answer its first request.
-model = "gemma4:latest"
+# The model that reads each post. It runs on your computer; nothing is sent
+# anywhere else.
+[llm]
+# Ollama, the default: install it from https://ollama.com, then run
+# `ollama pull gemma4`.
+backend = "ollama"
 host = "http://localhost:11434"
+model = "gemma4:latest"
 timeout_seconds = 20
-# How long Ollama should retain the model in VRAM after each request.
-# "10s" unloads the model shortly after the last classification/translation,
-# freeing GPU memory for other apps (games, etc.). Use "5m" for the
-# previous always-hot behavior, or "0" to unload immediately.
+# How long Ollama keeps the model loaded after the last post it checked.
+# "10s" hands the GPU back to games and other apps soon after you stop
+# scrolling; "5m" keeps it warm between sessions; "0" unloads it right away.
 keep_alive = "10s"
+
+# Any other server that speaks the OpenAI chat API works too: LM Studio,
+# vLLM, llama.cpp's llama-server, SGLang, llama-swap. Replace the lines above
+# with something like:
+#
+#   backend = "openai"
+#   host = "http://localhost:1234"   # LM Studio 1234, vLLM 8000,
+#                                    # llama-server 8080, SGLang 30000
+#   model = "qwen3-8b"               # an id from the server's /v1/models
+#   timeout_seconds = 120            # a model that has to load first is slow
+#   # api_key = "..."                # only if the server wants one
+#
+# `unrager doctor` checks that the model answers, and if it can't reach the
+# one set here, prints these lines for any server it finds on those ports.

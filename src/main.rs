@@ -37,7 +37,7 @@ async fn run_default() -> Result<()> {
 async fn run_default() -> Result<()> {
     eprintln!(
         "this build of unrager does not include the TUI. use a subcommand (try `unrager --help`) \
-         or reinstall with `cargo install unrager --features tui --force`."
+         or reinstall with `cargo install unrager --force`."
     );
     std::process::exit(2);
 }
@@ -63,6 +63,8 @@ async fn dispatch(command: Command) -> Result<()> {
         #[cfg(feature = "tui")]
         Command::Doctor(args) => cli::doctor::run(args).await,
         Command::Update(args) => cli::update::run(args).await,
+        #[cfg(feature = "server")]
+        Command::Setup(args) => cli::setup::run(args).await,
         #[cfg(feature = "server")]
         Command::Serve(args) => cli::serve::run(args).await,
     }

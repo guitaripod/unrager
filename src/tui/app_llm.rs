@@ -317,14 +317,14 @@ impl App {
             return;
         }
 
-        let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone()) else {
+        let Some(llm) = self.filter_cfg.as_ref().map(|c| c.llm.clone()) else {
             self.set_status("translate unavailable · run `unrager doctor`");
             return;
         };
 
         self.translation_inflight.insert(rest_id.clone());
         self.set_status("translating…");
-        filter::translate_async(rest_id, text, ollama, self.tx.clone());
+        filter::translate_async(rest_id, text, llm, self.tx.clone());
     }
 
     pub(super) fn handle_tweet_translated(&mut self, rest_id: String, translated: String) {
@@ -347,11 +347,11 @@ impl App {
                 return;
             }
         };
-        let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone()) else {
+        let Some(llm) = self.filter_cfg.as_ref().map(|c| c.llm.clone()) else {
             self.set_status("ask unavailable · run `unrager doctor`");
             return;
         };
-        ask::preload(ollama);
+        ask::preload(llm);
 
         let in_detail = self.active == super::app::ActivePane::Detail;
         let asked_parent_id = tweet.in_reply_to_tweet_id.clone();
@@ -516,7 +516,7 @@ impl App {
     }
 
     pub(super) fn ask_submit_input(&mut self) {
-        let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone()) else {
+        let Some(llm) = self.filter_cfg.as_ref().map(|c| c.llm.clone()) else {
             self.set_status("ask unavailable · run `unrager doctor`");
             return;
         };
@@ -541,7 +541,7 @@ impl App {
         let thread = view.thread.clone();
         let turns = view.turn_texts();
         let tx = self.tx.clone();
-        ask::send(ollama, tweet, replies, thread, turns, tx);
+        ask::send(llm, tweet, replies, thread, turns, tx);
     }
 
     pub(super) fn ask_fire_preset(&mut self, index: usize) {
@@ -588,7 +588,7 @@ impl App {
     }
 
     pub(super) fn open_brief_for_target(&mut self) {
-        let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone()) else {
+        let Some(llm) = self.filter_cfg.as_ref().map(|c| c.llm.clone()) else {
             self.set_status("profile unavailable · run `unrager doctor`");
             return;
         };
@@ -607,7 +607,7 @@ impl App {
             self.focus_stack.push(FocusEntry::Brief(cached));
             self.active = super::app::ActivePane::Detail;
             self.set_status("profile cached · R to re-read");
-            ask::preload(ollama);
+            ask::preload(llm);
             return;
         }
         tracing::info!(handle = %handle, "profile view opened");
@@ -615,10 +615,10 @@ impl App {
         self.focus_stack.push(FocusEntry::Brief(view));
         self.active = super::app::ActivePane::Detail;
         self.set_status(format!("profile · jacking into @{handle}…"));
-        ask::preload(ollama.clone());
+        ask::preload(llm.clone());
         brief::start(
             self.client.clone(),
-            ollama,
+            llm,
             handle,
             prefetched,
             self.tx.clone(),
@@ -650,7 +650,7 @@ impl App {
             }
             view.handle.clone()
         };
-        let Some(ollama) = self.filter_cfg.as_ref().map(|c| c.ollama.clone()) else {
+        let Some(llm) = self.filter_cfg.as_ref().map(|c| c.llm.clone()) else {
             return;
         };
         self.brief_cache.remove(&handle);
@@ -658,7 +658,7 @@ impl App {
             *view = BriefView::new(handle.clone());
         }
         self.set_status(format!("profile · re-reading @{handle}…"));
-        brief::start(self.client.clone(), ollama, handle, None, self.tx.clone());
+        brief::start(self.client.clone(), llm, handle, None, self.tx.clone());
     }
 
     pub(super) fn handle_brief_sample_ready(

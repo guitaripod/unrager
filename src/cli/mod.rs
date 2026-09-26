@@ -1,5 +1,7 @@
 pub mod auth;
 pub mod bookmarks;
+#[cfg(feature = "tui")]
+pub mod checks;
 pub mod common;
 #[cfg(feature = "tui")]
 pub mod demo;
@@ -14,6 +16,8 @@ pub mod reply;
 pub mod search;
 #[cfg(feature = "server")]
 pub mod serve;
+#[cfg(feature = "server")]
+pub mod setup;
 pub mod thread;
 pub mod tweet;
 pub mod update;
@@ -23,24 +27,30 @@ pub mod whoami;
 
 use clap::{Parser, Subcommand};
 
-const LONG_ABOUT: &str = "A calm Twitter/X CLI with a local-LLM rage filter.
+const LONG_ABOUT: &str =
+    "Takes the rage out of your x.com timeline with a model on your own computer.
 
-Run `unrager` with no arguments to launch the TUI. Subcommands perform
-one-shot reads, writes, or diagnostics.
+Get started:
+  unrager setup     checks your model, runs unrager in the background and
+                    unpacks the browser extension; then follow what it prints
+  unrager doctor    shows what is and isn't working
 
-The TUI reads cookies from your logged-in Chromium-family browser and
-pipes every tweet through a local Ollama classifier. The filter disables
-itself silently when Ollama isn't running; `unrager doctor` explains what
-is and isn't set up.
+The browser extension works in Chrome, Brave, Edge, Vivaldi and Arc. Run
+`unrager` with no arguments for the terminal client, which filters the same
+way; the other subcommands read and post from the command line.
+
+The model runs on Ollama by default (`ollama pull gemma4`). Any server that
+speaks the OpenAI chat API works too (LM Studio, vLLM, llama.cpp, SGLang):
+set [llm] in filter.toml.
 
 Config:
-  Linux   ~/.config/unrager/{filter.toml, session.json, tokens.json}
+  Linux   ~/.config/unrager/{filter.toml, config.toml, tokens.json}
   macOS   ~/Library/Application Support/unrager/{filter.toml, ...}";
 
 #[derive(Debug, Parser)]
 #[command(
     name = "unrager",
-    about = "A calm Twitter/X CLI with a local-LLM rage filter",
+    about = "Takes the rage out of your x.com timeline with a model on your own computer",
     long_about = LONG_ABOUT,
     version,
     disable_help_subcommand = true
@@ -100,13 +110,19 @@ pub enum Command {
     Demo(demo::Args),
 
     #[cfg(feature = "tui")]
-    #[command(about = "Check cookies and the LLM backend (Ollama or SGLang)")]
+    #[command(about = "Check the model, background server, extension and X login")]
     Doctor(doctor::Args),
 
     #[command(about = "Update unrager to the latest release")]
     Update(update::Args),
 
     #[cfg(feature = "server")]
-    #[command(about = "Run the HTTP API server for the native client")]
+    #[command(
+        about = "Check your model, run unrager in the background and unpack the browser extension"
+    )]
+    Setup(setup::Args),
+
+    #[cfg(feature = "server")]
+    #[command(about = "Run the server the browser extension and the iPhone app talk to")]
     Serve(serve::Args),
 }

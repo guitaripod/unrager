@@ -66,7 +66,7 @@ pub async fn home(
         }
         None => home_live(&state, q.following, count, cursor, q.mode.as_deref()).await?,
     };
-    Ok(Json(page))
+    Ok(serve(&state, page))
 }
 
 /// Live fetch used when the materialized buffer is still cold (e.g. the very
@@ -181,10 +181,13 @@ async fn user_timeline(
         ],
     )?;
     let page = timeline::walk(instructions);
-    Ok(Json(TimelinePage {
-        tweets: page.tweets,
-        cursor: page.next_cursor,
-    }))
+    Ok(serve(
+        state,
+        TimelinePage {
+            tweets: page.tweets,
+            cursor: page.next_cursor,
+        },
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -224,10 +227,13 @@ pub async fn search(
         "/data/search_by_raw_query/search_timeline/timeline/instructions",
     )?;
     let page = timeline::walk(instructions);
-    Ok(Json(TimelinePage {
-        tweets: page.tweets,
-        cursor: page.next_cursor,
-    }))
+    Ok(serve(
+        &state,
+        TimelinePage {
+            tweets: page.tweets,
+            cursor: page.next_cursor,
+        },
+    ))
 }
 
 fn normalize_product(s: &str) -> &'static str {
@@ -261,10 +267,13 @@ pub async fn mentions(
         "/data/search_by_raw_query/search_timeline/timeline/instructions",
     )?;
     let page = timeline::walk(instructions);
-    Ok(Json(TimelinePage {
-        tweets: page.tweets,
-        cursor: page.next_cursor,
-    }))
+    Ok(serve(
+        &state,
+        TimelinePage {
+            tweets: page.tweets,
+            cursor: page.next_cursor,
+        },
+    ))
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -311,10 +320,13 @@ pub async fn bookmarks(
     };
     let instructions = timeline::extract_instructions(&response, path)?;
     let page = timeline::walk(instructions);
-    Ok(Json(TimelinePage {
-        tweets: page.tweets,
-        cursor: page.next_cursor,
-    }))
+    Ok(serve(
+        &state,
+        TimelinePage {
+            tweets: page.tweets,
+            cursor: page.next_cursor,
+        },
+    ))
 }
 
 pub async fn notifications(
@@ -353,4 +365,11 @@ pub async fn notifications(
         notifications,
         cursor: page.next_cursor,
     }))
+}
+
+/// Hands a page to the client, keeping its tweets for follow-up requests
+/// about them (filter verdicts, ask, translate).
+fn serve(state: &AppState, page: TimelinePage) -> Json<TimelinePage> {
+    state.remember(&page.tweets);
+    Json(page)
 }

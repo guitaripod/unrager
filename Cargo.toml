@@ -53,6 +53,7 @@ tui = [
 server = [
     "tui",
     "dep:axum",
+    "dep:lru",
     "dep:tower",
     "dep:tower-http",
     "dep:async-stream",
@@ -117,6 +118,7 @@ tower-http = { version = "0.6", features = ["compression-full", "trace", "fs"], 
 async-stream = { version = "0.3", optional = true }
 eventsource-stream = { version = "0.2", optional = true }
 fs2 = { version = "0.4", optional = true }
+lru = { version = "0.16", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 secret-service = { version = "4", features = ["rt-tokio-crypto-rust"] }

@@ -30,6 +30,7 @@ pub async fn serve(addr: SocketAddr, filter_only: bool) -> crate::error::Result<
     if state.x_session_loaded {
         spawn_ingest(&state, shutdown_rx).await;
     }
+    spawn_housekeeping(&state);
     let app = router(state.clone());
 
     if filter_only {
@@ -55,6 +56,26 @@ pub async fn serve(addr: SocketAddr, filter_only: bool) -> crate::error::Result<
         .map_err(|e| crate::error::Error::Config(format!("serve: {e}")))?;
 
     Ok(())
+}
+
+/// Daily pruning for a server that stays up for weeks: `open` only prunes
+/// expired filter verdicts and read marks at startup, so without this both
+/// tables and their in-memory copies would grow for as long as it runs.
+fn spawn_housekeeping(state: &Arc<AppState>) {
+    let state = state.clone();
+    tokio::spawn(async move {
+        let mut daily = tokio::time::interval(std::time::Duration::from_secs(24 * 3600));
+        daily.tick().await;
+        loop {
+            daily.tick().await;
+            if let Err(e) = state.filter_cache.lock().await.prune() {
+                tracing::warn!("filter cache prune failed: {e}");
+            }
+            if let Err(e) = state.seen.lock().await.prune() {
+                tracing::warn!("seen store prune failed: {e}");
+            }
+        }
+    });
 }
 
 /// Take the feed-writer lock and launch the background ingest worker. If

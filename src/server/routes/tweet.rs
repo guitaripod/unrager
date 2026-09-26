@@ -15,6 +15,7 @@ pub async fn single(
     Path(id): Path<String>,
 ) -> std::result::Result<Json<Tweet>, ApiError> {
     let tweet = fetch_tweet_by_rest_id(&state, &id).await?;
+    state.remember([&tweet]);
     Ok(Json(tweet))
 }
 
@@ -64,6 +65,7 @@ pub async fn thread(
         return Err(ApiError::not_found("focal tweet not in thread"));
     }
 
+    state.remember(focal.iter().chain(&ancestors).chain(&replies));
     Ok(Json(ThreadView {
         focal,
         ancestors,

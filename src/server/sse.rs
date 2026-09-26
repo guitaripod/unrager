@@ -7,7 +7,7 @@ use async_stream::stream;
 use axum::extract::{Query, State};
 use axum::response::Sse;
 use axum::response::sse::{Event, KeepAlive};
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use serde::Deserialize;
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -19,6 +19,32 @@ use unrager_model::{
 #[derive(Debug, Deserialize)]
 pub struct FilterQuery {
     pub ids: String,
+}
+
+/// Posts judged at once per filter stream. Cached verdicts come back
+/// immediately; the rest overlap their tweet lookup with the previous ones'
+/// classification instead of waiting in line one by one.
+const FILTER_STREAM_CONCURRENCY: usize = 4;
+
+/// One post's verdict for the filter stream: cached, or looked up (recently
+/// served, the Home buffer, X) and classified. `None` when the post can't be
+/// read or the model doesn't answer; the client keeps showing it.
+async fn verdict_for(state: &AppState, rubric: &str, id: String) -> Option<FilterVerdictEvent> {
+    let cached = state.filter_cache.lock().await.get(&id);
+    let decision = match cached {
+        Some(decision) => decision,
+        None => {
+            let tweet = state.tweet(&id).await.ok()?;
+            let text = filter::build_classification_text(&tweet);
+            let decision = state.classifier_handle.classify(&id, &text).await?;
+            persist_verdict(&mut *state.filter_cache.lock().await, rubric, &id, decision);
+            decision
+        }
+    };
+    Some(FilterVerdictEvent {
+        id,
+        verdict: decision_to_verdict(decision),
+    })
 }
 
 pub async fn filter_stream(
@@ -33,42 +59,22 @@ pub async fn filter_stream(
         .collect();
 
     let (tx, mut rx) = mpsc::channel::<FilterVerdictEvent>(64);
-    let state_clone = state.clone();
 
     tokio::spawn(async move {
-        let rubric_snapshot = state_clone.filter_config.lock().await.rubric_hash();
-        let classifier = state_clone.classifier_handle.clone();
-        for id in ids {
-            {
-                let cache = state_clone.filter_cache.lock().await;
-                if let Some(d) = cache.get(&id) {
-                    let _ = tx
-                        .send(FilterVerdictEvent {
-                            id: id.clone(),
-                            verdict: decision_to_verdict(d),
-                        })
-                        .await;
-                    continue;
+        let rubric_snapshot = state.filter_config.lock().await.rubric_hash();
+        let mut verdicts = futures::stream::iter(ids)
+            .map(|id| {
+                let state = state.clone();
+                let rubric = rubric_snapshot.clone();
+                async move { verdict_for(&state, &rubric, id).await }
+            })
+            .buffer_unordered(FILTER_STREAM_CONCURRENCY);
+        while let Some(verdict) = verdicts.next().await {
+            if let Some(verdict) = verdict {
+                if tx.send(verdict).await.is_err() {
+                    break;
                 }
             }
-            let tweet = match llm::fetch_tweet(&state_clone.gql, &id).await {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
-            let text = filter::build_classification_text(&tweet);
-            let Some(decision) = classifier.classify(&id, &text).await else {
-                continue;
-            };
-            {
-                let mut cache = state_clone.filter_cache.lock().await;
-                persist_verdict(&mut cache, &rubric_snapshot, &id, decision);
-            }
-            let _ = tx
-                .send(FilterVerdictEvent {
-                    id,
-                    verdict: decision_to_verdict(decision),
-                })
-                .await;
         }
     });
 
@@ -95,7 +101,7 @@ pub async fn ask_stream(
 {
     let preset = parse_preset(&q.preset)
         .ok_or_else(|| ApiError::bad_request(format!("unknown preset: {}", q.preset)))?;
-    let tweet = llm::fetch_tweet(&state.gql, &q.tweet_id).await?;
+    let tweet = state.tweet(&q.tweet_id).await?;
     let cfg = state.filter_config.lock().await.clone();
 
     Ok(stream_tokens(
@@ -129,7 +135,7 @@ pub async fn ask_context_stream(
     if !last_is_user {
         return Err(ApiError::bad_request("turns must end with a user turn"));
     }
-    let tweet = llm::fetch_tweet(&state.gql, &req.tweet_id).await?;
+    let tweet = state.tweet(&req.tweet_id).await?;
     let cfg = state.filter_config.lock().await.clone();
 
     let images = if cfg.llm.supports_vision() {
@@ -227,7 +233,7 @@ pub async fn translate_stream(
     Query(q): Query<TranslateQuery>,
 ) -> std::result::Result<Sse<impl Stream<Item = std::result::Result<Event, Infallible>>>, ApiError>
 {
-    let tweet = llm::fetch_tweet(&state.gql, &q.tweet_id).await?;
+    let tweet = state.tweet(&q.tweet_id).await?;
     let cfg = state.filter_config.lock().await.clone();
 
     Ok(stream_tokens(

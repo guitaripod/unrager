@@ -27,20 +27,19 @@ impl SeenStore {
             PRAGMA synchronous = NORMAL;",
         )?;
 
-        let cutoff = chrono::Utc::now().timestamp() - RETENTION_DAYS * 86400;
-        let pruned = conn.execute("DELETE FROM seen WHERE seen_at < ?1", params![cutoff])?;
-        if pruned > 0 {
-            tracing::info!(pruned, "seen.db: pruned old entries");
-        }
-
-        let mut stmt = conn.prepare("SELECT tweet_id FROM seen")?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        let mut cache = HashSet::new();
-        for r in rows {
-            cache.insert(r?);
-        }
-        drop(stmt);
+        prune_expired(&conn)?;
+        let cache = load_seen(&conn)?;
         Ok(Self { conn, cache })
+    }
+
+    /// Drops read marks past the retention window from disk and memory.
+    /// `open` does this once; the background server, which stays up for
+    /// weeks, calls it periodically.
+    pub fn prune(&mut self) -> Result<()> {
+        if prune_expired(&self.conn)? > 0 {
+            self.cache = load_seen(&self.conn)?;
+        }
+        Ok(())
     }
 
     pub fn is_seen(&self, tweet_id: &str) -> bool {
@@ -131,6 +130,25 @@ fn marker_millis(marker: &str) -> i64 {
         .unwrap_or(0)
 }
 
+fn prune_expired(conn: &Connection) -> Result<usize> {
+    let cutoff = chrono::Utc::now().timestamp() - RETENTION_DAYS * 86400;
+    let pruned = conn.execute("DELETE FROM seen WHERE seen_at < ?1", params![cutoff])?;
+    if pruned > 0 {
+        tracing::info!(pruned, "seen.db: pruned old entries");
+    }
+    Ok(pruned)
+}
+
+fn load_seen(conn: &Connection) -> Result<HashSet<String>> {
+    let mut stmt = conn.prepare("SELECT tweet_id FROM seen")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let mut cache = HashSet::new();
+    for r in rows {
+        cache.insert(r?);
+    }
+    Ok(cache)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,6 +166,20 @@ mod tests {
         assert!(!store.is_seen("1"));
         store.mark_seen("1");
         assert!(store.is_seen("1"));
+    }
+
+    #[test]
+    fn prune_forgets_expired_marks() {
+        let (_tmp, mut store) = fresh_store();
+        store.mark_seen("old");
+        store.mark_seen("new");
+        store
+            .conn
+            .execute("UPDATE seen SET seen_at = 0 WHERE tweet_id = 'old'", [])
+            .unwrap();
+        store.prune().unwrap();
+        assert!(!store.is_seen("old"));
+        assert!(store.is_seen("new"));
     }
 
     #[test]

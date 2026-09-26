@@ -1,7 +1,4 @@
 use crate::api::{ApiClient, MediaFile};
-use crate::gql::endpoints;
-use crate::gql::query_ids::Operation;
-use crate::parse::tweet as parse_tweet;
 use crate::server::error::ApiError;
 use crate::server::state::AppState;
 use axum::Json;
@@ -13,19 +10,27 @@ use std::io::Write;
 use std::sync::Arc;
 use unrager_model::{MediaKind, MediaUploadResult};
 
+/// One client for every proxied download, so the X CDN connections are
+/// reused instead of paying a TLS handshake per image.
+fn cdn_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .user_agent(crate::gql::client::USER_AGENT)
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap_or_default()
+    })
+}
+
+/// `GET /api/media/{tweet_id}/{index}` — streams a post's photo or video
+/// from X's CDN. The post usually comes from what the server just sent the
+/// app, so opening media costs no extra request to X's API.
 pub async fn proxy(
     State(state): State<Arc<AppState>>,
     Path((tweet_id, index)): Path<(String, usize)>,
 ) -> std::result::Result<Response, ApiError> {
-    let response = state
-        .gql
-        .get(
-            Operation::TweetResultByRestId,
-            &endpoints::tweet_by_rest_id_variables(&tweet_id),
-            &endpoints::tweet_read_features(),
-        )
-        .await?;
-    let tweet = parse_tweet::parse_tweet_result_by_rest_id(&response)?;
+    let tweet = state.tweet(&tweet_id).await?;
     let media = tweet
         .media
         .get(index)
@@ -38,7 +43,7 @@ pub async fn proxy(
         _ => media.url.as_str(),
     };
 
-    let upstream = reqwest::Client::new()
+    let upstream = cdn_client()
         .get(url)
         .send()
         .await

@@ -2,15 +2,20 @@ use crate::auth::chromium;
 use crate::config::{self, FeedConfig};
 use crate::error::Result;
 use crate::gql::{GqlClient, QueryIdStore};
+use crate::model::Tweet;
 use crate::store::about::{self, AboutFetcher, AboutStore};
 use crate::store::feed::FeedStore;
 use crate::store::ingest::Activity;
 use crate::tui::filter::{Classifier, FilterCache, FilterConfig};
 use crate::tui::seen::SeenStore;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 use tokio::sync::Mutex;
 use unrager_model::SessionState;
+
+/// How many tweets the server keeps from what it recently sent clients.
+const RECENT_TWEETS: NonZeroUsize = NonZeroUsize::new(2000).unwrap();
 
 pub struct AppState {
     /// `serve --filter-only`: no X session is loaded and only the filter
@@ -45,6 +50,10 @@ pub struct AppState {
     /// 2025) so `/api/users/{id}/followers` skips straight to the
     /// `BlueVerifiedFollowers` fallback on subsequent requests.
     pub followers_op_dead: std::sync::atomic::AtomicBool,
+    /// Tweets recently sent to a client, so a follow-up request about one of
+    /// them (its filter verdict, ask, translate) is answered without another
+    /// throttled GraphQL round trip to X.
+    pub recent_tweets: std::sync::Mutex<lru::LruCache<String, Tweet>>,
     pub feed_cfg: FeedConfig,
     pub feed_db_path: PathBuf,
     pub lock_path: PathBuf,
@@ -113,6 +122,7 @@ impl AppState {
             about: Mutex::new(about_store),
             about_fetcher,
             followers_op_dead: std::sync::atomic::AtomicBool::new(false),
+            recent_tweets: std::sync::Mutex::new(lru::LruCache::new(RECENT_TWEETS)),
             feed_cfg: app_config.feed.clone(),
             feed_db_path,
             lock_path: cache_dir.join("server.lock"),
@@ -120,6 +130,40 @@ impl AppState {
             filter_toml_path: filter_toml,
             config_dir,
         })
+    }
+}
+
+impl AppState {
+    /// Keeps tweets a client was just sent for [`tweet`](Self::tweet).
+    pub fn remember<'a>(&self, tweets: impl IntoIterator<Item = &'a Tweet>) {
+        let mut recent = self
+            .recent_tweets
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        for tweet in tweets {
+            recent.put(tweet.rest_id.clone(), tweet.clone());
+        }
+    }
+
+    /// A tweet by id: from what this server recently sent, then the Home
+    /// buffer, and only then from X.
+    pub async fn tweet(&self, id: &str) -> Result<Tweet> {
+        let recent = self
+            .recent_tweets
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(id)
+            .cloned();
+        if let Some(tweet) = recent {
+            return Ok(tweet);
+        }
+        let stored = self.feed.lock().await.tweet(id);
+        let tweet = match stored {
+            Some(tweet) => tweet,
+            None => crate::server::llm::fetch_tweet(&self.gql, id).await?,
+        };
+        self.remember([&tweet]);
+        Ok(tweet)
     }
 }
 

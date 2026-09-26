@@ -15,13 +15,18 @@ use crate::gql::query_ids::Operation;
 use crate::model::Tweet;
 use crate::parse::timeline;
 use crate::store::feed::{FeedStore, FeedVariant, now_secs};
-use crate::tui::filter::{self, ClassifierHandle, FilterCache};
+use crate::tui::filter::{self, ClassifierHandle, FilterCache, FilterDecision};
+use futures::StreamExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 use tokio::sync::{Mutex, Notify, watch};
 
 const FETCH_COUNT: u32 = 40;
+/// How many of a page's new tweets are classified at once. Half the shared
+/// classifier's permits, so the extension's and apps' own requests never
+/// queue behind a whole page of background work.
+const INGEST_CLASSIFY_CONCURRENCY: usize = 4;
 const SEEN_IDS_LIMIT: usize = 100;
 /// Below this idle window a client is "active" and the worker polls briskly.
 const ACTIVE_WINDOW_SECS: i64 = 900;
@@ -227,25 +232,10 @@ async fn run_cycle(
     let fetched = page.tweets.len();
 
     let new_rows = store_tweets(store, variant, &page.tweets)?;
-
-    for tweet in &page.tweets {
-        let cached = filter_cache.lock().await.get(&tweet.rest_id);
-        let verdict = match cached {
-            Some(v) => Some(v),
-            None if classify_enabled => {
-                let text = filter::build_classification_text(tweet);
-                let v = classifier.classify(&tweet.rest_id, &text).await;
-                if let Some(v) = v {
-                    filter_cache.lock().await.put(&tweet.rest_id, v);
-                }
-                v
-            }
-            None => None,
-        };
-        if let Some(v) = verdict {
-            store.update_verdict(variant, &tweet.rest_id, v)?;
-        }
-    }
+    let verdicts = classify_page(classifier, filter_cache, &page.tweets, classify_enabled).await;
+    let verdicts: Vec<(&str, FilterDecision)> =
+        verdicts.iter().map(|(id, v)| (id.as_str(), *v)).collect();
+    store.update_verdicts(variant, &verdicts)?;
 
     store.trim_to_cap(variant, cap)?;
     store.record_poll(variant, new_rows as i64)?;
@@ -262,13 +252,63 @@ async fn run_cycle(
 /// Upsert a fetched page into the store, returning the count of net-new rows.
 /// Split out so it can be unit-tested without a live X / Ollama.
 fn store_tweets(store: &mut FeedStore, variant: FeedVariant, tweets: &[Tweet]) -> Result<usize> {
-    let mut new_rows = 0;
-    for tweet in tweets {
-        if store.upsert(variant, tweet)? {
-            new_rows += 1;
-        }
+    store.upsert_page(variant, tweets)
+}
+
+/// Verdicts for a fetched page: cached ones straight from the filter cache,
+/// the rest classified [`INGEST_CLASSIFY_CONCURRENCY`] at a time. New
+/// verdicts are persisted only if the rubric didn't change meanwhile, and
+/// dropped from the result if it did (the next cycle's reconcile resets the
+/// page anyway).
+async fn classify_page(
+    classifier: &ClassifierHandle,
+    filter_cache: &Mutex<FilterCache>,
+    tweets: &[Tweet],
+    classify_enabled: bool,
+) -> Vec<(String, FilterDecision)> {
+    let (rubric, cached): (String, Vec<Option<FilterDecision>>) = {
+        let cache = filter_cache.lock().await;
+        (
+            cache.rubric_hash().to_string(),
+            tweets.iter().map(|t| cache.get(&t.rest_id)).collect(),
+        )
+    };
+    let mut verdicts: Vec<(String, FilterDecision)> = tweets
+        .iter()
+        .zip(&cached)
+        .filter_map(|(t, v)| v.map(|v| (t.rest_id.clone(), v)))
+        .collect();
+    if !classify_enabled {
+        return verdicts;
     }
-    Ok(new_rows)
+    let jobs: Vec<(String, String)> = tweets
+        .iter()
+        .zip(&cached)
+        .filter(|(_, v)| v.is_none())
+        .map(|(t, _)| (t.rest_id.clone(), filter::build_classification_text(t)))
+        .collect();
+    let computed: Vec<Option<(String, FilterDecision)>> = futures::stream::iter(jobs)
+        .map(|(id, text)| {
+            let classifier = classifier.clone();
+            async move { classifier.classify(&id, &text).await.map(|v| (id, v)) }
+        })
+        .buffer_unordered(INGEST_CLASSIFY_CONCURRENCY)
+        .collect()
+        .await;
+    let computed: Vec<(String, FilterDecision)> = computed.into_iter().flatten().collect();
+    if computed.is_empty() {
+        return verdicts;
+    }
+    let mut cache = filter_cache.lock().await;
+    if cache.rubric_hash() != rubric {
+        return verdicts;
+    }
+    let batch: Vec<(&str, FilterDecision)> =
+        computed.iter().map(|(id, v)| (id.as_str(), *v)).collect();
+    cache.put_many(&batch);
+    drop(cache);
+    verdicts.extend(computed);
+    verdicts
 }
 
 fn jittered(secs: u64) -> Duration {
@@ -336,6 +376,143 @@ mod tests {
             "only the genuinely new tweet counts"
         );
         assert_eq!(store.count(FeedVariant::ForYou).unwrap(), 4);
+    }
+
+    /// An OpenAI-compatible model stub that answers HIDE after `delay` and
+    /// records the most requests it ever had in flight at once.
+    async fn stub_model(delay: Duration) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::AtomicUsize;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let peak_out = peak.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let (in_flight, peak) = (in_flight.clone(), peak.clone());
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 64 * 1024];
+                    let mut read = 0;
+                    loop {
+                        let n = socket.read(&mut buf[read..]).await.unwrap_or(0);
+                        if n == 0 {
+                            return;
+                        }
+                        read += n;
+                        let head = String::from_utf8_lossy(&buf[..read]).to_string();
+                        if let Some(end) = head.find("\r\n\r\n") {
+                            let length = head
+                                .lines()
+                                .find_map(|l| {
+                                    l.to_ascii_lowercase()
+                                        .strip_prefix("content-length:")
+                                        .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                                })
+                                .unwrap_or(0);
+                            if read >= end + 4 + length {
+                                break;
+                            }
+                        }
+                    }
+                    let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(now, Ordering::SeqCst);
+                    tokio::time::sleep(delay).await;
+                    in_flight.fetch_sub(1, Ordering::SeqCst);
+                    let body = r#"{"choices":[{"message":{"content":"HIDE"}}]}"#;
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        (format!("http://{addr}"), peak_out)
+    }
+
+    fn classifier_for(host: &str) -> ClassifierHandle {
+        let mut cfg: crate::tui::filter::FilterConfig =
+            toml::from_str(crate::tui::filter::FilterConfig::default_content()).unwrap();
+        cfg.llm.backend = crate::tui::filter::LlmBackend::OpenAi;
+        cfg.llm.host = host.into();
+        cfg.llm.model = "stub".into();
+        cfg.llm.timeout_seconds = 10;
+        crate::tui::filter::Classifier::new(&cfg).handle()
+    }
+
+    #[tokio::test]
+    async fn a_page_is_classified_concurrently_and_cached() {
+        let (host, peak) = stub_model(Duration::from_millis(100)).await;
+        let classifier = classifier_for(&host);
+        let dir = TempDir::new().unwrap();
+        let cache =
+            Mutex::new(FilterCache::open(&dir.path().join("filter.db"), "rubric".into()).unwrap());
+        cache.lock().await.put("0", FilterDecision::Keep);
+        let page: Vec<Tweet> = (0..10).map(|i| tweet(&i.to_string(), 100 + i)).collect();
+
+        let verdicts = classify_page(&classifier, &cache, &page, true).await;
+
+        assert_eq!(verdicts.len(), 10);
+        assert!(
+            verdicts.contains(&("0".to_string(), FilterDecision::Keep)),
+            "cached verdicts are reused"
+        );
+        assert_eq!(
+            verdicts
+                .iter()
+                .filter(|(_, v)| *v == FilterDecision::Hide)
+                .count(),
+            9
+        );
+        let peak = peak.load(Ordering::SeqCst);
+        assert!(
+            (2..=INGEST_CLASSIFY_CONCURRENCY).contains(&peak),
+            "{peak} requests in flight at once"
+        );
+        let cache = cache.lock().await;
+        assert!((0..10).all(|i| cache.get(&i.to_string()).is_some()));
+    }
+
+    #[tokio::test]
+    async fn verdicts_from_before_a_rubric_change_are_dropped() {
+        let (host, _) = stub_model(Duration::from_millis(300)).await;
+        let classifier = classifier_for(&host);
+        let dir = TempDir::new().unwrap();
+        let cache = Arc::new(Mutex::new(
+            FilterCache::open(&dir.path().join("filter.db"), "old".into()).unwrap(),
+        ));
+        let page = vec![tweet("1", 100), tweet("2", 200)];
+        let rekey = {
+            let cache = cache.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                cache.lock().await.rekey("new".into()).unwrap();
+            })
+        };
+
+        let verdicts = classify_page(&classifier, &cache, &page, true).await;
+        rekey.await.unwrap();
+
+        assert!(
+            verdicts.is_empty(),
+            "old-rubric verdicts are not used: {verdicts:?}"
+        );
+        let cache = cache.lock().await;
+        assert!(cache.get("1").is_none() && cache.get("2").is_none());
+    }
+
+    #[tokio::test]
+    async fn without_a_model_only_cached_verdicts_come_back() {
+        let classifier = classifier_for("http://127.0.0.1:9");
+        let dir = TempDir::new().unwrap();
+        let cache =
+            Mutex::new(FilterCache::open(&dir.path().join("filter.db"), "rubric".into()).unwrap());
+        cache.lock().await.put("1", FilterDecision::Hide);
+        let page = vec![tweet("1", 100), tweet("2", 200)];
+        let verdicts = classify_page(&classifier, &cache, &page, false).await;
+        assert_eq!(verdicts, [("1".to_string(), FilterDecision::Hide)]);
     }
 
     #[test]

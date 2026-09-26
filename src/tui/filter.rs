@@ -695,20 +695,7 @@ impl FilterCache {
             [],
         )
         .map_err(|e| Error::Config(format!("create verdicts table: {e}")))?;
-        let cutoff = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0)
-            - RETENTION_DAYS * 86400;
-        let pruned = conn
-            .execute(
-                "DELETE FROM verdicts WHERE classified_at < ?1",
-                params![cutoff],
-            )
-            .unwrap_or(0);
-        if pruned > 0 {
-            tracing::info!(pruned, "filter.db: pruned old entries");
-        }
+        prune_expired(&conn);
         let mem = load_verdicts(&conn, &rubric_hash)?;
         debug!(
             rubric_hash = %rubric_hash,
@@ -751,43 +738,101 @@ impl FilterCache {
     }
 
     pub fn put(&mut self, tweet_id: &str, decision: FilterDecision) {
-        let verdict_int: i64 = match decision {
-            FilterDecision::Keep => 0,
-            FilterDecision::Hide => 1,
-        };
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-        if let Err(e) = self.conn.execute(
-            "INSERT OR REPLACE INTO verdicts (tweet_id, rubric_hash, verdict, classified_at) VALUES (?1, ?2, ?3, ?4)",
-            params![tweet_id, &self.rubric_hash, verdict_int, now],
-        ) {
+        self.put_many(&[(tweet_id, decision)]);
+    }
+
+    /// Persists verdicts in one transaction: a page of them costs one WAL
+    /// commit, not one each. The in-memory map is updated even if the disk
+    /// write fails, so the running process still benefits.
+    pub fn put_many(&mut self, verdicts: &[(&str, FilterDecision)]) {
+        if verdicts.is_empty() {
+            return;
+        }
+        let now = unix_now();
+        let written = self.conn.transaction().and_then(|tx| {
+            {
+                let mut insert = tx.prepare_cached(
+                    "INSERT OR REPLACE INTO verdicts (tweet_id, rubric_hash, verdict, classified_at) VALUES (?1, ?2, ?3, ?4)",
+                )?;
+                for (tweet_id, decision) in verdicts {
+                    let verdict_int: i64 = match decision {
+                        FilterDecision::Keep => 0,
+                        FilterDecision::Hide => 1,
+                    };
+                    insert.execute(params![tweet_id, &self.rubric_hash, verdict_int, now])?;
+                }
+            }
+            tx.commit()
+        });
+        if let Err(e) = written {
             warn!("filter cache put failed: {e}");
         }
-        self.mem.insert(tweet_id.to_string(), decision);
+        for (tweet_id, decision) in verdicts {
+            self.mem.insert((*tweet_id).to_string(), *decision);
+        }
     }
 
     /// Persist a verdict only while `rubric_snapshot` still matches this
     /// cache's live rubric. A concurrent rubric edit rekeys the shared cache
     /// mid-request; writing under a stale snapshot would poison the new
     /// rubric's cache for the whole retention window. Shared by the SSE
-    /// filter stream and the batch `/api/classify` route.
+    /// filter stream, the batch `/api/classify` route and the feed ingest.
     pub fn put_if_current_rubric(
         &mut self,
         rubric_snapshot: &str,
         tweet_id: &str,
         decision: FilterDecision,
     ) {
+        self.put_many_if_current_rubric(rubric_snapshot, &[(tweet_id, decision)]);
+    }
+
+    /// [`put_if_current_rubric`](Self::put_if_current_rubric) for a batch.
+    pub fn put_many_if_current_rubric(
+        &mut self,
+        rubric_snapshot: &str,
+        verdicts: &[(&str, FilterDecision)],
+    ) {
         if self.rubric_hash == rubric_snapshot {
-            self.put(tweet_id, decision);
+            self.put_many(verdicts);
         }
+    }
+
+    /// Drops verdicts older than the retention window from disk and memory.
+    /// `open` does this once; a process that stays up for weeks (the
+    /// background server) calls it periodically so neither grows forever.
+    pub fn prune(&mut self) -> Result<()> {
+        if prune_expired(&self.conn) > 0 {
+            self.mem = load_verdicts(&self.conn, &self.rubric_hash)?;
+        }
+        Ok(())
     }
 
     #[cfg(test)]
     pub fn contains(&self, tweet_id: &str) -> bool {
         self.mem.contains_key(tweet_id)
     }
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Deletes verdicts past the retention window, returning how many went.
+fn prune_expired(conn: &Connection) -> usize {
+    let cutoff = unix_now() - RETENTION_DAYS * 86400;
+    let pruned = conn
+        .execute(
+            "DELETE FROM verdicts WHERE classified_at < ?1",
+            params![cutoff],
+        )
+        .unwrap_or(0);
+    if pruned > 0 {
+        tracing::info!(pruned, "filter.db: pruned old entries");
+    }
+    pruned
 }
 
 /// Load every persisted verdict for one rubric hash into a fresh in-memory
@@ -1396,6 +1441,45 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let cache = FilterCache::open(tmp.path(), "hash-x".into()).unwrap();
         assert_eq!(cache.rubric_hash(), "hash-x");
+    }
+
+    #[test]
+    fn prune_drops_expired_verdicts_from_disk_and_memory() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        let mut cache = FilterCache::open(&path, "r".into()).unwrap();
+        cache.put_many(&[("old", FilterDecision::Hide), ("new", FilterDecision::Keep)]);
+        cache
+            .conn
+            .execute(
+                "UPDATE verdicts SET classified_at = 0 WHERE tweet_id = 'old'",
+                [],
+            )
+            .unwrap();
+        cache.prune().unwrap();
+        assert!(cache.get("old").is_none());
+        assert_eq!(cache.get("new"), Some(FilterDecision::Keep));
+        let reopened = FilterCache::open(&path, "r".into()).unwrap();
+        assert!(reopened.get("old").is_none());
+        assert_eq!(reopened.get("new"), Some(FilterDecision::Keep));
+    }
+
+    #[test]
+    fn put_many_persists_a_batch() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        {
+            let mut cache = FilterCache::open(&path, "r".into()).unwrap();
+            cache.put_many_if_current_rubric(
+                "r",
+                &[("1", FilterDecision::Hide), ("2", FilterDecision::Keep)],
+            );
+            cache.put_many_if_current_rubric("stale", &[("3", FilterDecision::Hide)]);
+        }
+        let reopened = FilterCache::open(&path, "r".into()).unwrap();
+        assert_eq!(reopened.get("1"), Some(FilterDecision::Hide));
+        assert_eq!(reopened.get("2"), Some(FilterDecision::Keep));
+        assert!(reopened.get("3").is_none());
     }
 
     #[test]

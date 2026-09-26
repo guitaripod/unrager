@@ -120,27 +120,61 @@ impl FeedStore {
     /// never rewritten — the For You rank stays stable across re-fetches.
     /// Returns `true` when the row was newly inserted.
     pub fn upsert(&mut self, variant: FeedVariant, tweet: &Tweet) -> Result<bool> {
-        let payload = serde_json::to_string(tweet)?;
-        let created = tweet.created_at.timestamp();
-        let now = now_secs();
+        Ok(self.upsert_page(variant, std::slice::from_ref(tweet))? == 1)
+    }
+
+    /// [`upsert`](Self::upsert) for a whole fetched page in one transaction —
+    /// one WAL commit instead of one per row. Returns how many rows were new.
+    pub fn upsert_page(&mut self, variant: FeedVariant, tweets: &[Tweet]) -> Result<usize> {
         let source = variant.as_source();
-        let seq = self.seq + 1;
-        let inserted = self.conn.execute(
-            "INSERT OR IGNORE INTO tweets
-                (rest_id, source, payload, created_at, ingest_seq, first_seen, filter_verdict)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'unclassified')",
-            params![tweet.rest_id, source, payload, created, seq, now],
-        )?;
-        if inserted == 1 {
-            self.seq = seq;
-            Ok(true)
-        } else {
-            self.conn.execute(
-                "UPDATE tweets SET payload = ?3, created_at = ?4 WHERE rest_id = ?1 AND source = ?2",
-                params![tweet.rest_id, source, payload, created],
+        let now = now_secs();
+        let mut seq = self.seq;
+        let mut new_rows = 0;
+        let tx = self.conn.transaction()?;
+        {
+            let mut insert = tx.prepare_cached(
+                "INSERT OR IGNORE INTO tweets
+                    (rest_id, source, payload, created_at, ingest_seq, first_seen, filter_verdict)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'unclassified')",
             )?;
-            Ok(false)
+            let mut refresh = tx.prepare_cached(
+                "UPDATE tweets SET payload = ?3, created_at = ?4 WHERE rest_id = ?1 AND source = ?2",
+            )?;
+            for tweet in tweets {
+                let payload = serde_json::to_string(tweet)?;
+                let created = tweet.created_at.timestamp();
+                if insert.execute(params![
+                    tweet.rest_id,
+                    source,
+                    payload,
+                    created,
+                    seq + 1,
+                    now
+                ])? == 1
+                {
+                    seq += 1;
+                    new_rows += 1;
+                } else {
+                    refresh.execute(params![tweet.rest_id, source, payload, created])?;
+                }
+            }
         }
+        tx.commit()?;
+        self.seq = seq;
+        Ok(new_rows)
+    }
+
+    /// The stored copy of a tweet, from either variant.
+    pub fn tweet(&self, rest_id: &str) -> Option<Tweet> {
+        let payload: String = self
+            .conn
+            .query_row(
+                "SELECT payload FROM tweets WHERE rest_id = ?1 LIMIT 1",
+                params![rest_id],
+                |row| row.get(0),
+            )
+            .ok()?;
+        serde_json::from_str(&payload).ok()
     }
 
     /// The rubric hash the stored verdicts were classified under, if any
@@ -187,10 +221,32 @@ impl FeedStore {
         rest_id: &str,
         decision: FilterDecision,
     ) -> Result<()> {
-        self.conn.execute(
-            "UPDATE tweets SET filter_verdict = ?3 WHERE rest_id = ?1 AND source = ?2",
-            params![rest_id, variant.as_source(), verdict_to_str(Some(decision))],
-        )?;
+        self.update_verdicts(variant, &[(rest_id, decision)])
+    }
+
+    /// Records several verdicts in one transaction.
+    pub fn update_verdicts(
+        &mut self,
+        variant: FeedVariant,
+        verdicts: &[(&str, FilterDecision)],
+    ) -> Result<()> {
+        if verdicts.is_empty() {
+            return Ok(());
+        }
+        let tx = self.conn.transaction()?;
+        {
+            let mut update = tx.prepare_cached(
+                "UPDATE tweets SET filter_verdict = ?3 WHERE rest_id = ?1 AND source = ?2",
+            )?;
+            for (rest_id, decision) in verdicts {
+                update.execute(params![
+                    rest_id,
+                    variant.as_source(),
+                    verdict_to_str(Some(*decision))
+                ])?;
+            }
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -542,6 +598,32 @@ mod tests {
         FeedStore::open_writer(&dir.path().join("feed.db"))
             .unwrap()
             .expect("writer lock should be free")
+    }
+
+    #[test]
+    fn a_page_is_stored_in_one_go_and_readable_by_id() {
+        let dir = TempDir::new().unwrap();
+        let mut s = FeedStore::open_writer(&dir.path().join("feed.db"))
+            .unwrap()
+            .unwrap();
+        let page = vec![tweet("1", 100), tweet("2", 200)];
+        assert_eq!(s.upsert_page(FeedVariant::ForYou, &page).unwrap(), 2);
+        assert_eq!(s.upsert_page(FeedVariant::ForYou, &page).unwrap(), 0);
+        s.update_verdicts(
+            FeedVariant::ForYou,
+            &[("1", FilterDecision::Hide), ("2", FilterDecision::Keep)],
+        )
+        .unwrap();
+        let stored = s.read_page(FeedVariant::ForYou, None, 10).unwrap();
+        let verdicts: Vec<_> = stored
+            .items
+            .iter()
+            .map(|i| (i.tweet.rest_id.as_str(), i.verdict))
+            .collect();
+        assert!(verdicts.contains(&("1", Some(FilterDecision::Hide))));
+        assert!(verdicts.contains(&("2", Some(FilterDecision::Keep))));
+        assert_eq!(s.tweet("2").map(|t| t.rest_id), Some("2".to_string()));
+        assert!(s.tweet("missing").is_none());
     }
 
     #[test]

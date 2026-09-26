@@ -29,11 +29,12 @@ pub struct ClassifyResponse {
 /// `POST /api/classify` — batch tweet classification for callers that
 /// already have full tweet text, not just an id (the browser extension: it
 /// walks X's own GraphQL responses and has the text right there, so sending
-/// it directly skips a redundant GraphQL refetch through `llm::fetch_tweet`). Reuses the exact same `FilterCache`/rate-limited
-/// `ClassifierHandle` the TUI and background ingest worker share, so a
-/// verdict computed here is visible everywhere else and vice versa. A tweet
-/// the backend failed to classify is left out of `verdicts` entirely, so the
-/// caller keeps it visible and can ask again later.
+/// it directly skips a redundant GraphQL refetch through `llm::fetch_tweet`).
+/// Reuses the exact same `FilterCache`/rate-limited `ClassifierHandle` the
+/// TUI and background ingest worker share, so a verdict computed here is
+/// visible everywhere else and vice versa. A tweet the backend failed to
+/// classify is left out of `verdicts` entirely, so the caller keeps it
+/// visible and can ask again later.
 pub async fn classify(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ClassifyRequest>,
@@ -72,10 +73,13 @@ pub async fn classify(
         .filter_map(|(id, decision)| decision.map(|d| (id, d)))
         .collect();
     if !computed.is_empty() {
-        let mut cache = state.filter_cache.lock().await;
-        for (id, decision) in &computed {
-            cache.put_if_current_rubric(&rubric_snapshot, id, *decision);
-        }
+        let batch: Vec<(&str, FilterDecision)> =
+            computed.iter().map(|(id, d)| (id.as_str(), *d)).collect();
+        state
+            .filter_cache
+            .lock()
+            .await
+            .put_many_if_current_rubric(&rubric_snapshot, &batch);
     }
     verdicts.extend(computed);
 

@@ -4189,6 +4189,7 @@ dependencies = [
  "hmac",
  "image",
  "libc",
+ "lru",
  "mime_guess",
  "pbkdf2",
  "rand 0.9.3",

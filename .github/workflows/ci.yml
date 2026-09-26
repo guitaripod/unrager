@@ -58,9 +58,13 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets ${{ matrix.flavor.features }} -- -D warnings
 
+      # macOS runners default to 256 open files, which ~500 tests running in
+      # parallel (each opening sqlite files and sockets) can exhaust.
       - name: cargo test
         if: matrix.flavor.name == 'full (default)'
-        run: cargo test --workspace --all-targets
+        run: |
+          ulimit -n 4096
+          cargo test --workspace --all-targets
 
       # Smoke the binary — verifies the CLI dispatch still compiles and
       # subcommands parse. We can't actually start `unrager serve` without

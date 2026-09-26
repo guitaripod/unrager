@@ -1,7 +1,7 @@
 import Foundation
 
-/// `HTTPTransport` over `URLSession`. Cross-platform (Foundation only), so both
-/// the iOS and macOS apps share it.
+/// `HTTPTransport` over `URLSession`, Foundation only, so the package's tests
+/// run on a Mac host as well as in the iOS app.
 public final class URLSessionTransport: HTTPTransport {
     let session: URLSession
     let streamSession: URLSession

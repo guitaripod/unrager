@@ -6,10 +6,10 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+## [0.24.0] — 2026-09-27
+
 - **`unrager eval --posts` measures your model on your own posts.** Label posts from your feed in a file (`{"expect": "hide"|"keep"|"either", "text": "@handle (Name): …"}` per line) and eval judges them against your own rules instead of the bundled made-up posts against the default ones, with the same scorecard, `--mistakes`, `--model` and `--strictness`. Real posts are harder than made-up ones: on 1,049 labelled posts from one feed, Qwen3 4B, the default, hid 5% of good posts and caught 64% of rage, while a 27B model hid a quarter of the good ones.
-
 - **A reply to a hidden post is hidden with it, so For you no longer shows replies answering nothing.** For you often shows a post together with a reply from someone you follow; when unrager hid the post, the reply stayed on its own, cut off from what it answered. Replies under a hidden post in such a conversation are now hidden too, and wait out of view while that post is being judged, so they don't flash up first. With *Show hidden posts* on they're labelled "Hidden: reply to a hidden post"; showing the post brings its replies back, and a reply you chose to show, or a conversation you're part of, is never hidden this way.
-
 - **A Not interested button on every For you post does what X's "Not interested in this post" does, in one click.** It sits in the post's header next to X's Grok button, a small frown in X's own colours. Clicking it picks *Not interested in this post* from the post's ⋯ menu without the menu ever showing, so X gets the same feedback, swaps the post for its usual confirmation and keeps its Undo and "Show fewer posts from" follow-ups. It appears only on posts X offers that choice for (For you, not Following, not ads) and not while filtering is paused; when X's menu doesn't have the item, the menu closes and the button turns red for a moment.
 
 ## [0.23.0] — 2026-09-27
@@ -250,7 +250,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.23.0...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.24.0...HEAD
+[0.24.0]: https://github.com/guitaripod/unrager/releases/tag/0.24.0
 [0.23.0]: https://github.com/guitaripod/unrager/releases/tag/0.23.0
 [0.22.0]: https://github.com/guitaripod/unrager/releases/tag/0.22.0
 [0.21.1]: https://github.com/guitaripod/unrager/releases/tag/0.21.1

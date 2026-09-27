@@ -410,10 +410,8 @@ impl App {
         whisper::start_poll_loop(tx.clone());
         super::app_fetch::spawn_update_check(tx.clone());
 
-        if !crate::tui::demo::is_demo_mode() {
-            let warm_client = client.clone();
-            tokio::spawn(async move { warm_client.warm_transaction_key().await });
-        }
+        let warm_client = client.clone();
+        tokio::spawn(async move { warm_client.warm_transaction_key().await });
 
         let media = MediaRegistry::new();
         let background = Background::new();

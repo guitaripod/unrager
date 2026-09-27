@@ -67,6 +67,10 @@ pub struct GqlClient {
     /// them.
     ingest_rate_limit_until: Mutex<Option<std::time::Instant>>,
     transaction_key: Mutex<Option<TransactionKeyMaterial>>,
+    /// Set for `unrager demo`: every request fails with [`Error::Offline`]
+    /// before anything is sent, so a demo never reaches X or reads the
+    /// browser's login.
+    offline: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -113,7 +117,24 @@ impl GqlClient {
             about_rate_limit_until: Mutex::new(None),
             ingest_rate_limit_until: Mutex::new(None),
             transaction_key: Mutex::new(None),
+            offline: false,
         })
+    }
+
+    /// A client that never contacts X, for `unrager demo`'s bundled feed.
+    pub fn offline(store: QueryIdStore, cache_path: PathBuf) -> Result<Self> {
+        Ok(Self {
+            offline: true,
+            ..Self::new(XSession::default(), store, cache_path)?
+        })
+    }
+
+    fn ensure_online(&self) -> Result<()> {
+        if self.offline {
+            Err(Error::Offline)
+        } else {
+            Ok(())
+        }
     }
 
     pub async fn get(&self, op: Operation, variables: &Value, features: &Value) -> Result<Value> {
@@ -142,6 +163,7 @@ impl GqlClient {
     /// 429s land in the shared write bucket; a 401/403 triggers the same
     /// browser session re-extraction and single retry as GraphQL calls.
     pub async fn post_form_1_1(&self, path: &str, form: &[(&str, &str)]) -> Result<Value> {
+        self.ensure_online()?;
         match self.post_form_once(path, form).await {
             Ok(v) => Ok(v),
             Err(signed) if is_auth_failure(&signed.error) => {
@@ -235,6 +257,7 @@ impl GqlClient {
         features: &Value,
         background: bool,
     ) -> Result<Value> {
+        self.ensure_online()?;
         match self
             .call_once(&method, op, variables, features, background)
             .await
@@ -387,6 +410,7 @@ impl GqlClient {
     ) -> Result<String> {
         const UPLOAD_URL: &str = "https://upload.x.com/i/media/upload.json";
         const CHUNK_SIZE: usize = 4 * 1024 * 1024;
+        self.ensure_online()?;
         let (session, _) = self.session_snapshot();
 
         let init = reqwest::multipart::Form::new()
@@ -544,9 +568,6 @@ impl GqlClient {
     /// [`SESSION_REFRESH_COOLDOWN`] so a persistent non-cookie 403 doesn't
     /// re-copy and re-decrypt the browser's cookie DB on every call.
     async fn try_refresh_session(&self, request_generation: u64) -> bool {
-        if std::env::var_os("UNRAGER_DEMO").is_some() {
-            return false;
-        }
         let mut last_failed_attempt = self.session_refresh.lock().await;
         let (stale, generation) = self.session_snapshot();
         if generation != request_generation {
@@ -589,6 +610,9 @@ impl GqlClient {
     /// failure must not leave the key unavailable for the whole process life.
     pub async fn warm_transaction_key(&self) {
         const BACKOFFS: [u64; 5] = [5, 15, 30, 60, 120];
+        if self.offline {
+            return;
+        }
         for (attempt, delay) in std::iter::once(0)
             .chain(BACKOFFS.iter().copied())
             .enumerate()
@@ -1047,7 +1071,7 @@ fn truncate(s: &str, max_bytes: usize) -> String {
 mod tests {
     use super::{Error, GqlClient, Instant, is_auth_failure, needs_query_id_refresh, truncate};
     use crate::auth::XSession;
-    use crate::gql::query_ids::QueryIdStore;
+    use crate::gql::query_ids::{Operation, QueryIdStore};
 
     fn status_err(status: u16) -> Error {
         Error::GraphqlStatus {
@@ -1071,6 +1095,42 @@ mod tests {
             std::env::temp_dir().join("unrager-client-test-query-ids.json"),
         )
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_offline_client_never_sends_a_request() {
+        let client = GqlClient::offline(
+            QueryIdStore::with_fallbacks(),
+            std::env::temp_dir().join("unrager-offline-test-query-ids.json"),
+        )
+        .unwrap();
+        let empty = serde_json::json!({});
+        let quick = std::time::Duration::from_millis(200);
+
+        let read = tokio::time::timeout(
+            quick,
+            client.get(Operation::AboutAccountQuery, &empty, &empty),
+        )
+        .await
+        .expect("an offline read returns without waiting on the network");
+        assert!(matches!(read, Err(Error::Offline)));
+        let write = tokio::time::timeout(
+            quick,
+            client.post_form_1_1("/i/api/1.1/friendships/create.json", &[]),
+        )
+        .await
+        .expect("an offline write returns without waiting on the network");
+        assert!(matches!(write, Err(Error::Offline)));
+        let upload = tokio::time::timeout(
+            quick,
+            client.upload_media_session(b"img", "image/png", "tweet_image"),
+        )
+        .await
+        .expect("an offline upload returns without waiting on the network");
+        assert!(matches!(upload, Err(Error::Offline)));
+        tokio::time::timeout(quick, client.warm_transaction_key())
+            .await
+            .expect("an offline client doesn't scrape x.com for a signing key");
     }
 
     #[test]

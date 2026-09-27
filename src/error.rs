@@ -57,6 +57,9 @@ pub enum Error {
     #[error("config load failed: {0}")]
     Config(String),
 
+    #[error("the demo never contacts X; run `unrager` for your own timeline")]
+    Offline,
+
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
 

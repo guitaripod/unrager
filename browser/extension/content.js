@@ -4,6 +4,9 @@
 /// exactly as X rendered it.
 (() => {
   const CHUNK = 10;
+  /// The top of a timeline goes to the model on its own, so what's on screen
+  /// first is judged, and shown, first.
+  const FIRST_CHUNK = 5;
   const RETRY_DELAY_MS = 20000;
   const MAX_ATTEMPTS = 3;
   /// Posts remembered with their text, so resuming or a rules change can
@@ -13,9 +16,22 @@
   /// answers a page well within it; when it's still loading (or down), the
   /// post is shown anyway once this runs out.
   const HOLD_MS = 2500;
+  /// How long a post already in view takes to fold away when a late verdict
+  /// hides it, and a held one to fade in.
+  const FOLD_MS = 220;
+  const ENTER_MS = 200;
+  /// Once the timeline has waited this long, its loading edge shows the
+  /// spinner at once as it moves down, rather than fading it in again.
+  const EDGE_STEADY_MS = 450;
+  /// How long, and for how many calm frames, the post in view is held in
+  /// place after posts above it come or go: X moves its cells a frame or two
+  /// after one changes size.
+  const SETTLE_MS = 1000;
+  const SETTLE_FRAMES = 6;
   /// A tab asks for the model to be loaded at most this often; the server
   /// skips one that just answered anyway.
   const WARM_EVERY_MS = 30000;
+  const MAX_ON_SCREEN = 1000;
   /// How long the Not interested button waits for X's menu to open or close.
   const MENU_WAIT_MS = 1500;
   const MENU = '#layers [role="menu"]';
@@ -46,12 +62,29 @@
   /// Replies kept out of view while the post above them waits for its
   /// verdict, with when that post is shown anyway.
   const threadHolds = new Map();
+  /// Posts that have been on screen, by the id their cell shows. They're
+  /// never held back again: nothing already read disappears to wait.
+  const onScreen = new Set();
+  /// Cells without a post (Who to follow, X's own spinner) that have been
+  /// on screen.
+  const cellsOnScreen = new WeakSet();
+  /// Whether each cell showed its post after the last pass, to tell which
+  /// ones changed.
+  const lastShown = new WeakMap();
+  /// Cells folding out of view, with their animation.
+  const folding = new Map();
   const warned = new Set();
   const health = { failing: false, lastError: null, shapeProblem: null };
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   let generation = 0;
   let lastBadge = "";
   let marksOnPage = false;
   let contextTarget = null;
+  /// When the timeline's loading edge appeared, or 0 while there's none.
+  let waitingSince = 0;
+  /// The post kept in place while posts above it come and go.
+  let anchor = null;
+  let lastInput = 0;
   let lastWarm = 0;
 
   function state() {
@@ -333,6 +366,164 @@
     if (slot) slot.row.insertBefore(buildButton(caret, prompt, slot.gap), slot.before);
   }
 
+  /// The cells of the timeline on screen, top to bottom. A dialog X lays
+  /// over it (a photo with its replies) has cells of its own, left alone.
+  function timelineCells() {
+    const cell = '[data-testid="cellInnerDiv"]';
+    const column = document.querySelector('[data-testid="primaryColumn"]');
+    const inColumn = column ? column.querySelectorAll(cell) : [];
+    return [...(inColumn.length ? inColumn : document.querySelectorAll(cell))];
+  }
+
+  function wasOnScreen(cell, id) {
+    return id === null ? cellsOnScreen.has(cell) : onScreen.has(id);
+  }
+
+  function noteOnScreen(cell, id) {
+    if (id === null) {
+      cellsOnScreen.add(cell);
+      return;
+    }
+    if (onScreen.has(id)) return;
+    onScreen.add(id);
+    if (onScreen.size > MAX_ON_SCREEN) onScreen.delete(onScreen.values().next().value);
+  }
+
+  /// What each cell should show, top to bottom. A new post shows once it's
+  /// judged and every new post above it has shown or been hidden, so the
+  /// timeline fills in from the top and nothing lands above a post already
+  /// on screen; the first one still waiting is the loading edge. A post
+  /// that's been on screen is never held again.
+  function planCells(cells, filtering) {
+    let edge = -1;
+    const rows = cells.map((cell, i) => {
+      const id = cellTweetId(cell);
+      const info = id === null ? undefined : hidden.get(id);
+      const waiting = id !== null && (holds.has(id) || threadHolds.has(id));
+      let mark = null;
+      if (info) mark = "hidden";
+      else if (!wasOnScreen(cell, id) && (waiting || (filtering && edge >= 0))) mark = "held";
+      if (filtering && mark === "held" && edge < 0) edge = i;
+      return { cell, id, info, mark, shows: !filtering || mark === null };
+    });
+    return { rows, edge };
+  }
+
+  function hasNote(cell) {
+    const first = cell.firstElementChild;
+    return !!first && first.classList.contains("unrager-note");
+  }
+
+  /// The first cell in view when it reaches above the top of the window, so
+  /// posts before it are out of sight above; null when the timeline's top
+  /// is in view, where posts arriving above should push it down.
+  function firstInView(rows) {
+    for (const { cell } of rows) {
+      const box = cell.getBoundingClientRect();
+      if (box.height > 0 && box.bottom > 0) {
+        return box.top <= 0 ? { cell, top: box.top, since: performance.now(), until: 0, calm: 0, running: false } : null;
+      }
+    }
+    return null;
+  }
+
+  /// Reads, before anything is written, which cells change and where: a
+  /// post in view that a late verdict hides folds away, and returns whether
+  /// posts coming or going above the one in view need making up for.
+  function measure(rows, home, filtering) {
+    const motion = home && !reducedMotion.matches;
+    let first = -1;
+    rows.forEach((row, i) => {
+      const was = lastShown.get(row.cell);
+      const noted = hasNote(row.cell) !== (!!row.info && settings.reveal && !settings.paused);
+      row.changed = was !== undefined && (was !== row.shows || noted);
+      row.enter = motion && row.changed && row.shows && was === false;
+      if (row.changed && first < 0) first = i;
+    });
+    if (first < 0 || !home) return false;
+    for (const row of rows) {
+      if (!row.changed || row.shows || row.mark !== "hidden" || !filtering || !motion || folding.has(row.cell)) continue;
+      const box = row.cell.getBoundingClientRect();
+      if (box.height > 0 && box.bottom > 0 && box.top < window.innerHeight) {
+        row.fold = true;
+        row.height = box.height;
+      }
+    }
+    const kept =
+      anchor && anchor.running && anchor.cell.isConnected && rows.some((r) => r.cell === anchor.cell)
+        ? anchor
+        : firstInView(rows);
+    if (!kept || rows.findIndex((r) => r.cell === kept.cell) <= first) return false;
+    anchor = kept;
+    return true;
+  }
+
+  /// Holds the post in view where the reader had it while posts above it
+  /// come or go: X positions its cells itself, a frame or two after one
+  /// changes size, where the browser's own scroll anchoring can't follow.
+  /// Stops as soon as the reader scrolls, or once nothing has moved for a
+  /// few frames.
+  function keepInPlace() {
+    const current = anchor;
+    current.until = performance.now() + SETTLE_MS;
+    current.calm = 0;
+    if (current.running) return;
+    current.running = true;
+    const step = () => {
+      if (anchor !== current) return;
+      const box = current.cell.isConnected ? current.cell.getBoundingClientRect() : null;
+      const done = !box || !box.height || lastInput > current.since || performance.now() > current.until;
+      if (!done) {
+        const drift = box.top - current.top;
+        if (Math.abs(drift) >= 0.5) {
+          window.scrollBy(0, drift);
+          current.calm = 0;
+        } else {
+          current.calm += 1;
+        }
+      }
+      if (done || current.calm >= SETTLE_FRAMES) {
+        anchor = null;
+        return;
+      }
+      requestAnimationFrame(step);
+    };
+    step();
+  }
+
+  /// Folds a post in view away, so the posts under it slide up rather than
+  /// jump, and marks it hidden once it's flat.
+  function foldAway(cell, height) {
+    cell.dataset.unragerFolding = "";
+    const animation = cell.animate(
+      [
+        { height: `${height}px`, opacity: 1 },
+        { height: "0px", opacity: 0 },
+      ],
+      { duration: FOLD_MS, easing: "cubic-bezier(0.4, 0, 0.2, 1)", fill: "forwards" }
+    );
+    folding.set(cell, animation);
+    animation.finished.then(
+      () => {
+        if (folding.get(cell) !== animation) return;
+        folding.delete(cell);
+        delete cell.dataset.unragerFolding;
+        const id = cellTweetId(cell);
+        if (id !== null && hidden.has(id)) cell.dataset.unrager = "hidden";
+        animation.cancel();
+        scheduleApply();
+      },
+      () => {}
+    );
+  }
+
+  function unfold(cell) {
+    const animation = folding.get(cell);
+    folding.delete(cell);
+    delete cell.dataset.unragerFolding;
+    animation.cancel();
+  }
+
   /// Marks cells instead of removing them: X's React tree owns these nodes,
   /// and pulling one out from under it breaks its next unmount. Re-checking
   /// every cell lets a recycled cell showing a different post come back.
@@ -340,28 +531,66 @@
     const now = Date.now();
     for (const [domId, until] of holds) if (until <= now) holds.delete(domId);
     for (const [domId, until] of threadHolds) if (until <= now) threadHolds.delete(domId);
-    root.toggleAttribute("data-unrager-away", !onHome());
-    const buttons = offers.size > 0 && !settings.paused && onHome() && onForYou();
+    const home = onHome();
+    root.toggleAttribute("data-unrager-away", !home);
+    const filtering = home && !settings.paused && !settings.reveal;
+    const buttons = offers.size > 0 && !settings.paused && home && onForYou();
+    const { rows, edge } = planCells(timelineCells(), filtering);
+    const settle = measure(rows, home, filtering);
+    if (edge < 0) waitingSince = 0;
+    else if (!waitingSince) waitingSince = now;
+    const edgeShows = edge >= 0 && rows.slice(edge + 1).every((r) => !r.shows);
+    const edgeState = now - waitingSince > EDGE_STEADY_MS ? "steady" : "";
+    const entering = [];
     let marks = false;
-    for (const cell of document.querySelectorAll('[data-testid="cellInnerDiv"]')) {
-      const id = cellTweetId(cell);
-      const info = id === null ? undefined : hidden.get(id);
-      const mark = info ? "hidden" : id !== null && (holds.has(id) || threadHolds.has(id)) ? "held" : null;
+    rows.forEach((row, i) => {
+      const { cell, id, info, mark } = row;
+      if (folding.has(cell)) {
+        if (mark === "hidden" && filtering) {
+          marks = true;
+          return;
+        }
+        unfold(cell);
+      }
+      if (row.fold) {
+        foldAway(cell, row.height);
+        lastShown.set(cell, false);
+        marks = true;
+        return;
+      }
       if (mark) {
         if (cell.dataset.unrager !== mark) cell.dataset.unrager = mark;
         marks = true;
       } else if (cell.dataset.unrager) {
         delete cell.dataset.unrager;
       }
+      if (i === edge && edgeShows) {
+        if (cell.dataset.unragerEdge !== edgeState) cell.dataset.unragerEdge = edgeState;
+      } else if (cell.dataset.unragerEdge !== undefined) {
+        delete cell.dataset.unragerEdge;
+      }
+      if (row.enter) {
+        cell.dataset.unragerEnter = "";
+        entering.push(cell);
+      }
       if (syncNote(cell, info)) marks = true;
       syncButton(cell, id, buttons && (!mark || (mark === "hidden" && settings.reveal)));
+      if (home && row.shows) noteOnScreen(cell, id);
+      lastShown.set(cell, row.shows);
+    });
+    if (entering.length) {
+      setTimeout(() => {
+        for (const cell of entering) delete cell.dataset.unragerEnter;
+      }, ENTER_MS + 100);
     }
+    if (settle) keepInPlace();
     marksOnPage = marks;
   }
 
   let scheduled = false;
   function scheduleApply() {
-    if (scheduled || (hidden.size === 0 && holds.size === 0 && threadHolds.size === 0 && !marksOnPage && offers.size === 0)) {
+    const idle = hidden.size === 0 && holds.size === 0 && threadHolds.size === 0 && folding.size === 0;
+    if (scheduled || (idle && !marksOnPage && offers.size === 0)) {
       return;
     }
     scheduled = true;
@@ -553,7 +782,11 @@
   function classify(tweets) {
     const fresh = tweets.filter((t) => !t.own && !verdicts.has(t.id) && !pending.has(t.id));
     for (const t of fresh) pending.add(t.id);
-    for (let i = 0; i < fresh.length; i += CHUNK) classifyChunk(fresh.slice(i, i + CHUNK));
+    for (let i = 0; i < fresh.length; ) {
+      const size = i === 0 ? FIRST_CHUNK : CHUNK;
+      classifyChunk(fresh.slice(i, i + size));
+      i += size;
+    }
   }
 
   /// Asks unrager to load the model before X's posts arrive: after an idle
@@ -693,6 +926,17 @@
     if (settingsLoaded) warm();
     else ready.then(warm);
   });
+
+  /// A reader scrolling takes over from keepInPlace at once.
+  for (const type of ["wheel", "touchmove", "keydown", "mousedown"]) {
+    window.addEventListener(
+      type,
+      () => {
+        lastInput = performance.now();
+      },
+      { capture: true, passive: true }
+    );
+  }
 
   new MutationObserver(scheduleApply).observe(root, { childList: true, subtree: true });
 

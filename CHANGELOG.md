@@ -6,6 +6,7 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **For you fills in from the top instead of jumping around while posts are checked.** Posts the server had already judged used to appear first, and the rest popped in between them as the model answered, pushing what you were reading down the page. A new post now shows only once every new post above it has been shown or hidden, all of the first screen together, and a small spinner marks where the timeline continues while the model reads. A post hidden after it was already on screen (its verdict came late) folds away instead of vanishing, and posts coming or going above the one you're reading no longer move it.
 - **The model starts loading as x.com opens.** After an idle spell the filter's model can take a second or two to load, which the first posts spent waiting. The extension now asks unrager to load it as x.com opens and whenever X fetches the timeline (`POST /api/filter/warm`), so it's usually ready before the posts arrive. A model that answered in the last minute isn't asked again.
 
 ## [0.24.0] — 2026-09-27

@@ -50,7 +50,7 @@ The installer runs `unrager setup`, which checks that your model answers, starts
    - Linux: `~/.local/share/unrager/browser-extension`
    - macOS: `~/Library/Application Support/unrager/browser-extension`
 
-Open x.com. Posts that match your rules never show up in For you and Following: each new post waits out of view for the moment your model takes to read it, and the unrager icon counts the ones it hid.
+Open x.com. Posts that match your rules never show up in For you and Following: the timeline fills in from the top as your model reads each new post, which takes a moment per page, and the unrager icon counts the ones it hid.
 
 <details>
 <summary><strong>Other ways to install</strong></summary>

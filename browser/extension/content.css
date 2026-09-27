@@ -3,6 +3,65 @@ html:not([data-unrager-paused]):not([data-unrager-reveal]):not([data-unrager-awa
   display: none !important;
 }
 
+html:not([data-unrager-paused]):not([data-unrager-reveal]):not([data-unrager-away])
+  [data-testid="cellInnerDiv"][data-unrager="held"][data-unrager-edge] {
+  display: block !important;
+  height: 64px !important;
+  overflow: hidden !important;
+}
+
+html:not([data-unrager-paused]):not([data-unrager-reveal]):not([data-unrager-away])
+  [data-testid="cellInnerDiv"][data-unrager="held"][data-unrager-edge] > * {
+  visibility: hidden !important;
+}
+
+html:not([data-unrager-paused]):not([data-unrager-reveal]):not([data-unrager-away])
+  [data-testid="cellInnerDiv"][data-unrager="held"][data-unrager-edge]::before {
+  content: "";
+  display: block;
+  box-sizing: border-box;
+  width: 24px;
+  height: 24px;
+  margin: 20px auto;
+  border: 2.5px solid rgba(29, 155, 240, 0.2);
+  border-top-color: rgb(29, 155, 240);
+  border-radius: 50%;
+  animation: unrager-spin 0.8s linear infinite, unrager-appear 0.2s 0.25s both;
+}
+
+html:not([data-unrager-paused]):not([data-unrager-reveal]):not([data-unrager-away])
+  [data-testid="cellInnerDiv"][data-unrager="held"][data-unrager-edge="steady"]::before {
+  animation: unrager-spin 0.8s linear infinite;
+}
+
+[data-testid="cellInnerDiv"][data-unrager-folding] {
+  overflow: hidden !important;
+  pointer-events: none;
+}
+
+[data-testid="cellInnerDiv"][data-unrager-enter] {
+  animation: unrager-appear 0.2s ease-out;
+}
+
+@keyframes unrager-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes unrager-appear {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html:not([data-unrager-paused]):not([data-unrager-reveal]):not([data-unrager-away])
+    [data-testid="cellInnerDiv"][data-unrager="held"][data-unrager-edge]::before {
+    animation: unrager-spin 1.6s linear infinite;
+  }
+}
+
 html[data-unrager-reveal]:not([data-unrager-paused]):not([data-unrager-away])
   [data-testid="cellInnerDiv"][data-unrager="hidden"] > :not(.unrager-note) {
   opacity: 0.4;

@@ -10,11 +10,6 @@ Pre-launch and post-launch polish. Each item is a self-contained task an agent c
 
 These determine whether a new user's first 60 seconds end in "wow" or "uninstall." Every one of them is a known unknown until exercised on a clean machine.
 
-### [ ] Query ID scraper fails again
-**Goal:** `unrager doctor` reports a healthy scraper. As of 2026-09-27 it says "no main.*.js url found in any of 2 client shell routes": X changed its shell again, so the terminal client and the iPhone app's server run on cached/fallback IDs until they go stale. The extension is unaffected (it reads what x.com's own page fetches).
-**How:** find a route that still references the web bundle (or read the bundle URL from another asset), refresh `FALLBACK_QUERY_IDS`, and extend `examples/check_query_ids.rs` if the watch workflow missed it.
-**Done when:** doctor shows the scraper finding IDs and the fallback table matches the live bundle.
-
 ### [ ] Fresh-install smoke test on a clean Linux desktop
 **Goal:** confirm `curl -fsSL https://unrager.com/install.sh | bash` → `unrager setup` → Load unpacked → x.com filtering works end-to-end on a never-touched Ubuntu LTS desktop with Ollama.
 **How:** a throwaway VM with a desktop session (systemd user services need one). Run the one-liner, pull qwen3:4b-instruct, add the extension in Chrome, open x.com. Record every point where something asked for a dependency, printed a scary warning, or silently hung. File each as a GitHub issue with `first-run` label.
@@ -45,7 +40,7 @@ These determine whether a new user's first 60 seconds end in "wow" or "uninstall
 **Done when:** a signed build filters x.com in Firefox with the same popup.
 
 ### [ ] Site link check in a real paste context
-**Goal:** OG card renders on Twitter, Discord, and Slack previews; install snippet copy works; demo plays.
+**Goal:** midgarcorp.cc/unrager's OG card renders on Twitter, Discord, and Slack previews; install snippet copy works; demo plays.
 **How:** paste the site URL into each platform's compose box, confirm the preview. Copy the install snippet from the site in a real browser, paste into a shell, confirm it's what you expect (no smart quotes, no zero-width chars). Watch the hero demo on mobile Safari and Firefox, and flip its Show what it hid switch.
 **Done when:** all three platform previews look right; install-copy yields a clean bash-executable string.
 
@@ -85,3 +80,4 @@ These determine whether a new user's first 60 seconds end in "wow" or "uninstall
 - [x] **`unrager --help` readthrough** — `d74819e` — filled in `-n`, `--json`, `--max-pages`, `--product` help text across 7 subcommands.
 - [x] **Panic audit on common user paths** — `f0800b7` — audited every non-test `unwrap`/`expect`; documented the non-local invariant on `external.rs` viewer spawns with `.expect(...)`; no user-reachable panic remains.
 - [x] **Query ID rotation early-warning** — `23cd9fd` — `examples/check_query_ids.rs` + `.github/workflows/query-ids-watch.yml` cron that opens or refreshes a tracking issue on drift.
+- [x] **Query ID scraper fixed again** — `29a7211` — scrapes the signed-in shell first, follows the lazily loaded chunks, and every built-in ID was refreshed against the live bundle.

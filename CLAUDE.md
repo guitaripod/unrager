@@ -225,6 +225,8 @@ Integration tests for App state transitions use `tui/test_util.rs` which provide
 
 ## Demos
 
+The public landing page is https://midgarcorp.cc/unrager/, built from the midgarcorp site repo (`~/Dev/web/midgarcorp`, `src/pages/unrager.astro` and `src/components/landing/Unrager*.astro`; it deploys on push to that repo's master). `site/` here deploys unrager.com, which serves `install.sh`, the download badge and counts (`/api/*`) and an older copy of the landing page; product changes a visitor would notice belong on the midgarcorp page.
+
 README images (`assets/extension.png`, `popup.png`, `terminal.png`) are rendered from the landing page's mocks, with mocked posts rather than real accounts: `python3 site/og/assets.py` (Playwright). `site/og/render.py` renders the Open Graph card from `site/og/template.html`; the deploy workflow reruns it.
 
 VHS tapes in `demos/`. Regenerate with `vhs demos/<tape>.tape`. Requires `vhs`, `ttyd`, `ffmpeg`. All tapes use `UNRAGER_DISABLE_KITTY=1` because VHS renders via xterm.js which doesn't support kitty graphics.

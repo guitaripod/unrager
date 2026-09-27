@@ -15,6 +15,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "Takes the rage out of your x.com timeline with a local LLM: browser extension, terminal client and API server"
+homepage = "https://midgarcorp.cc/unrager/"
 license.workspace = true
 repository.workspace = true
 readme = "README.md"

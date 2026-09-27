@@ -6,7 +6,7 @@
   </p>
   <p align="center">
     <a href="https://crates.io/crates/unrager"><img src="https://img.shields.io/crates/v/unrager?style=flat-square&label=crates.io&logo=rust&color=orange" alt="crates.io"></a>
-    <a href="https://unrager.com"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Funrager.com%2Fapi%2Fbadge&style=flat-square&cacheSeconds=300" alt="installs"></a>
+    <a href="https://midgarcorp.cc/unrager/"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Funrager.com%2Fapi%2Fbadge&style=flat-square&cacheSeconds=300" alt="installs"></a>
     <a href="https://github.com/guitaripod/unrager/actions"><img src="https://img.shields.io/github/actions/workflow/status/guitaripod/unrager/ci.yml?branch=master&style=flat-square&label=ci" alt="CI"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square" alt="GPL-3.0 License"></a>
   </p>

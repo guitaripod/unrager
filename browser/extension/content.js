@@ -32,6 +32,9 @@
   /// skips one that just answered anyway.
   const WARM_EVERY_MS = 30000;
   const MAX_ON_SCREEN = 1000;
+  /// Addresses X gives the dialogs it opens over the page you're on (a reply,
+  /// a photo), which stays on screen underneath.
+  const OVERLAY = /^\/(?:compose\/|[^/]+\/status\/\d+\/(?:photo|video)\/)/;
   /// How long the Not interested button waits for X's menu to open or close.
   const MENU_WAIT_MS = 1500;
   const MENU = '#layers [role="menu"]';
@@ -80,6 +83,8 @@
   let lastBadge = "";
   let marksOnPage = false;
   let contextTarget = null;
+  /// The page on screen under any dialog.
+  let page = null;
   /// When the timeline's loading edge appeared, or 0 while there's none.
   let waitingSince = 0;
   /// The post kept in place while posts above it come and go.
@@ -148,10 +153,32 @@
     return id ? id[1] : null;
   }
 
+  /// Whether a dialog covers the page, as opposed to a bar along its bottom
+  /// edge (a cookie notice) that can stay open while you move between pages.
+  function dialogOpen() {
+    for (const dialog of document.querySelectorAll('[aria-modal="true"]')) {
+      const box = dialog.getBoundingClientRect();
+      if (box.height > 0 && box.top < window.innerHeight / 2) return true;
+    }
+    return false;
+  }
+
+  /// Follows which page is on screen. X changes the address when it opens a
+  /// reply box or a photo over a page, which stays underneath, so neither an
+  /// overlay's address nor one that changed with a dialog open counts.
+  function trackPage() {
+    const path = window.location.pathname;
+    if (path === page || OVERLAY.test(path) || dialogOpen()) return;
+    page = path;
+  }
+
   /// Only the Home timelines are filtered. Anywhere else (a post you opened,
-  /// a profile, search) you went looking, so nothing is hidden there.
+  /// a profile, search) you went looking, so nothing is hidden there. A
+  /// dialog over Home keeps it filtered, so the timeline under a reply box
+  /// doesn't shift and is where you left it when the box closes.
   function onHome() {
-    return window.location.pathname === "/home";
+    trackPage();
+    return page === "/home";
   }
 
   /// The post a cell shows: its first permalink wrapping a <time>. A quoted
@@ -938,7 +965,10 @@
     );
   }
 
-  new MutationObserver(scheduleApply).observe(root, { childList: true, subtree: true });
+  new MutationObserver(() => {
+    trackPage();
+    scheduleApply();
+  }).observe(root, { childList: true, subtree: true });
 
   document.addEventListener("DOMContentLoaded", publish, { once: true });
   console.info("[unrager] active");

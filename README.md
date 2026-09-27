@@ -18,6 +18,8 @@
 
 unrager is a browser extension for the x.com you already use. As X loads your Home timeline, a language model running on your computer reads each post and hides the ones that match your rules: the outrage, the ratio bait, the doom and the engagement farming. You keep X's own app, your account and every feature; you lose the posts that exist to make you angry.
 
+It isn't perfect, and it shows its work. Tested on 1,000 real posts from one person's feed, against their own rules, the default model took out about two in three rage posts and hid about one good post in twenty. Every post it hides is one switch away, labelled with the rule that caught it, and one click brings it back for good. The model is small on purpose: 2.5 GB, it runs on an ordinary laptop, and bigger ones hide more of what you wanted to see (a 27B model hid one good post in four).
+
 Nothing leaves your computer. The extension talks to unrager on `localhost`, unrager talks to your model, and the model never sees anything but the post it's judging. It works with [Ollama](https://ollama.com) out of the box, or with any server that speaks the OpenAI chat API: LM Studio, vLLM, llama.cpp, SGLang, llama-swap.
 
 ## Install

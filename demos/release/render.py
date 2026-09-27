@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render the release video: every frame of release.html in headless Chromium, the score from score.py, one MP4.
 
-    python3 demos/release/render.py                  # full render into target/release-video/
+    python3 demos/release/render.py                  # full render into target/release-video/unrager.mp4
     python3 demos/release/render.py --stills 1 4.5   # a PNG of those moments, for checking a change
     python3 demos/release/render.py --preview        # a quick 30 fps, fast-encode pass
 """
@@ -11,7 +11,6 @@ import http.server
 import json
 import multiprocessing
 import pathlib
-import re
 import resource
 import shutil
 import subprocess
@@ -53,7 +52,7 @@ def open_page(p):
         ignore_default_args=["--disable-dev-shm-usage"],
     )
     page = browser.new_page(viewport={"width": SIZE, "height": SIZE}, device_scale_factor=1)
-    page.goto(f"http://127.0.0.1:{PORT}/release.html?version={version()}", wait_until="networkidle")
+    page.goto(f"http://127.0.0.1:{PORT}/release.html", wait_until="networkidle")
     page.wait_for_function("window.__ready === true")
     return browser, page
 
@@ -115,11 +114,6 @@ def stills(times):
         browser.close()
 
 
-def version() -> str:
-    cargo = (ROOT / "Cargo.toml").read_text()
-    return re.search(r'^version\s*=\s*"([^"]+)"', cargo, re.M).group(1)
-
-
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--stills", type=float, nargs="*")
@@ -157,7 +151,7 @@ def main() -> int:
         score.render(facts["cues"], facts["scenes"], duration, wav)
         (OUT / "cues.json").write_text(json.dumps(facts["cues"], indent=1))
 
-        out = args.out or OUT / f"unrager-{version()}{'-preview' if args.preview else ''}.mp4"
+        out = args.out or OUT / f"unrager{'-preview' if args.preview else ''}.mp4"
         video = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23"] if args.preview else [
             "-c:v", "libx264", "-preset", "slow", "-crf", "15", "-profile:v", "high", "-level:v", "4.2",
             "-tune", "animation", "-x264-params", "keyint=120:min-keyint=60:colorprim=bt709:transfer=bt709:colormatrix=bt709",

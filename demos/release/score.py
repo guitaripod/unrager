@@ -12,23 +12,19 @@ PITCH = {"C": 0, "C#": 1, "D": 2, "D#": 3, "E": 4, "F": 5, "F#": 6, "G": 7, "G#"
 
 CHORDS = {
     "calm": ["D2", "A2", "F#3", "C#4", "E4"],
-    "held": ["B1", "F#2", "D3", "A3", "C#4"],
-    "why": ["G1", "D2", "B2", "F#3", "A3"],
-    "call": ["E2", "B2", "D3", "F#3", "G3"],
-    "strict": ["F#2", "D3", "A3", "C#4", "E4"],
-    "model": ["G2", "D3", "F#3", "B3", "C#4"],
-    "install": ["A1", "E2", "A2", "D3", "E3"],
+    "why": ["B1", "F#2", "D3", "A3", "C#4"],
+    "ni": ["G1", "D2", "B2", "F#3", "A3"],
+    "numbers": ["E2", "B2", "D3", "F#3", "G3"],
+    "local": ["A1", "E2", "A2", "D3", "E3"],
     "resolve": ["A1", "E2", "A2", "C#3", "E3"],
     "end": ["D2", "A2", "F#3", "C#4", "E4"],
 }
 SPARKLE = {
     "calm": ["F#5", "A5", "C#6", "E5"],
-    "held": ["B4", "D5", "F#5", "C#6"],
-    "why": ["B4", "D5", "F#5", "A5"],
-    "call": ["E5", "G5", "B5", "F#5"],
-    "strict": ["D5", "F#5", "A5", "E5"],
-    "model": ["B4", "D5", "F#5", "C#6"],
-    "install": ["A4", "D5", "E5", "A5"],
+    "why": ["B4", "D5", "F#5", "C#6"],
+    "ni": ["B4", "D5", "F#5", "A5"],
+    "numbers": ["E5", "G5", "B5", "F#5"],
+    "local": ["A4", "D5", "E5", "A5"],
     "end": ["D5", "F#5", "A5", "E5"],
 }
 
@@ -225,13 +221,13 @@ def render(cues, scenes, duration: float, path) -> None:
     noisy = crowd(noise_len / SR) * loud[:noise_len] * ramp(noise_len, int(0.02 * SR), int(0.1 * SR))
     mix.add(0, noisy, gain=0.62, send=0.1)
 
-    order = ["held", "why", "call", "strict", "model", "install", "end"]
+    order = ["why", "ni", "numbers", "local", "end"]
     starts = [("calm", first - 0.25)] + [(k, scenes[k]) for k in order]
-    install_mid = scenes["install"] + (scenes["end"] - scenes["install"]) * 0.55
+    install_mid = scenes["local"] + (scenes["end"] - scenes["local"]) * 0.55
     for i, (key, start) in enumerate(starts):
         stop = starts[i + 1][1] if i + 1 < len(starts) else duration - 0.6
-        if key == "install":
-            for part, a, b in (("install", start, install_mid), ("resolve", install_mid, stop)):
+        if key == "local":
+            for part, a, b in (("local", start, install_mid), ("resolve", install_mid, stop)):
                 at, sig = pad(CHORDS[part], a - 0.15, b + 0.1, attack=0.7, release=1.3)
                 mix.add_pad(at, sig, 0.32)
         else:
@@ -276,7 +272,15 @@ def render(cues, scenes, duration: float, path) -> None:
         elif kind == "arrive":
             mix.add(t, click(int(t * 1000), tone=5200, body=900, strength=0.35), gain=0.3, pan=-0.1)
         elif kind == "keep":
-            mix.add(t, blip(880, 1320, 0.18, 0.03), gain=0.05, send=0.3)
+            mix.add(t, pluck(hz("A5"), 0.9, 0.3), gain=0.12, pan=-0.1, send=0.4)
+            mix.add(t + 0.07, pluck(hz("D6"), 0.9, 0.3), gain=0.1, pan=0.1, send=0.4)
+        elif kind == "confirm":
+            mix.add(t, blip(520, 380, 0.22, 0.06), gain=0.09, send=0.3)
+            mix.add(t + 0.05, pluck(hz("F#5"), 1.0, 0.3), gain=0.1, send=0.45)
+        elif kind == "dim":
+            mix.add(t, blip(300, 180, 0.3, 0.1), gain=0.08, send=0.35)
+        elif kind == "flow":
+            mix.add(t, noise_sweep(9, 0.9, 700, 2400, 0.5), gain=0.12, pan=0.2, send=0.4)
         elif kind in ("click", "rclick"):
             mix.add(t, click(int(t * 997), tone=3000 if kind == "click" else 2600), gain=0.26, pan=0.1)
         elif kind == "toggle":

@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **The model starts loading as x.com opens.** After an idle spell the filter's model can take a second or two to load, which the first posts spent waiting. The extension now asks unrager to load it as x.com opens and whenever X fetches the timeline (`POST /api/filter/warm`), so it's usually ready before the posts arrive. A model that answered in the last minute isn't asked again.
+
 ## [0.24.0] — 2026-09-27
 
 - **`unrager eval --posts` measures your model on your own posts.** Label posts from your feed in a file (`{"expect": "hide"|"keep"|"either", "text": "@handle (Name): …"}` per line) and eval judges them against your own rules instead of the bundled made-up posts against the default ones, with the same scorecard, `--mistakes`, `--model` and `--strictness`. Real posts are harder than made-up ones: on 1,049 labelled posts from one feed, Qwen3 4B, the default, hid 5% of good posts and caught 64% of rage, while a 27B model hid a quarter of the good ones.

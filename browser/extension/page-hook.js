@@ -17,6 +17,10 @@
   const post = (op, body) =>
     document.dispatchEvent(new CustomEvent(`unrager:${op}`, { detail: body }));
 
+  /// Tells the content script a timeline is on its way, so the model can
+  /// load while X waits for it.
+  const loading = (op) => document.dispatchEvent(new CustomEvent("unrager:loading", { detail: op }));
+
   /// X's web client issues its GraphQL calls through XMLHttpRequest.
   function hookXhr() {
     const xhrOps = new WeakMap();
@@ -30,6 +34,7 @@
     XMLHttpRequest.prototype.send = function () {
       const op = xhrOps.get(this);
       if (op) {
+        loading(op);
         this.addEventListener(
           "load",
           () => {
@@ -58,6 +63,7 @@
       const url =
         typeof input === "string" ? input : input instanceof URL ? input.href : input && input.url;
       const op = opFor(url);
+      if (op) loading(op);
       const pending = origFetch.apply(this, arguments);
       if (op) {
         pending

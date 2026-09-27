@@ -3,6 +3,7 @@ use crate::server::state::AppState;
 use crate::tui::filter::{CachedVerdict, ClassifierHandle, FilterCache, FilterDecision, Judgement};
 use axum::Json;
 use axum::extract::State;
+use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -170,6 +171,16 @@ pub async fn status(State(state): State<Arc<AppState>>) -> Json<FilterStatus> {
         host: llm.host.clone(),
         state: model_state,
     })
+}
+
+/// `POST /api/filter/warm` — loads the filter's model ahead of the posts
+/// about to need it: the browser extension asks as x.com opens and whenever
+/// X fetches a Home timeline. Answers at once and warms in the background;
+/// a model that answered in the last minute isn't asked again.
+pub async fn warm(State(state): State<Arc<AppState>>) -> StatusCode {
+    let handle = state.classifier_handle.clone();
+    tokio::spawn(async move { handle.warm().await });
+    StatusCode::ACCEPTED
 }
 
 #[cfg(test)]

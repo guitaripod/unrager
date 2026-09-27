@@ -112,6 +112,7 @@ fn filter_routes() -> Router<Arc<AppState>> {
         .route("/health", get(routes::health::health))
         .route("/classify", post(routes::classify::classify))
         .route("/filter/status", get(routes::classify::status))
+        .route("/filter/warm", post(routes::classify::warm))
         .route("/filter/stats", get(routes::filter::stats))
         .route("/filter/overrides", post(routes::filter::set_overrides))
         .route(

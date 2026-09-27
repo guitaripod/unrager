@@ -6,6 +6,8 @@ const DEFAULT_SERVER = "http://localhost:7777";
 /// model cold-loading, and aborting would cancel that work too.
 const TIMEOUT_MS = 120000;
 const OVERRIDE_TIMEOUT_MS = 10000;
+/// The server answers a warm-up at once and loads the model on its own time.
+const WARM_TIMEOUT_MS = 5000;
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 const X_HOME = ["https://x.com/home*", "https://twitter.com/home*"];
 
@@ -146,6 +148,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       (err) => sendResponse({ ok: false, error: String((err && err.message) || err) })
     );
     return true;
+  }
+  if (msg.type === "warm") {
+    post("/api/filter/warm", {}, WARM_TIMEOUT_MS).catch(() => {});
+    return false;
   }
   if (msg.type === "override" && Array.isArray(msg.ids)) {
     override(msg.ids, msg.verdict).then(

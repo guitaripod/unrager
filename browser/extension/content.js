@@ -13,6 +13,9 @@
   /// answers a page well within it; when it's still loading (or down), the
   /// post is shown anyway once this runs out.
   const HOLD_MS = 2500;
+  /// A tab asks for the model to be loaded at most this often; the server
+  /// skips one that just answered anyway.
+  const WARM_EVERY_MS = 30000;
   /// How long the Not interested button waits for X's menu to open or close.
   const MENU_WAIT_MS = 1500;
   const MENU = '#layers [role="menu"]';
@@ -49,6 +52,7 @@
   let lastBadge = "";
   let marksOnPage = false;
   let contextTarget = null;
+  let lastWarm = 0;
 
   function state() {
     if (settings.paused) return "paused";
@@ -552,6 +556,15 @@
     for (let i = 0; i < fresh.length; i += CHUNK) classifyChunk(fresh.slice(i, i + CHUNK));
   }
 
+  /// Asks unrager to load the model before X's posts arrive: after an idle
+  /// spell that takes a second or two, which the first posts would
+  /// otherwise spend waiting out of view.
+  function warm() {
+    if (settings.paused || Date.now() - lastWarm < WARM_EVERY_MS) return;
+    lastWarm = Date.now();
+    sendToExtension({ type: "warm" }).catch(() => {});
+  }
+
   /// The user's own call on the post a cell shows, from the page's context
   /// menu or a note's "Show this post". It applies here at once, and unrager
   /// keeps it, so every client and every later visit respects it.
@@ -621,6 +634,7 @@
       settings.reveal = !!stored.reveal;
       settingsLoaded = true;
       applySettings();
+      if (window.location.pathname === "/home") warm();
     },
     () => {
       settingsLoaded = true;
@@ -674,6 +688,11 @@
       else ready.then(() => handleTimeline(op, body));
     });
   }
+
+  document.addEventListener("unrager:loading", () => {
+    if (settingsLoaded) warm();
+    else ready.then(warm);
+  });
 
   new MutationObserver(scheduleApply).observe(root, { childList: true, subtree: true });
 

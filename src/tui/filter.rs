@@ -7,8 +7,9 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::{Arc, PoisonError, RwLock};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
+use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 use tracing::{debug, warn};
 
@@ -47,6 +48,11 @@ const PROMPT_VERSION: &str = "v3-numbered-rules";
 const MAX_TEXT_CHARS: usize = 500;
 /// Room for "HIDE 12" and whatever spacing the model puts around it.
 const ANSWER_MAX_TOKENS: u32 = 8;
+/// A model that answered this recently is still loaded, so a warm-up then
+/// would only take a turn from real posts.
+const WARM_FOR: Duration = Duration::from_secs(60);
+/// What a warm-up asks the model to judge; its answer is thrown away.
+const WARM_TEXT: &str = "Good morning.";
 
 /// How readily the filter hides a post: `strictness` in `filter.toml`. It is
 /// part of the rubric hash, so changing it checks every post again.
@@ -1406,6 +1412,42 @@ pub struct Classifier {
     llm: LlmConfig,
     sem: Arc<Semaphore>,
     rubric: Arc<RwLock<Arc<Rubric>>>,
+    warmth: Arc<Warmth>,
+}
+
+/// When the filter's model last answered, shared by the classifier and every
+/// handle, and whether a warm-up is already on its way to it.
+#[derive(Default)]
+struct Warmth {
+    answered_at: Mutex<Option<Instant>>,
+    warming: AtomicBool,
+}
+
+impl Warmth {
+    fn note(&self, answered: bool) {
+        if answered {
+            *self
+                .answered_at
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Some(Instant::now());
+        }
+    }
+
+    fn fresh(&self) -> bool {
+        self.answered_at
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some_and(|at| at.elapsed() < WARM_FOR)
+    }
+}
+
+/// Clears `Warmth::warming` however the warm-up ends.
+struct WarmingUp<'a>(&'a AtomicBool);
+
+impl Drop for WarmingUp<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 /// Grab the current rubric out of the shared slot: an `Arc` clone, not a
@@ -1430,6 +1472,7 @@ impl Classifier {
             llm,
             sem: Arc::new(Semaphore::new(8)),
             rubric: Arc::new(RwLock::new(Arc::new(Rubric::new(cfg)))),
+            warmth: Arc::default(),
         }
     }
 
@@ -1492,11 +1535,13 @@ impl Classifier {
         let llm = self.llm.clone();
         let sem = self.sem.clone();
         let rubric = self.rubric.clone();
+        let warmth = self.warmth.clone();
         tokio::spawn(async move {
             let _permit = sem.acquire_owned().await.ok();
             let rubric = current_rubric(&rubric);
             let verdict =
                 classify_once(&http, &llm, &rubric, &payload.rest_id, &payload.text).await;
+            warmth.note(verdict.is_some());
             let _ = tx.send(Event::TweetClassified {
                 rest_id: payload.rest_id,
                 verdict,
@@ -1514,6 +1559,7 @@ impl Classifier {
             llm: self.llm.clone(),
             sem: self.sem.clone(),
             rubric: self.rubric.clone(),
+            warmth: self.warmth.clone(),
         }
     }
 }
@@ -1524,6 +1570,7 @@ pub struct ClassifierHandle {
     llm: LlmConfig,
     sem: Arc<Semaphore>,
     rubric: Arc<RwLock<Arc<Rubric>>>,
+    warmth: Arc<Warmth>,
 }
 
 impl ClassifierHandle {
@@ -1532,7 +1579,50 @@ impl ClassifierHandle {
     pub async fn classify(&self, rest_id: &str, text: &str) -> Option<Judgement> {
         let _permit = self.sem.acquire().await.ok();
         let rubric = current_rubric(&self.rubric);
-        classify_once(&self.http, &self.llm, &rubric, rest_id, text).await
+        let judged = classify_once(&self.http, &self.llm, &rubric, rest_id, text).await;
+        self.warmth.note(judged.is_some());
+        judged
+    }
+
+    /// Loads the model before the posts it's about to judge arrive, so they
+    /// don't wait out a cold start: the browser extension asks as x.com
+    /// opens and whenever X fetches a Home timeline. One short generation
+    /// with the filter's own prompt, which also leaves that prompt in the
+    /// model server's cache. Returns whether it asked; it doesn't when the
+    /// model answered within `WARM_FOR`, a warm-up is already running, or
+    /// there are no rules to judge by.
+    pub async fn warm(&self) -> bool {
+        let rubric = current_rubric(&self.rubric);
+        if !rubric.has_rules()
+            || self.warmth.fresh()
+            || self.warmth.warming.swap(true, Ordering::AcqRel)
+        {
+            return false;
+        }
+        let _warming = WarmingUp(&self.warmth.warming);
+        let _permit = self.sem.acquire().await.ok();
+        let started = Instant::now();
+        let req = ChatRequest {
+            messages: vec![
+                serde_json::json!({ "role": "system", "content": rubric.prompt() }),
+                serde_json::json!({ "role": "user", "content": WARM_TEXT }),
+            ],
+            thinking: false,
+            temperature: 0.0,
+            max_tokens: 1,
+        };
+        match self.llm.chat_with_client(req, &self.http).await {
+            Ok(_) => {
+                self.warmth.note(true);
+                tracing::info!(
+                    model = %self.llm.model,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "filter model warmed up"
+                );
+            }
+            Err(e) => warn!("filter warm-up failed: {e}"),
+        }
+        true
     }
 
     /// The backend this handle classifies with, including the model an
@@ -2628,5 +2718,99 @@ mod tests {
     #[test]
     fn parse_sse_data_line_malformed_json_is_ignored() {
         assert_eq!(parse_sse_data_line("data: not json"), SseLine::Ignore);
+    }
+
+    /// An OpenAI-compatible model server that answers KEEP to everything
+    /// after `delay`, counting the requests it gets.
+    async fn counting_model(delay: Duration) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = asked.clone();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let counter = counter.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 64 * 1024];
+                    let mut read = 0;
+                    loop {
+                        let n = socket.read(&mut buf[read..]).await.unwrap_or(0);
+                        if n == 0 {
+                            return;
+                        }
+                        read += n;
+                        let head = String::from_utf8_lossy(&buf[..read]);
+                        if let Some(end) = head.find("\r\n\r\n") {
+                            let length = head
+                                .lines()
+                                .find_map(|l| {
+                                    l.to_ascii_lowercase()
+                                        .strip_prefix("content-length:")
+                                        .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                                })
+                                .unwrap_or(0);
+                            if read >= end + 4 + length {
+                                break;
+                            }
+                        }
+                    }
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(delay).await;
+                    let body = r#"{"choices":[{"message":{"content":"KEEP"}}]}"#;
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        (format!("http://{addr}"), asked)
+    }
+
+    fn handle_for(host: &str) -> ClassifierHandle {
+        let mut cfg: FilterConfig = toml::from_str(FilterConfig::default_content()).unwrap();
+        cfg.llm.backend = LlmBackend::OpenAi;
+        cfg.llm.host = host.into();
+        cfg.llm.model = "stub".into();
+        Classifier::new(&cfg).handle()
+    }
+
+    #[tokio::test]
+    async fn warming_up_asks_the_model_once_until_it_goes_quiet() {
+        let (host, asked) = counting_model(Duration::from_millis(50)).await;
+        let handle = handle_for(&host);
+
+        let (first, second) = tokio::join!(handle.warm(), handle.warm());
+        assert!(first ^ second, "two warm-ups at once ask the model once");
+        assert_eq!(asked.load(Ordering::SeqCst), 1);
+
+        assert!(
+            !handle.warm().await,
+            "a model that just answered isn't asked again"
+        );
+        assert_eq!(asked.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_model_that_just_judged_a_post_is_not_warmed_up() {
+        let (host, asked) = counting_model(Duration::ZERO).await;
+        let handle = handle_for(&host);
+        assert!(handle.classify("1", "a post about bread").await.is_some());
+
+        assert!(!handle.warm().await);
+        assert_eq!(asked.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_failed_warm_up_lets_the_next_one_try() {
+        let handle = handle_for("http://127.0.0.1:9");
+
+        assert!(handle.warm().await);
+        assert!(
+            handle.warm().await,
+            "a model that never answered is asked again"
+        );
     }
 }

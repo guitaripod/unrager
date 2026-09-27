@@ -17,3 +17,6 @@ demos/shots/
 # Cloudflare Pages local dev (wrangler cache + transient deps for /site)
 site/.wrangler/
 site/node_modules/
+
+# Python bytecode from the site and demo render scripts
+__pycache__/

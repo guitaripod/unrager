@@ -1,0 +1,1512 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>unrager release video</title>
+<style>
+@font-face {
+  font-family: "JB";
+  src: url("fonts/jetbrains-mono-var.woff2") format("woff2");
+  font-weight: 100 800;
+}
+@font-face {
+  font-family: "InterV";
+  src: url("fonts/inter-var.woff2") format("woff2");
+  font-weight: 100 900;
+}
+:root {
+  --bg: #03161c;
+  --ink: #e6f0f2;
+  --muted: #93aab3;
+  --faint: #58727c;
+  --teal: #1f6f8b;
+  --teal-hi: #62b6d0;
+  --rage: #ff5a4f;
+  --x-line: #2f3336;
+  --x-ink: #e7e9ea;
+  --x-muted: #71767b;
+  --x-blue: #1d9bf0;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: #000; }
+body { width: 1080px; height: 1080px; overflow: hidden; }
+#frame {
+  position: relative;
+  width: 1080px;
+  height: 1080px;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "JB", ui-monospace, monospace;
+}
+#glow {
+  position: absolute;
+  inset: -10%;
+  background:
+    radial-gradient(70% 50% at 50% 100%, rgba(31, 111, 139, 0.42), rgba(31, 111, 139, 0) 72%),
+    radial-gradient(50% 35% at 88% 0%, rgba(98, 182, 208, 0.09), rgba(98, 182, 208, 0) 70%);
+}
+#vignette {
+  position: absolute;
+  inset: 0;
+  box-shadow: inset 0 0 240px rgba(0, 0, 0, 0.6);
+}
+#world { position: absolute; inset: 0; }
+#browserWrap { position: absolute; inset: 0; }
+#cam { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+#browser {
+  position: relative;
+  width: 720px;
+  height: 1800px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #000;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.09), 0 50px 140px rgba(0, 0, 0, 0.65);
+  font-family: "InterV", system-ui, sans-serif;
+  color: var(--x-ink);
+}
+.tabstrip {
+  position: absolute; left: 0; right: 0; top: 0; height: 38px;
+  background: #1f2023;
+  display: flex; align-items: flex-end; padding: 0 10px; gap: 6px;
+}
+.tab {
+  width: 230px; height: 31px;
+  background: #35363a;
+  border-radius: 9px 9px 0 0;
+  display: flex; align-items: center; gap: 9px; padding: 0 12px;
+  font-size: 12.5px; color: #e8eaed;
+}
+.tab .fav { width: 14px; height: 14px; border-radius: 50%; background: #e8eaed; box-shadow: inset 0 0 0 3.5px #000; }
+.tab .close { margin-left: auto; color: #9aa0a6; font-size: 13px; }
+.newtab { color: #9aa0a6; font-size: 18px; line-height: 31px; padding: 0 8px; }
+.toolbar {
+  position: absolute; left: 0; right: 0; top: 38px; height: 44px;
+  background: #35363a;
+  border-bottom: 1px solid #202124;
+  display: flex; align-items: center; gap: 14px; padding: 0 12px;
+}
+.toolbar svg { width: 18px; height: 18px; fill: none; stroke: #e8eaed; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.toolbar .dim { stroke: #7d8186; }
+.omni {
+  flex: 1; height: 30px; border-radius: 15px; background: #202124;
+  display: flex; align-items: center; gap: 9px; padding: 0 12px;
+  font-size: 13.5px; color: #e8eaed; letter-spacing: 0.01em;
+}
+.omni svg { width: 14px; height: 14px; stroke: #9aa0a6; }
+.omni .host { color: #e8eaed; }
+.omni .path { color: #9aa0a6; }
+.ext { position: relative; width: 22px; height: 22px; flex: none; }
+.ext svg.mark { width: 22px; height: 22px; stroke: none; }
+.mark rect { fill: #1f6f8b; }
+.mark path { fill: none; stroke: #fff; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+.badge {
+  position: absolute; left: 11px; top: 11px;
+  min-width: 17px; height: 13px; padding: 0 3px;
+  border-radius: 3px;
+  background: #1f6f8b;
+  box-shadow: 0 0 0 1.5px #35363a;
+  color: #fff; font: 700 9.5px/13px "InterV", sans-serif; text-align: center;
+  transform-origin: 30% 50%;
+}
+.ping {
+  position: absolute; left: 50%; top: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px;
+  border-radius: 7px; border: 2px solid var(--teal-hi); opacity: 0;
+}
+.avatar-me { width: 22px; height: 22px; border-radius: 50%; background: linear-gradient(135deg, #7b8cff, #3e4bb8); flex: none; }
+.xpage { position: absolute; left: 0; right: 0; top: 82px; bottom: 0; }
+.xnav {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 72px;
+  border-right: 1px solid var(--x-line);
+  display: flex; flex-direction: column; align-items: center; gap: 30px; padding-top: 20px;
+}
+.xnav svg { width: 25px; height: 25px; fill: none; stroke: var(--x-ink); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.xnav .postbtn { width: 46px; height: 46px; border-radius: 50%; background: var(--x-blue); display: grid; place-items: center; margin-top: 6px; }
+.xnav .postbtn svg { stroke: #fff; stroke-width: 2.4; width: 22px; height: 22px; }
+.xmain { position: absolute; left: 72px; top: 0; width: 600px; bottom: 0; border-right: 1px solid var(--x-line); }
+.xhead { position: relative; height: 53px; display: flex; border-bottom: 1px solid var(--x-line); }
+.xhead span { flex: 1; display: grid; place-items: center; font-size: 15px; font-weight: 500; color: var(--x-muted); position: relative; }
+.xhead span.on { color: var(--x-ink); font-weight: 700; }
+.xhead span.on::after { content: ""; position: absolute; bottom: 0; left: 50%; width: 56px; margin-left: -28px; height: 4px; border-radius: 2px; background: var(--x-blue); }
+#feed { position: relative; }
+.cell { position: relative; overflow: hidden; }
+.cell > * { position: absolute; left: 0; right: 0; }
+.post {
+  top: 0;
+  display: grid; grid-template-columns: 40px 1fr; gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--x-line);
+}
+.av {
+  width: 40px; height: 40px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-weight: 700; font-size: 17px; color: rgba(255, 255, 255, 0.92);
+}
+.meta { display: flex; gap: 4px; font-size: 15px; line-height: 20px; white-space: nowrap; }
+.meta b { font-weight: 700; color: var(--x-ink); }
+.meta span { color: var(--x-muted); }
+.text { font-size: 15px; line-height: 20px; margin-top: 2px; color: var(--x-ink); }
+.actions { display: flex; justify-content: space-between; max-width: 430px; margin-top: 12px; color: var(--x-muted); font-size: 13px; }
+.actions span { display: flex; align-items: center; gap: 6px; }
+.actions svg { width: 18px; height: 18px; fill: none; stroke: var(--x-muted); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.tint { top: 0; bottom: 0; pointer-events: none; }
+.flash { top: 50%; display: flex; justify-content: center; transform: translateY(-50%); pointer-events: none; }
+.pill {
+  display: inline-block;
+  padding: 2px 10px; border-radius: 999px;
+  background: #1d6f8b; color: #fff;
+  font: 600 12px/1.5 "InterV", sans-serif;
+  white-space: nowrap;
+}
+.note {
+  top: 0; height: 32px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 16px 0;
+  font: 600 12px/1.5 "InterV", sans-serif;
+}
+.note .show {
+  padding: 1px 10px; border-radius: 999px;
+  border: 1px solid #1d6f8b; background: #fff; color: #1d6f8b;
+}
+.held {
+  top: 0; height: 44px;
+  display: flex; align-items: center; gap: 12px;
+  padding: 0 16px;
+  border-bottom: 1px dashed #1c4552;
+}
+.held .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--teal-hi); flex: none; }
+.held .label { font: 600 12.5px/1 "JB", monospace; color: var(--teal-hi); width: 86px; flex: none; }
+.held .bar {
+  flex: 1; height: 6px; border-radius: 3px;
+  background: linear-gradient(90deg, #0b242c 0%, #0b242c 30%, #2a7f99 50%, #0b242c 70%, #0b242c 100%);
+  background-size: 300% 100%;
+}
+#scan { position: absolute; left: 0; width: 600px; height: 0; pointer-events: none; }
+#scan .line { position: absolute; left: 0; right: 0; top: -1px; height: 2px; background: var(--teal-hi); box-shadow: 0 0 14px 3px rgba(98, 182, 208, 0.65); }
+#scan .wash { position: absolute; left: 0; right: 0; bottom: 0; height: 160px; background: linear-gradient(180deg, rgba(98, 182, 208, 0), rgba(98, 182, 208, 0.10)); }
+
+.pop {
+  position: absolute; width: 340px;
+  padding: 14px 16px 16px;
+  border-radius: 10px;
+  background: #10252e; color: #e4eef1;
+  border: 1px solid #28474f;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.4);
+  font: 14px/1.45 "InterV", sans-serif;
+  transform-origin: 85% 0;
+}
+.pop p { margin: 0; }
+.pop-top { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.pop-top svg { width: 20px; height: 20px; }
+.pop-name { font-weight: 700; font-size: 15px; }
+.pop-ver { margin-left: auto; color: #9db4be; font-size: 12px; }
+.pop-status { padding: 12px 14px; border-radius: 10px; background: #173340; border: 1px solid #28474f; }
+.pop-headline { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 15px; }
+.pop-headline i { width: 8px; height: 8px; border-radius: 50%; background: #62b6d0; }
+.pop-detail { margin-top: 4px !important; color: #9db4be; }
+.pop-switches { margin-top: 12px; }
+.pop-switch { display: flex; align-items: center; justify-content: space-between; padding: 7px 2px; }
+.sw { position: relative; width: 34px; height: 20px; border-radius: 999px; background: #28474f; }
+.sw b { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #d8e6ea; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); }
+.pop-hint { margin: 4px 0 8px !important; color: #9db4be; font-size: 13px; }
+.pop-panel { margin-top: 8px; border-top: 1px solid #28474f; padding-top: 8px; }
+.pop-summary { display: flex; align-items: center; gap: 8px; font-weight: 600; padding: 4px 2px; }
+.pop-summary .tri { width: 0; height: 0; border: 5px solid transparent; border-left-color: currentColor; border-right-width: 0; transform-origin: 30% 50%; }
+.pop-body { overflow: hidden; }
+.pop-tally { margin: 4px 0 10px !important; font-size: 13px; }
+.pop-label { display: block; margin: 12px 0 4px !important; font-size: 13px; font-weight: 600; }
+.pop-label.first { margin-top: 0 !important; }
+.seg {
+  position: relative;
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  padding: 2px; border-radius: 8px;
+  border: 1px solid #28474f; background: #173340;
+}
+.seg .thumb { position: absolute; top: 2px; bottom: 2px; left: 2px; width: calc((100% - 4px) / 3); border-radius: 6px; background: #62b6d0; }
+.seg span { position: relative; display: block; padding: 4px 0; text-align: center; font-size: 13px; color: #9db4be; }
+.seg span.on { color: #06222b; font-weight: 600; }
+.strict-hint { position: relative; height: 38px; margin: 6px 0 4px; }
+.strict-hint p { position: absolute; left: 0; right: 0; top: 0; color: #9db4be; font-size: 13px; }
+.topics { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.topics li { display: grid; grid-template-columns: 1fr auto; gap: 2px 6px; align-items: start; }
+.topics .field { padding: 6px 8px; border-radius: 7px; border: 1px solid #28474f; background: #173340; font-size: 13px; line-height: 1.4; }
+.topics .rm { padding: 4px 10px; border-radius: 7px; border: 1px solid #28474f; background: #173340; font-size: 12px; color: #9db4be; }
+.topics .count { grid-column: 1; padding-left: 2px; font-size: 12px; color: #9db4be; }
+.pop-add { display: flex; gap: 6px; margin-top: 8px; }
+.pop-add .field { flex: 1; padding: 6px 8px; border-radius: 7px; border: 1px solid #28474f; background: #173340; font-size: 13px; color: #6f8a94; }
+.pop-add b { padding: 6px 10px; border-radius: 7px; border: 1px solid #28474f; background: #173340; font-size: 13px; font-weight: 400; }
+.builtins ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: 13px; }
+.builtins li { display: flex; justify-content: space-between; gap: 8px; }
+.builtins li span { color: #9db4be; font-size: 12px; }
+.pop-area { height: 74px; border-radius: 7px; border: 1px solid #28474f; background: #173340; }
+.pop-save { margin-top: 10px !important; }
+.pop-save b { display: inline-block; padding: 6px 14px; border-radius: 7px; background: #62b6d0; color: #06222b; font-size: 13px; font-weight: 600; }
+
+.menu {
+  position: absolute; min-width: 230px;
+  padding: 6px 0;
+  border-radius: 8px;
+  background: #292a2d;
+  border: 1px solid #3c4043;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.55);
+  font: 13px/1 "InterV", sans-serif; color: #e8eaed;
+  transform-origin: 0 0;
+}
+.mi { position: relative; display: flex; align-items: center; gap: 10px; height: 28px; padding: 0 16px 0 34px; }
+.mi.dim { color: #7d8186; }
+.mi .ic { position: absolute; left: 10px; top: 6px; width: 16px; height: 16px; }
+.mi .arrow { margin-left: auto; color: #9aa0a6; font-size: 10px; }
+.mi .hl { position: absolute; inset: 0; background: #45474b; opacity: 0; }
+.mi span { position: relative; }
+.menu hr { border: 0; border-top: 1px solid #3c4043; margin: 6px 0; }
+
+#cursor { position: absolute; left: 0; top: 0; width: 20px; height: 26px; transform-origin: 2px 1px; }
+#cursor svg { width: 20px; height: 26px; overflow: visible; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.45)); }
+#ripple { position: absolute; left: 0; top: 0; width: 40px; height: 40px; margin: -20px 0 0 -20px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.9); opacity: 0; }
+
+#scrim {
+  position: absolute; left: 0; right: 0; top: 0; height: 420px;
+  background: linear-gradient(180deg, rgba(3, 22, 28, 0.97) 0%, rgba(3, 22, 28, 0.94) 48%, rgba(3, 22, 28, 0) 100%);
+}
+.cap { position: absolute; left: 64px; width: 952px; }
+.cap .head { font-weight: 800; font-size: 72px; line-height: 1.04; letter-spacing: -0.045em; color: var(--ink); }
+.cap .sub { margin-top: 18px; font-weight: 500; font-size: 29px; line-height: 1.34; letter-spacing: -0.02em; color: var(--muted); max-width: 900px; }
+.w { display: inline-block; overflow: hidden; vertical-align: top; padding-bottom: 0.08em; margin-bottom: -0.08em; }
+.w > i { display: inline-block; font-style: normal; }
+
+#logo { position: absolute; left: 0; top: 0; width: 1080px; height: 1080px; overflow: visible; }
+#logoRect { fill: #1f6f8b; }
+#logoLine { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.lockup { position: absolute; left: 0; right: 0; text-align: center; }
+.wordmark { font-weight: 800; font-size: 118px; letter-spacing: -0.06em; line-height: 1; color: var(--ink); }
+.wordmark i { display: inline-block; font-style: normal; }
+.ver {
+  display: inline-block; vertical-align: top; margin: 10px 0 0 18px;
+  padding: 6px 14px; border-radius: 999px;
+  border: 2px solid var(--teal-hi); color: var(--teal-hi);
+  font-weight: 700; font-size: 28px; letter-spacing: -0.02em;
+}
+.tagline { font-weight: 500; font-size: 30px; letter-spacing: -0.02em; color: var(--muted); }
+
+#stats { position: absolute; left: 64px; top: 372px; width: 952px; }
+.st-title { font-weight: 700; font-size: 32px; letter-spacing: -0.03em; color: var(--ink); }
+.st-sub { margin-top: 4px; font-weight: 500; font-size: 24px; letter-spacing: -0.02em; color: var(--muted); }
+.st-row { position: relative; margin-top: 34px; height: 128px; }
+.st-name { font-weight: 700; font-size: 30px; letter-spacing: -0.03em; }
+.st-bar { position: absolute; left: 0; top: 50px; height: 66px; border-radius: 12px; }
+.st-val { position: absolute; top: 38px; font-weight: 800; font-size: 92px; line-height: 1; letter-spacing: -0.06em; }
+.st-facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: 44px; padding-top: 30px; border-top: 2px solid #12323c; }
+.fact b { display: block; font-weight: 800; font-size: 64px; line-height: 1; letter-spacing: -0.05em; color: var(--teal-hi); }
+.fact span { display: block; margin-top: 10px; font-weight: 500; font-size: 24px; letter-spacing: -0.02em; color: var(--muted); }
+.st-foot { margin-top: 30px; font-weight: 500; font-size: 22px; letter-spacing: -0.01em; color: var(--faint); }
+
+#term {
+  position: absolute; left: 40px; top: 300px; width: 1000px; height: 690px;
+  border-radius: 14px; overflow: hidden;
+  background: #0b1418; border: 1px solid #1c3440;
+  box-shadow: 0 40px 120px rgba(0, 0, 0, 0.6);
+}
+.term-bar { height: 44px; display: flex; align-items: center; gap: 9px; padding: 0 16px; background: #101c21; border-bottom: 1px solid #1c3440; }
+.term-bar i { width: 13px; height: 13px; border-radius: 50%; background: #2a3b42; }
+.term-bar span { flex: 1; text-align: center; margin-right: 66px; color: #6f8a94; font-size: 16px; }
+#termText { margin: 0; padding: 24px 26px; font: 500 27px/1.52 "JB", monospace; color: #cfe1e6; white-space: pre; letter-spacing: -0.01em; }
+#termText .p { color: var(--teal-hi); font-weight: 700; }
+#termText .ok { color: #5fd3a8; font-weight: 700; }
+#termText .dim { color: #6f8a94; }
+#termText .caret { display: inline-block; width: 0.6em; height: 1.1em; vertical-align: -0.18em; background: #cfe1e6; }
+
+#end { position: absolute; inset: 0; }
+.url { font-weight: 700; font-size: 50px; letter-spacing: -0.035em; color: var(--teal-hi); }
+.fine { font-weight: 500; font-size: 24px; letter-spacing: -0.015em; color: var(--muted); line-height: 1.45; }
+</style>
+</head>
+<body>
+<div id="frame">
+  <div id="glow"></div>
+  <div id="world">
+    <div id="browserWrap">
+      <div id="cam"><div id="browser"></div></div>
+    </div>
+    <div id="stats"></div>
+    <div id="term"><div class="term-bar"><i></i><i></i><i></i><span>Terminal</span></div><pre id="termText"></pre></div>
+  </div>
+  <div id="scrim"></div>
+  <div id="caps"></div>
+  <svg id="logo" viewBox="0 0 1080 1080"><rect id="logoRect" rx="0" ry="0"></rect><path id="logoLine"></path></svg>
+  <div id="title"></div>
+  <div id="end"></div>
+  <div id="vignette"></div>
+</div>
+<script>
+const FPS = 60;
+const PARAMS = new URLSearchParams(location.search);
+const VERSION = PARAMS.get("version") || "0.23.0";
+const SHORT_VERSION = VERSION.split(".").slice(0, 2).join(".");
+const SC = { title: 3.45, held: 6.35, why: 10.55, call: 15.35, strict: 19.75, model: 24.35, install: 28.75, end: 32.35 };
+const DURATION = 35.5;
+
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, p) => a + (b - a) * p;
+const prog = (t, a, b) => clamp((t - a) / (b - a));
+const EASE = {
+  linear: (p) => p,
+  inOut: (p) => (p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2),
+  inOutQuint: (p) => (p < 0.5 ? 16 * p ** 5 : 1 - Math.pow(-2 * p + 2, 5) / 2),
+  cam: (p) => p * p * p * (p * (6 * p - 15) + 10),
+  out: (p) => 1 - Math.pow(1 - p, 3),
+  outQuart: (p) => 1 - Math.pow(1 - p, 4),
+  outExpo: (p) => (p >= 1 ? 1 : 1 - Math.pow(2, -10 * p)),
+  in: (p) => p * p * p,
+  outBack: (p) => {
+    const c1 = 1.5;
+    const c3 = c1 + 1;
+    return 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2);
+  },
+};
+const ease = (t, a, b, kind = "inOut") => EASE[kind](prog(t, a, b));
+const mix = (c1, c2, p) => c1.map((v, i) => Math.round(lerp(v, c2[i], p)));
+const rgb = (c, a = 1) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+const RAGE = [255, 90, 79];
+const TEAL_HI = [98, 182, 208];
+
+/** Piecewise track over [time, value, easing] keys; values may be numbers or arrays. */
+function track(t, keys) {
+  if (t <= keys[0][0]) return keys[0][1];
+  for (let i = 1; i < keys.length; i++) {
+    const [t1, v1, kind] = keys[i];
+    const [t0, v0] = keys[i - 1];
+    if (t <= t1) {
+      const p = EASE[kind || "inOut"](t1 === t0 ? 1 : (t - t0) / (t1 - t0));
+      return Array.isArray(v0) ? v0.map((x, j) => lerp(x, v1[j], p)) : lerp(v0, v1, p);
+    }
+  }
+  return keys[keys.length - 1][1];
+}
+
+const el = (tag, cls, html) => {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (html != null) e.innerHTML = html;
+  return e;
+};
+const $ = (id) => document.getElementById(id);
+
+const MARK_SVG = '<svg class="mark" viewBox="0 0 32 32"><rect x="0.5" y="0.5" width="31" height="31" rx="7"></rect><path d="M5 16.5 Q7.4 3.5 9.8 16.5 Q12 26.5 14.2 16.5 Q15.6 11 17 16.5 L27 16.5"></path></svg>';
+const ICON = {
+  back: '<svg viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>',
+  fwd: '<svg class="dim" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
+  reload: '<svg viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4.2h-4.2"/></svg>',
+  tune: '<svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>',
+  puzzle: '<svg viewBox="0 0 24 24"><path d="M9 4.5a2 2 0 0 1 4 0V6h4a1 1 0 0 1 1 1v4h-1.5a2 2 0 0 0 0 4H18v4a1 1 0 0 1-1 1h-4v-1.5a2 2 0 0 0-4 0V20H5a1 1 0 0 1-1-1v-4h1.5a2 2 0 0 0 0-4H4V7a1 1 0 0 1 1-1h4z"/></svg>',
+  dots: '<svg viewBox="0 0 24 24"><path d="M12 5.5v.01M12 12v.01M12 18.5v.01" stroke-width="3"/></svg>',
+  home: '<svg viewBox="0 0 24 24"><path d="M3.5 10.5 12 3.5l8.5 7V20a1 1 0 0 1-1 1h-5v-6h-5v6h-5a1 1 0 0 1-1-1z"/></svg>',
+  search: '<svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg>',
+  bell: '<svg viewBox="0 0 24 24"><path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15zM10 20.5a2 2 0 0 0 4 0"/></svg>',
+  mail: '<svg viewBox="0 0 24 24"><rect x="3.5" y="5.5" width="17" height="13" rx="2"/><path d="m4 7 8 6 8-6"/></svg>',
+  people: '<svg viewBox="0 0 24 24"><circle cx="9" cy="9" r="3.5"/><path d="M3 20c.5-3.5 3-5.5 6-5.5s5.5 2 6 5.5M16 5.5a3.5 3.5 0 0 1 0 7M18 14.8c1.8.7 3 2.4 3.2 5.2"/></svg>',
+  user: '<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4.5 20.5c.6-4 3.6-6.5 7.5-6.5s6.9 2.5 7.5 6.5"/></svg>',
+  more: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12v.01M12 12v.01M16 12v.01" stroke-width="2.6"/></svg>',
+  plus: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
+  reply: '<svg viewBox="0 0 24 24"><path d="M5 6.5A2.5 2.5 0 0 1 7.5 4h9A2.5 2.5 0 0 1 19 6.5v7a2.5 2.5 0 0 1-2.5 2.5H12l-4.5 4v-4A2.5 2.5 0 0 1 5 13.5z"/></svg>',
+  repost: '<svg viewBox="0 0 24 24"><path d="M7 17V8a2 2 0 0 1 2-2h8M4.5 14.5 7 17l2.5-2.5M17 7v9a2 2 0 0 1-2 2H7M19.5 9.5 17 7l-2.5 2.5"/></svg>',
+  like: '<svg viewBox="0 0 24 24"><path d="M12 19.5s-7.5-4.6-7.5-10A4.2 4.2 0 0 1 12 7a4.2 4.2 0 0 1 7.5 2.5c0 5.4-7.5 10-7.5 10z"/></svg>',
+  views: '<svg viewBox="0 0 24 24"><path d="M5.5 19.5v-6M10 19.5V6M14.5 19.5v-9M19 19.5V9"/></svg>',
+};
+
+const POSTS = {
+  hottake: { name: "Hot Take Harold", handle: "hottake_harold", hue: 40, ago: "now", stats: ["6.2K", "3.9K", "21K", "2.8M"], rule: "engagement farming",
+    text: "Unpopular opinion: anyone who uses tabs instead of spaces shouldn't be allowed near a keyboard. RT if you agree." },
+  owen: { name: "Owen", handle: "owen_repairs", hue: 168, ago: "now", stats: ["9", "41", "388", "11K"],
+    text: "Fixed a 1974 radio with one capacitor and a lot of patience. It found a jazz station on the first try." },
+  doom2: { name: "It's Over", handle: "itsover_daily", hue: 2, ago: "now", stats: ["980", "2.7K", "14K", "1.6M"], rule: "doom-posting",
+    text: "It's over. Everything is getting worse and nobody will say it out loud. Nothing can be done." },
+  scene: { name: "Screen Scene", handle: "screen_scene", hue: 214, ago: "now", stats: ["312", "1.2K", "9.8K", "402K"],
+    text: "Last night's finale, scene by scene. Spoilers all the way down 🧵👇" },
+  outrage: { name: "Outrage Daily", handle: "outrage_daily", hue: 352, ago: "38m", stats: ["2.1K", "8.4K", "31K", "2.2M"], rule: "manufactured outrage",
+    text: "THIS IS WHY NOBODY TRUSTS THEM ANYMORE 😡😡 share before they delete it!!!" },
+  mira: { name: "Mira Okafor", handle: "mira_bakes", hue: 28, ago: "2m", stats: ["4", "12", "38", "1.2K"],
+    text: "Day 3 of the new sourdough starter. It smells like green apples, which I'm told is good news." },
+  doomcast: { name: "Doomcast", handle: "doomcast", hue: 12, ago: "1h", stats: ["1.4K", "5.2K", "19K", "1.1M"], rule: "economic fearmongering",
+    text: "The economy has THREE WEEKS left. Pull your savings NOW. Nobody is talking about this." },
+  kestrel: { name: "Kestrel", handle: "kestrel_dev", hue: 200, ago: "16m", stats: ["11", "38", "205", "8.4K"],
+    text: "Shipped v2 of my tiny CLI. Startup went from 180 ms to 9 ms by deleting one dependency." },
+  ratio: { name: "Rick", handle: "ratio_rick", hue: 328, ago: "3h", stats: ["3.3K", "1.1K", "7.7K", "890K"], rule: "ratio bait and dunking",
+    text: "Imagine being this wrong in public. Quote this with your worst take, cowards." },
+  harbor: { name: "Harbor Light", handle: "harborlight", hue: 188, ago: "23m", stats: ["2", "9", "91", "3.1K"],
+    text: "Morning ferry. The fog was sitting right on the water and nobody said a word." },
+  payout: { name: "Payout Pete", handle: "payout_pete", hue: 50, ago: "2h", stats: ["4.5K", "2.2K", "12K", "3.4M"], rule: "X/Twitter creator payouts",
+    text: "X paid me $4 for 90 million impressions. This platform is DEAD. Screenshot below 👇" },
+  juno: { name: "Juno Reads", handle: "juno_reads", hue: 280, ago: "41m", stats: ["6", "14", "120", "4.4K"],
+    text: "Halfway through a 900-page novel and I've started rationing chapters so it doesn't end." },
+  ada: { name: "Ada Lindqvist", handle: "ada_plots", hue: 158, ago: "47m", stats: ["7", "30", "132", "5.6K"],
+    text: "The new paper on sparse attention is unusually readable. My notes are in the thread." },
+  tomas: { name: "Tomás", handle: "tomas_climbs", hue: 95, ago: "58m", stats: ["3", "8", "64", "2.2K"],
+    text: "Finally sent the route I've been falling off since April. Hands shredded, heart full." },
+  fern: { name: "Fern & Fog", handle: "fernandfog", hue: 128, ago: "1h", stats: ["5", "6", "77", "2.9K"],
+    text: "Repotted every plant in the apartment. The cat supervised." },
+  priya: { name: "Priya", handle: "priya_maps", hue: 250, ago: "1h", stats: ["9", "52", "310", "12K"],
+    text: "Made a map of every bench in my neighborhood. There are 212. I have sat on 40." },
+};
+const FEED = ["hottake", "owen", "doom2", "scene", "outrage", "mira", "doomcast", "kestrel", "ratio", "harbor", "payout", "juno", "ada", "tomas", "fern", "priya"];
+
+const T = {
+  scanStart: 1.3,
+  scanEnd: 2.3,
+  titleIn: SC.title,
+  titleOut: SC.held - 0.5,
+  browserBack: SC.held - 0.18,
+  arrivals: [
+    { id: "scene", at: SC.held + 0.3, verdict: SC.held + 0.9 },
+    { id: "doom2", at: SC.held + 1.1, verdict: SC.held + 1.62 },
+    { id: "owen", at: SC.held + 1.9, verdict: SC.held + 2.46 },
+    { id: "hottake", at: SC.held + 2.7, verdict: SC.held + 3.22 },
+  ],
+  pop1Open: SC.why + 0.72,
+  revealAt: SC.why + 1.4,
+  pop1Close: SC.why + 2.2,
+  menuOpen: SC.call + 1.22,
+  subOpen: SC.call + 1.68,
+  userHide: SC.call + 2.18,
+  pop2Open: SC.strict + 0.68,
+  rulesOpen: SC.strict + 1.16,
+  strict: [
+    [SC.strict + 1.9, 0],
+    [SC.strict + 2.65, 2],
+    [SC.strict + 3.4, 1],
+  ],
+  statsIn: SC.model - 0.35,
+  bars: [SC.model + 0.57, SC.model + 0.77],
+  chips: SC.model + 1.65,
+  termIn: SC.install - 0.15,
+  endIn: SC.end,
+};
+
+const CUES = [];
+const cue = (t, kind, extra = {}) => CUES.push({ t: +t.toFixed(4), kind, ...extra });
+
+const state = { heights: {}, hookHide: {}, noteH: 32, heldH: 44 };
+
+function buildPost(id) {
+  const p = POSTS[id];
+  const initial = p.name.replace(/[^A-Za-z]/g, "")[0];
+  const av = `background: linear-gradient(140deg, hsl(${p.hue} 62% 62%), hsl(${p.hue + 28} 58% 38%))`;
+  const [r, rp, l, v] = p.stats;
+  return el("article", "post",
+    `<div class="av" style="${av}">${initial}</div>
+     <div>
+       <div class="meta"><b>${p.name}</b><span>@${p.handle} · ${p.ago}</span></div>
+       <div class="text">${p.text}</div>
+       <div class="actions"><span>${ICON.reply}${r}</span><span>${ICON.repost}${rp}</span><span>${ICON.like}${l}</span><span>${ICON.views}${v}</span></div>
+     </div>`);
+}
+
+function buildBrowser() {
+  const b = $("browser");
+  b.innerHTML = `
+    <div class="tabstrip"><div class="tab"><i class="fav"></i><span>Home / X</span><span class="close">✕</span></div><div class="newtab">+</div></div>
+    <div class="toolbar">${ICON.back}${ICON.fwd}${ICON.reload}
+      <div class="omni">${ICON.tune}<span><span class="host">x.com</span><span class="path">/home</span></span></div>
+      <div class="ext" id="ext">${MARK_SVG}<i class="ping" id="ping"></i><b class="badge" id="badge">0</b></div>
+      ${ICON.puzzle}<i class="avatar-me"></i>${ICON.dots}
+    </div>
+    <div class="xpage">
+      <nav class="xnav">${ICON.home}${ICON.search}${ICON.bell}${ICON.mail}${ICON.people}${ICON.user}${ICON.more}<span class="postbtn">${ICON.plus}</span></nav>
+      <main class="xmain">
+        <div class="xhead"><span class="on">For you</span><span>Following</span></div>
+        <div id="feed"></div>
+        <div id="scan"><div class="wash"></div><div class="line"></div></div>
+      </main>
+    </div>`;
+  const feed = $("feed");
+  for (const id of FEED) {
+    const cell = el("div", "cell");
+    cell.id = `cell-${id}`;
+    const p = POSTS[id];
+    cell.append(
+      el("div", "held", '<i class="dot"></i><span class="label">judging</span><span class="bar"></span>'),
+      el("div", "note", `<span class="pill">Hidden: ${p.rule || ""}</span><span class="show">Show this post</span>`),
+      buildPost(id),
+      el("div", "tint"),
+      el("div", "flash", `<span class="pill">Hidden: ${p.rule || ""}</span>`),
+    );
+    feed.append(cell);
+  }
+  b.append(buildPopup(), buildMenus());
+  const cursor = el("div", "", '<svg viewBox="0 0 20 26"><path d="M2 1.5v19.2l4.9-4.6 3.4 7.7 3.1-1.3-3.3-7.6h6.6z" fill="#fff" stroke="#000" stroke-width="1.4" stroke-linejoin="round"/></svg>');
+  cursor.id = "cursor";
+  const ripple = el("div", "");
+  ripple.id = "ripple";
+  b.append(ripple, cursor);
+}
+
+function buildPopup() {
+  const pop = el("div", "pop");
+  pop.id = "pop";
+  const topics = [
+    ["american electoral politics, presidents, congress, partisan fights", "41 hidden"],
+    ["economic fearmongering: tariff panic, inflation doom, market-crash prophecies", "23 hidden"],
+    ["crypto and NFT shilling, pump-and-dump hype, rug-pull drama", "6 hidden"],
+    ["X/Twitter creator payouts, ad revenue sharing, monetization complaints", "9 hidden"],
+  ];
+  const builtins = [
+    ["subtweets and callouts", "3 hidden"],
+    ["ratio bait and dunking", "5 hidden"],
+    ["engagement farming", "7 hidden"],
+    ["manufactured outrage", "12 hidden"],
+    ["doom-posting", "4 hidden"],
+  ];
+  pop.innerHTML = `
+    <div class="pop-top">${MARK_SVG}<span class="pop-name">unrager</span><span class="pop-ver">${VERSION}</span></div>
+    <div class="pop-status"><p class="pop-headline"><i></i><span id="popHead">6 posts hidden</span></p><p class="pop-detail" id="popDetail">148 posts checked on this tab.</p></div>
+    <div class="pop-switches">
+      <div class="pop-switch"><span>Pause filtering</span><i class="sw"><b></b></i></div>
+      <div class="pop-switch" id="swReveal"><span>Show hidden posts</span><i class="sw" id="swRevealTrack"><b id="swRevealKnob"></b></i></div>
+      <p class="pop-hint">Right-click a post on your Home timeline to hide it, or to make sure it always shows.</p>
+    </div>
+    <div class="pop-panel">
+      <p class="pop-summary" id="sumRules"><i class="tri" id="triRules"></i>What gets hidden</p>
+      <div class="pop-body" id="rulesBody"><div id="rulesInner">
+        <p class="pop-tally">These rules hid 110 of the 468 posts checked since they last changed (24%). You hid 1 and showed 0 yourself.</p>
+        <p class="pop-label first">How strict</p>
+        <div class="seg" id="seg"><i class="thumb" id="segThumb"></i><span id="seg0">Relaxed</span><span id="seg1" class="on">Balanced</span><span id="seg2">Strict</span></div>
+        <div class="strict-hint">
+          <p id="hint0">Only posts clearly about one of your topics.</p>
+          <p id="hint1">Your topics, plus rage bait and dunking. A post the model isn't sure about stays.</p>
+          <p id="hint2">Also posts by people known for a topic, and anything the model isn't sure about.</p>
+        </div>
+        <p class="pop-hint">Posts mainly about one of these topics disappear. A post that only mentions one in passing stays.</p>
+        <ol class="topics">${topics.map(([t, c]) => `<li><span class="field">${t}</span><span class="rm">Remove</span><span class="count">${c}</span></li>`).join("")}</ol>
+        <div class="pop-add"><span class="field">Add a topic</span><b>Add</b></div>
+        <div class="builtins" id="builtins"><div id="builtinsInner"><p class="pop-label">Also hidden</p><ul>${builtins.map(([t, c]) => `<li>${t}<span>${c}</span></li>`).join("")}</ul></div></div>
+        <p class="pop-label">Anything else the model should know</p>
+        <div class="pop-area"></div>
+        <p class="pop-save"><b>Save rules</b></p>
+      </div></div>
+    </div>
+    <div class="pop-panel"><p class="pop-summary"><i class="tri"></i>Settings</p></div>`;
+  return pop;
+}
+
+function buildMenus() {
+  const wrap = el("div", "");
+  const menu = el("div", "menu",
+    `<div class="mi"><i class="hl"></i><span>Back</span></div>
+     <div class="mi dim"><i class="hl"></i><span>Forward</span></div>
+     <div class="mi"><i class="hl"></i><span>Reload</span></div><hr>
+     <div class="mi"><i class="hl"></i><span>Save as…</span></div>
+     <div class="mi"><i class="hl"></i><span>Print…</span></div><hr>
+     <div class="mi" id="miUnrager"><i class="hl" id="hlUnrager"></i><span class="ic">${MARK_SVG}</span><span>unrager</span><span class="arrow">▶</span></div><hr>
+     <div class="mi"><i class="hl"></i><span>View page source</span></div>
+     <div class="mi"><i class="hl"></i><span>Inspect</span></div>`);
+  menu.id = "menu";
+  const sub = el("div", "menu",
+    `<div class="mi" id="miHide"><i class="hl" id="hlHide"></i><span>Hide this post</span></div>
+     <div class="mi" id="miShow"><i class="hl"></i><span>Show this post</span></div>`);
+  sub.id = "submenu";
+  sub.style.minWidth = "190px";
+  wrap.append(menu, sub);
+  return wrap;
+}
+
+/** Offset of an element inside #browser, ignoring the camera transform. */
+function offsetIn(node) {
+  let x = 0;
+  let y = 0;
+  const root = $("browser");
+  while (node && node !== root) {
+    x += node.offsetLeft;
+    y += node.offsetTop;
+    node = node.offsetParent;
+  }
+  return { x, y };
+}
+
+function center(node) {
+  const o = offsetIn(node);
+  return { x: o.x + node.offsetWidth / 2, y: o.y + node.offsetHeight / 2 };
+}
+
+function measure() {
+  for (const id of FEED) {
+    const post = $(`cell-${id}`).querySelector(".post");
+    state.heights[id] = post.offsetHeight;
+  }
+  state.rulesH = $("rulesInner").offsetHeight;
+  state.builtinsH = $("builtinsInner").offsetHeight;
+}
+
+const FEED_TOP = 135;
+const arrival = (id) => T.arrivals.find((a) => a.id === id);
+
+/** Hide times for the loud posts in the opening, found by sweeping the scan line down the feed. */
+function planHookHides() {
+  const hook = FEED.filter((id) => !arrival(id));
+  const rage = hook.filter((id) => POSTS[id].rule);
+  for (let t = T.scanStart; t <= T.scanEnd + 0.4; t += 1 / 600) {
+    const y = scanY(t);
+    let top = 0;
+    for (const id of hook) {
+      const h = hookCellHeight(id, t);
+      if (rage.includes(id) && state.hookHide[id] == null && y >= top + 26) state.hookHide[id] = t;
+      top += h;
+    }
+  }
+}
+
+function scanY(t) {
+  return lerp(-6, 760, ease(t, T.scanStart, T.scanEnd, "inOut"));
+}
+
+function hideCurve(t, t0) {
+  return ease(t, t0 + 0.28, t0 + 0.72, "inOut");
+}
+
+function hookCellHeight(id, t) {
+  const h = state.heights[id];
+  const t0 = state.hookHide[id];
+  if (t0 == null) return h;
+  return h * (1 - hideCurve(t, t0));
+}
+
+const revealStart = (i) => T.revealAt + 0.1 + 0.07 * i;
+
+/** Everything a feed cell shows at time t: its height and what is drawn inside it. */
+function cellState(id, t, order) {
+  const p = POSTS[id];
+  const h = state.heights[id];
+  const noteH = state.noteH;
+  const s = { height: h, postY: 0, postOpacity: 1, postShift: 0, held: 0, heldBar: 0, note: 0, noteText: p.rule ? `Hidden: ${p.rule}` : "", tintRage: 0, tintTeal: 0, flash: 0, dim: 1 };
+  const a = arrival(id);
+  const revealIndex = order.indexOf(id);
+  const reveal = ease(t, revealStart(revealIndex), revealStart(revealIndex) + 0.5, "inOut");
+  if (a) {
+    const grow = ease(t, a.at, a.at + 0.32, "out");
+    if (t < a.verdict) {
+      s.height = state.heldH * grow;
+      s.held = grow;
+      s.postOpacity = 0;
+      s.heldBar = t;
+      return s;
+    }
+    if (!p.rule) {
+      const open = ease(t, a.verdict, a.verdict + 0.5, "inOut");
+      s.height = lerp(state.heldH, h, open);
+      s.held = 1 - ease(t, a.verdict, a.verdict + 0.2, "out");
+      s.postOpacity = ease(t, a.verdict + 0.12, a.verdict + 0.5, "out");
+      s.postShift = (1 - s.postOpacity) * 10;
+      s.heldBar = a.verdict;
+    } else {
+      const shut = ease(t, a.verdict + 0.34, a.verdict + 0.7, "inOut");
+      s.height = lerp(state.heldH, 0, shut);
+      s.held = 1 - ease(t, a.verdict, a.verdict + 0.12, "out");
+      s.flash = ease(t, a.verdict + 0.04, a.verdict + 0.18, "out") * (1 - ease(t, a.verdict + 0.52, a.verdict + 0.7));
+      s.tintTeal = s.flash;
+      s.postOpacity = 0;
+      s.heldBar = a.verdict;
+      if (reveal > 0) return revealed(s, h, noteH, reveal);
+      return s;
+    }
+  } else if (p.rule) {
+    const t0 = state.hookHide[id];
+    const turn = ease(t, t0, t0 + 0.18, "out");
+    s.tintRage = 1 - turn;
+    s.tintTeal = turn * (1 - ease(t, t0 + 0.5, t0 + 0.72));
+    s.flash = ease(t, t0 + 0.08, t0 + 0.24, "out") * (1 - ease(t, t0 + 0.52, t0 + 0.72));
+    s.height = hookCellHeight(id, t);
+    s.postOpacity = 1 - ease(t, t0, t0 + 0.16, "out");
+    if (reveal > 0) return revealed(s, h, noteH, reveal);
+  }
+  if (id === "scene") {
+    const u = ease(t, T.userHide + 0.08, T.userHide + 0.5, "inOut");
+    if (u > 0) {
+      s.height = lerp(s.height, h + noteH, u);
+      s.postY = noteH * u;
+      s.note = u;
+      s.noteText = "Hidden by you";
+      s.dim = lerp(1, 0.4, u);
+    }
+  }
+  return s;
+}
+
+function revealed(s, h, noteH, r) {
+  s.height = lerp(s.height, h + noteH, r);
+  s.postY = noteH * r;
+  s.note = r;
+  s.postOpacity = lerp(s.postOpacity, 1, r);
+  s.dim = 0.4;
+  s.tintRage = 0;
+  s.tintTeal = 0;
+  s.flash = 0;
+  s.held = 0;
+  return s;
+}
+
+function feedOrder() {
+  return FEED.filter((id) => POSTS[id].rule);
+}
+
+function renderFeed(t) {
+  const order = feedOrder();
+  let y = FEED_TOP;
+  state.cellTop = {};
+  for (const id of FEED) {
+    const cell = $(`cell-${id}`);
+    const s = cellState(id, t, order);
+    state.cellTop[id] = y;
+    y += s.height;
+    cell.style.height = `${s.height.toFixed(2)}px`;
+    const [held, note, post, tint, flash] = cell.children;
+    held.style.opacity = s.held.toFixed(3);
+    held.style.display = s.held > 0.001 ? "flex" : "none";
+    if (s.held > 0.001) {
+      const dots = Math.floor((s.heldBar * 3) % 4);
+      held.children[1].textContent = "judging" + ".".repeat(dots);
+      held.children[2].style.backgroundPosition = `${(100 - ((s.heldBar * 70) % 100)).toFixed(1)}% 0`;
+    }
+    note.style.display = s.note > 0.001 ? "flex" : "none";
+    note.style.opacity = s.note.toFixed(3);
+    note.children[0].textContent = s.noteText;
+    post.style.transform = `translateY(${(s.postY + s.postShift).toFixed(2)}px)`;
+    post.style.opacity = (s.postOpacity * s.dim).toFixed(3);
+    tint.style.display = s.tintRage + s.tintTeal > 0.001 ? "block" : "none";
+    tint.style.background = `linear-gradient(90deg, ${rgb(RAGE, 0.16 * s.tintRage)} 0%, ${rgb(RAGE, 0.05 * s.tintRage)} 55%, ${rgb(RAGE, 0.02 * s.tintRage)} 100%), ${rgb(TEAL_HI, 0.18 * s.tintTeal)}`;
+    tint.style.boxShadow = `inset 3px 0 0 ${rgb(mix(RAGE, TEAL_HI, s.tintTeal > 0 ? 1 : 0), Math.max(s.tintRage, s.tintTeal))}`;
+    flash.style.display = s.flash > 0.001 ? "flex" : "none";
+    flash.style.opacity = s.flash.toFixed(3);
+    flash.style.transform = `translateY(-50%) scale(${lerp(0.92, 1, s.flash).toFixed(3)})`;
+  }
+  const scan = $("scan");
+  const sp = prog(t, T.scanStart, T.scanEnd);
+  scan.style.display = sp > 0 && sp < 1 ? "block" : "none";
+  scan.style.top = `${(53 + scanY(t)).toFixed(1)}px`;
+  scan.style.opacity = (1 - ease(t, T.scanEnd - 0.25, T.scanEnd)).toFixed(3);
+}
+
+/** Every moment the badge count goes up, in order. */
+function hideMoments() {
+  const out = [];
+  for (const [id, t0] of Object.entries(state.hookHide)) out.push(t0 + 0.2);
+  for (const a of T.arrivals) if (POSTS[a.id].rule) out.push(a.verdict + 0.1);
+  out.push(T.userHide + 0.1);
+  return out.sort((a, b) => a - b);
+}
+
+function renderBadge(t) {
+  const moments = state.moments;
+  const n = moments.filter((m) => t >= m).length;
+  const badge = $("badge");
+  badge.style.display = n > 0 ? "block" : "none";
+  badge.textContent = String(n);
+  const last = moments.filter((m) => t >= m).pop();
+  const bump = last == null ? 0 : 1 - prog(t, last, last + 0.28);
+  badge.style.transform = `scale(${(1 + 0.45 * EASE.out(bump) * (bump > 0 ? 1 : 0)).toFixed(3)})`;
+  const ping = $("ping");
+  const pp = prog(t, T.scanStart - 0.12, T.scanStart + 0.55);
+  ping.style.opacity = pp > 0 && pp < 1 ? (0.9 * (1 - pp)).toFixed(3) : "0";
+  ping.style.transform = `scale(${lerp(1, 2.6, EASE.out(pp)).toFixed(3)})`;
+}
+
+const EXT = () => center($("ext"));
+
+function popupPlace() {
+  const ext = offsetIn($("ext"));
+  return { x: ext.x + 22 + 10 - 340, y: 86 };
+}
+
+function popupState(t) {
+  if (t >= T.pop1Open - 0.01 && t < T.pop1Close + 0.2) {
+    const o = ease(t, T.pop1Open, T.pop1Open + 0.16, "out") * (1 - ease(t, T.pop1Close, T.pop1Close + 0.16, "in"));
+    return { open: o, rules: 0, n: 6 };
+  }
+  if (t >= T.pop2Open - 0.01 && t < T.statsIn + 0.4) {
+    const o = ease(t, T.pop2Open, T.pop2Open + 0.16, "out");
+    return { open: o, rules: ease(t, T.rulesOpen + 0.04, T.rulesOpen + 0.44, "inOut"), n: 7 };
+  }
+  return { open: 0, rules: 0, n: 6 };
+}
+
+function strictIndex(t) {
+  let pos = 1;
+  let from = 1;
+  let at = -1;
+  for (const [ts, idx] of T.strict) {
+    if (t >= ts) {
+      from = pos;
+      pos = idx;
+      at = ts;
+    }
+  }
+  const p = at < 0 ? 1 : ease(t, at + 0.03, at + 0.24, "inOut");
+  return { pos: lerp(from, pos, p), target: pos, from, p };
+}
+
+function renderPopup(t) {
+  const pop = $("pop");
+  const st = popupState(t);
+  const place = popupPlace();
+  pop.style.left = `${place.x}px`;
+  pop.style.top = `${place.y}px`;
+  pop.style.visibility = st.open > 0.001 ? "visible" : "hidden";
+  pop.style.opacity = st.open.toFixed(3);
+  pop.style.transform = `scale(${lerp(0.96, 1, st.open).toFixed(4)})`;
+  $("popHead").textContent = `${st.n} posts hidden`;
+  const on = ease(t, T.revealAt, T.revealAt + 0.16, "inOut");
+  $("swRevealTrack").style.background = rgb(mix([40, 71, 79], TEAL_HI, on));
+  $("swRevealKnob").style.transform = `translateX(${(14 * on).toFixed(2)}px)`;
+  const relaxedNow = 1 - Math.min(1, Math.abs(strictIndex(t).pos));
+  $("rulesBody").style.height = `${((state.rulesH - state.builtinsH * relaxedNow) * st.rules).toFixed(2)}px`;
+  $("rulesBody").style.opacity = clamp(st.rules * 1.6).toFixed(3);
+  $("triRules").style.transform = `rotate(${(90 * st.rules).toFixed(1)}deg)`;
+  const s = strictIndex(t);
+  $("segThumb").style.transform = `translateX(${(s.pos * 100).toFixed(2)}%)`;
+  for (let i = 0; i < 3; i++) {
+    const w = 1 - Math.min(1, Math.abs(s.pos - i));
+    $(`seg${i}`).style.color = rgb(mix([157, 180, 190], [6, 34, 43], w));
+    $(`seg${i}`).style.fontWeight = w > 0.5 ? 600 : 400;
+    $(`hint${i}`).style.opacity = w.toFixed(3);
+  }
+  const relaxed = 1 - Math.min(1, Math.abs(s.pos - 0));
+  const b = $("builtins");
+  b.style.height = `${(state.builtinsH * (1 - relaxed)).toFixed(2)}px`;
+  b.style.overflow = "hidden";
+  b.style.opacity = (1 - relaxed).toFixed(3);
+}
+
+function menuPlace() {
+  const c = cursorTargets.sceneText();
+  return { x: c.x + 2, y: c.y + 2 };
+}
+
+function renderMenus(t) {
+  const menu = $("menu");
+  const sub = $("submenu");
+  const open = t >= T.menuOpen && t < T.userHide + 0.12 ? ease(t, T.menuOpen, T.menuOpen + 0.12, "out") * (1 - ease(t, T.userHide + 0.02, T.userHide + 0.12)) : 0;
+  const place = state.menuPlace;
+  menu.style.left = `${place.x}px`;
+  menu.style.top = `${place.y}px`;
+  menu.style.visibility = open > 0.001 ? "visible" : "hidden";
+  menu.style.opacity = open.toFixed(3);
+  menu.style.transform = `scale(${lerp(0.97, 1, open).toFixed(4)})`;
+  const subOpen = t >= T.subOpen && t < T.userHide + 0.12 ? ease(t, T.subOpen, T.subOpen + 0.1, "out") * (1 - ease(t, T.userHide + 0.02, T.userHide + 0.12)) : 0;
+  const mu = $("miUnrager");
+  sub.style.left = `${place.x + menu.offsetWidth - 4}px`;
+  sub.style.top = `${place.y + mu.offsetTop - 7}px`;
+  sub.style.visibility = subOpen > 0.001 ? "visible" : "hidden";
+  sub.style.opacity = subOpen.toFixed(3);
+  $("hlUnrager").style.opacity = t >= T.subOpen - 0.12 && t < T.userHide + 0.12 ? "1" : "0";
+  $("hlHide").style.opacity = t >= T.userHide - 0.14 && t < T.userHide + 0.12 ? "1" : "0";
+}
+
+const cursorTargets = {
+  ext: () => {
+    const c = EXT();
+    return { x: c.x + 2, y: c.y + 3 };
+  },
+  revealSwitch: () => {
+    const c = center($("swRevealTrack"));
+    return { x: c.x + 2, y: c.y + 2 };
+  },
+  away: () => ({ x: 150, y: 300 }),
+  sceneText: () => {
+    const cell = $("cell-scene");
+    const text = cell.querySelector(".text");
+    const o = offsetIn(text);
+    return { x: o.x + 70, y: o.y + 11 };
+  },
+  miUnrager: () => {
+    const m = $("miUnrager");
+    return { x: state.menuPlace.x + 110, y: state.menuPlace.y + m.offsetTop + 15 };
+  },
+  miHide: () => {
+    const sub = $("submenu");
+    return { x: sub.offsetLeft + 70, y: sub.offsetTop + $("miHide").offsetTop + 15 };
+  },
+  summary: () => {
+    const s = $("sumRules");
+    const p = popupPlace();
+    return { x: p.x + 16 + 60, y: p.y + s.offsetTop + 15 };
+  },
+  seg: (i) => () => {
+    const s = $(`seg${i}`);
+    const p = popupPlace();
+    const segBox = $("seg");
+    return { x: p.x + segBox.offsetLeft + s.offsetLeft + s.offsetWidth / 2 + 2, y: p.y + segBox.offsetTop + 14 };
+  },
+};
+
+const fixed = (x, y) => () => ({ x, y });
+const CURSOR_PATH = [
+  [SC.why + 0.02, fixed(640, 560)],
+  [SC.why + 0.62, cursorTargets.ext],
+  [SC.why + 0.85, cursorTargets.ext],
+  [SC.why + 1.32, cursorTargets.revealSwitch],
+  [SC.why + 1.85, cursorTargets.revealSwitch],
+  [SC.why + 2.16, cursorTargets.away],
+  [SC.why + 2.6, fixed(70, 420)],
+  [SC.call + 0.3, fixed(690, 700)],
+  [SC.call + 1.05, cursorTargets.sceneText],
+  [SC.call + 1.3, cursorTargets.sceneText],
+  [SC.call + 1.6, cursorTargets.miUnrager],
+  [SC.call + 1.76, cursorTargets.miUnrager],
+  [SC.call + 2.08, cursorTargets.miHide, "straight"],
+  [SC.call + 2.45, cursorTargets.miHide],
+  [SC.call + 3.0, fixed(700, 900)],
+  [SC.strict + 0.05, fixed(700, 330)],
+  [SC.strict + 0.6, cursorTargets.ext],
+  [SC.strict + 0.82, cursorTargets.ext],
+  [SC.strict + 1.12, cursorTargets.summary],
+  [SC.strict + 1.3, cursorTargets.summary],
+  [SC.strict + 1.86, cursorTargets.seg(0)],
+  [SC.strict + 2.1, cursorTargets.seg(0)],
+  [SC.strict + 2.61, cursorTargets.seg(2), "straight"],
+  [SC.strict + 2.85, cursorTargets.seg(2)],
+  [SC.strict + 3.36, cursorTargets.seg(1), "straight"],
+  [SC.model - 0.1, cursorTargets.seg(1)],
+];
+const CLICKS = [
+  [SC.why + 0.66, "click"],
+  [SC.why + 1.36, "click"],
+  [SC.why + 2.17, "click"],
+  [SC.call + 1.18, "rclick"],
+  [SC.call + 2.13, "click"],
+  [SC.strict + 0.63, "click"],
+  [SC.strict + 1.15, "click"],
+  [SC.strict + 1.9, "click"],
+  [SC.strict + 2.65, "click"],
+  [SC.strict + 3.4, "click"],
+];
+
+/** Where the cursor sits at time t: eased along its path, following targets that move. */
+function cursorAt(t) {
+  const path = CURSOR_PATH;
+  if (t < path[0][0] || t > path[path.length - 1][0]) return null;
+  for (let i = 1; i < path.length; i++) {
+    const [t1, f1, style] = path[i];
+    const [t0, f0] = path[i - 1];
+    if (t <= t1) {
+      const a = f0();
+      const b = f1();
+      const p = EASE.inOutQuint(t1 === t0 ? 1 : (t - t0) / (t1 - t0));
+      const reach = style === "straight" ? 0 : Math.min(40, Math.hypot(b.x - a.x, b.y - a.y) * 0.12);
+      const bow = Math.sin(Math.PI * p) * reach;
+      const nx = -(b.y - a.y);
+      const ny = b.x - a.x;
+      const len = Math.hypot(nx, ny) || 1;
+      return { x: lerp(a.x, b.x, p) + (nx / len) * bow, y: lerp(a.y, b.y, p) + (ny / len) * bow };
+    }
+  }
+  return null;
+}
+
+function cursorVisible(t) {
+  const spans = [
+    [SC.why + 0.02, SC.why + 2.6],
+    [SC.call + 0.3, SC.call + 3.0],
+    [SC.strict + 0.05, SC.model - 0.1],
+  ];
+  let v = 0;
+  for (const [a, b] of spans) v = Math.max(v, ease(t, a, a + 0.2, "out") * (1 - ease(t, b - 0.3, b)));
+  return v;
+}
+
+function renderCursor(t) {
+  const c = cursorAt(t);
+  const cursor = $("cursor");
+  const ripple = $("ripple");
+  const v = cursorVisible(t);
+  if (!c || v <= 0.001) {
+    cursor.style.opacity = "0";
+    ripple.style.opacity = "0";
+    return;
+  }
+  let press = 0;
+  let rip = null;
+  for (const [ct, kind] of CLICKS) {
+    press = Math.max(press, 1 - Math.min(1, Math.abs(t - ct) / 0.09));
+    const rp = prog(t, ct, ct + 0.42);
+    if (rp > 0 && rp < 1) rip = { p: rp, kind };
+  }
+  cursor.style.opacity = v.toFixed(3);
+  cursor.style.transform = `translate(${c.x.toFixed(2)}px, ${c.y.toFixed(2)}px) scale(${(1 - 0.14 * press).toFixed(3)})`;
+  if (rip) {
+    ripple.style.opacity = (0.85 * (1 - rip.p)).toFixed(3);
+    ripple.style.borderColor = rip.kind === "rclick" ? "rgba(98,182,208,0.95)" : "rgba(255,255,255,0.9)";
+    ripple.style.transform = `translate(${(c.x + 2).toFixed(2)}px, ${(c.y + 1).toFixed(2)}px) scale(${lerp(0.25, 1.15, EASE.out(rip.p)).toFixed(3)})`;
+  } else {
+    ripple.style.opacity = "0";
+  }
+}
+
+/** Camera shots: the logical point (lx, ly) of the browser lands on screen at (sx, sy), scaled by s. */
+function shots() {
+  const at = (t, fn) => {
+    layout(t);
+    return fn();
+  };
+  const hotTop = at(T.pop1Close + 0.9, () => state.cellTop.hottake);
+  const sceneTop = at(T.menuOpen, () => state.cellTop.scene);
+  const sceneNote = at(T.userHide + 0.7, () => state.cellTop.scene);
+  const pop = popupPlace();
+  const segY = at(T.strict[0][0], () => pop.y + $("seg").offsetTop);
+  const noteShot = (top, s) => [72 + 6 + 540 / s, top + 78, s, 540, 600];
+  const menuShot = [382, sceneTop + 176, 2.0, 540, 640];
+  const tool = [520, 70, 1.9, 700, 330];
+  const seg = [pop.x + 170, segY + 40];
+  return [
+    [0.0, [360, 0, 1.2, 540, 268]],
+    [SC.title - 0.05, [360, 0, 1.25, 540, 268], "linear"],
+    [T.browserBack, [372, 38, 1.72, 540, 292], "linear"],
+    [SC.why - 0.15, [372, 38, 1.8, 540, 292], "linear"],
+    [T.pop1Close + 0.06, [372, 38, 1.8, 540, 292]],
+    [T.pop1Close + 1.05, noteShot(hotTop, 2.3), "cam"],
+    [SC.call - 0.45, noteShot(hotTop, 2.36), "linear"],
+    [SC.call + 0.85, menuShot, "cam"],
+    [T.userHide - 0.05, [...menuShot.slice(0, 2), 2.04, 540, 640], "linear"],
+    [T.userHide + 0.85, noteShot(sceneNote, 2.3), "cam"],
+    [SC.strict - 0.5, noteShot(sceneNote, 2.36), "linear"],
+    [SC.strict + 0.6, tool, "cam"],
+    [T.rulesOpen, tool, "linear"],
+    [T.rulesOpen + 0.7, [...seg, 2.6, 540, 540], "cam"],
+    [SC.model, [seg[0], seg[1] + 70, 2.55, 540, 540], "inOut"],
+  ];
+}
+
+function renderCamera(t) {
+  const [lx, ly, s, sx, sy] = track(t, state.shots);
+  $("cam").style.transform = `translate(${(sx - lx * s).toFixed(2)}px, ${(sy - ly * s).toFixed(2)}px) scale(${s.toFixed(4)})`;
+  const wrap = $("browserWrap");
+  const out1 = ease(t, T.titleIn, T.titleIn + 0.5, "in");
+  const back = ease(t, T.browserBack, T.browserBack + 0.6, "outQuart");
+  const out2 = ease(t, T.statsIn, T.statsIn + 0.4, "inOut");
+  let y = 0;
+  let o = 1;
+  let sc = 1;
+  if (t < T.browserBack) {
+    y = 180 * out1;
+    o = 1 - out1;
+    sc = 1 - 0.06 * out1;
+  } else {
+    y = 160 * (1 - back) - 80 * out2;
+    o = back * (1 - out2);
+    sc = 1 - 0.05 * (1 - back) - 0.06 * out2;
+  }
+  wrap.style.transform = `translateY(${y.toFixed(2)}px) scale(${sc.toFixed(4)})`;
+  wrap.style.transformOrigin = "540px 700px";
+  wrap.style.opacity = o.toFixed(3);
+  wrap.style.visibility = o > 0.001 ? "visible" : "hidden";
+}
+
+const CAPTIONS = [
+  { t0: -1, t1: SC.title - 0.09, y: 60, head: "Keep x.com." },
+  { t0: 1.98, t1: SC.title - 0.09, y: 138, head: "Lose the rage." },
+  { t0: SC.held + 0.15, t1: SC.why - 0.3, y: 60, head: "Nothing flashes.", sub: "New posts wait out of view\nuntil your model has judged them." },
+  { t0: SC.why + 0.2, t1: SC.call - 0.3, y: 60, head: "See what it hid.", sub: "Every hidden post names the rule that caught it." },
+  { t0: SC.call + 0.1, t1: SC.strict - 0.3, y: 60, head: "Your call wins.", sub: "Right-click any post to hide it,\nor to keep it, for good." },
+  { t0: SC.strict + 0.05, t1: SC.model - 0.3, y: 60, head: "Pick how strict.", sub: "Relaxed, Balanced or Strict,\nwith a count for every rule." },
+  { t0: SC.model + 0.1, t1: SC.install - 0.3, y: 60, head: "Small model.\nFewer mistakes.", sub: "A 4B model on your own computer,\nand nothing you read leaves it." },
+  { t0: SC.install + 0.05, t1: SC.end - 0.25, y: 60, head: "Two commands.\nThree clicks." },
+];
+
+function splitWords(text) {
+  return text
+    .split("\n")
+    .map((line) => line.split(" ").map((w) => `<span class="w"><i>${w}</i></span>`).join(" "))
+    .join("<br>");
+}
+
+function buildCaptions() {
+  const root = $("caps");
+  for (const c of CAPTIONS) {
+    const node = el("div", "cap", `<div class="head">${splitWords(c.head)}</div>${c.sub ? `<div class="sub">${splitWords(c.sub)}</div>` : ""}`);
+    node.style.top = `${c.y}px`;
+    root.append(node);
+    c.node = node;
+    c.words = [...node.querySelectorAll(".head .w > i")];
+    c.subWords = [...node.querySelectorAll(".sub .w > i")];
+  }
+}
+
+function renderCaptions(t) {
+  for (const c of CAPTIONS) {
+    const out = ease(t, c.t1, c.t1 + 0.28, "in");
+    const visible = t >= c.t0 - 0.01 && t <= c.t1 + 0.3;
+    c.node.style.visibility = visible ? "visible" : "hidden";
+    if (!visible) continue;
+    c.node.style.opacity = (1 - out).toFixed(3);
+    c.node.style.transform = `translateY(${(-16 * out).toFixed(2)}px)`;
+    c.words.forEach((w, i) => {
+      const p = c.t0 < 0 ? 1 : ease(t, c.t0 + i * 0.055, c.t0 + i * 0.055 + 0.6, "outExpo");
+      w.style.transform = `translateY(${((1 - p) * 110).toFixed(2)}%)`;
+    });
+    const subStart = c.t0 + 0.16 + c.words.length * 0.04;
+    c.subWords.forEach((w, i) => {
+      const p = ease(t, subStart + i * 0.022, subStart + i * 0.022 + 0.55, "outExpo");
+      w.style.transform = `translateY(${((1 - p) * 110).toFixed(2)}%)`;
+    });
+  }
+  const scrim = ease(t, SC.held - 0.35, SC.held + 0.05) * (1 - ease(t, SC.model - 0.1, SC.model + 0.25));
+  $("scrim").style.opacity = scrim.toFixed(3);
+}
+
+const MARK_PTS = 180;
+
+/** y of the logo's wave at viewBox x (5..27): three quadratic humps settling into a flat line. */
+function markY(vx) {
+  const segs = [
+    [5, 16.5, 7.4, 3.5, 9.8, 16.5],
+    [9.8, 16.5, 12, 26.5, 14.2, 16.5],
+    [14.2, 16.5, 15.6, 11, 17, 16.5],
+  ];
+  for (const [x0, y0, , y1, x2, y2] of segs) {
+    if (vx <= x2) {
+      const u = (vx - x0) / (x2 - x0);
+      return (1 - u) * (1 - u) * y0 + 2 * u * (1 - u) * y1 + u * u * y2;
+    }
+  }
+  return 16.5;
+}
+
+/** Noise level of the opening's loud feed: one step down for each post hidden. */
+function loudness(t) {
+  const hides = Object.values(state.hookHide);
+  let level = 1;
+  for (const h of hides) level -= ease(t, h + 0.1, h + 0.5, "inOut") / hides.length;
+  return clamp(level);
+}
+
+function noise(x, t) {
+  return (
+    Math.sin(x * 23 + t * 19) * 0.42 +
+    Math.sin(x * 47 - t * 31 + 1.3) * 0.3 +
+    Math.sin(x * 83 + t * 47 + 0.7) * 0.18 +
+    Math.sin(x * 131 - t * 67 + 2.1) * 0.1
+  );
+}
+
+function renderLogo(t) {
+  const line = $("logoLine");
+  const rect = $("logoRect");
+  const titleMark = { cx: 540, cy: 392, size: 196 };
+  const endMark = { cx: 540, cy: 330, size: 150 };
+  const hook = { x0: 616, x1: 1012, y: 98 };
+  const inTitle = t < T.endIn;
+  const m = inTitle ? titleMark : endMark;
+  const k = m.size / 32;
+  const mx0 = m.cx - m.size / 2 + 5 * k;
+  const mx1 = m.cx - m.size / 2 + 27 * k;
+  const move = ease(t, T.titleIn + 0.02, T.titleIn + 0.5, "inOutQuint");
+  let shape;
+  let fade;
+  let x0;
+  let x1;
+  let yBase;
+  let amp = 0;
+  let squareIn;
+  let width;
+  let color;
+  if (inTitle) {
+    shape = ease(t, T.titleIn + 0.36, T.titleIn + 0.82, "outBack");
+    squareIn = ease(t, T.titleIn + 0.38, T.titleIn + 0.76, "outBack");
+    fade = ease(t, -1, 0) * (1 - ease(t, T.titleOut, T.titleOut + 0.3, "in"));
+    x0 = lerp(hook.x0, mx0, move);
+    x1 = lerp(hook.x1, mx1, move);
+    yBase = lerp(hook.y, m.cy - m.size / 2 + 16.5 * k, move);
+    amp = loudness(t) * (1 - move);
+    width = lerp(4, 2.6 * k, ease(t, T.titleIn + 0.3, T.titleIn + 0.7));
+    color = mix(mix(RAGE, TEAL_HI, 1 - loudness(t)), [255, 255, 255], ease(t, T.titleIn + 0.38, T.titleIn + 0.66));
+    if (t > T.titleOut + 0.3) fade = 0;
+  } else {
+    shape = ease(t, T.endIn + 0.4, T.endIn + 0.9, "outBack");
+    squareIn = ease(t, T.endIn + 0.12, T.endIn + 0.52, "outBack");
+    fade = ease(t, T.endIn + 0.05, T.endIn + 0.25);
+    x0 = mx0;
+    x1 = mx1;
+    yBase = m.cy - m.size / 2 + 16.5 * k;
+    width = 2.6 * k;
+    color = [255, 255, 255];
+  }
+  const pts = [];
+  for (let i = 0; i < MARK_PTS; i++) {
+    const u = i / (MARK_PTS - 1);
+    const x = lerp(x0, x1, u);
+    const vx = 5 + 22 * u;
+    const markOff = (markY(vx) - 16.5) * k * shape;
+    const env = Math.pow(Math.sin(Math.PI * u), 0.7);
+    const n = noise(u, t) * 40 * amp * env;
+    pts.push(`${x.toFixed(2)},${(yBase + markOff + n).toFixed(2)}`);
+  }
+  line.setAttribute("d", `M${pts.join(" L")}`);
+  line.style.stroke = rgb(color);
+  line.style.strokeWidth = width.toFixed(2);
+  line.style.opacity = fade.toFixed(3);
+  const size = m.size * lerp(0.4, 1, squareIn);
+  rect.setAttribute("x", (m.cx - size / 2).toFixed(2));
+  rect.setAttribute("y", (m.cy - size / 2).toFixed(2));
+  rect.setAttribute("width", size.toFixed(2));
+  rect.setAttribute("height", size.toFixed(2));
+  rect.setAttribute("rx", (size * 7 / 32).toFixed(2));
+  rect.style.opacity = (clamp(squareIn * 1.4) * fade).toFixed(3);
+}
+
+function buildTitle() {
+  const title = $("title");
+  const word = [..."unrager"].map((ch) => `<i>${ch}</i>`).join("");
+  title.innerHTML = `
+    <div class="lockup" style="top: 538px"><span class="wordmark" id="tWord">${word}</span><span class="ver" id="tVer">${SHORT_VERSION}</span></div>
+    <div class="lockup tagline" id="tTag" style="top: 690px">${splitWords("Rage bait, hidden by a model on your machine.")}</div>`;
+  const end = $("end");
+  end.innerHTML = `
+    <div class="lockup" style="top: 440px"><span class="wordmark" id="eWord">${word}</span><span class="ver">${SHORT_VERSION}</span></div>
+    <div class="lockup tagline" id="eTag" style="top: 590px; color: var(--ink)">Keep x.com. Lose the rage.</div>
+    <div class="lockup url" id="eUrl" style="top: 714px">midgarcorp.cc/unrager</div>
+    <div class="lockup fine" id="eFine" style="top: 804px">Free and open source, for macOS and Linux.<br>Works in Chrome, Brave, Edge, Vivaldi and Arc.</div>`;
+}
+
+function renderTitle(t) {
+  const title = $("title");
+  const vis = t > T.titleIn + 0.3 && t < T.titleOut + 0.4;
+  title.style.visibility = vis ? "visible" : "hidden";
+  if (vis) {
+    const out = ease(t, T.titleOut, T.titleOut + 0.3, "in");
+    title.style.opacity = (1 - out).toFixed(3);
+    title.style.transform = `translateY(${(-20 * out).toFixed(2)}px)`;
+    [...$("tWord").children].forEach((c, i) => {
+      const p = ease(t, T.titleIn + 0.5 + i * 0.035, T.titleIn + 0.5 + i * 0.035 + 0.5, "outExpo");
+      c.style.opacity = p.toFixed(3);
+      c.style.transform = `translateY(${((1 - p) * 34).toFixed(2)}px)`;
+    });
+    const vp = ease(t, T.titleIn + 0.8, T.titleIn + 1.15, "outBack");
+    $("tVer").style.opacity = clamp(vp).toFixed(3);
+    $("tVer").style.transform = `scale(${lerp(0.6, 1, vp).toFixed(3)})`;
+    [...$("tTag").querySelectorAll(".w > i")].forEach((w, i) => {
+      const p = ease(t, T.titleIn + 0.84 + i * 0.025, T.titleIn + 0.84 + i * 0.025 + 0.5, "outExpo");
+      w.style.transform = `translateY(${((1 - p) * 110).toFixed(2)}%)`;
+    });
+  }
+  const end = $("end");
+  const evis = t >= T.endIn;
+  end.style.visibility = evis ? "visible" : "hidden";
+  if (evis) {
+    [...$("eWord").children].forEach((c, i) => {
+      const p = ease(t, T.endIn + 0.3 + i * 0.04, T.endIn + 0.3 + i * 0.04 + 0.5, "outExpo");
+      c.style.opacity = p.toFixed(3);
+      c.style.transform = `translateY(${((1 - p) * 30).toFixed(2)}px)`;
+    });
+    const fadeUp = (node, a) => {
+      const p = ease(t, a, a + 0.5, "outExpo");
+      node.style.opacity = p.toFixed(3);
+      node.style.transform = `translateY(${((1 - p) * 18).toFixed(2)}px)`;
+    };
+    fadeUp(end.children[0].querySelector(".ver"), T.endIn + 0.62);
+    fadeUp($("eTag"), T.endIn + 0.7);
+    fadeUp($("eUrl"), T.endIn + 0.95);
+    fadeUp($("eFine"), T.endIn + 1.15);
+  }
+}
+
+function buildStats() {
+  $("stats").innerHTML = `
+    <div class="st-title">Good posts it hid by mistake</div>
+    <div class="st-sub">on a real Home timeline</div>
+    <div class="st-row"><div class="st-name">Qwen3 4B</div><div class="st-bar" id="bar0" style="background: linear-gradient(90deg, #1f6f8b, #62b6d0)"></div><div class="st-val" id="val0" style="color: var(--teal-hi)">4%</div></div>
+    <div class="st-row"><div class="st-name">a 27B model</div><div class="st-bar" id="bar1" style="background: linear-gradient(90deg, #4a2323, #c9564c)"></div><div class="st-val" id="val1" style="color: #ff8a7a">16%</div></div>
+    <div class="st-facts">
+      <div class="fact" id="fact0"><b>2.5 GB</b><span>to download</span></div>
+      <div class="fact" id="fact1"><b>2.4 s</b><span>to load, not 52</span></div>
+      <div class="fact" id="fact2"><b>&lt;1 s</b><span>per page of posts</span></div>
+    </div>
+    <div class="st-foot" id="stFoot">It still caught 18 of the 21 rage posts the 27B caught.</div>`;
+}
+
+function renderStats(t) {
+  const node = $("stats");
+  const vis = t >= T.statsIn + 0.3 && t < T.termIn;
+  node.style.visibility = vis ? "visible" : "hidden";
+  if (!vis) return;
+  const inP = ease(t, T.statsIn + 0.3, T.statsIn + 0.85, "outQuart");
+  const out = ease(t, T.termIn - 0.35, T.termIn, "inOut");
+  node.style.opacity = (inP * (1 - out)).toFixed(3);
+  node.style.transform = `translateY(${((1 - inP) * 60 - out * 40).toFixed(2)}px)`;
+  const full = 740;
+  const bars = [
+    [0.04, T.bars[0]],
+    [0.16, T.bars[1]],
+  ];
+  bars.forEach(([v, at], i) => {
+    const p = ease(t, at, at + 0.9, "outQuart");
+    const w = Math.max(12, (v / 0.16) * full * p);
+    $(`bar${i}`).style.width = `${w.toFixed(2)}px`;
+    const val = $(`val${i}`);
+    val.style.left = `${(w + 24).toFixed(2)}px`;
+    val.style.opacity = clamp(p * 2).toFixed(3);
+    val.textContent = `${Math.round(v * 100 * p)}%`;
+  });
+  ["fact0", "fact1", "fact2", "stFoot"].forEach((id, i) => {
+    const p = ease(t, T.chips + i * 0.16, T.chips + i * 0.16 + 0.5, "outExpo");
+    $(id).style.opacity = p.toFixed(3);
+    $(id).style.transform = `translateY(${((1 - p) * 16).toFixed(2)}px)`;
+  });
+}
+
+const I = SC.install;
+const TERM = [
+  { at: I + 0.43, type: 0.62, prompt: true, text: "ollama pull qwen3:4b-instruct" },
+  { at: I + 1.15, text: "pulling manifest", cls: "dim" },
+  { at: I + 1.25, progress: [I + 1.25, I + 1.63] },
+  { at: I + 1.67, text: "success", cls: "dim" },
+  { at: I + 1.79, type: 0.72, prompt: true, text: "curl -fsSL https://unrager.com/install.sh | bash" },
+  { at: I + 2.63, ok: "llm", text: "Ollama at localhost:11434 · qwen3:4b-instruct" },
+  { at: I + 2.73, ok: "service", text: "runs in the background" },
+  { at: I + 2.83, ok: "server", text: "answering on 127.0.0.1:7777 (filter only)" },
+  { at: I + 2.93, ok: "extension", text: `v${VERSION} unpacked` },
+  { at: I + 3.07, text: "" },
+  { at: I + 3.09, text: "  1. open chrome://extensions", cls: "dim" },
+  { at: I + 3.15, text: "  2. turn on Developer mode", cls: "dim" },
+  { at: I + 3.21, text: "  3. click Load unpacked", cls: "dim" },
+];
+
+function esc(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function renderTerminal(t) {
+  const term = $("term");
+  const vis = t >= T.termIn && t < T.endIn + 0.05;
+  term.style.visibility = vis ? "visible" : "hidden";
+  if (!vis) return;
+  const inP = ease(t, T.termIn, T.termIn + 0.5, "outQuart");
+  const out = ease(t, T.endIn - 0.3, T.endIn + 0.02, "inOut");
+  term.style.opacity = (inP * (1 - out)).toFixed(3);
+  term.style.transform = `translateY(${((1 - inP) * 70 + out * 50).toFixed(2)}px) scale(${(1 - out * 0.04).toFixed(4)})`;
+  const lines = [];
+  let caretLine = -1;
+  for (const [i, line] of TERM.entries()) {
+    if (t < line.at) break;
+    if (line.prompt) {
+      const n = Math.floor(line.text.length * prog(t, line.at, line.at + line.type));
+      lines.push(`<span class="p">$</span> ${esc(line.text.slice(0, n))}`);
+      caretLine = lines.length - 1;
+    } else if (line.progress) {
+      const p = prog(t, line.progress[0], line.progress[1]);
+      const cells = 24;
+      const filled = Math.round(cells * EASE.inOut(p));
+      lines.push(`<span class="dim">pulling 2.5 GB </span>${"█".repeat(filled)}<span class="dim">${"░".repeat(cells - filled)} ${String(Math.round(100 * EASE.inOut(p))).padStart(3)}%</span>`);
+      caretLine = -1;
+    } else if (line.ok) {
+      lines.push(`<span class="ok">✓</span> ${line.ok.padEnd(11)} ${esc(line.text)}`);
+      caretLine = -1;
+    } else {
+      lines.push(line.cls ? `<span class="${line.cls}">${esc(line.text)}</span>` : esc(line.text));
+      caretLine = -1;
+    }
+  }
+  const between = t >= TERM[3].at && t < TERM[4].at;
+  const idlePrompt = t < TERM[0].at || between;
+  if (idlePrompt) lines.push('<span class="p">$</span> ');
+  const blink = Math.floor(t * 2.2) % 2 === 0;
+  const caret = '<span class="caret"></span>';
+  if (idlePrompt) {
+    if (blink) lines[lines.length - 1] += caret;
+  } else if (caretLine === lines.length - 1) {
+    lines[caretLine] += caret;
+  }
+  $("termText").innerHTML = lines.join("\n");
+}
+
+function renderBackground(t) {
+  const g = $("glow");
+  g.style.transform = `translate(${(Math.sin(t * 0.35) * 18).toFixed(2)}px, ${(Math.cos(t * 0.27) * 12).toFixed(2)}px)`;
+}
+
+function layout(t) {
+  renderFeed(t);
+  renderPopup(t);
+}
+
+function seek(t) {
+  renderBackground(t);
+  renderFeed(t);
+  renderBadge(t);
+  renderPopup(t);
+  renderMenus(t);
+  renderCursor(t);
+  renderCamera(t);
+  renderCaptions(t);
+  renderLogo(t);
+  renderTitle(t);
+  renderStats(t);
+  renderTerminal(t);
+}
+
+function collectCues() {
+  for (const [id, t0] of Object.entries(state.hookHide)) cue(t0 + 0.18, "hide");
+  cue(T.scanStart - 0.1, "scan");
+  for (const a of T.arrivals) {
+    cue(a.at, "arrive");
+    cue(a.verdict, POSTS[a.id].rule ? "hide" : "keep");
+  }
+  for (const [t, kind] of CLICKS) cue(t, kind);
+  cue(T.revealAt + 0.02, "toggle");
+  cue(T.menuOpen, "menu");
+  cue(T.subOpen, "menu");
+  cue(T.userHide + 0.1, "hide");
+  cue(T.titleIn, "whoosh");
+  cue(T.titleIn + 0.5, "chime");
+  cue(T.browserBack, "whoosh");
+  cue(T.statsIn, "whoosh");
+  for (const b of T.bars) cue(b, "bar");
+  cue(T.termIn, "whoosh");
+  for (const line of TERM) {
+    if (line.prompt) {
+      for (let i = 0; i < line.text.length; i++) cue(line.at + (line.type * i) / line.text.length, "key");
+      cue(line.at + line.type + 0.12, "enter");
+    }
+    if (line.ok) cue(line.at, "tick");
+  }
+  cue(T.endIn, "whoosh");
+  cue(T.endIn + 0.4, "chime-end");
+  CUES.sort((a, b) => a.t - b.t);
+}
+
+async function boot() {
+  buildBrowser();
+  buildCaptions();
+  buildTitle();
+  buildStats();
+  await document.fonts.load('800 72px "JB"');
+  await document.fonts.load('500 29px "JB"');
+  await document.fonts.load('400 15px "InterV"');
+  await document.fonts.load('700 15px "InterV"');
+  await document.fonts.ready;
+  measure();
+  planHookHides();
+  state.moments = hideMoments();
+  layout(16.0);
+  state.menuPlace = menuPlace();
+  state.shots = shots();
+  collectCues();
+  window.CUES = CUES;
+  window.SCENES = SC;
+  window.seek = seek;
+  window.DURATION = DURATION;
+  window.FPS = FPS;
+  if (PARAMS.has("t")) {
+    seek(parseFloat(PARAMS.get("t")));
+  } else if (PARAMS.has("play")) {
+    const start = performance.now() - parseFloat(PARAMS.get("play") || "0") * 1000;
+    const loop = (now) => {
+      seek(((now - start) / 1000) % DURATION);
+      requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
+  } else {
+    seek(0);
+  }
+  window.__ready = true;
+}
+
+boot();
+</script>
+</body>
+</html>

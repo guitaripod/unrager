@@ -98,6 +98,15 @@ const unragerTimeline = (() => {
     for (const t of group) t.own = true;
   }
 
+  /// Tags the posts of a conversation X shows as one block with the block
+  /// and their place in it, top first.
+  function markThread(group, thread, first) {
+    group.forEach((t, i) => {
+      t.thread = thread;
+      t.position = first + i;
+    });
+  }
+
   /// Collects an entry's posts. A retweet's own id never appears in the DOM:
   /// X renders the original, whose permalink is what `domId` matches cells on.
   function collectFromEntry(entry, out, selfId, prompts) {
@@ -111,6 +120,7 @@ const unragerTimeline = (() => {
       for (const { item } of content.items || []) {
         if (item) collectTweet(item.itemContent, group, notInterested(item.feedbackInfo, prompts));
       }
+      if (entry.entryId) markThread(group, entry.entryId, 0);
     }
     markOwn(group, selfId);
     out.push(...group);
@@ -135,6 +145,7 @@ const unragerTimeline = (() => {
         for (const { item } of block.moduleItems || []) {
           if (item) collectTweet(item.itemContent, group, notInterested(item.feedbackInfo, prompts));
         }
+        if (block.moduleEntryId) markThread(group, block.moduleEntryId, block.prepend ? -1000 : 1000);
         markOwn(group, selfId);
         tweets.push(...group);
       } else if (block.type === "TimelineReplaceEntry" || block.type === "TimelinePinEntry") {

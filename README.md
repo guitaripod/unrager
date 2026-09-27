@@ -109,7 +109,7 @@ On For you, every post gets a **Not interested** button, a small frown next to X
 
 The toolbar badge shows how many posts were hidden on the current tab, `off` while paused, `!` when posts can't be checked and `↑` when the extension and unrager are different versions (open the popup to finish updating).
 
-Only your Home timeline (For you and Following) is filtered. Profiles, search, threads and notifications are always shown in full: the filter exists for the feed you didn't choose, not for the places you went looking. Your own posts, and the conversations you've replied in, are never hidden.
+Only your Home timeline (For you and Following) is filtered. Profiles, search, threads and notifications are always shown in full: the filter exists for the feed you didn't choose, not for the places you went looking. Your own posts, and the conversations you've replied in, are never hidden. A reply to a hidden post is hidden with it, so no reply is left answering nothing.
 
 ## Your rules
 

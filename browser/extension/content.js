@@ -37,6 +37,12 @@
   /// Posts X's own menu offers "Not interested in this post" for, by the id
   /// their cell shows, with the menu item's label.
   const offers = new Map();
+  /// Conversations X shows as one block, a post with the replies under it:
+  /// each block's posts by the id their cell shows, with their place in it.
+  const threads = new Map();
+  /// Replies kept out of view while the post above them waits for its
+  /// verdict, with when that post is shown anyway.
+  const threadHolds = new Map();
   const warned = new Set();
   const health = { failing: false, lastError: null, shapeProblem: null };
   let generation = 0;
@@ -55,7 +61,7 @@
       hidden: hidden.size,
       checked: verdicts.size,
       pending: pending.size,
-      held: holds.size,
+      held: holds.size + threadHolds.size,
       lastError: health.lastError,
       shapeProblem: health.shapeProblem,
     };
@@ -130,6 +136,7 @@
 
   function noteText(info) {
     if (info.overridden) return "Hidden by you";
+    if (info.inherited) return "Hidden: reply to a hidden post";
     return info.reason ? `Hidden: ${shortRule(info.reason)}` : "Hidden by unrager";
   }
 
@@ -166,7 +173,11 @@
     }
     const label = (existing || buildNote(cell)).firstElementChild;
     const text = noteText(info);
-    const title = info.reason && !info.overridden ? `Hidden for: ${info.reason}` : text;
+    const title = info.inherited
+      ? "Hidden because the post it replies to is hidden"
+      : info.reason && !info.overridden
+        ? `Hidden for: ${info.reason}`
+        : text;
     if (label.textContent !== text) label.textContent = text;
     if (label.title !== title) label.title = title;
     return true;
@@ -324,13 +335,14 @@
   function applyHides() {
     const now = Date.now();
     for (const [domId, until] of holds) if (until <= now) holds.delete(domId);
+    for (const [domId, until] of threadHolds) if (until <= now) threadHolds.delete(domId);
     root.toggleAttribute("data-unrager-away", !onHome());
     const buttons = offers.size > 0 && !settings.paused && onHome() && onForYou();
     let marks = false;
     for (const cell of document.querySelectorAll('[data-testid="cellInnerDiv"]')) {
       const id = cellTweetId(cell);
       const info = id === null ? undefined : hidden.get(id);
-      const mark = info ? "hidden" : id !== null && holds.has(id) ? "held" : null;
+      const mark = info ? "hidden" : id !== null && (holds.has(id) || threadHolds.has(id)) ? "held" : null;
       if (mark) {
         if (cell.dataset.unrager !== mark) cell.dataset.unrager = mark;
         marks = true;
@@ -345,7 +357,9 @@
 
   let scheduled = false;
   function scheduleApply() {
-    if (scheduled || (hidden.size === 0 && holds.size === 0 && !marksOnPage && offers.size === 0)) return;
+    if (scheduled || (hidden.size === 0 && holds.size === 0 && threadHolds.size === 0 && !marksOnPage && offers.size === 0)) {
+      return;
+    }
     scheduled = true;
     requestAnimationFrame(() => {
       scheduled = false;
@@ -363,6 +377,45 @@
       offers.delete(tweet.domId);
       offers.set(tweet.domId, tweet.notInterested);
       if (offers.size > MAX_KNOWN) offers.delete(offers.keys().next().value);
+    }
+    if (tweet.thread) {
+      if (!threads.has(tweet.thread)) threads.set(tweet.thread, new Map());
+      threads.get(tweet.thread).set(tweet.domId, { position: tweet.position, own: tweet.own });
+      if (threads.size > MAX_KNOWN) threads.delete(threads.keys().next().value);
+    }
+  }
+
+  /// Whether the user chose to always show the post a cell shows.
+  function keptByUser(domId) {
+    for (const t of known.values()) {
+      if (t.domId !== domId) continue;
+      const v = verdicts.get(t.id);
+      if (v && v.overridden && v.verdict === "keep") return true;
+    }
+    return false;
+  }
+
+  /// A reply under a hidden post in one of X's conversation blocks is hidden
+  /// with it, and waits while that post waits for its verdict, so a followed
+  /// account's reply never sits on the timeline answering nothing. The
+  /// user's own conversations and replies they chose to show are left alone.
+  function syncThreads() {
+    for (const posts of threads.values()) {
+      let hiddenAbove = false;
+      let waitUntil = 0;
+      for (const [domId, post] of [...posts].sort((a, b) => a[1].position - b[1].position)) {
+        const info = hidden.get(domId);
+        const follows = !post.own && !keptByUser(domId);
+        if (hiddenAbove && follows) {
+          if (!info) hidden.set(domId, { reason: null, overridden: false, inherited: true });
+        } else if (info && info.inherited) {
+          hidden.delete(domId);
+        }
+        if (!hidden.has(domId) && waitUntil && follows) threadHolds.set(domId, waitUntil);
+        else threadHolds.delete(domId);
+        if (hidden.has(domId)) hiddenAbove = true;
+        if (holds.has(domId)) waitUntil = Math.max(waitUntil, holds.get(domId));
+      }
     }
   }
 
@@ -386,6 +439,7 @@
   function record(list) {
     let newlyHidden = 0;
     for (const v of list || []) newlyHidden += apply(v.id, v);
+    syncThreads();
     return newlyHidden;
   }
 
@@ -406,6 +460,7 @@
   /// runs out.
   function release(tweets) {
     for (const t of tweets) holds.delete(t.domId);
+    syncThreads();
   }
 
   /// The server leaves out posts its model never answered for (cold start,
@@ -504,6 +559,7 @@
     const ids = new Set([domId]);
     for (const t of known.values()) if (t.domId === domId) ids.add(t.id);
     for (const id of ids) apply(id, { id, verdict, reason: null, overridden: true });
+    syncThreads();
     scheduleApply();
     publish();
     sendToExtension({ type: "override", ids: [...ids], verdict }).then(
@@ -538,6 +594,7 @@
       hold(firstSeen);
       classify(tweets);
     }
+    syncThreads();
     scheduleApply();
     publish();
   }
@@ -551,6 +608,7 @@
     verdicts.clear();
     pending.clear();
     holds.clear();
+    syncThreads();
     health.failing = false;
     if (!settings.paused) classify([...known.values()]);
     scheduleApply();

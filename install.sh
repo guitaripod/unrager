@@ -176,7 +176,7 @@ Next:
   \`unrager setup\` ends with the last step: adding the extension to your
   browser. It's safe to run again any time.
   No model yet? Install Ollama from https://ollama.com, run
-      ollama pull gemma4
+      ollama pull qwen3:4b-instruct
   and then \`unrager setup\` again. LM Studio, vLLM, llama.cpp and SGLang work
   too: \`unrager setup\` shows what to put in filter.toml.
 
@@ -192,11 +192,11 @@ EOF
         cat <<EOF
 
 Next steps:
-  unrager                  launch the terminal client against your X feed
-  unrager demo             launch it against a bundled offline feed
-  unrager doctor           check your X login and the model
-  ollama pull gemma4       give it a model for the rage filter
-  unrager --help           every command
+  unrager                         launch the terminal client against your X feed
+  unrager demo                    launch it against a bundled offline feed
+  unrager doctor                  check your X login and the model
+  ollama pull qwen3:4b-instruct   give it a model for the rage filter
+  unrager --help                  every command
 
 Want the browser extension too? Re-run without UNRAGER_FLAVOR.
 

@@ -17,7 +17,7 @@ These determine whether a new user's first 60 seconds end in "wow" or "uninstall
 
 ### [ ] Fresh-install smoke test on a clean Linux desktop
 **Goal:** confirm `curl -fsSL https://unrager.com/install.sh | bash` → `unrager setup` → Load unpacked → x.com filtering works end-to-end on a never-touched Ubuntu LTS desktop with Ollama.
-**How:** a throwaway VM with a desktop session (systemd user services need one). Run the one-liner, pull gemma4, add the extension in Chrome, open x.com. Record every point where something asked for a dependency, printed a scary warning, or silently hung. File each as a GitHub issue with `first-run` label.
+**How:** a throwaway VM with a desktop session (systemd user services need one). Run the one-liner, pull qwen3:4b-instruct, add the extension in Chrome, open x.com. Record every point where something asked for a dependency, printed a scary warning, or silently hung. File each as a GitHub issue with `first-run` label.
 **Done when:** either the flow works cleanly, or each rough edge has an issue.
 
 ### [ ] Fresh-install smoke test on clean macOS

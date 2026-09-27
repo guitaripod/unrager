@@ -8,7 +8,7 @@ Scriptable screen captures built with [VHS](https://github.com/charmbracelet/vhs
 - `ttyd` — prebuilt: `curl -sL -o ~/bin/ttyd https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64 && chmod +x ~/bin/ttyd` (or `pacman -S ttyd`)
 - `ffmpeg` — `pacman -S ffmpeg`
 - A release build: `cargo build --release`
-- Ollama running with `gemma4:latest` pulled (the filter demos hit it live)
+- Ollama running with `qwen3:4b-instruct` pulled (the filter demos hit it live)
 - A logged-in Vivaldi session with x.com cookies
 
 All tapes set `UNRAGER_DISABLE_KITTY=1` because VHS renders through xterm.js, which doesn't speak the kitty graphics protocol — without the override the inline image placeholders leak fg colors all over the media rows.
@@ -35,7 +35,7 @@ vhs demos/home.tape
 for tape in demos/*.tape; do vhs "$tape"; done
 ```
 
-Each tape takes ~15-45s depending on how much the script sleeps. The scripts deliberately leave generous `Sleep` time after launch so gemma4 can classify the first page before screenshots are taken.
+Each tape takes ~15-45s depending on how much the script sleeps. The scripts deliberately leave generous `Sleep` time after launch so the model can classify the first page before screenshots are taken.
 
 ## Notes on what won't capture
 

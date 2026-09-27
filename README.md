@@ -27,7 +27,7 @@ You need a Chromium browser (Chrome, Brave, Edge, Vivaldi or Arc) on macOS or Li
 **1. Get a model.** The simplest is [Ollama](https://ollama.com): install it, then
 
 ```sh
-ollama pull gemma4
+ollama pull qwen3:4b-instruct
 ```
 
 Already running LM Studio, vLLM, llama.cpp or SGLang? Skip this; step 2 finds it. See [Using another model server](#using-another-model-server).
@@ -168,15 +168,15 @@ model = "qwen3-27b"          # ask, brief, translate
 filter_model = "qwen3-4b"    # judging posts
 ```
 
-Any instruction-tuned model that can answer HIDE or KEEP will do; small ones (4–12B) are plenty, and faster is better, since posts show until their verdict arrives. For Ollama, the default is:
+Any instruction-tuned model that can answer HIDE or KEEP will do; small ones (2–12B) are plenty, and faster is better, since new posts wait for their verdict. For Ollama, the default is:
 
 ```toml
 [llm]
 backend = "ollama"
 host = "http://localhost:11434"
-model = "gemma4:latest"
+model = "qwen3:4b-instruct"
 timeout_seconds = 20
-keep_alive = "10s"   # how long Ollama keeps the model loaded; "5m" keeps it warm between sessions
+keep_alive = "30m"   # how long Ollama keeps the model loaded; "10s" frees the GPU soon after you stop scrolling
 ```
 
 ### Running the model on another computer

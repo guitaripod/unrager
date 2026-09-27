@@ -33,7 +33,7 @@ $ unrager --version
 
 ## `unrager doctor`
 
-<!-- Required. Covers cookies, Ollama, gemma4, query IDs in one shot. Nine times out of ten
+<!-- Required. Covers cookies, the model, query IDs in one shot. Nine times out of ten
      the fix is in this output. -->
 
 ```

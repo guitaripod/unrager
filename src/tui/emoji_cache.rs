@@ -222,7 +222,7 @@ async fn read_or_fetch(
         return None;
     }
     let bytes = resp.bytes().await.ok()?.to_vec();
-    if let Err(e) = tokio::fs::write(path, &bytes).await {
+    if let Err(e) = crate::tui::media::write_cache_atomic(path, &bytes).await {
         tracing::warn!("emoji cache write failed for {stem}: {e}");
     } else {
         tracing::debug!(stem, "emoji cached");

@@ -638,7 +638,9 @@ async fn load_image_targets(targets: Vec<OpenTarget>) -> Vec<RgbaImage> {
                 Ok(resp) => match resp.error_for_status() {
                     Ok(resp) => match resp.bytes().await {
                         Ok(bytes) => {
-                            if let Err(e) = tokio::fs::write(&t.path, &bytes).await {
+                            if let Err(e) =
+                                crate::tui::media::write_cache_atomic(&t.path, &bytes).await
+                            {
                                 tracing::warn!(error = %e, path = %t.path.display(), "screenshot: media write failed");
                                 continue;
                             }

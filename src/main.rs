@@ -5,6 +5,10 @@ use unrager::error::Result;
 #[cfg(feature = "tui")]
 use unrager::tui;
 
+/// How many daily log files stay in the cache directory; older ones are
+/// deleted when a process starts or the day rolls over.
+const LOG_FILES_KEPT: usize = 14;
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -96,18 +100,25 @@ fn init_tracing(debug: bool, tui_mode: bool) {
         )
     };
 
-    let file_layer = unrager::config::cache_dir().ok().map(|cache_dir| {
+    let file_layer = unrager::config::cache_dir().ok().and_then(|cache_dir| {
         let _ = std::fs::create_dir_all(&cache_dir);
-        let appender = tracing_appender::rolling::daily(&cache_dir, "unrager.log");
+        let appender = tracing_appender::rolling::Builder::new()
+            .rotation(tracing_appender::rolling::Rotation::DAILY)
+            .filename_prefix("unrager.log")
+            .max_log_files(LOG_FILES_KEPT)
+            .build(&cache_dir)
+            .ok()?;
         let file_filter = if debug {
             EnvFilter::try_new("unrager=debug,warn").unwrap()
         } else {
             EnvFilter::try_new("unrager=info,warn").unwrap()
         };
-        tracing_subscriber::fmt::layer()
-            .with_writer(appender)
-            .with_ansi(false)
-            .with_filter(file_filter)
+        Some(
+            tracing_subscriber::fmt::layer()
+                .with_writer(appender)
+                .with_ansi(false)
+                .with_filter(file_filter),
+        )
     });
 
     tracing_subscriber::registry()

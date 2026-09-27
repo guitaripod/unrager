@@ -797,7 +797,10 @@ async fn load_or_fetch_bytes(
     Ok(bytes)
 }
 
-async fn write_cache_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+/// Writes a cache file so it only ever appears complete: an interrupted
+/// download leaves a stray temp file, never a truncated file that passes for
+/// a cache hit.
+pub(crate) async fn write_cache_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }

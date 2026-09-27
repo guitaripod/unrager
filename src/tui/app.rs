@@ -409,6 +409,10 @@ impl App {
 
         whisper::start_poll_loop(tx.clone());
         super::app_fetch::spawn_update_check(tx.clone());
+        let downloads = cache_dir.join("media");
+        tokio::task::spawn_blocking(move || {
+            super::external::prune_downloads(&downloads, super::external::DOWNLOADS_CAP_BYTES)
+        });
 
         let warm_client = client.clone();
         tokio::spawn(async move { warm_client.warm_transaction_key().await });

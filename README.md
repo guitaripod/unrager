@@ -168,7 +168,7 @@ Then, in the extension's popup on the other computer, open **Settings** and ente
 
 - **Posts aren't being hidden.** Open the popup. If it says *Reload this tab*, the tab was open before the extension was added or updated. If the badge shows `!`, unrager or the model isn't answering; `unrager doctor` says which.
 - **Something was hidden that shouldn't have been.** Turn on *Show hidden posts* to see what the model hid, then sharpen the topic or add a line to *Anything else the model should know*. Small models misjudge more; a bigger or better-tuned one is the other lever.
-- **Logs.** The background server logs to `journalctl --user -u unrager-serve` (Linux) or `~/Library/Logs/unrager-serve.log` (macOS), and every unrager process writes to `~/.cache/unrager/unrager.log.<date>` (macOS: `~/Library/Caches/unrager/`). On x.com, `window.__unrager_status()` in the page console shows what the extension did on that tab.
+- **Logs.** The background server logs to `journalctl --user -u unrager-serve` (Linux) or `~/Library/Logs/unrager-serve.log` (macOS), and every unrager process writes to `~/.cache/unrager/unrager.log.<date>` (macOS: `~/Library/Caches/unrager/`), keeping the 14 most recent. On x.com, `window.__unrager_status()` in the page console shows what the extension did on that tab.
 
 If the model isn't answering, X keeps working as usual: unrager fails open. Posts stay visible until their verdict arrives, a failed check is never remembered, and those posts are asked about again shortly.
 
@@ -299,7 +299,7 @@ Press `n` or `:notifs` to open notifications as a detail pane without losing you
 - **Read tracking** — tweets mark as read on cursor. For You hides already-seen tweets and deduplicates across pages. `u` jumps to next unread.
 - **Theme engine** — built-in `x-dark` (X brand colors over a Rosé Pine surface palette) and `x-light` (X brand over Solarized Light). Swap live with `:theme x-dark|x-light|auto` or toggle with `Z`; the choice persists.
 - **Color-hashed handles** — FNV-1a hash into a per-theme 20-color palette, consistent across every mention.
-- **Share** — `y` copies a [fixupx](https://fixupx.com) embed URL, `o` opens in browser, `m` downloads every attachment on the selected tweet and opens it (QuickLook / QuickTime on macOS, `xdg-open` on Linux). Cache lives under `~/.cache/unrager/media/<tweet_id>/`.
+- **Share** — `y` copies a [fixupx](https://fixupx.com) embed URL, `o` opens in browser, `m` downloads every attachment on the selected tweet and opens it (QuickLook / QuickTime on macOS, `xdg-open` on Linux). Downloads live under `~/.cache/unrager/media/<tweet_id>/`, trimmed to 512 MB (posts downloaded longest ago go first) when the terminal client starts.
 - **Postcard** — `S` (or `C`) rasterizes the focal tweet to a PNG with one of six themes (`glass`, `synthwave`, `cutout`, `moss`, `blueprint`, `arcade`), "match TUI", or a custom two-color theme. `s` saves to `~/.cache/unrager/screenshots/`, `y` copies. `T` captures the whole reply chain as one tall image; `n` toggles display names, `m` the metrics row. Color emoji render as full-color [Twemoji](https://github.com/jdecked/twemoji) images (the newest set is resolved at runtime and cached under `~/.cache/unrager/emoji/`), at 2× density.
 - **Configurable browser** — `config.toml` supports a `{}` URL placeholder for Chromium `--app={}` kiosk mode.
 - **Digital clock overlay** — optional floating clock with big block-character digits, configured under `[clock]` in `config.toml`.
@@ -393,11 +393,12 @@ Paths are platform-native: Linux uses `~/.config/unrager/`, `~/.cache/unrager/` 
 | `~/.cache/unrager/seen.db` | Read-tracking SQLite |
 | `~/.cache/unrager/feed.db` | Materialized Home buffer for the terminal client and the iPhone app (`feed.db.writer.lock` guards the single writer) |
 | `~/.cache/unrager/about.db` | Country flag and about-profile cache, shared by the terminal client and `unrager serve` |
-| `~/.cache/unrager/media/<tweet_id>/` | Downloaded attachments for `m` (external viewer) |
+| `~/.cache/unrager/media/<tweet_id>/` | Downloaded attachments for `m` (external viewer; pruned to 512 MB) |
 | `~/.cache/unrager/screenshots/` | PNG screenshots written by `S` |
 | `~/.cache/unrager/avatars/<sha256>.bin` | Author-avatar disk cache (LRU-pruned to 50 MB) |
 | `~/.cache/unrager/emoji/<stem>.png` | Color emoji PNGs (Twemoji) composited into screenshots |
 | `~/.cache/unrager/mordor-user-<hash>.opus` | Sliced Mordor loop (generated from `[sound] source`) |
+| `~/.cache/unrager/unrager.log.<date>` | Daily log (the 14 most recent are kept) |
 
 </details>
 

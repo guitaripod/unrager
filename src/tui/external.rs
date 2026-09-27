@@ -1,5 +1,11 @@
 use crate::model::{MediaKind, Tweet};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
+/// How much room the full-size photos and videos `m` downloads for the
+/// external viewer (and screenshots fetch to embed) may take before the
+/// folders of the posts downloaded longest ago are deleted.
+pub const DOWNLOADS_CAP_BYTES: u64 = 512 * 1024 * 1024;
 
 /// macOS splits by media kind: images/GIF-stills go through QuickLook
 /// (`qlmanage -p`) so space/Esc returns focus to the terminal, while videos
@@ -170,7 +176,7 @@ pub async fn download_and_open(targets: Vec<OpenTarget>) -> Result<Vec<PathBuf>,
             .bytes()
             .await
             .map_err(|e| format!("read {}: {e}", t.url))?;
-        tokio::fs::write(&t.path, &bytes)
+        crate::tui::media::write_cache_atomic(&t.path, &bytes)
             .await
             .map_err(|e| format!("write {}: {e}", t.path.display()))?;
     }
@@ -199,6 +205,69 @@ pub async fn download_and_open(targets: Vec<OpenTarget>) -> Result<Vec<PathBuf>,
         }
     }
     Ok(opened)
+}
+
+/// Deletes whole per-post folders under `dir`, the ones written longest ago
+/// first, until what's left fits in `cap_bytes`. Best effort: a folder that
+/// can't be read or removed is skipped.
+pub fn prune_downloads(dir: &Path, cap_bytes: u64) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut folders: Vec<(PathBuf, u64, SystemTime)> = entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .map(|e| {
+            let path = e.path();
+            let (bytes, written) = folder_usage(&path);
+            (path, bytes, written)
+        })
+        .collect();
+    let total: u64 = folders.iter().map(|(_, bytes, _)| bytes).sum();
+    if total <= cap_bytes {
+        return;
+    }
+    folders.sort_by_key(|(_, _, written)| *written);
+    let mut excess = total - cap_bytes;
+    let mut removed = 0usize;
+    for (path, bytes, _) in folders {
+        if excess == 0 {
+            break;
+        }
+        match std::fs::remove_dir_all(&path) {
+            Ok(()) => {
+                excess = excess.saturating_sub(bytes);
+                removed += 1;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, path = %path.display(), "downloaded media prune failed")
+            }
+        }
+    }
+    tracing::info!(
+        removed,
+        total_bytes = total,
+        cap_bytes,
+        "pruned downloaded media"
+    );
+}
+
+/// The combined size of the files in a post's download folder, and when the
+/// newest of them was written.
+fn folder_usage(dir: &Path) -> (u64, SystemTime) {
+    let mut bytes = 0;
+    let mut written = SystemTime::UNIX_EPOCH;
+    let files = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.metadata().ok())
+        .filter(std::fs::Metadata::is_file);
+    for meta in files {
+        bytes += meta.len();
+        written = written.max(meta.modified().unwrap_or(SystemTime::UNIX_EPOCH));
+    }
+    (bytes, written)
 }
 
 async fn spawn_image_viewer(paths: Vec<PathBuf>) -> Result<(), String> {
@@ -545,5 +614,43 @@ mod tests {
         assert_eq!(prog, "xdg-open");
         assert!(prefix.is_empty());
         assert!(!multi);
+    }
+
+    fn downloaded_posts(ages_secs: &[(&str, u64)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let now = SystemTime::now();
+        for (post, age) in ages_secs {
+            let folder = dir.path().join(post);
+            std::fs::create_dir(&folder).unwrap();
+            let file = std::fs::File::create(folder.join("0.mp4")).unwrap();
+            file.set_len(100).unwrap();
+            file.set_modified(now - std::time::Duration::from_secs(*age))
+                .unwrap();
+        }
+        std::fs::write(dir.path().join("stray.txt"), vec![0u8; 1000]).unwrap();
+        dir
+    }
+
+    #[test]
+    fn downloads_over_the_cap_lose_the_posts_downloaded_longest_ago() {
+        let dir = downloaded_posts(&[("new", 100), ("old", 300), ("mid", 200)]);
+
+        prune_downloads(dir.path(), 250);
+
+        assert!(!dir.path().join("old").exists());
+        assert!(dir.path().join("mid/0.mp4").exists());
+        assert!(dir.path().join("new/0.mp4").exists());
+        assert!(dir.path().join("stray.txt").exists());
+    }
+
+    #[test]
+    fn downloads_within_the_cap_are_kept() {
+        let dir = downloaded_posts(&[("a", 300), ("b", 200), ("c", 100)]);
+
+        prune_downloads(dir.path(), 300);
+
+        for post in ["a", "b", "c"] {
+            assert!(dir.path().join(post).join("0.mp4").exists());
+        }
     }
 }

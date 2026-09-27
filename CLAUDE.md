@@ -103,7 +103,7 @@ Server side: `POST /api/classify` (`src/server/routes/classify.rs`, batch ≤100
 
 ## Logging
 
-Daily rolling log file at `~/.cache/unrager/unrager.log.YYYY-MM-DD` via `tracing-appender`. Default level is `info` for the file (captures notification fetch lifecycle, filter decisions, milestone crossings); `--debug` upgrades file output to `debug`. Stderr stays at `warn`.
+Daily rolling log file at `~/.cache/unrager/unrager.log.YYYY-MM-DD` via `tracing-appender`, keeping the `LOG_FILES_KEPT` (14) most recent files. Default level is `info` for the file (captures notification fetch lifecycle, filter decisions, milestone crossings); `--debug` upgrades file output to `debug`. Stderr stays at `warn`.
 
 When debugging a silent failure — a fetch that seems stuck, missing data, a TUI action that does nothing — check the log file first: `tail -f ~/.cache/unrager/unrager.log.$(date +%Y-%m-%d)`. Add `tracing::info!`/`tracing::debug!` calls around any new async work you introduce. Events that deserve logging: spawn start, completion with counts, error paths, silent "skip" branches (loading locks, stale guards). Never use `println!`/`eprintln!` from within the TUI loop — it corrupts the render.
 
@@ -115,12 +115,12 @@ When debugging a silent failure — a fetch that seems stuck, missing data, a TU
 - `~/.config/unrager/filter.toml` — rage filter rubric and `[llm]` model settings (auto-created from `src/tui/filter_default.toml`; rule edits over the API go through `FilterConfig::write_rules_into`, which keeps comments)
 - `~/.local/share/unrager/browser-extension/` — the unpacked extension `unrager setup` writes; `setup.json` beside it remembers setup's `--apps`/`--bind`
 - `~/.config/systemd/user/unrager-serve.service` (macOS: `~/Library/LaunchAgents/com.unrager.serve.plist`, log `~/Library/Logs/unrager-serve.log`) — the background server `unrager setup` installs
-- `~/.cache/unrager/unrager.log.YYYY-MM-DD` — rolling log file
+- `~/.cache/unrager/unrager.log.YYYY-MM-DD` — rolling log file (14 most recent kept)
 - `~/.cache/unrager/seen.db` — read tracking (auto-pruned to 2 days)
 - `~/.cache/unrager/filter.db` — filter verdict cache (auto-pruned to 7 days; rubric-hash invalidates the rest)
 - `~/.cache/unrager/feed.db` — materialized Home buffer (capped ring, `[feed] buffer_cap` default 200/variant); `feed.db.writer.lock` is the `fs2` flock for the single ingest writer
 - `~/.cache/unrager/query-ids.json` — scraped GraphQL query ID cache
-- `~/.cache/unrager/media/<tweet_id>/` — downloaded attachments for external viewer (`m` key); one subdir per tweet so Linux image viewers can arrow through siblings
+- `~/.cache/unrager/media/<tweet_id>/` — downloaded attachments for external viewer (`m` key) and screenshot embeds; one subdir per tweet so Linux image viewers can arrow through siblings; whole subdirs LRU-pruned to 512 MB in the background at TUI startup (`external::prune_downloads`)
 - `~/.cache/unrager/avatars/<sha256(url)>.bin` — author-avatar disk cache; LRU-pruned to 50 MB on startup; URL-keyed so X's per-upload URL rotation self-invalidates
 - `~/.cache/unrager/emoji/<stem>.png` — color emoji PNGs (Twemoji) composited into screenshots; keyed by Twemoji filename stem, cached forever (tiny files)
 

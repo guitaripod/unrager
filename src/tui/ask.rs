@@ -273,7 +273,7 @@ pub fn send(
             has_thread = thread.is_some(),
             "ask stream start"
         );
-        let images = if llm.supports_vision() {
+        let images = if llm.sees_images().await {
             fetch_images(&tweet).await
         } else {
             Vec::new()

@@ -1,6 +1,8 @@
 use crate::config;
 use crate::error::Result;
-use crate::tui::filter::{ChatRequest, FilterConfig, LlmBackend, LlmConfig};
+use crate::tui::filter::{
+    ChatRequest, DEFAULT_OLLAMA_MODEL, FilterConfig, LlmBackend, LlmConfig, pick_fallback_model,
+};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -73,19 +75,18 @@ pub async fn llm(report: &mut Report) {
             return;
         }
     };
-    let llm = &filter_cfg.llm;
-    let host = llm.host.trim_end_matches('/');
-    let model = &llm.model;
-    let kind = backend_name(llm.backend);
+    let filter = filter_cfg.llm.for_filter();
+    let host = filter.host.trim_end_matches('/');
+    let kind = backend_name(filter.backend);
 
-    let models = match llm.list_models().await {
+    let models = match filter.list_models().await {
         Ok(m) => m,
         Err(e) => {
             println!("✗ llm         {kind} not reachable at {host} ({e})");
-            match llm.backend {
+            match filter.backend {
                 LlmBackend::Ollama => {
                     println!(
-                        "              → install Ollama from https://ollama.com, then: ollama pull gemma4"
+                        "              → install Ollama from https://ollama.com, then: ollama pull {DEFAULT_OLLAMA_MODEL}"
                     );
                 }
                 LlmBackend::OpenAi => {
@@ -98,13 +99,81 @@ pub async fn llm(report: &mut Report) {
         }
     };
 
+    let separate = filter.model != filter_cfg.llm.model;
+    let filter_role = if separate {
+        ModelRole::Filter
+    } else {
+        ModelRole::Everything
+    };
+    if check_model(&filter, &models, filter_role, &path, report) {
+        if let LlmBackend::OpenAi = filter.backend {
+            smoke_test(&filter, report).await;
+        }
+    }
+    if separate {
+        check_model(
+            &filter_cfg.llm,
+            &models,
+            ModelRole::AskBriefTranslate,
+            &path,
+            report,
+        );
+    }
+}
+
+/// What a checked model is used for: a model only ask, brief and translate
+/// use is a warning when missing, since the filter works without it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ModelRole {
+    Everything,
+    Filter,
+    AskBriefTranslate,
+}
+
+impl ModelRole {
+    fn suffix(self) -> &'static str {
+        match self {
+            ModelRole::Everything => "",
+            ModelRole::Filter => " (filter)",
+            ModelRole::AskBriefTranslate => " (ask, brief, translate)",
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            ModelRole::Filter => "filter_model",
+            ModelRole::Everything | ModelRole::AskBriefTranslate => "model",
+        }
+    }
+}
+
+/// Reports whether the server has `llm.model`, returning whether it does.
+fn check_model(
+    llm: &LlmConfig,
+    models: &[String],
+    role: ModelRole,
+    path: &str,
+    report: &mut Report,
+) -> bool {
+    let host = llm.host.trim_end_matches('/');
+    let model = &llm.model;
+    let suffix = role.suffix();
+    let needed = role != ModelRole::AskBriefTranslate;
+    let missing = |report: &mut Report| {
+        if needed {
+            report.errors += 1;
+        } else {
+            report.warnings += 1;
+        }
+    };
+    let mark = if needed { "✗" } else { "!" };
     match llm.backend {
         LlmBackend::Ollama => {
-            if llm.is_served_by(&models) {
-                println!("✓ llm         Ollama at {host} · {model}");
-                return;
+            if llm.is_served_by(models) {
+                println!("✓ llm         Ollama at {host} · {model}{suffix}");
+                return true;
             }
-            match models.iter().find(|n| n.starts_with("gemma4")) {
+            match pick_fallback_model(models).filter(|_| needed) {
                 Some(fallback) => {
                     println!(
                         "! llm         {model} isn't pulled; the filter falls back to {fallback}"
@@ -113,30 +182,33 @@ pub async fn llm(report: &mut Report) {
                     report.warnings += 1;
                 }
                 None => {
-                    println!("✗ llm         Ollama at {host} has no {model}");
-                    println!("              → ollama pull gemma4");
+                    println!("{mark} llm         Ollama at {host} has no {model}{suffix}");
+                    println!("              → ollama pull {model}");
                     if !models.is_empty() {
                         println!(
-                            "              → or set `model` in {path} to one you have: {}",
+                            "              → or set `{}` in {path} to one you have: {}",
+                            role.key(),
                             models.join(", ")
                         );
                     }
-                    report.errors += 1;
+                    missing(report);
                 }
             }
+            false
         }
         LlmBackend::OpenAi => {
-            if !llm.is_served_by(&models) {
-                println!("✗ llm         {host} doesn't serve {model:?}");
+            if !llm.is_served_by(models) {
+                println!("{mark} llm         {host} doesn't serve {model:?}{suffix}");
                 println!(
-                    "              → set `model` in {path} to one it does: {}",
+                    "              → set `{}` in {path} to one it does: {}",
+                    role.key(),
                     models.join(", ")
                 );
-                report.errors += 1;
-                return;
+                missing(report);
+                return false;
             }
-            println!("✓ llm         OpenAI-compatible server at {host} · {model}");
-            smoke_test(llm, report).await;
+            println!("✓ llm         OpenAI-compatible server at {host} · {model}{suffix}");
+            true
         }
     }
 }
@@ -194,6 +266,7 @@ async fn suggest_local_servers(configured_host: &str) {
                 timeout_seconds: 2,
                 keep_alive: String::new(),
                 api_key: None,
+                filter_model: None,
             };
             match probe.list_models_within(Duration::from_millis(800)).await {
                 Ok(models) if !models.is_empty() => Some((host, backend, name, models)),

@@ -1226,6 +1226,7 @@ mod tests {
                 timeout_seconds: 1,
                 keep_alive: "10s".into(),
                 api_key: None,
+                filter_model: None,
             },
         };
         app.filter_classifier = Some(crate::tui::filter::Classifier::new(&cfg));
@@ -1273,6 +1274,7 @@ mod tests {
                 timeout_seconds: 1,
                 keep_alive: "10s".into(),
                 api_key: None,
+                filter_model: None,
             },
         };
         app.filter_classifier = Some(crate::tui::filter::Classifier::new(&cfg));
@@ -2014,6 +2016,7 @@ mod tests {
                 timeout_seconds: 1,
                 keep_alive: "10s".into(),
                 api_key: None,
+                filter_model: None,
             },
         };
         app.filter_classifier = Some(crate::tui::filter::Classifier::new(&cfg));
@@ -2126,6 +2129,7 @@ mod tests {
                 timeout_seconds: 1,
                 keep_alive: "10s".into(),
                 api_key: None,
+                filter_model: None,
             },
         };
         app.filter_classifier = Some(crate::tui::filter::Classifier::new(&cfg));

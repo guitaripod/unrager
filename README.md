@@ -160,6 +160,14 @@ timeout_seconds = 120            # a model that has to load first is slow to ans
 
 If the model you configured isn't reachable, `unrager setup` and `unrager doctor` look for servers on those usual ports and print the lines to paste. Both also send the model one real request, since a server can list a model it can't actually run.
 
+The filter can run on its own model. A small one judges posts as well as a big one (on unrager's tests Qwen3 4B hid fewer good posts than a 27B model), loads in a couple of seconds and can stay loaded, so new posts never wait on a model that's still starting. To keep a bigger model for ask, brief and translate in the terminal client, name both:
+
+```toml
+[llm]
+model = "qwen3-27b"          # ask, brief, translate
+filter_model = "qwen3-4b"    # judging posts
+```
+
 Any instruction-tuned model that can answer HIDE or KEEP will do; small ones (4–12B) are plenty, and faster is better, since posts show until their verdict arrives. For Ollama, the default is:
 
 ```toml

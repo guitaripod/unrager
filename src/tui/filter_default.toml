@@ -32,15 +32,22 @@ strictness = "balanced"
 # anywhere else.
 [llm]
 # Ollama, the default: install it from https://ollama.com, then run
-# `ollama pull gemma4`.
+# `ollama pull qwen3:4b-instruct`. It's 2.5 GB and fast, and in unrager's
+# tests it hid fewer good posts than models many times its size;
+# `unrager eval` checks any other model you try.
 backend = "ollama"
 host = "http://localhost:11434"
-model = "gemma4:latest"
+model = "qwen3:4b-instruct"
 timeout_seconds = 20
-# How long Ollama keeps the model loaded after the last post it checked.
+# How long Ollama keeps the model loaded after the last post it checked, so
+# new posts are judged at once. "30m" keeps it through a browsing session;
 # "10s" hands the GPU back to games and other apps soon after you stop
-# scrolling; "5m" keeps it warm between sessions; "0" unloads it right away.
-keep_alive = "10s"
+# scrolling; "-1" keeps it loaded for good.
+keep_alive = "30m"
+# Ask, brief and translate in the terminal client use `model` too. To give
+# them a bigger model while the filter keeps the small one, set `model` to
+# the big one and uncomment this:
+# filter_model = "qwen3:4b-instruct"
 
 # Any other server that speaks the OpenAI chat API works too: LM Studio,
 # vLLM, llama.cpp's llama-server, SGLang, llama-swap. Replace the lines above

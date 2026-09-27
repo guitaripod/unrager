@@ -1318,6 +1318,7 @@ mod store_tests {
                 timeout_seconds: 1,
                 keep_alive: "10s".into(),
                 api_key: None,
+                filter_model: None,
             },
         }
     }

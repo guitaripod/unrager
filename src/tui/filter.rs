@@ -185,11 +185,24 @@ impl LlmBackend {
     }
 }
 
+/// The model a fresh `filter.toml` points Ollama at, and the one `doctor`
+/// and `setup` tell people to pull.
+pub const DEFAULT_OLLAMA_MODEL: &str = "qwen3:4b-instruct";
+
+/// Installed Ollama models the filter falls back to, in order, when the
+/// configured one isn't pulled: the default, then the default before it.
+const FALLBACK_MODEL_PREFIXES: [&str; 2] = ["qwen3:4b-instruct", "gemma4"];
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
     #[serde(default)]
     pub backend: LlmBackend,
     pub model: String,
+    /// The model the rage filter uses when it should differ from `model`:
+    /// a small, fast one for judging posts, while ask, brief and translate
+    /// keep a bigger one. Same server, same backend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter_model: Option<String>,
     pub host: String,
     pub timeout_seconds: u64,
     /// Ollama-only model-residency control; never written into an
@@ -208,6 +221,7 @@ impl std::fmt::Debug for LlmConfig {
         f.debug_struct("LlmConfig")
             .field("backend", &self.backend)
             .field("model", &self.model)
+            .field("filter_model", &self.filter_model)
             .field("host", &self.host)
             .field("timeout_seconds", &self.timeout_seconds)
             .field("keep_alive", &self.keep_alive)
@@ -254,11 +268,44 @@ impl LlmConfig {
         }
     }
 
-    /// Vision (image-attached ask turns) stays Ollama-only: OpenAI-compatible
-    /// servers disagree on multimodal message shapes and most local text
-    /// models have no vision tower anyway.
-    pub fn supports_vision(&self) -> bool {
-        matches!(self.backend, LlmBackend::Ollama)
+    /// This config pointed at the filter's model: `filter_model` when set,
+    /// `model` otherwise.
+    pub fn for_filter(&self) -> LlmConfig {
+        let mut filter = self.clone();
+        if let Some(model) = self
+            .filter_model
+            .as_deref()
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+        {
+            filter.model = model.to_string();
+        }
+        filter.filter_model = None;
+        filter
+    }
+
+    /// Whether ask can attach a post's photos. Only Ollama gets images
+    /// (OpenAI-compatible servers disagree on multimodal message shapes), and
+    /// only for a model whose `/api/show` lists vision, so a text-only model
+    /// like the default isn't sent pictures it can't read.
+    pub async fn sees_images(&self) -> bool {
+        if !matches!(self.backend, LlmBackend::Ollama) {
+            return false;
+        }
+        let url = format!("{}/api/show", self.host.trim_end_matches('/'));
+        let shown = self
+            .authorized(self.build_client().post(&url))
+            .timeout(Duration::from_secs(5))
+            .json(&serde_json::json!({ "model": self.model }))
+            .send()
+            .await;
+        match shown {
+            Ok(resp) => match resp.json::<Value>().await {
+                Ok(body) => shows_vision(&body),
+                Err(_) => false,
+            },
+            Err(_) => false,
+        }
     }
 
     /// Applies the configured API key, if any.
@@ -663,8 +710,9 @@ impl FilterConfig {
         Ok(doc.to_string())
     }
 
-    /// Hashes the rubric AND the backend/model, so switching `[llm]
-    /// backend`/`model` in `filter.toml` auto-invalidates cached verdicts
+    /// Hashes the rubric AND the backend and the filter's model (its
+    /// `filter_model` when set), so switching either in `filter.toml`
+    /// auto-invalidates cached verdicts
     /// instead of silently serving a different model's HIDE/KEEP calls as if
     /// the new one produced them. Uses the same invalidation mechanism as a
     /// rubric edit (orphaned rows, later swept by the retention prune) — no
@@ -691,7 +739,7 @@ impl FilterConfig {
         hasher.update(b"---\n");
         hasher.update(self.llm.backend.as_str().as_bytes());
         hasher.update(b"\n");
-        hasher.update(self.llm.model.as_bytes());
+        hasher.update(self.llm.for_filter().model.as_bytes());
         let digest = hasher.finalize();
         hex16(&digest[..8])
     }
@@ -1376,9 +1424,10 @@ pub struct TweetPayload {
 
 impl Classifier {
     pub fn new(cfg: &FilterConfig) -> Self {
+        let llm = cfg.llm.for_filter();
         Self {
-            http: cfg.llm.build_client(),
-            llm: cfg.llm.clone(),
+            http: llm.build_client(),
+            llm,
             sem: Arc::new(Semaphore::new(8)),
             rubric: Arc::new(RwLock::new(Arc::new(Rubric::new(cfg)))),
         }
@@ -1402,18 +1451,19 @@ impl Classifier {
         match self.llm.backend {
             LlmBackend::Ollama => {
                 if available.is_empty() {
-                    return Err(Error::Config(
-                        "ollama has no models installed (run `ollama pull gemma4`)".into(),
-                    ));
+                    return Err(Error::Config(format!(
+                        "ollama has no models installed (run `ollama pull {DEFAULT_OLLAMA_MODEL}`)"
+                    )));
                 }
                 if self.llm.is_served_by(&available) {
                     tracing::info!("filter using configured model {}", self.llm.model);
                     return Ok(());
                 }
                 let fallback = pick_fallback_model(&available).ok_or_else(|| {
-                    Error::Config(
-                        "no gemma4 model installed in ollama (run `ollama pull gemma4`)".into(),
-                    )
+                    Error::Config(format!(
+                        "{} isn't installed in ollama (run `ollama pull {}`)",
+                        self.llm.model, self.llm.model
+                    ))
                 })?;
                 tracing::warn!(
                     "configured model {:?} not installed; falling back to {:?}",
@@ -1613,8 +1663,21 @@ fn ollama_tagged(name: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
-fn pick_fallback_model(available: &[String]) -> Option<String> {
-    available.iter().find(|n| n.starts_with("gemma4")).cloned()
+/// Whether an Ollama `/api/show` body says the model reads images. An
+/// Ollama too old to list capabilities is trusted to, as before it did.
+fn shows_vision(show: &Value) -> bool {
+    match show.get("capabilities").and_then(Value::as_array) {
+        Some(capabilities) => capabilities.iter().any(|c| c.as_str() == Some("vision")),
+        None => true,
+    }
+}
+
+/// The installed model the filter falls back to when the configured one
+/// isn't pulled, if any.
+pub fn pick_fallback_model(available: &[String]) -> Option<String> {
+    FALLBACK_MODEL_PREFIXES
+        .iter()
+        .find_map(|prefix| available.iter().find(|n| n.starts_with(prefix)).cloned())
 }
 
 pub fn translate_async(rest_id: String, text: String, llm: LlmConfig, tx: EventTx) {
@@ -1691,6 +1754,7 @@ mod tests {
             timeout_seconds: 20,
             keep_alive: "30s".into(),
             api_key: None,
+            filter_model: None,
         }
     }
 
@@ -1702,6 +1766,7 @@ mod tests {
             timeout_seconds: 20,
             keep_alive: "30s".into(),
             api_key: None,
+            filter_model: None,
         }
     }
 
@@ -1837,7 +1902,8 @@ mod tests {
     fn default_content_roundtrips() {
         let parsed: FilterConfig = toml::from_str(FilterConfig::default_content()).unwrap();
         assert!(!parsed.drop_topics.is_empty());
-        assert_eq!(parsed.llm.model, "gemma4:latest");
+        assert_eq!(parsed.llm.model, DEFAULT_OLLAMA_MODEL);
+        assert_eq!(parsed.llm.filter_model, None);
         assert_eq!(parsed.llm.backend, LlmBackend::Ollama);
         assert!(parsed.rubric_hash().chars().count() == 16);
     }
@@ -1864,14 +1930,14 @@ mod tests {
         let written = edited.write_rules_into(DEFAULT_CONFIG).unwrap();
         assert!(written.contains("# unrager's rules"));
         assert!(written.contains("# Any other server that speaks the OpenAI chat API"));
-        assert!(written.contains("keep_alive = \"10s\""));
+        assert!(written.contains("keep_alive = \"30m\""));
         assert!(
             written.contains("drop_topics = [\n    \"war\",\n    'tabs versus \"spaces\"',\n]")
         );
         let reparsed: FilterConfig = toml::from_str(&written).unwrap();
         assert_eq!(reparsed.drop_topics, edited.drop_topics);
         assert_eq!(reparsed.extra_guidance, "keep sports");
-        assert_eq!(reparsed.llm.model, "gemma4:latest");
+        assert_eq!(reparsed.llm.model, DEFAULT_OLLAMA_MODEL);
     }
 
     #[test]
@@ -2381,10 +2447,60 @@ mod tests {
         assert!(unkeyed.headers().get("authorization").is_none());
     }
 
+    #[tokio::test]
+    async fn only_ollama_models_that_list_vision_get_images() {
+        assert!(!openai_cfg().sees_images().await);
+        assert!(shows_vision(
+            &serde_json::json!({ "capabilities": ["completion", "vision"] })
+        ));
+        assert!(!shows_vision(
+            &serde_json::json!({ "capabilities": ["completion"] })
+        ));
+        assert!(shows_vision(&serde_json::json!({ "template": "…" })));
+    }
+
     #[test]
-    fn supports_vision_is_ollama_only() {
-        assert!(ollama_cfg().supports_vision());
-        assert!(!openai_cfg().supports_vision());
+    fn the_filter_can_run_its_own_model() {
+        let mut c = cfg(vec!["war"], "");
+        let shared = c.rubric_hash();
+        assert_eq!(c.llm.for_filter().model, "gemma4:latest");
+        c.llm.filter_model = Some("qwen3:4b-instruct".into());
+        assert_eq!(c.llm.for_filter().model, "qwen3:4b-instruct");
+        assert_eq!(c.llm.for_filter().filter_model, None);
+        assert_ne!(
+            c.rubric_hash(),
+            shared,
+            "the filter's model is part of the rubric"
+        );
+        let filtering = c.rubric_hash();
+        c.llm.model = "big-model".into();
+        assert_eq!(
+            c.rubric_hash(),
+            filtering,
+            "the ask/brief model doesn't touch cached verdicts"
+        );
+        c.llm.filter_model = Some("  ".into());
+        assert_eq!(c.llm.for_filter().model, "big-model");
+        let classifier = Classifier::new(&cfg_with_filter_model());
+        assert_eq!(classifier.handle().llm().model, "small");
+    }
+
+    fn cfg_with_filter_model() -> FilterConfig {
+        let mut c = cfg(vec!["war"], "");
+        c.llm.filter_model = Some("small".into());
+        c
+    }
+
+    #[test]
+    fn fallback_prefers_the_default_model() {
+        let available = vec![
+            "gemma4:e4b".to_string(),
+            "qwen3:4b-instruct-2507-q4_K_M".to_string(),
+        ];
+        assert_eq!(
+            pick_fallback_model(&available),
+            Some("qwen3:4b-instruct-2507-q4_K_M".into())
+        );
     }
 
     #[test]

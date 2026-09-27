@@ -113,7 +113,7 @@ When debugging a silent failure — a fetch that seems stuck, missing data, a TU
 - `~/.config/unrager/session.json` — TUI state
 - `~/.config/unrager/tokens.json` — OAuth tokens (0600)
 - `~/.config/unrager/config.toml` — general settings (browser command, `cookie_browser` pin, query ID overrides)
-- `~/.config/unrager/filter.toml` — rage filter rubric, `strictness` and `[llm]` model settings (auto-created from `src/tui/filter_default.toml`; rule edits over the API go through `FilterConfig::write_rules_into`, which keeps comments)
+- `~/.config/unrager/filter.toml` — rage filter rubric, `strictness` and `[llm]` model settings (`filter_model` gives the filter its own model) (auto-created from `src/tui/filter_default.toml`; rule edits over the API go through `FilterConfig::write_rules_into`, which keeps comments)
 - `~/.local/share/unrager/browser-extension/` — the unpacked extension `unrager setup` writes; `setup.json` beside it remembers setup's `--apps`/`--bind`
 - `~/.config/systemd/user/unrager-serve.service` (macOS: `~/Library/LaunchAgents/com.unrager.serve.plist`, log `~/Library/Logs/unrager-serve.log`) — the background server `unrager setup` installs
 - `~/.cache/unrager/unrager.log.YYYY-MM-DD` — rolling log file (14 most recent kept)
@@ -175,9 +175,10 @@ If you write a commit and find no `[Unreleased]` bullet matches it, that is the 
 - `ChatRequest { messages, thinking, temperature, max_tokens }` — backend-neutral; `build_body` translates it (`think`/`options.num_predict` for Ollama, top-level `chat_template_kwargs.enable_thinking`/`max_tokens` for OpenAI-compatible servers — confirmed live on SGLang that `extra_body` nesting is an SDK convention, not wire format)
 - `chat()` / `chat_with_client()` — one-shot, parses `{message:{content}}` vs `{choices:[{message}]}`
 - `stream_chat()` — dispatches to NDJSON (Ollama) or SSE `data:`/`[DONE]` (parsed by the pure, tested `parse_sse_data_line`)
-- `list_models()` / `list_models_within()` (`/api/tags` vs `/v1/models`), `is_served_by()` (Ollama names without a tag mean `:latest`), `supports_vision()` (Ollama only — ask skips image attach otherwise), `build_client()`/`build_streaming_client()`
+- `list_models()` / `list_models_within()` (`/api/tags` vs `/v1/models`), `is_served_by()` (Ollama names without a tag mean `:latest`), `sees_images()` (Ollama models whose `/api/show` lists `vision`; an Ollama too old to list capabilities is trusted — ask skips image attach otherwise), `build_client()`/`build_streaming_client()`
+- `for_filter()` — the config with `filter_model` swapped in: the filter (`Classifier::new`, `unrager eval`, doctor's first check) runs on it, while translate, ask, brief and whisper use `model`. The default Ollama model is `DEFAULT_OLLAMA_MODEL` (`qwen3:4b-instruct`, kept loaded 30 min by the default `keep_alive`); a configured model that isn't pulled falls back to it, then to any `gemma4` (`pick_fallback_model`).
 
-`rubric_hash` folds in backend + model, so switching either invalidates cached verdicts. Ollama-only residency calls (`ask::preload`/`unload`, `keep_alive`) are no-ops on OpenAI-compatible servers. New LLM features must go through `ChatRequest` + these helpers, never hand-built JSON bodies.
+`rubric_hash` folds in the backend and the filter's model, so switching either invalidates cached verdicts (changing only `model` while `filter_model` is set doesn't). Ollama-only residency calls (`ask::preload`/`unload`, `keep_alive`) are no-ops on OpenAI-compatible servers. New LLM features must go through `ChatRequest` + these helpers, never hand-built JSON bodies.
 
 ## Filter
 

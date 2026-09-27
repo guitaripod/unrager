@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 /// Past this share of good posts hidden, the filter costs more than it saves.
 const WRONGLY_HIDDEN_LIMIT: f64 = 0.05;
 /// Below this share of rage caught, the filter isn't doing its job.
-const CAUGHT_FLOOR: f64 = 0.80;
+const CAUGHT_FLOOR: f64 = 0.75;
 
 #[derive(Debug, Parser)]
 pub struct Args {
@@ -33,7 +33,7 @@ pub async fn run(args: Args) -> Result<()> {
     cfg.llm = mine.llm;
     cfg.strictness = args.strictness.unwrap_or(mine.strictness);
     if let Some(model) = args.model {
-        cfg.llm.model = model;
+        cfg.llm.filter_model = Some(model);
     }
     let mut classifier = Classifier::new(&cfg);
     classifier.init().await?;

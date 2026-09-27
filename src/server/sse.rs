@@ -154,7 +154,7 @@ pub async fn ask_context_stream(
     let tweet = state.tweet(&req.tweet_id).await?;
     let cfg = state.filter_config.lock().await.clone();
 
-    let images = if cfg.llm.supports_vision() {
+    let images = if cfg.llm.sees_images().await {
         ask::fetch_images(&tweet).await
     } else {
         Vec::new()

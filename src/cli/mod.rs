@@ -41,7 +41,7 @@ The browser extension works in Chrome, Brave, Edge, Vivaldi and Arc. Run
 `unrager` with no arguments for the terminal client, which filters the same
 way; the other subcommands read and post from the command line.
 
-The model runs on Ollama by default (`ollama pull gemma4`). Any server that
+The model runs on Ollama by default (`ollama pull qwen3:4b-instruct`). Any server that
 speaks the OpenAI chat API works too (LM Studio, vLLM, llama.cpp, SGLang):
 set [llm] in filter.toml.
 

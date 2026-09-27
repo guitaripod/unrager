@@ -14,6 +14,7 @@ pub mod demo;
 pub mod editor;
 pub mod emoji_cache;
 pub mod engage;
+pub mod eval;
 pub mod event;
 pub mod external;
 pub mod filter;

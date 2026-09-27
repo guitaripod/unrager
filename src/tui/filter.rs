@@ -64,6 +64,19 @@ pub enum Strictness {
     Strict,
 }
 
+impl std::str::FromStr for Strictness {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "relaxed" => Ok(Strictness::Relaxed),
+            "balanced" => Ok(Strictness::Balanced),
+            "strict" => Ok(Strictness::Strict),
+            other => Err(format!("{other:?} isn't relaxed, balanced or strict")),
+        }
+    }
+}
+
 impl Strictness {
     /// The name `filter.toml` uses; it feeds the rubric hash, so it must not
     /// drift with Rust renames.

@@ -135,6 +135,16 @@ Your own posts are never hidden. The model names the rule behind each post it hi
 
 Each verdict is cached per post, so scrolling back is instant and nothing is judged twice. Changing the rules, the strictness or the model throws the cache out automatically.
 
+### Checking your model
+
+unrager treats a good post hidden as a worse mistake than a rage post let through: you can see the rage post and scroll past it, but you never learn about the good one. `unrager eval` measures both. Your model judges a set of about 200 made-up posts, labelled against the default rules, and unrager prints how many good posts it hid, how much rage it caught, and whether that's good enough to filter with:
+
+```sh
+unrager eval                          # your model, your strictness
+unrager eval --strictness strict      # compare a strictness level
+unrager eval --model qwen3:4b-instruct --mistakes   # try another model, list what it got wrong
+```
+
 ## Using another model server
 
 Any server with an OpenAI-compatible `/v1/chat/completions` endpoint works. Set it under `[llm]` in `filter.toml`:
@@ -359,6 +369,7 @@ UDID=<UDID> ./scripts/install-device.sh     # build → ad-hoc sign → devicect
 |---|---|
 | `unrager setup` | Check the model, run unrager in the background, unpack the extension (`--apps` for the iPhone app, `--bind`, `--no-service`, `--uninstall`) |
 | `unrager doctor` | Check the model, the background server, the extension and your X login |
+| `unrager eval` | Measure how well your model filters (`--strictness`, `--model`, `--mistakes`) |
 | `unrager update` | Update to the latest release (restarts the server and refreshes the extension) |
 | `unrager serve` | Run the server by hand (`--filter-only` for just the extension, `--bind`) |
 | `unrager whoami` | Confirm which account your cookies belong to |

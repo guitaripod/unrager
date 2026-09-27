@@ -7,6 +7,8 @@ pub mod common;
 pub mod demo;
 #[cfg(feature = "tui")]
 pub mod doctor;
+#[cfg(feature = "tui")]
+pub mod eval;
 pub mod home;
 pub mod mentions;
 #[cfg(feature = "tui")]
@@ -112,6 +114,12 @@ pub enum Command {
     #[cfg(feature = "tui")]
     #[command(about = "Check the model, background server, extension and X login")]
     Doctor(doctor::Args),
+
+    #[cfg(feature = "tui")]
+    #[command(
+        about = "Measure how well your model filters: it judges a set of made-up posts labelled against the default rules"
+    )]
+    Eval(eval::Args),
 
     #[command(about = "Update unrager to the latest release")]
     Update(update::Args),

@@ -66,6 +66,8 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::Demo(args) => cli::demo::run(args).await,
         #[cfg(feature = "tui")]
         Command::Doctor(args) => cli::doctor::run(args).await,
+        #[cfg(feature = "tui")]
+        Command::Eval(args) => cli::eval::run(args).await,
         Command::Update(args) => cli::update::run(args).await,
         #[cfg(feature = "server")]
         Command::Setup(args) => cli::setup::run(args).await,

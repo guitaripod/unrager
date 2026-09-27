@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **A Not interested button on every For you post does what X's "Not interested in this post" does, in one click.** It sits in the post's header next to X's Grok button, a small frown in X's own colours. Clicking it picks *Not interested in this post* from the post's ⋯ menu without the menu ever showing, so X gets the same feedback, swaps the post for its usual confirmation and keeps its Undo and "Show fewer posts from" follow-ups. It appears only on posts X offers that choice for (For you, not Following, not ads) and not while filtering is paused; when X's menu doesn't have the item, the menu closes and the button turns red for a moment.
+
 ## [0.23.0] — 2026-09-27
 
 - **The filter can run on its own small model, and new installs default to one.** Set `filter_model` under `[llm]` in `filter.toml` and the filter judges posts with it, while ask, brief and translate keep `model`. A small model is the better filter: on real posts Qwen3 4B hid a quarter as many good posts as a 27B model (4% against 16%) and caught 18 of the 21 clear rage posts the 27B caught, answers a page in well under a second, loads in about two seconds rather than most of a minute, and uses about 3 GB of GPU memory, so it can stay loaded and new posts never wait on a model that's still starting. New `filter.toml` files use `qwen3:4b-instruct` on Ollama (2.5 GB, where `gemma4:latest` is 9.6 GB) and keep it loaded for 30 minutes. Existing files are left alone; when the configured model isn't pulled, the filter falls back to `qwen3:4b-instruct` and then to any Gemma 4. `unrager doctor` checks both models, and ask only attaches a post's photos when Ollama says the model can read them.

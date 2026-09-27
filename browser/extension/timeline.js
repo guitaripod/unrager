@@ -51,7 +51,26 @@ const unragerTimeline = (() => {
     return Array.from(s).slice(0, MAX_TEXT_CHARS).join("");
   }
 
-  function collectTweet(itemContent, out) {
+  /// X's own label for "Not interested in this post", in the user's language,
+  /// by the feedback key entries point at. Only For you responses carry these.
+  function notInterestedPrompts(urt) {
+    const prompts = new Map();
+    const actions = (urt.responseObjects && urt.responseObjects.feedbackActions) || [];
+    for (const action of actions) {
+      const value = action && action.value;
+      if (value && value.feedbackType === "DontLike" && value.prompt) prompts.set(action.key, value.prompt);
+    }
+    return prompts;
+  }
+
+  function notInterested(feedbackInfo, prompts) {
+    for (const key of (feedbackInfo && feedbackInfo.feedbackKeys) || []) {
+      if (prompts.has(key)) return prompts.get(key);
+    }
+    return null;
+  }
+
+  function collectTweet(itemContent, out, offer) {
     if (!itemContent || itemContent.itemType !== "TimelineTweet") return;
     if (itemContent.promotedMetadata != null) return;
     const node = unwrap(itemContent.tweet_results && itemContent.tweet_results.result);
@@ -67,6 +86,7 @@ const unragerTimeline = (() => {
       text: classificationText(node),
       authors: authors.filter(Boolean),
       own: false,
+      notInterested: offer || null,
     });
   }
 
@@ -80,15 +100,17 @@ const unragerTimeline = (() => {
 
   /// Collects an entry's posts. A retweet's own id never appears in the DOM:
   /// X renders the original, whose permalink is what `domId` matches cells on.
-  function collectFromEntry(entry, out, selfId) {
+  function collectFromEntry(entry, out, selfId, prompts) {
     const content = entry && entry.content;
     if (!content) return;
     const entryType = content.entryType || content.__typename;
     const group = [];
     if (entryType === "TimelineTimelineItem") {
-      collectTweet(content.itemContent, group);
+      collectTweet(content.itemContent, group, notInterested(content.feedbackInfo, prompts));
     } else if (entryType === "TimelineTimelineModule") {
-      for (const item of content.items || []) collectTweet(item.item && item.item.itemContent, group);
+      for (const { item } of content.items || []) {
+        if (item) collectTweet(item.itemContent, group, notInterested(item.feedbackInfo, prompts));
+      }
     }
     markOwn(group, selfId);
     out.push(...group);
@@ -98,24 +120,25 @@ const unragerTimeline = (() => {
   /// wrong, so drift surfaces as a warning instead of a silently idle filter.
   /// `selfId` is the signed-in account's id, for marking the user's own posts.
   function extractTweets(json, selfId) {
-    const instructions =
-      json && json.data && json.data.home && json.data.home.home_timeline_urt
-        ? json.data.home.home_timeline_urt.instructions
-        : null;
+    const urt = json && json.data && json.data.home ? json.data.home.home_timeline_urt : null;
+    const instructions = urt ? urt.instructions : null;
     if (!Array.isArray(instructions)) {
       return { tweets: [], problem: "no instructions[] at data.home.home_timeline_urt" };
     }
+    const prompts = notInterestedPrompts(urt);
     const tweets = [];
     for (const block of instructions) {
       if (block.type === "TimelineAddEntries") {
-        for (const entry of block.entries || []) collectFromEntry(entry, tweets, selfId);
+        for (const entry of block.entries || []) collectFromEntry(entry, tweets, selfId, prompts);
       } else if (block.type === "TimelineAddToModule") {
         const group = [];
-        for (const item of block.moduleItems || []) collectTweet(item.item && item.item.itemContent, group);
+        for (const { item } of block.moduleItems || []) {
+          if (item) collectTweet(item.itemContent, group, notInterested(item.feedbackInfo, prompts));
+        }
         markOwn(group, selfId);
         tweets.push(...group);
       } else if (block.type === "TimelineReplaceEntry" || block.type === "TimelinePinEntry") {
-        collectFromEntry(block.entry, tweets, selfId);
+        collectFromEntry(block.entry, tweets, selfId, prompts);
       }
     }
     const hadEntries = instructions.some(

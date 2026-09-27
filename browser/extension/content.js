@@ -13,6 +13,13 @@
   /// answers a page well within it; when it's still loading (or down), the
   /// post is shown anyway once this runs out.
   const HOLD_MS = 2500;
+  /// How long the Not interested button waits for X's menu to open or close.
+  const MENU_WAIT_MS = 1500;
+  const MENU = '#layers [role="menu"]';
+  const FROWN =
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.75"/>' +
+    '<path d="M8.6 16.3c.85-1.2 2-1.8 3.4-1.8s2.55.6 3.4 1.8"/>' +
+    '<circle class="unrager-ni-eye" cx="9.2" cy="10.1" r="1.2"/><circle class="unrager-ni-eye" cx="14.8" cy="10.1" r="1.2"/></svg>';
   const TIMELINE_OPS = ["HomeTimeline", "HomeLatestTimeline"];
   const origin = window.location.origin;
   const root = document.documentElement;
@@ -27,6 +34,9 @@
   const holds = new Map();
   /// Cells to hide, by the id they show, with the rule behind it.
   const hidden = new Map();
+  /// Posts X's own menu offers "Not interested in this post" for, by the id
+  /// their cell shows, with the menu item's label.
+  const offers = new Map();
   const warned = new Set();
   const health = { failing: false, lastError: null, shapeProblem: null };
   let generation = 0;
@@ -162,6 +172,152 @@
     return true;
   }
 
+  /// Whether For you is the tab showing: X's menu offers "Not interested"
+  /// only there, and the same post can turn up under Following too.
+  function onForYou() {
+    const tabs = document.querySelectorAll('[data-testid="primaryColumn"] [role="tablist"] [role="tab"]');
+    return tabs.length === 0 || tabs[0].getAttribute("aria-selected") === "true";
+  }
+
+  /// Polls once a frame until `find` returns something, or gives up with null.
+  function waitFor(find, ms) {
+    return new Promise((resolve) => {
+      const until = Date.now() + ms;
+      const poll = () => {
+        const found = find();
+        if (found || Date.now() > until) resolve(found || null);
+        else requestAnimationFrame(poll);
+      };
+      poll();
+    });
+  }
+
+  function closeMenu(dropdown) {
+    const layer = dropdown && dropdown.closest('[role="group"]');
+    const mask = layer && layer.firstElementChild && layer.firstElementChild.firstElementChild;
+    if (mask && !mask.contains(dropdown)) mask.click();
+    else document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", keyCode: 27, bubbles: true }));
+  }
+
+  /// X's own "Not interested in this post", minus the menu: opens the post's
+  /// "More" menu out of sight and picks the item X labelled `prompt`, so X
+  /// sends its feedback and swaps in its usual confirmation, Undo included.
+  async function pickNotInterested(article, prompt) {
+    const caret = article.querySelector('[data-testid="caret"]');
+    if (!caret) return false;
+    root.setAttribute("data-unrager-quiet-menu", "");
+    let picked = false;
+    try {
+      caret.click();
+      const dropdown = await waitFor(() => document.querySelector(`${MENU} [data-testid="Dropdown"]`), MENU_WAIT_MS);
+      const items = dropdown ? [...dropdown.querySelectorAll('[role="menuitem"]')] : [];
+      const item = items.find((el) => el.textContent.trim() === prompt);
+      if (item) {
+        item.click();
+        picked = true;
+      } else if (dropdown) {
+        closeMenu(dropdown);
+      }
+      await waitFor(() => !document.querySelector(MENU), MENU_WAIT_MS);
+    } finally {
+      root.removeAttribute("data-unrager-quiet-menu");
+    }
+    return picked;
+  }
+
+  /// Keeps a press on the button from reaching the post, which X opens on
+  /// any click inside it.
+  function swallow(e) {
+    e.stopPropagation();
+  }
+
+  async function onNotInterested(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const button = e.currentTarget;
+    const cell = button.closest('[data-testid="cellInnerDiv"]');
+    const article = button.closest('article[data-testid="tweet"]');
+    const id = cell ? cellTweetId(cell) : null;
+    const prompt = id === null ? null : offers.get(id);
+    if (!article || !prompt || button.dataset.state === "busy") return;
+    button.dataset.state = "busy";
+    if (await pickNotInterested(article, prompt)) {
+      delete button.dataset.state;
+      return;
+    }
+    button.dataset.state = "failed";
+    button.title = "X's menu didn't offer this for this post";
+    setTimeout(() => {
+      delete button.dataset.state;
+      button.title = prompt;
+    }, 2000);
+  }
+
+  /// Where the button goes in the post's header: just before the Grok
+  /// button's branch of the row it shares with "More", or before "More"
+  /// itself where there's no Grok button.
+  function slotFor(article, caret) {
+    const grok = article.querySelector('[aria-label*="Grok"]:is(button, [role="button"])');
+    if (grok) {
+      let branch = grok;
+      while (branch.parentElement && branch.parentElement !== article && !branch.parentElement.contains(caret)) {
+        branch = branch.parentElement;
+      }
+      const row = branch.parentElement;
+      if (row && row !== article && row.contains(caret) && !row.querySelector('[data-testid="tweetText"]')) {
+        return { row, before: branch, gap: caret.getBoundingClientRect().left - grok.getBoundingClientRect().right };
+      }
+    }
+    let branch = caret;
+    while (branch.parentElement && branch.parentElement !== article && branch.parentElement.childElementCount === 1) {
+      branch = branch.parentElement;
+    }
+    return branch.parentElement && branch.parentElement !== article ? { row: branch.parentElement, before: branch, gap: 0 } : null;
+  }
+
+  /// The one-click Not interested button, sized and coloured from the post's
+  /// own "More" button so it sits in X's header like one of X's.
+  function buildButton(caret, prompt, gap) {
+    const wrap = document.createElement("div");
+    wrap.className = "unrager-ni-wrap";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "unrager-ni";
+    button.title = prompt;
+    button.setAttribute("aria-label", prompt);
+    button.innerHTML = FROWN;
+    const box = caret.getBoundingClientRect();
+    if (box.width && box.height) {
+      button.style.width = `${box.width}px`;
+      button.style.height = `${box.height}px`;
+    }
+    const icon = caret.querySelector("svg");
+    if (icon) button.style.color = getComputedStyle(icon).color;
+    if (gap > 0) wrap.style.marginRight = `${gap}px`;
+    button.addEventListener("click", onNotInterested);
+    for (const type of ["pointerdown", "pointerup", "mousedown", "mouseup"]) button.addEventListener(type, swallow);
+    wrap.append(button);
+    return wrap;
+  }
+
+  /// Adds the button to a post X offers "Not interested" for, and takes it
+  /// off a cell X has since reused for a post it doesn't. A cell out of view
+  /// gets it once it shows, when X's header can be measured to match.
+  function syncButton(cell, id, show) {
+    const article = cell.querySelector('article[data-testid="tweet"]');
+    if (!article) return;
+    const existing = article.querySelector(".unrager-ni-wrap");
+    const prompt = show && id !== null ? offers.get(id) : undefined;
+    if (!prompt) {
+      if (existing) existing.remove();
+      return;
+    }
+    if (existing) return;
+    const caret = article.querySelector('[data-testid="caret"]');
+    const slot = caret && slotFor(article, caret);
+    if (slot) slot.row.insertBefore(buildButton(caret, prompt, slot.gap), slot.before);
+  }
+
   /// Marks cells instead of removing them: X's React tree owns these nodes,
   /// and pulling one out from under it breaks its next unmount. Re-checking
   /// every cell lets a recycled cell showing a different post come back.
@@ -169,6 +325,7 @@
     const now = Date.now();
     for (const [domId, until] of holds) if (until <= now) holds.delete(domId);
     root.toggleAttribute("data-unrager-away", !onHome());
+    const buttons = offers.size > 0 && !settings.paused && onHome() && onForYou();
     let marks = false;
     for (const cell of document.querySelectorAll('[data-testid="cellInnerDiv"]')) {
       const id = cellTweetId(cell);
@@ -181,13 +338,14 @@
         delete cell.dataset.unrager;
       }
       if (syncNote(cell, info)) marks = true;
+      syncButton(cell, id, buttons && (!mark || (mark === "hidden" && settings.reveal)));
     }
     marksOnPage = marks;
   }
 
   let scheduled = false;
   function scheduleApply() {
-    if (scheduled || (hidden.size === 0 && holds.size === 0 && !marksOnPage)) return;
+    if (scheduled || (hidden.size === 0 && holds.size === 0 && !marksOnPage && offers.size === 0)) return;
     scheduled = true;
     requestAnimationFrame(() => {
       scheduled = false;
@@ -201,6 +359,11 @@
     known.delete(tweet.id);
     known.set(tweet.id, tweet);
     if (known.size > MAX_KNOWN) known.delete(known.keys().next().value);
+    if (tweet.notInterested) {
+      offers.delete(tweet.domId);
+      offers.set(tweet.domId, tweet.notInterested);
+      if (offers.size > MAX_KNOWN) offers.delete(offers.keys().next().value);
+    }
   }
 
   /// Takes in one verdict and updates whether its post's cell is hidden.

@@ -105,6 +105,8 @@ Click the unrager icon for its popup:
 
 Right-click any post on your Home timeline for **Hide this post** or **Show this post**. unrager remembers the choice: it outranks the model in the extension, the terminal client and the iPhone app, and survives rule changes.
 
+On For you, every post gets a **Not interested** button, a small frown next to X's Grok button. One click does what *Not interested in this post* in the post's ⋯ menu does, without the menu: X shows its usual confirmation, with Undo and **Show fewer posts from** that account.
+
 The toolbar badge shows how many posts were hidden on the current tab, `off` while paused, `!` when posts can't be checked and `↑` when the extension and unrager are different versions (open the popup to finish updating).
 
 Only your Home timeline (For you and Following) is filtered. Profiles, search, threads and notifications are always shown in full: the filter exists for the feed you didn't choose, not for the places you went looking. Your own posts, and the conversations you've replied in, are never hidden.
@@ -201,7 +203,7 @@ If the model isn't answering, X keeps working as usual: unrager fails open. A ne
 
 ## Privacy
 
-- The extension reads only the Home timeline responses X already sends your browser. It requests nothing extra from X and changes nothing X sends; it only hides posts on your screen.
+- The extension reads only the Home timeline responses X already sends your browser. It requests nothing extra from X and changes nothing X sends; it only hides posts on your screen. The **Not interested** button clicks X's own menu item for you, so what X hears is exactly what it would from the menu.
 - Post text goes from the extension to unrager on your computer, and from unrager to your model. There's no account, no telemetry, and no server of ours in the loop.
 - The background server `unrager setup` installs runs in filter-only mode: it never reads your X login and never talks to X.
 - The server answers only the extension and the iPhone app. Requests from web pages are refused, so a site you visit can't use it through your browser.

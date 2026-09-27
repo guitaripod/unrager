@@ -52,3 +52,84 @@ html:not([data-unrager-reveal]) .unrager-note {
   outline: 2px solid #62b6d0;
   outline-offset: 2px;
 }
+
+html[data-unrager-quiet-menu] #layers [role="menu"] {
+  opacity: 0 !important;
+}
+
+html:is([data-unrager-paused], [data-unrager-away]) .unrager-ni-wrap {
+  display: none;
+}
+
+.unrager-ni-wrap {
+  display: flex;
+  align-items: center;
+  align-self: center;
+}
+
+.unrager-ni {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: rgb(113, 118, 123);
+  cursor: pointer;
+}
+
+.unrager-ni::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 34px;
+  height: 34px;
+  margin: -17px 0 0 -17px;
+  border-radius: 50%;
+  transition: background-color 0.2s;
+}
+
+.unrager-ni svg {
+  position: relative;
+  width: 18.75px;
+  height: 18.75px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+}
+
+.unrager-ni .unrager-ni-eye {
+  fill: currentColor;
+  stroke: none;
+}
+
+.unrager-ni:is(:hover, :focus-visible) {
+  color: rgb(29, 155, 240) !important;
+}
+
+.unrager-ni:is(:hover, :focus-visible)::before {
+  background-color: rgba(29, 155, 240, 0.1);
+}
+
+.unrager-ni:focus-visible {
+  outline: none;
+}
+
+.unrager-ni:focus-visible::before {
+  box-shadow: 0 0 0 2px rgb(29, 155, 240);
+}
+
+.unrager-ni[data-state="busy"] {
+  opacity: 0.5;
+  cursor: progress;
+}
+
+.unrager-ni[data-state="failed"] {
+  color: rgb(244, 33, 46) !important;
+}

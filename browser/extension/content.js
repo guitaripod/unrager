@@ -138,41 +138,74 @@
     }, RETRY_DELAY_MS);
   }
 
-  /// A reply from before the last rules change is dropped outright: reset()
+  /// Asks the server about `tweets` through the background worker. With
+  /// `cachedOnly`, only the posts it has already judged come back, and at
+  /// once, even while the model is still loading.
+  async function ask(tweets, cachedOnly) {
+    try {
+      return await sendToExtension({
+        type: "classify",
+        cachedOnly,
+        tweets: tweets.map(({ id, text }) => ({ id, text })),
+      });
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  }
+
+  /// Takes in verdicts and returns how many posts they newly hid.
+  function record(list) {
+    let newlyHidden = 0;
+    for (const v of list || []) {
+      verdicts.set(v.id, v.verdict);
+      if (v.verdict === "hide") newlyHidden += markHidden(v.id);
+    }
+    return newlyHidden;
+  }
+
+  /// Hides what the server has already judged straight away, then waits on
+  /// the model for the rest, which can take a minute after an idle spell. A
+  /// reply from before the last rules change is dropped outright: reset()
   /// already queued those posts again under the new rules.
   async function classifyChunk(chunk, attempt = 1) {
     const gen = generation;
-    let resp;
-    try {
-      resp = await sendToExtension({
-        type: "classify",
-        tweets: chunk.map(({ id, text }) => ({ id, text })),
-      });
-    } catch (e) {
-      resp = { ok: false, error: String((e && e.message) || e) };
+    let hid = 0;
+    if (attempt === 1) {
+      const cached = await ask(chunk, true);
+      if (gen !== generation) return;
+      if (cached && cached.ok && cached.verdicts.length) {
+        hid += record(cached.verdicts);
+        for (const t of chunk) if (verdicts.has(t.id)) pending.delete(t.id);
+        scheduleApply();
+        publish();
+      }
     }
+    const rest = chunk.filter((t) => !verdicts.has(t.id));
+    if (!rest.length) {
+      health.failing = false;
+      console.debug(`[unrager] checked ${chunk.length}/${chunk.length} from cache, hid ${hid}`);
+      publish();
+      return;
+    }
+    const resp = await ask(rest, false);
     if (gen !== generation) return;
-    for (const t of chunk) pending.delete(t.id);
+    for (const t of rest) pending.delete(t.id);
     if (!resp || !resp.ok) {
       health.failing = true;
       health.lastError = (resp && resp.error) || "no response";
       warn(`couldn't check posts, leaving them visible: ${health.lastError}`);
-      retryLater(chunk, attempt);
+      retryLater(rest, attempt);
       publish();
       return;
     }
-    let newlyHidden = 0;
-    for (const v of resp.verdicts || []) {
-      verdicts.set(v.id, v.verdict);
-      if (v.verdict === "hide") newlyHidden += markHidden(v.id);
-    }
-    const unanswered = chunk.filter((t) => !verdicts.has(t.id));
-    health.failing = unanswered.length === chunk.length;
+    hid += record(resp.verdicts);
+    const unanswered = rest.filter((t) => !verdicts.has(t.id));
+    health.failing = unanswered.length === rest.length;
     if (health.failing) {
       health.lastError = "the model didn't answer";
       warn("the model didn't answer; leaving these posts visible");
     }
-    console.debug(`[unrager] checked ${chunk.length - unanswered.length}/${chunk.length}, hid ${newlyHidden}`);
+    console.debug(`[unrager] checked ${chunk.length - unanswered.length}/${chunk.length}, hid ${hid}`);
     retryLater(unanswered, attempt);
     scheduleApply();
     publish();

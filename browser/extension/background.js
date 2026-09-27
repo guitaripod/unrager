@@ -17,14 +17,14 @@ async function serverUrl() {
   return (server || DEFAULT_SERVER).replace(/\/+$/, "");
 }
 
-async function classify(tweets) {
+async function classify(tweets, cachedOnly) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
     const res = await fetch(`${await serverUrl()}/api/classify`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tweets }),
+      body: JSON.stringify({ tweets, cached_only: !!cachedOnly }),
       signal: controller.signal,
     });
     if (!res.ok) throw new Error(`http ${res.status}: ${(await res.text()).slice(0, 200)}`);
@@ -45,7 +45,7 @@ function setBadge(tabId, { hidden, state }) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg) return false;
   if (msg.type === "classify" && Array.isArray(msg.tweets)) {
-    classify(msg.tweets).then(
+    classify(msg.tweets, msg.cachedOnly).then(
       (verdicts) => sendResponse({ ok: true, verdicts }),
       (err) => sendResponse({ ok: false, error: String((err && err.message) || err) })
     );

@@ -68,7 +68,7 @@ pub async fn run() -> Result<()> {
 /// Whether the terminal's background is dark, from its answer to an OSC 11
 /// query. No answer (or no terminal) counts as dark, the common setup.
 fn detect_is_dark() -> bool {
-    match terminal_background(Duration::from_millis(100)) {
+    match terminal_background(Duration::from_secs(1)) {
         Some((r, g, b)) => {
             let dark =
                 f64::from(r) * 0.299 + f64::from(g) * 0.587 + f64::from(b) * 0.114 <= 32768.0;
@@ -99,21 +99,26 @@ fn terminal_background(_timeout: Duration) -> Option<(u16, u16, u16)> {
     None
 }
 
-/// Sends the plain xterm query, which tmux answers itself, and reads the
-/// reply byte by byte straight off stdin behind `poll`, so a terminal that
-/// never answers costs `timeout` and leaves nothing behind. termbg sent tmux
-/// a passthrough query it drops by default, and the reader it left blocked on
-/// stdin hung startup until the first key, which it then swallowed.
+/// Sends the plain xterm query, which tmux answers itself, then a primary
+/// device attributes query (DA1), which every terminal answers, and reads the
+/// replies byte by byte straight off stdin behind `poll` until the DA1 answer
+/// arrives. Terminals answer in order, so one that ignores OSC 11 costs a
+/// round trip instead of the whole timeout, and a slow SSH link can't leave a
+/// late reply behind to be read as keystrokes. termbg sent tmux a passthrough
+/// query it drops by default, and the reader it left blocked on stdin hung
+/// startup until the first key, which it then swallowed.
 #[cfg(unix)]
 fn ask_background(timeout: Duration) -> Option<Vec<u8>> {
     use std::io::Write;
     let mut out = std::io::stdout();
-    out.write_all(b"\x1b]11;?\x1b\\").ok()?;
+    out.write_all(b"\x1b]11;?\x1b\\\x1b[c").ok()?;
     out.flush().ok()?;
     let deadline = std::time::Instant::now() + timeout;
     let mut reply = Vec::new();
-    while reply.len() < 64 {
-        let left = deadline.checked_duration_since(std::time::Instant::now())?;
+    while reply.len() < 256 {
+        let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) else {
+            break;
+        };
         let mut stdin = libc::pollfd {
             fd: libc::STDIN_FILENO,
             events: libc::POLLIN,
@@ -121,7 +126,7 @@ fn ask_background(timeout: Duration) -> Option<Vec<u8>> {
         };
         let millis = left.as_millis().min(i32::MAX as u128) as i32;
         if unsafe { libc::poll(&mut stdin, 1, millis) } <= 0 {
-            return None;
+            break;
         }
         let mut byte = 0u8;
         let read = unsafe {
@@ -132,14 +137,28 @@ fn ask_background(timeout: Duration) -> Option<Vec<u8>> {
             )
         };
         if read != 1 {
-            return None;
+            break;
         }
         reply.push(byte);
-        if byte == 0x07 || reply.ends_with(b"\x1b\\") {
-            return Some(reply);
+        if ends_with_device_attributes(&reply) {
+            break;
         }
     }
-    None
+    (!reply.is_empty()).then_some(reply)
+}
+
+/// Whether `reply` ends with a DA1 answer, `ESC [ ? <digits and ;> c`.
+fn ends_with_device_attributes(reply: &[u8]) -> bool {
+    let Some((b'c', body)) = reply.split_last() else {
+        return false;
+    };
+    body.windows(3)
+        .rposition(|w| w == b"\x1b[?")
+        .is_some_and(|start| {
+            body[start + 3..]
+                .iter()
+                .all(|b| b.is_ascii_digit() || *b == b';')
+        })
 }
 
 /// `rgb:RRRR/GGGG/BBBB` out of an OSC 11 reply, each channel scaled to 16
@@ -185,7 +204,7 @@ async fn run_inner(terminal: &mut ratatui::DefaultTerminal, is_dark: bool) -> Re
 
 #[cfg(test)]
 mod tests {
-    use super::parse_background_reply;
+    use super::{ends_with_device_attributes, parse_background_reply};
 
     #[test]
     fn osc11_replies_parse_at_any_channel_width() {
@@ -201,6 +220,25 @@ mod tests {
             parse_background_reply(b"\x1b]11;rgb:0/0/0\x07"),
             Some((0, 0, 0))
         );
+    }
+
+    #[test]
+    fn the_background_is_read_ahead_of_the_device_attributes() {
+        let reply = b"\x1b]11;rgb:ffff/ffff/ffff\x1b\\\x1b[?64;1;2;4c";
+        assert!(ends_with_device_attributes(reply));
+        assert_eq!(
+            parse_background_reply(reply),
+            Some((0xffff, 0xffff, 0xffff))
+        );
+        assert_eq!(parse_background_reply(b"\x1b[?62;22c"), None);
+    }
+
+    #[test]
+    fn reading_stops_only_at_a_complete_device_attributes_answer() {
+        assert!(ends_with_device_attributes(b"\x1b[?1;2c"));
+        assert!(!ends_with_device_attributes(b"\x1b[?1;2"));
+        assert!(!ends_with_device_attributes(b"\x1b]11;rgb:0/0/c"));
+        assert!(!ends_with_device_attributes(b"c"));
     }
 
     #[test]

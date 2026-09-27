@@ -147,6 +147,8 @@ unrager eval --strictness strict      # compare a strictness level
 unrager eval --model qwen3:4b-instruct --mistakes   # try another model, list what it got wrong
 ```
 
+Made-up posts only go so far. To measure on your own feed, label some of your posts in a file, one JSON object per line: `{"expect": "hide", "text": "@handle (Name): the post"}`, where `expect` is `hide`, `keep` or `either` (for posts reasonable people would disagree on), and `about` is an optional note that `--mistakes` prints. `unrager eval --posts that-file.jsonl` then judges them against your own rules.
+
 ## Using another model server
 
 Any server with an OpenAI-compatible `/v1/chat/completions` endpoint works. Set it under `[llm]` in `filter.toml`:
@@ -379,7 +381,7 @@ UDID=<UDID> ./scripts/install-device.sh     # build → ad-hoc sign → devicect
 |---|---|
 | `unrager setup` | Check the model, run unrager in the background, unpack the extension (`--apps` for the iPhone app, `--bind`, `--no-service`, `--uninstall`) |
 | `unrager doctor` | Check the model, the background server, the extension and your X login |
-| `unrager eval` | Measure how well your model filters (`--strictness`, `--model`, `--mistakes`) |
+| `unrager eval` | Measure how well your model filters (`--strictness`, `--model`, `--mistakes`, `--posts` for your own labelled posts) |
 | `unrager update` | Update to the latest release (restarts the server and refreshes the extension) |
 | `unrager serve` | Run the server by hand (`--filter-only` for just the extension, `--bind`) |
 | `unrager whoami` | Confirm which account your cookies belong to |

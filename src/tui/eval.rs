@@ -3,8 +3,10 @@
 //! matters most: a post hidden by mistake is one the user never learns about,
 //! while a missed rage post is at least visible.
 
+use crate::error::{Error, Result};
 use crate::tui::filter::FilterDecision;
 use serde::Deserialize;
+use std::path::Path;
 
 const EVAL_SET: &str = include_str!("filter_eval.jsonl");
 
@@ -22,6 +24,7 @@ pub enum Expect {
 pub struct Case {
     pub expect: Expect,
     /// What the post is, for whoever reads the mistakes.
+    #[serde(default)]
     pub about: String,
     /// The post as the classifier sees it: `@handle (Name): text`.
     pub text: String,
@@ -30,6 +33,17 @@ pub struct Case {
 /// The bundled set. Every line is checked by the tests below.
 pub fn cases() -> Vec<Case> {
     parse(EVAL_SET).expect("the bundled eval set parses")
+}
+
+/// A set of the user's own labelled posts, in the bundled set's format.
+pub fn load(path: &Path) -> Result<Vec<Case>> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| Error::Config(format!("{}: {e}", path.display())))?;
+    let cases = parse(&raw).map_err(|e| Error::Config(format!("{}: {e}", path.display())))?;
+    if cases.is_empty() {
+        return Err(Error::Config(format!("{} has no posts", path.display())));
+    }
+    Ok(cases)
 }
 
 fn parse(jsonl: &str) -> serde_json::Result<Vec<Case>> {
@@ -119,6 +133,25 @@ mod tests {
             );
             assert!(!case.about.is_empty(), "{}", case.text);
         }
+    }
+
+    #[test]
+    fn a_users_own_posts_load_without_the_about_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mine.jsonl");
+        std::fs::write(
+            &path,
+            "{\"expect\": \"hide\", \"text\": \"@a (A): x\", \"id\": \"1\"}\n\n{\"expect\": \"either\", \"text\": \"@b (B): y\"}\n",
+        )
+        .unwrap();
+        let cases = load(&path).unwrap();
+        assert_eq!(cases.len(), 2);
+        assert_eq!(cases[0].expect, Expect::Hide);
+        assert!(cases[1].about.is_empty());
+        std::fs::write(&path, "\n").unwrap();
+        assert!(load(&path).is_err());
+        std::fs::write(&path, "{\"expect\": \"maybe\", \"text\": \"@a (A): x\"}").unwrap();
+        assert!(load(&path).is_err());
     }
 
     #[test]

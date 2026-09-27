@@ -3,6 +3,7 @@ use crate::error::{Error, Result};
 use crate::tui::eval::{self, Case, Expect, Scorecard};
 use crate::tui::filter::{Classifier, FilterConfig, FilterDecision, Judgement, Strictness};
 use clap::Parser;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 /// Past this share of good posts hidden, the filter costs more than it saves.
@@ -21,16 +22,34 @@ pub struct Args {
     pub model: Option<String>,
     #[arg(long, help = "List every post the model got wrong")]
     pub mistakes: bool,
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Judge your own labelled posts against your rules instead: JSON Lines like the bundled set, one {\"expect\": \"hide\"|\"keep\"|\"either\", \"text\": \"@handle (Name): …\"} per line"
+    )]
+    pub posts: Option<PathBuf>,
 }
 
 /// Runs the configured model over the bundled made-up posts with the default
-/// rules, so models, strictness levels and prompt changes can be compared by
-/// numbers: how many good posts it hid, how much rage it caught.
+/// rules, or over the user's own labelled posts with their rules, so models,
+/// strictness levels and prompt changes can be compared by numbers: how many
+/// good posts it hid, how much rage it caught.
 pub async fn run(args: Args) -> Result<()> {
     let mine = checks::load_filter_cfg()?;
-    let mut cfg: FilterConfig = toml::from_str(FilterConfig::default_content())
-        .map_err(|e| Error::Config(format!("default rules: {e}")))?;
-    cfg.llm = mine.llm;
+    let (mut cfg, cases, what) = match &args.posts {
+        Some(path) => {
+            let cases = eval::load(path)?;
+            let what = format!("posts from {} against your rules", path.display());
+            (mine.clone(), cases, what)
+        }
+        None => {
+            let mut cfg: FilterConfig = toml::from_str(FilterConfig::default_content())
+                .map_err(|e| Error::Config(format!("default rules: {e}")))?;
+            cfg.llm = mine.llm.clone();
+            let what = "made-up posts against the default rules".to_string();
+            (cfg, eval::cases(), what)
+        }
+    };
     cfg.strictness = args.strictness.unwrap_or(mine.strictness);
     if let Some(model) = args.model {
         cfg.llm.filter_model = Some(model);
@@ -38,9 +57,8 @@ pub async fn run(args: Args) -> Result<()> {
     let mut classifier = Classifier::new(&cfg);
     classifier.init().await?;
     let handle = classifier.handle();
-    let cases = eval::cases();
     println!(
-        "Judging {} made-up posts against the default rules with {} ({})…",
+        "Judging {} {what} with {} ({})…",
         cases.len(),
         handle.llm().model,
         cfg.strictness.as_str()

@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+## [0.23.0] — 2026-09-27
+
 - **The filter can run on its own small model, and new installs default to one.** Set `filter_model` under `[llm]` in `filter.toml` and the filter judges posts with it, while ask, brief and translate keep `model`. A small model is the better filter: on real posts Qwen3 4B hid a quarter as many good posts as a 27B model (4% against 16%) and caught 18 of the 21 clear rage posts the 27B caught, answers a page in well under a second, loads in about two seconds rather than most of a minute, and uses about 3 GB of GPU memory, so it can stay loaded and new posts never wait on a model that's still starting. New `filter.toml` files use `qwen3:4b-instruct` on Ollama (2.5 GB, where `gemma4:latest` is 9.6 GB) and keep it loaded for 30 minutes. Existing files are left alone; when the configured model isn't pulled, the filter falls back to `qwen3:4b-instruct` and then to any Gemma 4. `unrager doctor` checks both models, and ask only attaches a post's photos when Ollama says the model can read them.
 - **`unrager eval` measures how well your model filters.** Your model judges about 200 made-up posts, labelled against the default rules, and unrager reports how many good posts it hid (the mistake that matters most, since you never see those), how much rage it caught, and whether that's good enough to filter with. `--strictness` and `--model` compare settings and models, and `--mistakes` lists every post it got wrong.
 - **New posts on the Home timeline wait out of view until they're judged, so a post no longer shows up only to vanish.** The extension let every post X drew appear and hid it once the model answered, so two in three disappeared again moments later, sometimes mid-read. A post seen for the first time is now held back until its verdict arrives, which a loaded model gives within a second; when that takes longer than two and a half seconds (the model is loading, or down), the post shows anyway, so the filter still fails open. The page now hands each timeline response to the extension synchronously, so posts are held before X paints them.
@@ -242,7 +244,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.22.0...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.23.0...HEAD
+[0.23.0]: https://github.com/guitaripod/unrager/releases/tag/0.23.0
 [0.22.0]: https://github.com/guitaripod/unrager/releases/tag/0.22.0
 [0.21.1]: https://github.com/guitaripod/unrager/releases/tag/0.21.1
 [0.21.0]: https://github.com/guitaripod/unrager/releases/tag/0.21.0

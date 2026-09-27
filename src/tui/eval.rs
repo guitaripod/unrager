@@ -5,7 +5,8 @@
 
 use crate::error::{Error, Result};
 use crate::tui::filter::FilterDecision;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
+use sha2::{Digest, Sha256};
 use std::path::Path;
 
 const EVAL_SET: &str = include_str!("filter_eval.jsonl");
@@ -28,6 +29,52 @@ pub struct Case {
     pub about: String,
     /// The post as the classifier sees it: `@handle (Name): text`.
     pub text: String,
+    /// For a HIDE post, the numbers of the rules it breaks (one number or a
+    /// list), to check the rule a hide names.
+    #[serde(default, deserialize_with = "one_or_many")]
+    pub rule: Vec<usize>,
+    /// Where the post came from (`for_you`, `following`), to break results
+    /// down by it.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// The post's language code as X reports it.
+    #[serde(default)]
+    pub lang: Option<String>,
+}
+
+impl Case {
+    /// A stable name for the post in saved runs, without storing its text.
+    pub fn key(&self) -> String {
+        let digest = Sha256::digest(self.text.as_bytes());
+        digest[..8].iter().map(|b| format!("{b:02x}")).collect()
+    }
+}
+
+fn one_or_many<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Vec<usize>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Rules {
+        One(usize),
+        Many(Vec<usize>),
+    }
+    Ok(match Option::<Rules>::deserialize(d)? {
+        None => Vec::new(),
+        Some(Rules::One(n)) => vec![n],
+        Some(Rules::Many(v)) => v,
+    })
+}
+
+/// A fingerprint of a whole set, so runs on different sets aren't compared.
+pub fn set_hash(cases: &[Case]) -> String {
+    let mut hasher = Sha256::new();
+    for case in cases {
+        hasher.update(case.text.as_bytes());
+        hasher.update([0]);
+    }
+    hasher.finalize()[..8]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// The bundled set. Every line is checked by the tests below.
@@ -83,6 +130,70 @@ fn share(part: usize, whole: usize) -> f64 {
     } else {
         part as f64 / whole as f64
     }
+}
+
+/// The 95% Wilson interval of `k` out of `n`, as shares.
+pub fn wilson(k: usize, n: usize) -> (f64, f64) {
+    if n == 0 {
+        return (0.0, 1.0);
+    }
+    let z = 1.96_f64;
+    let (k, n) = (k as f64, n as f64);
+    let p = k / n;
+    let d = 1.0 + z * z / n;
+    let centre = (p + z * z / (2.0 * n)) / d;
+    let half = z * (p * (1.0 - p) / n + z * z / (4.0 * n * n)).sqrt() / d;
+    ((centre - half).max(0.0), (centre + half).min(1.0))
+}
+
+/// The exact two-sided McNemar p-value for two runs over the same posts:
+/// how likely a split this lopsided is when the runs are equally good.
+/// `only_a` and `only_b` are the posts only one of them hid.
+pub fn mcnemar(only_a: usize, only_b: usize) -> f64 {
+    let n = only_a + only_b;
+    if n == 0 {
+        return 1.0;
+    }
+    let ln_choose =
+        |n: usize, k: usize| -> f64 { (1..=k).map(|i| ((n - k + i) as f64 / i as f64).ln()).sum() };
+    let tail: f64 = (0..=only_a.min(only_b))
+        .map(|i| (ln_choose(n, i) - n as f64 * std::f64::consts::LN_2).exp())
+        .sum();
+    (2.0 * tail).min(1.0)
+}
+
+/// The chance a random rage post scores above a random good one (ties count
+/// half): 1.0 separates them perfectly, 0.5 is a coin toss.
+pub fn auc(good: &[f64], rage: &[f64]) -> f64 {
+    if good.is_empty() || rage.is_empty() {
+        return 0.5;
+    }
+    let wins: f64 = rage
+        .iter()
+        .map(|r| {
+            good.iter()
+                .map(|g| match r.partial_cmp(g) {
+                    Some(std::cmp::Ordering::Greater) => 1.0,
+                    Some(std::cmp::Ordering::Equal) => 0.5,
+                    _ => 0.0,
+                })
+                .sum::<f64>()
+        })
+        .sum();
+    wins / (good.len() * rage.len()) as f64
+}
+
+/// The share of rage a model would catch if it hid only the posts it was
+/// surest about, stopping before `budget` of the good posts were hidden.
+pub fn caught_at(good: &[f64], rage: &[f64], budget: f64) -> f64 {
+    if rage.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = good.to_vec();
+    sorted.sort_by(|a, b| b.total_cmp(a));
+    let allowed = (budget * sorted.len() as f64).floor() as usize;
+    let cut = sorted.get(allowed).copied().unwrap_or(f64::NEG_INFINITY);
+    rage.iter().filter(|&&r| r > cut).count() as f64 / rage.len() as f64
 }
 
 pub fn score(cases: &[Case], verdicts: &[Option<FilterDecision>]) -> Scorecard {
@@ -155,11 +266,61 @@ mod tests {
     }
 
     #[test]
+    fn a_post_can_name_one_rule_or_several() {
+        let cases = parse(
+            "{\"expect\": \"hide\", \"text\": \"@a (A): x\", \"rule\": 3, \"source\": \"for_you\"}\n{\"expect\": \"hide\", \"text\": \"@b (B): y\", \"rule\": [1, 14]}\n{\"expect\": \"keep\", \"text\": \"@c (C): z\", \"rule\": null}",
+        )
+        .unwrap();
+        assert_eq!(cases[0].rule, vec![3]);
+        assert_eq!(cases[0].source.as_deref(), Some("for_you"));
+        assert_eq!(cases[1].rule, vec![1, 14]);
+        assert!(cases[2].rule.is_empty());
+        assert_ne!(cases[0].key(), cases[1].key());
+        assert_eq!(cases[0].key(), cases[0].clone().key());
+    }
+
+    #[test]
+    fn intervals_and_paired_tests_match_known_values() {
+        let (lo, hi) = wilson(42, 845);
+        assert!(
+            (lo - 0.0369).abs() < 0.001 && (hi - 0.0666).abs() < 0.001,
+            "{lo} {hi}"
+        );
+        assert_eq!(wilson(0, 0), (0.0, 1.0));
+        assert!(
+            (mcnemar(5, 29) - 0.0000386).abs() < 0.000001,
+            "{}",
+            mcnemar(5, 29)
+        );
+        assert!(
+            (mcnemar(22, 28) - 0.4799).abs() < 0.001,
+            "{}",
+            mcnemar(22, 28)
+        );
+        assert_eq!(mcnemar(0, 0), 1.0);
+        assert_eq!(mcnemar(3, 3), 1.0);
+    }
+
+    #[test]
+    fn ranking_numbers_reward_rage_scored_above_good_posts() {
+        let good = [0.0, 0.1, 0.2, 0.9];
+        let rage = [0.95, 0.8, 0.1];
+        assert!((auc(&good, &rage) - (4.0 + 3.0 + 1.5) / 12.0).abs() < 1e-9);
+        assert_eq!(auc(&[0.0], &[1.0]), 1.0);
+        assert_eq!(caught_at(&good, &rage, 0.0), 1.0 / 3.0);
+        assert_eq!(caught_at(&good, &rage, 0.25), 2.0 / 3.0);
+        assert_eq!(caught_at(&good, &rage, 1.0), 1.0);
+    }
+
+    #[test]
     fn scoring_counts_each_kind_of_post_separately() {
         let case = |expect| Case {
             expect,
             about: "x".into(),
             text: "@a (A): x".into(),
+            rule: Vec::new(),
+            source: None,
+            lang: None,
         };
         let cases = [
             case(Expect::Keep),

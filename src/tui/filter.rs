@@ -412,6 +412,44 @@ impl LlmConfig {
         }
     }
 
+    /// [`Self::chat_with_client`] that also asks for the alternatives the
+    /// model weighed at each answer token (`logprobs`, on Ollama 0.12.11 and
+    /// later and on OpenAI-compatible servers). A server that doesn't report
+    /// them leaves the list empty.
+    pub(crate) async fn chat_with_logprobs(
+        &self,
+        req: ChatRequest,
+        http: &reqwest::Client,
+    ) -> std::result::Result<(String, Vec<TokenChoice>), String> {
+        let mut body = self.build_body(&req, false);
+        body["logprobs"] = Value::Bool(true);
+        body["top_logprobs"] = Value::from(TOP_LOGPROBS);
+        let resp = self
+            .authorized(http.post(self.chat_url()))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("request failed: {e}"))?;
+        let status = resp.status();
+        if !status.is_success() {
+            let preview = resp.text().await.unwrap_or_default();
+            let trimmed: String = preview.chars().take(200).collect();
+            return Err(format!("http {}: {trimmed}", status.as_u16()));
+        }
+        let reply: Value = resp.json().await.map_err(|e| format!("parse: {e}"))?;
+        let (content, tokens) = match self.backend {
+            LlmBackend::Ollama => (&reply["message"]["content"], &reply["logprobs"]),
+            LlmBackend::OpenAi => (
+                &reply["choices"][0]["message"]["content"],
+                &reply["choices"][0]["logprobs"]["content"],
+            ),
+        };
+        Ok((
+            content.as_str().unwrap_or_default().to_string(),
+            token_choices(tokens),
+        ))
+    }
+
     pub async fn stream_chat(
         &self,
         req: ChatRequest,
@@ -875,6 +913,98 @@ pub fn parse_verdict(raw: &str) -> FilterDecision {
         }
     }
     FilterDecision::Keep
+}
+
+/// Whether an answer says HIDE or KEEP at all; anything else is read as
+/// KEEP, which would make a model that can't follow the format look careful.
+pub fn answer_is_readable(raw: &str) -> bool {
+    raw.split(|c: char| !c.is_ascii_alphabetic())
+        .any(|t| t.eq_ignore_ascii_case("HIDE") || t.eq_ignore_ascii_case("KEEP"))
+}
+
+/// How many alternatives per answer token `unrager eval` asks for.
+const TOP_LOGPROBS: u32 = 20;
+
+/// One generated token and the alternatives the model gave it, with their
+/// probabilities.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TokenChoice {
+    pub token: String,
+    pub alternatives: Vec<(String, f64)>,
+}
+
+fn token_choices(list: &Value) -> Vec<TokenChoice> {
+    let pair = |v: &Value| {
+        Some((
+            v["token"].as_str()?.to_string(),
+            v["logprob"].as_f64()?.exp(),
+        ))
+    };
+    list.as_array()
+        .map(|tokens| {
+            tokens
+                .iter()
+                .filter_map(|t| {
+                    Some(TokenChoice {
+                        token: t["token"].as_str()?.to_string(),
+                        alternatives: t["top_logprobs"]
+                            .as_array()
+                            .map(|alts| alts.iter().filter_map(pair).collect())
+                            .unwrap_or_default(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether a token could be the start of `word`, ignoring case, spacing and
+/// markdown ("H", " HI", "**HIDE").
+fn starts_word(token: &str, word: &str) -> bool {
+    let t = token
+        .trim()
+        .trim_matches(|c: char| "*_`\"':.#".contains(c))
+        .to_ascii_uppercase();
+    !t.is_empty() && (t.starts_with(word) || word.starts_with(t.as_str()))
+}
+
+/// How likely the model was to answer HIDE rather than KEEP, read at the
+/// first token of its answer: the HIDE-like alternatives' share of the
+/// HIDE-like and KEEP-like ones. `None` when no token starts either word.
+pub fn hide_probability(tokens: &[TokenChoice]) -> Option<f64> {
+    let answer = tokens
+        .iter()
+        .find(|t| starts_word(&t.token, "HIDE") || starts_word(&t.token, "KEEP"))?;
+    let share = |word| {
+        answer
+            .alternatives
+            .iter()
+            .filter(|(t, _)| starts_word(t, word))
+            .map(|(_, p)| p)
+            .sum::<f64>()
+    };
+    let (hide, keep) = (share("HIDE"), share("KEEP"));
+    if hide + keep > 0.0 {
+        Some(hide / (hide + keep))
+    } else {
+        Some(if starts_word(&answer.token, "HIDE") {
+            1.0
+        } else {
+            0.0
+        })
+    }
+}
+
+/// A verdict as `unrager eval` sees it: the parsed judgement, the rule
+/// number the answer cites, the raw answer, how sure the model was when the
+/// server reports it, and how long the request took once it had a slot.
+#[derive(Debug, Clone)]
+pub struct Scored {
+    pub judgement: Judgement,
+    pub rule: Option<usize>,
+    pub answer: String,
+    pub hide_probability: Option<f64>,
+    pub elapsed: Duration,
 }
 
 /// [`parse_verdict`], plus the number a HIDE is followed by ("HIDE 3",
@@ -1584,6 +1714,40 @@ impl ClassifierHandle {
         judged
     }
 
+    /// [`Self::classify`] for `unrager eval`: the same request, plus the raw
+    /// answer, the cited rule's number and how sure the model was.
+    pub async fn classify_scored(&self, text: &str) -> Option<Scored> {
+        let _permit = self.sem.acquire().await.ok();
+        let rubric = current_rubric(&self.rubric);
+        let started = Instant::now();
+        if !rubric.has_rules() {
+            return Some(Scored {
+                judgement: FilterDecision::Keep.into(),
+                rule: None,
+                answer: String::new(),
+                hide_probability: Some(0.0),
+                elapsed: started.elapsed(),
+            });
+        }
+        match self
+            .llm
+            .chat_with_logprobs(verdict_request(&rubric, text), &self.http)
+            .await
+        {
+            Ok((answer, tokens)) => Some(Scored {
+                judgement: rubric.judge(&answer),
+                rule: parse_answer(&answer).1,
+                hide_probability: hide_probability(&tokens),
+                answer,
+                elapsed: started.elapsed(),
+            }),
+            Err(e) => {
+                warn!("eval classify failed: {e}");
+                None
+            }
+        }
+    }
+
     /// Loads the model before the posts it's about to judge arrive, so they
     /// don't wait out a cold start: the browser extension asks as x.com
     /// opens and whenever X fetches a Home timeline. One short generation
@@ -1650,6 +1814,20 @@ impl ClassifierHandle {
     }
 }
 
+/// The one request every verdict is asked with, so `unrager eval` measures
+/// exactly what the filter sends.
+fn verdict_request(rubric: &Rubric, text: &str) -> ChatRequest {
+    ChatRequest {
+        messages: vec![
+            serde_json::json!({ "role": "system", "content": rubric.prompt() }),
+            serde_json::json!({ "role": "user", "content": text }),
+        ],
+        thinking: false,
+        temperature: 0.0,
+        max_tokens: ANSWER_MAX_TOKENS,
+    }
+}
+
 /// `None` when the backend never produced an answer (unreachable, timed out,
 /// malformed reply). Callers show the tweet but must not cache anything: a
 /// cold-loading model or a restart would otherwise pin a fake KEEP onto every
@@ -1666,15 +1844,7 @@ async fn classify_once(
         return Some(FilterDecision::Keep.into());
     }
     let started = std::time::Instant::now();
-    let req = ChatRequest {
-        messages: vec![
-            serde_json::json!({ "role": "system", "content": rubric.prompt() }),
-            serde_json::json!({ "role": "user", "content": text }),
-        ],
-        thinking: false,
-        temperature: 0.0,
-        max_tokens: ANSWER_MAX_TOKENS,
-    };
+    let req = verdict_request(rubric, text);
     debug!(rest_id, text_len = text.len(), "filter dispatch");
     match llm.chat_with_client(req, http).await {
         Ok(reply) => {
@@ -1945,6 +2115,40 @@ mod tests {
         assert_eq!(parse_verdict("KEEP"), FilterDecision::Keep);
         assert_eq!(parse_verdict("keep."), FilterDecision::Keep);
         assert_eq!(parse_verdict(" answer: keep"), FilterDecision::Keep);
+    }
+
+    #[test]
+    fn unreadable_answers_are_told_apart() {
+        assert!(answer_is_readable("HIDE 3"));
+        assert!(answer_is_readable("**keep**"));
+        assert!(!answer_is_readable("13: politicians"));
+        assert!(!answer_is_readable(""));
+    }
+
+    #[test]
+    fn hide_probability_reads_the_first_answer_token() {
+        let openai = serde_json::json!([
+            {"token": "**", "logprob": -0.1, "top_logprobs": [{"token": "**", "logprob": -0.1}]},
+            {"token": "H", "logprob": -0.2231, "top_logprobs": [
+                {"token": "H", "logprob": -0.2231},
+                {"token": "KEEP", "logprob": -1.6094},
+                {"token": "The", "logprob": -4.0}
+            ]},
+            {"token": "IDE", "logprob": 0.0, "top_logprobs": []}
+        ]);
+        let tokens = token_choices(&openai);
+        assert_eq!(tokens.len(), 3);
+        let p = hide_probability(&tokens).unwrap();
+        assert!((p - 0.8 / 1.0).abs() < 0.01, "{p}");
+        assert_eq!(
+            hide_probability(&token_choices(&serde_json::json!(null))),
+            None
+        );
+        let bare = [TokenChoice {
+            token: " KEEP".into(),
+            alternatives: vec![],
+        }];
+        assert_eq!(hide_probability(&bare), Some(0.0));
     }
 
     #[test]

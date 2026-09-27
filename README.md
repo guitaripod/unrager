@@ -141,7 +141,7 @@ Each verdict is cached per post, so scrolling back is instant and nothing is jud
 
 ### Checking your model
 
-unrager treats a good post hidden as a worse mistake than a rage post let through: you can see the rage post and scroll past it, but you never learn about the good one. `unrager eval` measures both. Your model judges a set of about 200 made-up posts, labelled against the default rules, and unrager prints how many good posts it hid, how much rage it caught, and whether that's good enough to filter with:
+unrager treats a good post hidden as a worse mistake than a rage post let through: you can see the rage post and scroll past it, but you never learn about the good one. `unrager eval` measures both. Your model judges about 200 made-up posts labelled against the default rules, and unrager prints how many good posts it hid and how much rage it caught, each with its 95% range, and whether that's good enough to filter with:
 
 ```sh
 unrager eval                          # your model, your strictness
@@ -149,7 +149,16 @@ unrager eval --strictness strict      # compare a strictness level
 unrager eval --model qwen3:4b-instruct --mistakes   # try another model, list what it got wrong
 ```
 
-Made-up posts only go so far. To measure on your own feed, label some of your posts in a file, one JSON object per line: `{"expect": "hide", "text": "@handle (Name): the post"}`, where `expect` is `hide`, `keep` or `either` (for posts reasonable people would disagree on), and `about` is an optional note that `--mistakes` prints. `unrager eval --posts that-file.jsonl` then judges them against your own rules.
+Made-up posts only go so far. To measure on your own feed, label some of your posts in a file, one JSON object per line: `{"expect": "hide", "text": "@handle (Name): the post"}`, where `expect` is `hide`, `keep` or `either` (for posts reasonable people would disagree on). Optionally, `rule` (the number or numbers of the rules a hide breaks) checks the reason each hide names, `source` and `lang` split the results by timeline and language, and `about` is a note `--mistakes` prints. `unrager eval --posts that-file.jsonl` then judges them against your own rules.
+
+To compare two models, save a run and judge the same posts with the other one. unrager counts the posts only one of them hid and says whether the difference could be chance:
+
+```sh
+unrager eval --posts mine.jsonl --save today.jsonl
+unrager eval --posts mine.jsonl --model another-model --against today.jsonl --repeat 3
+```
+
+`--repeat` judges every post several times and scores the majority, since a few verdicts change between runs even at temperature 0. When the model server reports token probabilities (llama.cpp, vLLM, SGLang, Ollama 0.12.11 and later), unrager also shows how much rage the model would catch at 2% and 5% of good posts hidden, which compares models fairly even when one hides more readily than the other.
 
 ## Using another model server
 
@@ -383,7 +392,7 @@ UDID=<UDID> ./scripts/install-device.sh     # build → ad-hoc sign → devicect
 |---|---|
 | `unrager setup` | Check the model, run unrager in the background, unpack the extension (`--apps` for the iPhone app, `--bind`, `--no-service`, `--uninstall`) |
 | `unrager doctor` | Check the model, the background server, the extension and your X login |
-| `unrager eval` | Measure how well your model filters (`--strictness`, `--model`, `--mistakes`, `--posts` for your own labelled posts) |
+| `unrager eval` | Measure how well your model filters (`--strictness`, `--model`, `--mistakes`, `--posts` for your own labelled posts, `--save`/`--against` to compare runs, `--repeat`) |
 | `unrager update` | Update to the latest release (restarts the server and refreshes the extension) |
 | `unrager serve` | Run the server by hand (`--filter-only` for just the extension, `--bind`) |
 | `unrager whoami` | Confirm which account your cookies belong to |

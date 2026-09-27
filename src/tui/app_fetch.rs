@@ -105,7 +105,7 @@ impl App {
                 Some(h) if h == cache.rubric_hash() => {
                     for item in &page.items {
                         if let Some(v) = item.verdict {
-                            cache.put(&item.tweet.rest_id, v);
+                            cache.seed(&item.tweet.rest_id, v);
                         }
                     }
                 }
@@ -256,6 +256,7 @@ impl App {
                     self.drain_about_pending();
                     self.source.profile_user = Some(user);
                 }
+                self.prepare_filter_cache(&page.tweets);
                 let total_incoming = page.tweets.len();
                 let hidden = filter_incoming_page(
                     &mut page,
@@ -1309,6 +1310,7 @@ mod store_tests {
         FilterConfig {
             drop_topics: vec![],
             extra_guidance: String::new(),
+            strictness: Default::default(),
             llm: LlmConfig {
                 backend: LlmBackend::Ollama,
                 model: "test".into(),

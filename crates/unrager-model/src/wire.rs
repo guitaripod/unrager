@@ -118,6 +118,13 @@ pub enum Verdict {
 pub struct FilterVerdictEvent {
     pub id: String,
     pub verdict: Verdict,
+    /// The rule a HIDE was for, as the user wrote it (or a built-in rule's
+    /// short name). Absent when the model didn't cite one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The user set this verdict on the post themselves.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub overridden: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

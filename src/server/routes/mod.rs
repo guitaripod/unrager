@@ -4,6 +4,7 @@ pub mod compose;
 pub mod config;
 pub mod engage;
 pub mod feed;
+pub mod filter;
 pub mod health;
 pub mod media;
 pub mod profile;

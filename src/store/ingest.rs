@@ -15,7 +15,7 @@ use crate::gql::query_ids::Operation;
 use crate::model::Tweet;
 use crate::parse::timeline;
 use crate::store::feed::{FeedStore, FeedVariant, now_secs};
-use crate::tui::filter::{self, ClassifierHandle, FilterCache, FilterDecision};
+use crate::tui::filter::{self, ClassifierHandle, FilterCache, FilterDecision, Judgement};
 use futures::StreamExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -232,7 +232,15 @@ async fn run_cycle(
     let fetched = page.tweets.len();
 
     let new_rows = store_tweets(store, variant, &page.tweets)?;
-    let verdicts = classify_page(classifier, filter_cache, &page.tweets, classify_enabled).await;
+    let self_id = gql.self_user_id();
+    let verdicts = classify_page(
+        classifier,
+        filter_cache,
+        &page.tweets,
+        classify_enabled,
+        self_id.as_deref(),
+    )
+    .await;
     let verdicts: Vec<(&str, FilterDecision)> =
         verdicts.iter().map(|(id, v)| (id.as_str(), *v)).collect();
     store.update_verdicts(variant, &verdicts)?;
@@ -255,19 +263,28 @@ fn store_tweets(store: &mut FeedStore, variant: FeedVariant, tweets: &[Tweet]) -
     store.upsert_page(variant, tweets)
 }
 
-/// Verdicts for a fetched page: cached ones straight from the filter cache,
-/// the rest classified [`INGEST_CLASSIFY_CONCURRENCY`] at a time. New
-/// verdicts are persisted only if the rubric didn't change meanwhile, and
-/// dropped from the result if it did (the next cycle's reconcile resets the
-/// page anyway).
+/// Verdicts for a fetched page: keep for the user's own posts (`self_id`
+/// wrote them), cached ones straight from the filter cache, the rest
+/// classified [`INGEST_CLASSIFY_CONCURRENCY`] at a time. New verdicts are
+/// persisted only if the rubric didn't change meanwhile, and dropped from the
+/// result if it did (the next cycle's reconcile resets the page anyway).
 async fn classify_page(
     classifier: &ClassifierHandle,
     filter_cache: &Mutex<FilterCache>,
     tweets: &[Tweet],
     classify_enabled: bool,
+    self_id: Option<&str>,
 ) -> Vec<(String, FilterDecision)> {
     let (rubric, cached): (String, Vec<Option<FilterDecision>>) = {
-        let cache = filter_cache.lock().await;
+        let mut cache = filter_cache.lock().await;
+        if let Some(me) = self_id {
+            cache.exempt(
+                tweets
+                    .iter()
+                    .filter(|t| t.author.rest_id == me)
+                    .map(|t| t.rest_id.as_str()),
+            );
+        }
         (
             cache.rubric_hash().to_string(),
             tweets.iter().map(|t| cache.get(&t.rest_id)).collect(),
@@ -287,15 +304,15 @@ async fn classify_page(
         .filter(|(_, v)| v.is_none())
         .map(|(t, _)| (t.rest_id.clone(), filter::build_classification_text(t)))
         .collect();
-    let computed: Vec<Option<(String, FilterDecision)>> = futures::stream::iter(jobs)
+    let computed: Vec<Option<(String, Judgement)>> = futures::stream::iter(jobs)
         .map(|(id, text)| {
             let classifier = classifier.clone();
-            async move { classifier.classify(&id, &text).await.map(|v| (id, v)) }
+            async move { classifier.classify(&id, &text).await.map(|j| (id, j)) }
         })
         .buffer_unordered(INGEST_CLASSIFY_CONCURRENCY)
         .collect()
         .await;
-    let computed: Vec<(String, FilterDecision)> = computed.into_iter().flatten().collect();
+    let computed: Vec<(String, Judgement)> = computed.into_iter().flatten().collect();
     if computed.is_empty() {
         return verdicts;
     }
@@ -303,11 +320,13 @@ async fn classify_page(
     if cache.rubric_hash() != rubric {
         return verdicts;
     }
-    let batch: Vec<(&str, FilterDecision)> =
-        computed.iter().map(|(id, v)| (id.as_str(), *v)).collect();
-    cache.put_many(&batch);
+    let batch: Vec<(&str, Judgement)> = computed
+        .iter()
+        .map(|(id, j)| (id.as_str(), j.clone()))
+        .collect();
+    cache.put_judgements(&batch);
     drop(cache);
-    verdicts.extend(computed);
+    verdicts.extend(computed.into_iter().map(|(id, j)| (id, j.decision)));
     verdicts
 }
 
@@ -378,7 +397,7 @@ mod tests {
         assert_eq!(store.count(FeedVariant::ForYou).unwrap(), 4);
     }
 
-    /// An OpenAI-compatible model stub that answers HIDE after `delay` and
+    /// An OpenAI-compatible model stub that answers "HIDE 2" after `delay` and
     /// records the most requests it ever had in flight at once.
     async fn stub_model(delay: Duration) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
         use std::sync::atomic::AtomicUsize;
@@ -420,7 +439,7 @@ mod tests {
                     peak.fetch_max(now, Ordering::SeqCst);
                     tokio::time::sleep(delay).await;
                     in_flight.fetch_sub(1, Ordering::SeqCst);
-                    let body = r#"{"choices":[{"message":{"content":"HIDE"}}]}"#;
+                    let body = r#"{"choices":[{"message":{"content":"HIDE 2"}}]}"#;
                     let response = format!(
                         "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                         body.len()
@@ -452,7 +471,7 @@ mod tests {
         cache.lock().await.put("0", FilterDecision::Keep);
         let page: Vec<Tweet> = (0..10).map(|i| tweet(&i.to_string(), 100 + i)).collect();
 
-        let verdicts = classify_page(&classifier, &cache, &page, true).await;
+        let verdicts = classify_page(&classifier, &cache, &page, true, None).await;
 
         assert_eq!(verdicts.len(), 10);
         assert!(
@@ -492,7 +511,7 @@ mod tests {
             })
         };
 
-        let verdicts = classify_page(&classifier, &cache, &page, true).await;
+        let verdicts = classify_page(&classifier, &cache, &page, true, None).await;
         rekey.await.unwrap();
 
         assert!(
@@ -511,8 +530,50 @@ mod tests {
             Mutex::new(FilterCache::open(&dir.path().join("filter.db"), "rubric".into()).unwrap());
         cache.lock().await.put("1", FilterDecision::Hide);
         let page = vec![tweet("1", 100), tweet("2", 200)];
-        let verdicts = classify_page(&classifier, &cache, &page, false).await;
+        let verdicts = classify_page(&classifier, &cache, &page, false, None).await;
         assert_eq!(verdicts, [("1".to_string(), FilterDecision::Hide)]);
+    }
+
+    #[tokio::test]
+    async fn the_users_own_posts_are_kept_without_asking_the_model() {
+        let classifier = classifier_for("http://127.0.0.1:9");
+        let dir = TempDir::new().unwrap();
+        let cache =
+            Mutex::new(FilterCache::open(&dir.path().join("filter.db"), "rubric".into()).unwrap());
+        cache.lock().await.put("1", FilterDecision::Hide);
+        let mut own = tweet("1", 100);
+        own.author.rest_id = "me".into();
+        let page = vec![own, tweet("2", 200)];
+
+        let verdicts = classify_page(&classifier, &cache, &page, false, Some("me")).await;
+
+        assert_eq!(
+            verdicts,
+            [("1".to_string(), FilterDecision::Keep)],
+            "an earlier HIDE on the user's own post no longer counts"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_rule_behind_a_hide_is_cached_with_it() {
+        let (host, _) = stub_model(Duration::from_millis(10)).await;
+        let classifier = classifier_for(&host);
+        let dir = TempDir::new().unwrap();
+        let cache =
+            Mutex::new(FilterCache::open(&dir.path().join("filter.db"), "rubric".into()).unwrap());
+
+        classify_page(&classifier, &cache, &[tweet("1", 100)], true, None).await;
+
+        let cached = cache.lock().await.lookup("1").unwrap();
+        assert_eq!(cached.decision, FilterDecision::Hide);
+        assert!(
+            cached
+                .reason
+                .as_deref()
+                .is_some_and(|r| r.starts_with("war,")),
+            "HIDE 2 names the second default topic: {:?}",
+            cached.reason
+        );
     }
 
     #[test]

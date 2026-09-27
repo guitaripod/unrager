@@ -19,6 +19,8 @@ use tower_http::trace::TraceLayer;
 
 pub use error::ApiError;
 
+const VERSION_HEADER: &str = "x-unrager-version";
+
 pub async fn serve(addr: SocketAddr, filter_only: bool) -> crate::error::Result<()> {
     let state = Arc::new(AppState::build(filter_only).await?);
     if !filter_only {
@@ -110,6 +112,8 @@ fn filter_routes() -> Router<Arc<AppState>> {
         .route("/health", get(routes::health::health))
         .route("/classify", post(routes::classify::classify))
         .route("/filter/status", get(routes::classify::status))
+        .route("/filter/stats", get(routes::filter::stats))
+        .route("/filter/overrides", post(routes::filter::set_overrides))
         .route(
             "/config/filter",
             get(routes::config::get_filter).patch(routes::config::patch_filter),
@@ -148,6 +152,16 @@ async fn reject_web_origins(request: Request, next: Next) -> Response {
         .into_response(),
         _ => next.run(request).await,
     }
+}
+
+/// Tells every client which unrager answered, so the browser extension can
+/// flag a version it no longer matches without polling for it.
+async fn stamp_version(mut response: Response) -> Response {
+    response.headers_mut().insert(
+        VERSION_HEADER,
+        HeaderValue::from_static(env!("CARGO_PKG_VERSION")),
+    );
+    response
 }
 
 fn is_extension_origin(origin: &HeaderValue) -> bool {
@@ -237,6 +251,7 @@ fn router(state: Arc<AppState>) -> Router {
         .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
         .layer(CompressionLayer::new())
         .layer(middleware::from_fn(reject_web_origins))
+        .layer(middleware::map_response(stamp_version))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

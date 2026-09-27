@@ -1,6 +1,6 @@
 use crate::server::error::ApiError;
 use crate::server::state::AppState;
-use crate::tui::filter::{ClassifierHandle, FilterCache, FilterDecision};
+use crate::tui::filter::{CachedVerdict, ClassifierHandle, FilterCache, FilterDecision, Judgement};
 use axum::Json;
 use axum::extract::State;
 use serde::{Deserialize, Serialize};
@@ -64,15 +64,23 @@ pub async fn classify(
     Ok(Json(ClassifyResponse {
         verdicts: verdicts
             .into_iter()
-            .map(|(id, d)| FilterVerdictEvent {
-                id,
-                verdict: match d {
-                    FilterDecision::Hide => Verdict::Hide,
-                    FilterDecision::Keep => Verdict::Keep,
-                },
-            })
+            .map(|(id, v)| verdict_event(id, v))
             .collect(),
     }))
+}
+
+/// The wire form of a verdict, with the rule behind a HIDE and whether the
+/// user set it themselves.
+pub(crate) fn verdict_event(id: String, verdict: CachedVerdict) -> FilterVerdictEvent {
+    FilterVerdictEvent {
+        id,
+        verdict: match verdict.decision {
+            FilterDecision::Hide => Verdict::Hide,
+            FilterDecision::Keep => Verdict::Keep,
+        },
+        reason: verdict.reason.map(|r| r.to_string()),
+        overridden: verdict.overridden,
+    }
 }
 
 /// The cached verdicts for `tweets`, then, unless `cached_only`, the model's
@@ -83,14 +91,14 @@ async fn judge(
     handle: &ClassifierHandle,
     tweets: &[ClassifyItem],
     cached_only: bool,
-) -> Vec<(String, FilterDecision)> {
-    let mut verdicts: Vec<(String, FilterDecision)> = Vec::with_capacity(tweets.len());
+) -> Vec<(String, CachedVerdict)> {
+    let mut verdicts: Vec<(String, CachedVerdict)> = Vec::with_capacity(tweets.len());
     let mut misses: Vec<&ClassifyItem> = Vec::new();
     let rubric_snapshot = {
         let cache = cache.lock().await;
         for item in tweets {
-            match cache.get(&item.id) {
-                Some(d) => verdicts.push((item.id.clone(), d)),
+            match cache.lookup(&item.id) {
+                Some(v) => verdicts.push((item.id.clone(), v)),
                 None => misses.push(item),
             }
         }
@@ -106,19 +114,25 @@ async fn judge(
     }))
     .await;
 
-    let computed: Vec<(String, FilterDecision)> = computed
+    let computed: Vec<(String, Judgement)> = computed
         .into_iter()
-        .filter_map(|(id, decision)| decision.map(|d| (id, d)))
+        .filter_map(|(id, judged)| judged.map(|j| (id, j)))
         .collect();
     if !computed.is_empty() {
-        let batch: Vec<(&str, FilterDecision)> =
-            computed.iter().map(|(id, d)| (id.as_str(), *d)).collect();
+        let batch: Vec<(&str, Judgement)> = computed
+            .iter()
+            .map(|(id, j)| (id.as_str(), j.clone()))
+            .collect();
         cache
             .lock()
             .await
-            .put_many_if_current_rubric(&rubric_snapshot, &batch);
+            .put_judgements_if_current_rubric(&rubric_snapshot, &batch);
     }
-    verdicts.extend(computed);
+    verdicts.extend(
+        computed
+            .into_iter()
+            .map(|(id, j)| (id, CachedVerdict::from(j))),
+    );
     verdicts
 }
 
@@ -204,6 +218,44 @@ mod tests {
         .await
         .expect("a cache-only answer never waits on the model");
 
-        assert_eq!(verdicts, vec![("judged".to_string(), FilterDecision::Hide)]);
+        assert_eq!(verdicts.len(), 1);
+        assert_eq!(verdicts[0].0, "judged");
+        assert_eq!(verdicts[0].1.decision, FilterDecision::Hide);
+    }
+
+    #[tokio::test]
+    async fn verdicts_say_which_rule_hid_a_post_and_who_decided() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cache =
+            Mutex::new(FilterCache::open(&dir.path().join("filter.db"), "rubric".into()).unwrap());
+        {
+            let mut cache = cache.lock().await;
+            cache.put_judgements(&[(
+                "ruled",
+                Judgement {
+                    decision: FilterDecision::Hide,
+                    reason: Some(Arc::from("war")),
+                },
+            )]);
+            cache.put("shown", FilterDecision::Hide);
+            cache
+                .set_override(&["shown"], Some(FilterDecision::Keep))
+                .unwrap();
+        }
+        let handle = silent_model().await;
+
+        let verdicts = judge(&cache, &handle, &[item("ruled"), item("shown")], true).await;
+        let wire: Vec<serde_json::Value> = verdicts
+            .into_iter()
+            .map(|(id, v)| serde_json::to_value(verdict_event(id, v)).unwrap())
+            .collect();
+
+        assert_eq!(
+            wire,
+            [
+                serde_json::json!({ "id": "ruled", "verdict": "hide", "reason": "war" }),
+                serde_json::json!({ "id": "shown", "verdict": "keep", "overridden": true }),
+            ]
+        );
     }
 }

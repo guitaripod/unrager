@@ -120,11 +120,18 @@ drop_topics = [
     # add your own
 ]
 extra_guidance = "KEEP technical, scientific, art, music, sports, personal-life, and humor tweets that only mention these topics in passing."
+strictness = "balanced"
 ```
 
-On top of the topics, the model always hides what you'd mute on sight: subtweets, ratio bait, "RT if you agree" engagement farming, and outrage with no information in it. It keeps spicy opinions and sharp critique as long as there's something there besides an invitation to be angry.
+`strictness` sets how readily a post goes:
 
-Each verdict is cached per post, so scrolling back is instant and nothing is judged twice. Changing the rules or the model throws the cache out automatically.
+- `"balanced"`, the default: the topics, plus what you'd mute on sight: subtweets, ratio bait, "RT if you agree" engagement farming, and outrage with no information in it. Spicy opinions and sharp critique stay as long as there's something there besides an invitation to be angry, and so does anything the model isn't sure about, like a short reply or a post that's only a photo.
+- `"relaxed"`: only posts clearly about one of the topics.
+- `"strict"`: also posts by people known for a topic, and anything the model isn't sure about.
+
+Your own posts are never hidden. The model names the rule behind each post it hides.
+
+Each verdict is cached per post, so scrolling back is instant and nothing is judged twice. Changing the rules, the strictness or the model throws the cache out automatically.
 
 ## Using another model server
 

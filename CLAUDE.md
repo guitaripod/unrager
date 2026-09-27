@@ -87,7 +87,7 @@ When changing the server's `/api/*` contract, update the matching `UnragerKit` m
 - `background.js` POSTs to `{server}/api/classify` (`server` in `chrome.storage.local`, default `http://localhost:7777`) and sets the per-tab badge. x.com's CSP blocks page-context fetch to localhost, hence the service-worker hop.
 - `popup.{html,css,js}` — status (reads `/api/health` + `/api/filter/status`, compares the server's version with the manifest's), pause, show hidden, the rules editor (`GET`/`PATCH /api/config/filter`), and the server address (non-localhost origins get an optional host permission on save).
 
-Server side: `POST /api/classify` (`src/server/routes/classify.rs`, batch ≤100, shared `FilterCache` + `ClassifierHandle`, omits posts the model failed on; `cached_only: true` answers from the cache alone) and `GET /api/filter/status` (model state: `ready`/`model_missing`/`unreachable`). `unrager serve --filter-only` (what setup installs) loads no X session and answers only the filter routes; every other route returns 503 `filter_only`. A middleware refuses any request whose `Origin` isn't a browser-extension origin, so web pages can't drive the server (native clients send no `Origin`). Tampermonkey was tried first and abandoned: its userScripts gating silently never injected in Vivaldi.
+Server side: `POST /api/classify` (`src/server/routes/classify.rs`, batch ≤100, shared `FilterCache` + `ClassifierHandle`, omits posts the model failed on; `cached_only: true` answers from the cache alone; each verdict carries the rule behind a hide as `reason` and `overridden` for the user's own call), `GET /api/filter/status` (model state: `ready`/`model_missing`/`unreachable`), `POST /api/filter/overrides` and `GET /api/filter/stats` (`src/server/routes/filter.rs`). Every response carries `x-unrager-version`. `unrager serve --filter-only` (what setup installs) loads no X session and answers only the filter routes; every other route returns 503 `filter_only`. A middleware refuses any request whose `Origin` isn't a browser-extension origin, so web pages can't drive the server (native clients send no `Origin`). Tampermonkey was tried first and abandoned: its userScripts gating silently never injected in Vivaldi.
 
 ## Key patterns
 
@@ -112,12 +112,12 @@ When debugging a silent failure — a fetch that seems stuck, missing data, a TU
 - `~/.config/unrager/session.json` — TUI state
 - `~/.config/unrager/tokens.json` — OAuth tokens (0600)
 - `~/.config/unrager/config.toml` — general settings (browser command, `cookie_browser` pin, query ID overrides)
-- `~/.config/unrager/filter.toml` — rage filter rubric and `[llm]` model settings (auto-created from `src/tui/filter_default.toml`; rule edits over the API go through `FilterConfig::write_rules_into`, which keeps comments)
+- `~/.config/unrager/filter.toml` — rage filter rubric, `strictness` and `[llm]` model settings (auto-created from `src/tui/filter_default.toml`; rule edits over the API go through `FilterConfig::write_rules_into`, which keeps comments)
 - `~/.local/share/unrager/browser-extension/` — the unpacked extension `unrager setup` writes; `setup.json` beside it remembers setup's `--apps`/`--bind`
 - `~/.config/systemd/user/unrager-serve.service` (macOS: `~/Library/LaunchAgents/com.unrager.serve.plist`, log `~/Library/Logs/unrager-serve.log`) — the background server `unrager setup` installs
 - `~/.cache/unrager/unrager.log.YYYY-MM-DD` — rolling log file (14 most recent kept)
 - `~/.cache/unrager/seen.db` — read tracking (auto-pruned to 2 days)
-- `~/.cache/unrager/filter.db` — filter verdict cache (auto-pruned to 7 days; rubric-hash invalidates the rest)
+- `~/.cache/unrager/filter.db` — filter verdict cache with the rule behind each hide (auto-pruned to 7 days; rubric-hash invalidates the rest) and the user's per-post overrides (kept 90 days)
 - `~/.cache/unrager/feed.db` — materialized Home buffer (capped ring, `[feed] buffer_cap` default 200/variant); `feed.db.writer.lock` is the `fs2` flock for the single ingest writer
 - `~/.cache/unrager/query-ids.json` — scraped GraphQL query ID cache
 - `~/.cache/unrager/media/<tweet_id>/` — downloaded attachments for external viewer (`m` key) and screenshot embeds; one subdir per tweet so Linux image viewers can arrow through siblings; whole subdirs LRU-pruned to 512 MB in the background at TUI startup (`external::prune_downloads`)
@@ -180,7 +180,9 @@ If you write a commit and find no `[Unreleased]` bullet matches it, that is the 
 
 ## Filter
 
-One-shot HIDE/KEEP classifier (`thinking: false`, `temperature: 0`, `max_tokens: 3`) built from `filter.toml` topics. Verdicts cache to sqlite keyed by `(tweet_id, rubric_hash)` — editing the rubric (or backend/model) invalidates automatically. `classify_once` returns `None` when the backend never answered (unreachable, timeout, malformed reply): every caller shows the tweet but must NOT cache anything, or a cold-loading model pins fake KEEPs for the 7-day retention window. If the backend is down, the filter silently fails open.
+One-shot classifier (`thinking: false`, `temperature: 0`, `max_tokens: 8`) built from `filter.toml` by `Rubric`: the topics numbered 1..n, then (unless relaxed) the five built-in `RAGE_BAIT_RULES`, answered as `KEEP` or `HIDE <n>`. `Rubric::judge` maps the number back to the rule's label (a topic's own text, or a built-in's short name), which is the verdict's `reason` (`Judgement`). `strictness` (`Strictness`: relaxed, balanced by default, strict) changes the prompt: relaxed and balanced keep short or unclear posts and say "When in doubt, KEEP", strict judges authors too and says "When in doubt, HIDE". Verdicts cache to sqlite keyed by `(tweet_id, rubric_hash)` with a nullable `reason` column (added in place to older files) — editing the rubric (or strictness, backend, model) invalidates automatically. `classify_once` returns `None` when the backend never answered (unreachable, timeout, malformed reply): every caller shows the tweet but must NOT cache anything, or a cold-loading model pins fake KEEPs for the 7-day retention window. If the backend is down, the filter silently fails open.
+
+`FilterCache::get`/`lookup` answer, in order: the user's own posts (`exempt`, keyed from the `twid` cookie via `XSession::user_id`; always Keep, never judged or stored — the TUI's `prepare_filter_cache`, the ingest worker and the SSE stream mark them), the user's per-post overrides (`overrides` table, set by `POST /api/filter/overrides`, outrank the model in every client, survive rubric changes, pruned after 90 days; another process's overrides arrive through `refresh_overrides`, which rereads them when `PRAGMA data_version` moves), then the model's verdict under the current rubric. `seed` fills memory from `feed.db` rows without writing back. `stats` (behind `GET /api/filter/stats`) counts hides per rule under the current rubric.
 
 ## Media
 

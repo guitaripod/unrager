@@ -547,6 +547,15 @@ impl GqlClient {
         self.store.lock().ok()?.get(op).cloned()
     }
 
+    /// The signed-in account's numeric id, when a session is loaded.
+    pub fn self_user_id(&self) -> Option<String> {
+        self.session
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .session
+            .user_id()
+    }
+
     fn session_snapshot(&self) -> (XSession, u64) {
         let slot = self.session.read().unwrap_or_else(PoisonError::into_inner);
         (slot.session.clone(), slot.generation)

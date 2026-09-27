@@ -1,5 +1,6 @@
 use crate::server::error::ApiError;
 use crate::server::state::AppState;
+use crate::tui::filter::{FilterConfig, Strictness, built_in_rule_labels};
 use axum::Json;
 use axum::extract::State;
 use serde::Deserialize;
@@ -12,6 +13,8 @@ pub async fn get_filter(
     Ok(Json(serde_json::json!({
         "drop_topics": cfg.drop_topics,
         "extra_guidance": cfg.extra_guidance,
+        "strictness": cfg.strictness,
+        "built_in_rules": built_in_rule_labels(),
         "ollama": {
             "backend": cfg.llm.backend,
             "model": cfg.llm.model,
@@ -26,6 +29,8 @@ pub struct FilterPatch {
     pub drop_topics: Option<Vec<String>>,
     #[serde(default)]
     pub extra_guidance: Option<String>,
+    #[serde(default)]
+    pub strictness: Option<Strictness>,
 }
 
 /// Apply a rubric edit everywhere it matters, atomically from the client's
@@ -46,6 +51,9 @@ pub async fn patch_filter(
     if let Some(guidance) = patch.extra_guidance {
         updated.extra_guidance = guidance;
     }
+    if let Some(strictness) = patch.strictness {
+        updated.strictness = strictness;
+    }
     let toml_path = state.filter_toml_path.clone();
     let rules = updated.clone();
     tokio::task::spawn_blocking(move || -> std::result::Result<(), ApiError> {
@@ -64,8 +72,13 @@ pub async fn patch_filter(
     state.classifier.lock().await.set_rubric(&updated);
     *cfg = updated;
     state.activity.touch();
-    Ok(Json(serde_json::json!({
+    Ok(Json(rules_view(&cfg)))
+}
+
+fn rules_view(cfg: &FilterConfig) -> serde_json::Value {
+    serde_json::json!({
         "drop_topics": cfg.drop_topics,
         "extra_guidance": cfg.extra_guidance,
-    })))
+        "strictness": cfg.strictness,
+    })
 }

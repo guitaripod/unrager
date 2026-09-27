@@ -1,8 +1,11 @@
 use crate::server::error::ApiError;
 use crate::server::llm;
+use crate::server::routes::classify::verdict_event;
 use crate::server::state::AppState;
 use crate::tui::ask;
-use crate::tui::filter::{self, ChatRequest, FilterCache, FilterDecision, LlmConfig};
+use crate::tui::filter::{
+    self, CachedVerdict, ChatRequest, FilterCache, FilterDecision, Judgement, LlmConfig,
+};
 use async_stream::stream;
 use axum::extract::{Query, State};
 use axum::response::Sse;
@@ -12,9 +15,7 @@ use serde::Deserialize;
 use std::convert::Infallible;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use unrager_model::{
-    AskPreset, AskRequest, AskRole, AskTurn, FilterVerdictEvent, TokenEvent, Verdict,
-};
+use unrager_model::{AskPreset, AskRequest, AskRole, AskTurn, FilterVerdictEvent, TokenEvent};
 
 #[derive(Debug, Deserialize)]
 pub struct FilterQuery {
@@ -26,25 +27,40 @@ pub struct FilterQuery {
 /// classification instead of waiting in line one by one.
 const FILTER_STREAM_CONCURRENCY: usize = 4;
 
-/// One post's verdict for the filter stream: cached, or looked up (recently
-/// served, the Home buffer, X) and classified. `None` when the post can't be
-/// read or the model doesn't answer; the client keeps showing it.
+/// One post's verdict for the filter stream: kept if the user wrote it, else
+/// cached, or looked up (recently served, the Home buffer, X) and
+/// classified. `None` when the post can't be read or the model doesn't
+/// answer; the client keeps showing it.
 async fn verdict_for(state: &AppState, rubric: &str, id: String) -> Option<FilterVerdictEvent> {
-    let cached = state.filter_cache.lock().await.get(&id);
-    let decision = match cached {
-        Some(decision) => decision,
+    if state.is_own_post(&id).await {
+        return Some(verdict_event(
+            id,
+            Judgement::from(FilterDecision::Keep).into(),
+        ));
+    }
+    let cached = state.filter_cache.lock().await.lookup(&id);
+    let verdict = match cached {
+        Some(verdict) => verdict,
         None => {
             let tweet = state.tweet(&id).await.ok()?;
+            if state.is_own_post(&id).await {
+                return Some(verdict_event(
+                    id,
+                    Judgement::from(FilterDecision::Keep).into(),
+                ));
+            }
             let text = filter::build_classification_text(&tweet);
-            let decision = state.classifier_handle.classify(&id, &text).await?;
-            persist_verdict(&mut *state.filter_cache.lock().await, rubric, &id, decision);
-            decision
+            let judged = state.classifier_handle.classify(&id, &text).await?;
+            persist_verdict(
+                &mut *state.filter_cache.lock().await,
+                rubric,
+                &id,
+                judged.clone(),
+            );
+            CachedVerdict::from(judged)
         }
     };
-    Some(FilterVerdictEvent {
-        id,
-        verdict: decision_to_verdict(decision),
-    })
+    Some(verdict_event(id, verdict))
 }
 
 pub async fn filter_stream(
@@ -316,9 +332,9 @@ fn token_channel() -> (
 /// storing an old-prompt verdict under it would poison the new rubric's cache
 /// for the whole retention window. The SSE event is emitted either way — the
 /// client asked under the old rubric and still gets its answer.
-fn persist_verdict(cache: &mut FilterCache, rubric_snapshot: &str, id: &str, d: FilterDecision) {
+fn persist_verdict(cache: &mut FilterCache, rubric_snapshot: &str, id: &str, judged: Judgement) {
     if cache.rubric_hash() == rubric_snapshot {
-        cache.put(id, d);
+        cache.put_judgements(&[(id, judged)]);
     } else {
         tracing::debug!(
             id,
@@ -326,13 +342,6 @@ fn persist_verdict(cache: &mut FilterCache, rubric_snapshot: &str, id: &str, d: 
             live = cache.rubric_hash(),
             "rubric changed mid-stream; verdict not cached"
         );
-    }
-}
-
-fn decision_to_verdict(d: FilterDecision) -> Verdict {
-    match d {
-        FilterDecision::Hide => Verdict::Hide,
-        FilterDecision::Keep => Verdict::Keep,
     }
 }
 
@@ -361,14 +370,14 @@ mod tests {
     fn verdict_persists_only_under_the_snapshotted_rubric() {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let mut cache = FilterCache::open(tmp.path(), "old-rubric".into()).unwrap();
-        persist_verdict(&mut cache, "old-rubric", "t1", FilterDecision::Hide);
+        persist_verdict(&mut cache, "old-rubric", "t1", FilterDecision::Hide.into());
         assert_eq!(
             cache.get("t1"),
             Some(FilterDecision::Hide),
             "matching rubric persists normally"
         );
         cache.rekey("new-rubric".into()).unwrap();
-        persist_verdict(&mut cache, "old-rubric", "t2", FilterDecision::Hide);
+        persist_verdict(&mut cache, "old-rubric", "t2", FilterDecision::Hide.into());
         assert_eq!(
             cache.get("t2"),
             None,

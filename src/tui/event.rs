@@ -70,7 +70,7 @@ pub enum Event {
     },
     TweetClassified {
         rest_id: String,
-        verdict: Option<crate::tui::filter::FilterDecision>,
+        verdict: Option<crate::tui::filter::Judgement>,
     },
     TweetTranslated {
         rest_id: String,

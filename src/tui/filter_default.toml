@@ -21,6 +21,13 @@ drop_topics = [
 ]
 extra_guidance = "KEEP technical, scientific, art, music, sports, personal-life, and humor tweets that only mention these topics in passing. KEEP genuine AI research, product announcements, and thoughtful critique. HIDE if the topic IS the point of the tweet."
 
+# How readily a post is hidden. "relaxed": only posts clearly about one of
+# the topics above. "balanced": those, plus rage bait, dunking and
+# engagement farming; a post the model isn't sure about stays. "strict":
+# also posts by people known for a topic, and anything the model isn't sure
+# about.
+strictness = "balanced"
+
 # The model that reads each post. It runs on your computer; nothing is sent
 # anywhere else.
 [llm]

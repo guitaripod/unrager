@@ -146,6 +146,21 @@ public enum FilterVerdict: String, Decodable, Sendable {
 public struct FilterVerdictEvent: Decodable, Sendable {
     public let id: String
     public let verdict: FilterVerdict
+    /// The rule a hide was for, as the user wrote it or a built-in rule's
+    /// name; `nil` when the model didn't name one.
+    public let reason: String?
+    /// The user set this verdict on the post themselves.
+    public let overridden: Bool
+
+    enum CodingKeys: String, CodingKey { case id, verdict, reason, overridden }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        verdict = try c.decode(FilterVerdict.self, forKey: .verdict)
+        reason = try c.decodeIfPresent(String.self, forKey: .reason)
+        overridden = try c.decodeIfPresent(Bool.self, forKey: .overridden) ?? false
+    }
 }
 
 /// One `data:` payload on the ask/brief/translate token streams.

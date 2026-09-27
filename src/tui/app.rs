@@ -1218,6 +1218,7 @@ mod tests {
         let cfg = crate::tui::filter::FilterConfig {
             drop_topics: vec![],
             extra_guidance: String::new(),
+            strictness: Default::default(),
             llm: crate::tui::filter::LlmConfig {
                 backend: crate::tui::filter::LlmBackend::Ollama,
                 model: "test".into(),
@@ -1264,6 +1265,7 @@ mod tests {
         let cfg = crate::tui::filter::FilterConfig {
             drop_topics: vec![],
             extra_guidance: String::new(),
+            strictness: Default::default(),
             llm: crate::tui::filter::LlmConfig {
                 backend: crate::tui::filter::LlmBackend::Ollama,
                 model: "test".into(),
@@ -1287,7 +1289,7 @@ mod tests {
             } else {
                 FilterDecision::Keep
             };
-            app.handle_tweet_classified(format!("t{i}"), Some(verdict));
+            app.handle_tweet_classified(format!("t{i}"), Some(verdict.into()));
         }
         assert!(app.pending_classification.is_empty());
         assert_eq!(app.source.tweets.len(), 10);
@@ -2004,6 +2006,7 @@ mod tests {
         let cfg = crate::tui::filter::FilterConfig {
             drop_topics: vec![],
             extra_guidance: String::new(),
+            strictness: Default::default(),
             llm: crate::tui::filter::LlmConfig {
                 backend: crate::tui::filter::LlmBackend::Ollama,
                 model: "test".into(),
@@ -2031,11 +2034,56 @@ mod tests {
         );
         assert_eq!(app.pending_classification.len(), 2);
 
-        app.handle_tweet_classified("uncached_new".into(), Some(FilterDecision::Keep));
+        app.handle_tweet_classified("uncached_new".into(), Some(FilterDecision::Keep.into()));
 
         assert_eq!(app.source.tweets.len(), 2);
         assert_eq!(app.source.tweets[0].rest_id, "uncached_new");
         assert_eq!(app.source.tweets[1].rest_id, "cached_keep");
+    }
+
+    #[tokio::test]
+    async fn the_users_own_posts_are_never_filtered() {
+        let (mut app, _rx, tmp) = dummy_app();
+        let session = crate::auth::XSession {
+            twid: "u%3D42".into(),
+            ..Default::default()
+        };
+        app.client = Arc::new(
+            GqlClient::new(
+                session,
+                crate::gql::QueryIdStore::with_fallbacks(),
+                tmp.path().join("own-qids.json"),
+            )
+            .unwrap(),
+        );
+        let cache_tmp = NamedTempFile::new().unwrap();
+        let mut cache = FilterCache::open(cache_tmp.path(), "h".into()).unwrap();
+        cache.put("mine", FilterDecision::Hide);
+        cache.put("theirs", FilterDecision::Hide);
+        app.filter_cache = Some(cache);
+        let cfg: crate::tui::filter::FilterConfig =
+            toml::from_str(crate::tui::filter::FilterConfig::default_content()).unwrap();
+        app.filter_classifier = Some(crate::tui::filter::Classifier::new(&cfg));
+        app.filter_mode = crate::tui::filter::FilterMode::On;
+        app.source = crate::tui::source::Source::new(SourceKind::Home { following: false });
+        let mut mine = make_tweet("mine", "a post the model once hid");
+        mine.author.rest_id = "42".into();
+
+        let page = make_page(vec![mine, make_tweet("theirs", "rage")]);
+        app.handle_timeline_loaded(
+            SourceKind::Home { following: false },
+            Ok(page),
+            false,
+            false,
+        );
+
+        let shown: Vec<&str> = app
+            .source
+            .tweets
+            .iter()
+            .map(|t| t.rest_id.as_str())
+            .collect();
+        assert_eq!(shown, ["mine"]);
     }
 
     #[tokio::test]
@@ -2070,6 +2118,7 @@ mod tests {
         let cfg = crate::tui::filter::FilterConfig {
             drop_topics: vec![],
             extra_guidance: String::new(),
+            strictness: Default::default(),
             llm: crate::tui::filter::LlmConfig {
                 backend: crate::tui::filter::LlmBackend::Ollama,
                 model: "test".into(),

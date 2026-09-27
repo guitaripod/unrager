@@ -168,6 +168,12 @@ struct DecodingTests {
         #expect(done.done)
         let verdict = try decode(FilterVerdictEvent.self, #"{"id":"1","verdict":"hide"}"#)
         #expect(verdict.verdict == .hide)
+        #expect(verdict.reason == nil)
+        #expect(!verdict.overridden)
+        let ruled = try decode(FilterVerdictEvent.self, #"{"id":"2","verdict":"hide","reason":"war"}"#)
+        #expect(ruled.reason == "war")
+        let yours = try decode(FilterVerdictEvent.self, #"{"id":"3","verdict":"keep","overridden":true}"#)
+        #expect(yours.verdict == .keep && yours.overridden)
     }
 
     @Test("Notification renames `type` and defaults actors")

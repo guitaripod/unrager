@@ -5,7 +5,7 @@ use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
@@ -13,25 +13,88 @@ use tokio::sync::Semaphore;
 use tracing::{debug, warn};
 
 const DEFAULT_CONFIG: &str = include_str!("filter_default.toml");
-const SYSTEM_TEMPLATE: &str = "HIDE or KEEP this tweet?
+const KEEP_RULE: &str = "KEEP technical, scientific, art, music, sports, personal-life, and humor posts — including spicy opinions, frustration, trash talk, and sharp critique — as long as the post has actual content, not just an invitation to be angry.";
+const KEEP_UNCLEAR: &str =
+    "KEEP short replies and posts with too little text to tell what they are about.";
+const ANSWER_FORMAT: &str = "Answer KEEP, or HIDE followed by the number of the rule, like HIDE 3.";
 
-HIDE if it is about, or written by someone primarily known for, any of these topics:
-{TOPICS}
+/// Rules every rubric but a relaxed one carries after the user's topics, as
+/// (what the model reads, the name a post hidden for it is labeled with).
+const RAGE_BAIT_RULES: [(&str, &str); 5] = [
+    (
+        "subtweets, vaguebooking, \"you know who you are\" callouts",
+        "subtweets and callouts",
+    ),
+    (
+        "ratio bait, dunking, \"imagine being this person\" posts",
+        "ratio bait and dunking",
+    ),
+    (
+        "engagement farming: \"RT if you agree\", \"unpopular opinion: [bait]\", \"what is the most controversial...\"",
+        "engagement farming",
+    ),
+    (
+        "manufactured outrage with no information beyond \"be mad\"",
+        "manufactured outrage",
+    ),
+    (
+        "doom-posting and vague moral panic with no specifics",
+        "doom-posting",
+    ),
+];
 
-ALSO HIDE, even if no topic above applies, when you would tap \"Not interested\", mute, block, or report the author after seeing this. Specifically:
-- subtweets, vaguebooking, \"you know who you are\" callouts
-- ratio bait, dunking, \"imagine being this person\" posts
-- engagement farming: \"RT if you agree\", \"unpopular opinion: [bait]\", \"what is the most controversial...\"
-- manufactured outrage with no information content beyond \"be mad\"
-- doom-posting and vague moral panic with no specifics
-
-KEEP technical, scientific, art, music, sports, personal-life, and humor tweets — including spicy opinions, frustration, trash talk, and sharp critique — as long as the post has actual content, not just an invitation to be angry.
-{GUIDANCE}
-When in doubt, HIDE.
-One word answer:";
-
-const PROMPT_VERSION: &str = "v2-mute-signals";
+const PROMPT_VERSION: &str = "v3-numbered-rules";
 const MAX_TEXT_CHARS: usize = 500;
+/// Room for "HIDE 12" and whatever spacing the model puts around it.
+const ANSWER_MAX_TOKENS: u32 = 8;
+
+/// How readily the filter hides a post: `strictness` in `filter.toml`. It is
+/// part of the rubric hash, so changing it checks every post again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Strictness {
+    /// Only posts clearly about one of the user's topics.
+    Relaxed,
+    /// The user's topics plus the built-in rage-bait rules; a post the model
+    /// isn't sure about stays.
+    #[default]
+    Balanced,
+    /// Also posts by people known for a topic, and anything the model isn't
+    /// sure about.
+    Strict,
+}
+
+impl Strictness {
+    /// The name `filter.toml` uses; it feeds the rubric hash, so it must not
+    /// drift with Rust renames.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Strictness::Relaxed => "relaxed",
+            Strictness::Balanced => "balanced",
+            Strictness::Strict => "strict",
+        }
+    }
+
+    /// The line the numbered rules hang under.
+    fn rules_intro(self) -> &'static str {
+        match self {
+            Strictness::Relaxed => {
+                "HIDE a post only when one of these rules is clearly its main subject:"
+            }
+            Strictness::Balanced => "HIDE a post when one of these rules is its main point:",
+            Strictness::Strict => {
+                "HIDE a post when it is about one of these rules, or written by someone primarily known for one:"
+            }
+        }
+    }
+
+    fn when_in_doubt(self) -> &'static str {
+        match self {
+            Strictness::Strict => "When in doubt, HIDE.",
+            Strictness::Relaxed | Strictness::Balanced => "When in doubt, KEEP.",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilterMode {
@@ -52,11 +115,31 @@ pub enum FilterState {
     Unavailable,
 }
 
+/// A verdict plus, for a HIDE, the rule the model said it broke.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Judgement {
+    pub decision: FilterDecision,
+    /// The rule's label as users see it: a topic's own text, or the short
+    /// name of a built-in rule.
+    pub reason: Option<Arc<str>>,
+}
+
+impl From<FilterDecision> for Judgement {
+    fn from(decision: FilterDecision) -> Self {
+        Self {
+            decision,
+            reason: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FilterConfig {
     pub drop_topics: Vec<String>,
     #[serde(default)]
     pub extra_guidance: String,
+    #[serde(default)]
+    pub strictness: Strictness,
     /// `[llm]` in `filter.toml`; `[ollama]` (the pre-1.0 name) still loads.
     #[serde(alias = "ollama")]
     pub llm: LlmConfig,
@@ -563,6 +646,7 @@ impl FilterConfig {
         topics.set_trailing_comma(true);
         doc["drop_topics"] = toml_edit::value(topics);
         doc["extra_guidance"] = toml_edit::value(self.extra_guidance.as_str());
+        doc["strictness"] = toml_edit::value(self.strictness.as_str());
         Ok(doc.to_string())
     }
 
@@ -590,6 +674,8 @@ impl FilterConfig {
         hasher.update(b"---\n");
         hasher.update(PROMPT_VERSION.as_bytes());
         hasher.update(b"---\n");
+        hasher.update(self.strictness.as_str().as_bytes());
+        hasher.update(b"---\n");
         hasher.update(self.llm.backend.as_str().as_bytes());
         hasher.update(b"\n");
         hasher.update(self.llm.model.as_bytes());
@@ -608,24 +694,84 @@ fn hex16(bytes: &[u8]) -> String {
     out
 }
 
-pub fn build_system_prompt(cfg: &FilterConfig) -> String {
-    let mut topics = String::new();
-    for t in &cfg.drop_topics {
-        if t.trim().is_empty() {
-            continue;
+/// The classifier's system prompt and the rules it numbers, so the rule an
+/// answer like "HIDE 3" cites can be named back to the user.
+#[derive(Debug)]
+pub struct Rubric {
+    prompt: String,
+    labels: Vec<Arc<str>>,
+}
+
+impl Rubric {
+    pub fn new(cfg: &FilterConfig) -> Self {
+        let mut rules: Vec<(&str, &str)> = cfg
+            .drop_topics
+            .iter()
+            .map(|t| t.trim())
+            .filter(|t| !t.is_empty())
+            .map(|t| (t, t))
+            .collect();
+        if cfg.strictness != Strictness::Relaxed {
+            rules.extend(RAGE_BAIT_RULES);
         }
-        topics.push_str("- ");
-        topics.push_str(t.trim());
-        topics.push('\n');
+        let numbered = rules
+            .iter()
+            .enumerate()
+            .map(|(i, (text, _))| format!("{}. {text}", i + 1))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let unclear = match cfg.strictness {
+            Strictness::Strict => String::new(),
+            Strictness::Relaxed | Strictness::Balanced => format!("\n{KEEP_UNCLEAR}"),
+        };
+        let guidance = match cfg.extra_guidance.trim() {
+            "" => String::new(),
+            g => format!("\n{g}"),
+        };
+        let prompt = format!(
+            "Decide whether to HIDE or KEEP this post.\n\n{}\n{numbered}\n\n{KEEP_RULE}{unclear}{guidance}\n{}\n{ANSWER_FORMAT}",
+            cfg.strictness.rules_intro(),
+            cfg.strictness.when_in_doubt(),
+        );
+        Self {
+            prompt,
+            labels: rules
+                .into_iter()
+                .map(|(_, label)| Arc::from(label))
+                .collect(),
+        }
     }
-    let guidance = if cfg.extra_guidance.trim().is_empty() {
-        String::new()
-    } else {
-        format!("\n{}\n", cfg.extra_guidance.trim())
-    };
-    SYSTEM_TEMPLATE
-        .replace("{TOPICS}", topics.trim_end_matches('\n'))
-        .replace("{GUIDANCE}", guidance.trim_end_matches('\n'))
+
+    pub fn prompt(&self) -> &str {
+        &self.prompt
+    }
+
+    /// Whether there is anything to hide for at all: a relaxed rubric with
+    /// no topics has no rules.
+    fn has_rules(&self) -> bool {
+        !self.labels.is_empty()
+    }
+
+    /// The verdict in a model's answer, with the label of the rule a HIDE
+    /// cites when the number is one of this rubric's.
+    fn judge(&self, answer: &str) -> Judgement {
+        let (decision, rule) = parse_answer(answer);
+        let reason = rule
+            .and_then(|n| n.checked_sub(1))
+            .and_then(|i| self.labels.get(i))
+            .cloned();
+        Judgement { decision, reason }
+    }
+}
+
+pub fn build_system_prompt(cfg: &FilterConfig) -> String {
+    Rubric::new(cfg).prompt
+}
+
+/// The names of the built-in rage-bait rules, which every rubric but a
+/// relaxed one numbers after the user's topics.
+pub fn built_in_rule_labels() -> Vec<&'static str> {
+    RAGE_BAIT_RULES.iter().map(|(_, label)| *label).collect()
 }
 
 pub fn build_classification_text(t: &Tweet) -> String {
@@ -664,12 +810,77 @@ pub fn parse_verdict(raw: &str) -> FilterDecision {
     FilterDecision::Keep
 }
 
+/// [`parse_verdict`], plus the number a HIDE is followed by ("HIDE 3",
+/// "HIDE: 12"), which is the rule it cites.
+fn parse_answer(raw: &str) -> (FilterDecision, Option<usize>) {
+    let decision = parse_verdict(raw);
+    if decision == FilterDecision::Keep {
+        return (decision, None);
+    }
+    let after_hide = raw
+        .to_ascii_uppercase()
+        .find("HIDE")
+        .map_or(raw, |at| &raw[at + "HIDE".len()..]);
+    let rule = after_hide
+        .split(|c: char| !c.is_ascii_digit())
+        .find(|digits| !digits.is_empty())
+        .and_then(|digits| digits.parse().ok());
+    (decision, rule)
+}
+
 const RETENTION_DAYS: i64 = 7;
+/// A post the user showed or hid by hand stays that way this long; the
+/// timeline has long moved on by then.
+const OVERRIDE_RETENTION_DAYS: i64 = 90;
 
 pub struct FilterCache {
     conn: Connection,
     rubric_hash: String,
     mem: HashMap<String, FilterDecision>,
+    /// The rule behind each HIDE the model named one for.
+    reasons: HashMap<String, Arc<str>>,
+    /// Verdicts the user set on single posts. They outrank the model's and
+    /// outlive rule changes.
+    overrides: HashMap<String, FilterDecision>,
+    /// The user's own posts: always kept, never judged, never stored.
+    exempt: HashSet<String>,
+    /// `PRAGMA data_version` when `overrides` was last read, so overrides
+    /// another process set (the server, for the browser extension) show up.
+    overrides_version: i64,
+}
+
+/// What the cache knows about one post.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CachedVerdict {
+    pub decision: FilterDecision,
+    /// The rule a model's HIDE cited.
+    pub reason: Option<Arc<str>>,
+    /// Set by the user rather than the model.
+    pub overridden: bool,
+}
+
+impl From<Judgement> for CachedVerdict {
+    fn from(judged: Judgement) -> Self {
+        Self {
+            decision: judged.decision,
+            reason: judged.reason,
+            overridden: false,
+        }
+    }
+}
+
+/// Counts over the verdicts made under the current rules.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FilterStats {
+    pub checked: u64,
+    pub hidden: u64,
+    /// Hidden posts per rule label, most first; `None` for HIDEs whose rule
+    /// isn't known.
+    pub hidden_by_reason: Vec<(Option<String>, u64)>,
+    /// When the oldest of those verdicts was made, in unix seconds.
+    pub since: Option<i64>,
+    pub hidden_by_user: u64,
+    pub shown_by_user: u64,
 }
 
 impl FilterCache {
@@ -684,28 +895,41 @@ impl FilterCache {
             .map_err(|e| Error::Config(format!("set WAL: {e}")))?;
         conn.pragma_update(None, "synchronous", "NORMAL")
             .map_err(|e| Error::Config(format!("set sync: {e}")))?;
-        conn.execute(
+        conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS verdicts (
                 tweet_id      TEXT NOT NULL,
                 rubric_hash   TEXT NOT NULL,
                 verdict       INTEGER NOT NULL,
                 classified_at INTEGER NOT NULL,
+                reason        TEXT,
                 PRIMARY KEY (tweet_id, rubric_hash)
-            )",
-            [],
+            );
+            CREATE TABLE IF NOT EXISTS overrides (
+                tweet_id TEXT PRIMARY KEY,
+                verdict  INTEGER NOT NULL,
+                set_at   INTEGER NOT NULL
+            );",
         )
-        .map_err(|e| Error::Config(format!("create verdicts table: {e}")))?;
+        .map_err(|e| Error::Config(format!("create filter tables: {e}")))?;
+        ensure_reason_column(&conn)?;
         prune_expired(&conn);
-        let mem = load_verdicts(&conn, &rubric_hash)?;
+        let (mem, reasons) = load_verdicts(&conn, &rubric_hash)?;
+        let overrides = load_overrides(&conn)?;
+        let overrides_version = data_version(&conn);
         debug!(
             rubric_hash = %rubric_hash,
             loaded = mem.len(),
+            overrides = overrides.len(),
             "filter cache opened",
         );
         Ok(Self {
             conn,
             rubric_hash,
             mem,
+            reasons,
+            overrides,
+            exempt: HashSet::new(),
+            overrides_version,
         })
     }
 
@@ -713,12 +937,13 @@ impl FilterCache {
     /// already-open connection: drop the in-memory map, adopt the new hash,
     /// and reload whatever verdicts are already persisted under it. Much
     /// cheaper than `open` (no new connection, no schema DDL, no retention
-    /// prune), so it's safe to call under a lock on a live rubric edit.
+    /// prune), so it's safe to call under a lock on a live rubric edit. The
+    /// user's own verdicts don't depend on the rubric and stay.
     pub fn rekey(&mut self, rubric_hash: String) -> Result<()> {
         if self.rubric_hash == rubric_hash {
             return Ok(());
         }
-        let mem = load_verdicts(&self.conn, &rubric_hash)?;
+        let (mem, reasons) = load_verdicts(&self.conn, &rubric_hash)?;
         debug!(
             rubric_hash = %rubric_hash,
             loaded = mem.len(),
@@ -726,11 +951,39 @@ impl FilterCache {
         );
         self.rubric_hash = rubric_hash;
         self.mem = mem;
+        self.reasons = reasons;
         Ok(())
     }
 
+    /// The verdict to act on: keep for the user's own posts, the user's own
+    /// call on a post if they made one, else the model's under the current
+    /// rules.
     pub fn get(&self, tweet_id: &str) -> Option<FilterDecision> {
-        self.mem.get(tweet_id).copied()
+        self.lookup(tweet_id).map(|v| v.decision)
+    }
+
+    /// [`get`](Self::get), with the rule behind a HIDE and who made the call.
+    pub fn lookup(&self, tweet_id: &str) -> Option<CachedVerdict> {
+        if self.exempt.contains(tweet_id) {
+            return Some(CachedVerdict {
+                decision: FilterDecision::Keep,
+                reason: None,
+                overridden: false,
+            });
+        }
+        if let Some(&decision) = self.overrides.get(tweet_id) {
+            return Some(CachedVerdict {
+                decision,
+                reason: None,
+                overridden: true,
+            });
+        }
+        let decision = *self.mem.get(tweet_id)?;
+        Some(CachedVerdict {
+            decision,
+            reason: self.reasons.get(tweet_id).cloned(),
+            overridden: false,
+        })
     }
 
     pub fn rubric_hash(&self) -> &str {
@@ -741,25 +994,36 @@ impl FilterCache {
         self.put_many(&[(tweet_id, decision)]);
     }
 
+    /// [`put_judgements`](Self::put_judgements) for verdicts without a rule.
+    pub fn put_many(&mut self, verdicts: &[(&str, FilterDecision)]) {
+        let judged: Vec<(&str, Judgement)> = verdicts
+            .iter()
+            .map(|(id, decision)| (*id, Judgement::from(*decision)))
+            .collect();
+        self.put_judgements(&judged);
+    }
+
     /// Persists verdicts in one transaction: a page of them costs one WAL
     /// commit, not one each. The in-memory map is updated even if the disk
     /// write fails, so the running process still benefits.
-    pub fn put_many(&mut self, verdicts: &[(&str, FilterDecision)]) {
-        if verdicts.is_empty() {
+    pub fn put_judgements(&mut self, judged: &[(&str, Judgement)]) {
+        if judged.is_empty() {
             return;
         }
         let now = unix_now();
         let written = self.conn.transaction().and_then(|tx| {
             {
                 let mut insert = tx.prepare_cached(
-                    "INSERT OR REPLACE INTO verdicts (tweet_id, rubric_hash, verdict, classified_at) VALUES (?1, ?2, ?3, ?4)",
+                    "INSERT OR REPLACE INTO verdicts (tweet_id, rubric_hash, verdict, classified_at, reason) VALUES (?1, ?2, ?3, ?4, ?5)",
                 )?;
-                for (tweet_id, decision) in verdicts {
-                    let verdict_int: i64 = match decision {
-                        FilterDecision::Keep => 0,
-                        FilterDecision::Hide => 1,
-                    };
-                    insert.execute(params![tweet_id, &self.rubric_hash, verdict_int, now])?;
+                for (tweet_id, j) in judged {
+                    insert.execute(params![
+                        tweet_id,
+                        &self.rubric_hash,
+                        verdict_int(j.decision),
+                        now,
+                        j.reason.as_deref()
+                    ])?;
                 }
             }
             tx.commit()
@@ -767,8 +1031,16 @@ impl FilterCache {
         if let Err(e) = written {
             warn!("filter cache put failed: {e}");
         }
-        for (tweet_id, decision) in verdicts {
-            self.mem.insert((*tweet_id).to_string(), *decision);
+        for (tweet_id, j) in judged {
+            self.mem.insert((*tweet_id).to_string(), j.decision);
+            match &j.reason {
+                Some(reason) => {
+                    self.reasons.insert((*tweet_id).to_string(), reason.clone());
+                }
+                None => {
+                    self.reasons.remove(*tweet_id);
+                }
+            }
         }
     }
 
@@ -797,12 +1069,147 @@ impl FilterCache {
         }
     }
 
-    /// Drops verdicts older than the retention window from disk and memory.
-    /// `open` does this once; a process that stays up for weeks (the
-    /// background server) calls it periodically so neither grows forever.
+    /// [`put_judgements`](Self::put_judgements), only while `rubric_snapshot`
+    /// is still the live rubric (see
+    /// [`put_if_current_rubric`](Self::put_if_current_rubric)).
+    pub fn put_judgements_if_current_rubric(
+        &mut self,
+        rubric_snapshot: &str,
+        judged: &[(&str, Judgement)],
+    ) {
+        if self.rubric_hash == rubric_snapshot {
+            self.put_judgements(judged);
+        }
+    }
+
+    /// Fills in a verdict read from elsewhere (the Home buffer) without
+    /// writing it back: whoever made it already stored it, with its rule.
+    pub fn seed(&mut self, tweet_id: &str, decision: FilterDecision) {
+        self.mem.entry(tweet_id.to_string()).or_insert(decision);
+    }
+
+    /// Marks posts as the user's own: always kept, never judged or stored.
+    pub fn exempt<'a>(&mut self, tweet_ids: impl IntoIterator<Item = &'a str>) {
+        for id in tweet_ids {
+            if !self.exempt.contains(id) {
+                self.exempt.insert(id.to_string());
+            }
+        }
+    }
+
+    /// Records the user's own verdict on posts, or with `None` hands them
+    /// back to the model. It outranks the model's and survives rule changes.
+    pub fn set_override(
+        &mut self,
+        tweet_ids: &[&str],
+        decision: Option<FilterDecision>,
+    ) -> Result<()> {
+        let now = unix_now();
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|e| Error::Config(format!("begin override: {e}")))?;
+        {
+            let (sql, verdict) = match decision {
+                Some(d) => (
+                    "INSERT OR REPLACE INTO overrides (tweet_id, verdict, set_at) VALUES (?1, ?2, ?3)",
+                    verdict_int(d),
+                ),
+                None => ("DELETE FROM overrides WHERE tweet_id = ?1", 0),
+            };
+            let mut stmt = tx
+                .prepare_cached(sql)
+                .map_err(|e| Error::Config(format!("prepare override: {e}")))?;
+            for id in tweet_ids {
+                let written = if decision.is_some() {
+                    stmt.execute(params![id, verdict, now])
+                } else {
+                    stmt.execute(params![id])
+                };
+                written.map_err(|e| Error::Config(format!("write override: {e}")))?;
+            }
+        }
+        tx.commit()
+            .map_err(|e| Error::Config(format!("commit override: {e}")))?;
+        for id in tweet_ids {
+            match decision {
+                Some(d) => {
+                    self.overrides.insert((*id).to_string(), d);
+                }
+                None => {
+                    self.overrides.remove(*id);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Picks up overrides another process set since they were last read.
+    /// One pragma when nothing changed, so it's cheap to call per page.
+    pub fn refresh_overrides(&mut self) {
+        let version = data_version(&self.conn);
+        if version == self.overrides_version {
+            return;
+        }
+        match load_overrides(&self.conn) {
+            Ok(overrides) => {
+                self.overrides = overrides;
+                self.overrides_version = version;
+            }
+            Err(e) => warn!("filter overrides reload failed: {e}"),
+        }
+    }
+
+    /// How many posts the current rules checked and hid, and for which rule.
+    pub fn stats(&self) -> Result<FilterStats> {
+        let db = |e: rusqlite::Error| Error::Config(format!("filter stats: {e}"));
+        let (checked, hidden, since): (i64, Option<i64>, Option<i64>) = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*), SUM(verdict = 1), MIN(classified_at) FROM verdicts WHERE rubric_hash = ?1",
+                params![self.rubric_hash],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .map_err(db)?;
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT reason, COUNT(*) FROM verdicts WHERE rubric_hash = ?1 AND verdict = 1
+                 GROUP BY reason ORDER BY COUNT(*) DESC, reason",
+            )
+            .map_err(db)?;
+        let hidden_by_reason = stmt
+            .query_map(params![self.rubric_hash], |r| {
+                Ok((r.get::<_, Option<String>>(0)?, r.get::<_, i64>(1)? as u64))
+            })
+            .map_err(db)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(db)?;
+        let hidden_by_user = self
+            .overrides
+            .values()
+            .filter(|d| **d == FilterDecision::Hide)
+            .count() as u64;
+        Ok(FilterStats {
+            checked: checked as u64,
+            hidden: hidden.unwrap_or(0) as u64,
+            hidden_by_reason,
+            since,
+            hidden_by_user,
+            shown_by_user: self.overrides.len() as u64 - hidden_by_user,
+        })
+    }
+
+    /// Drops verdicts and overrides older than their retention windows from
+    /// disk and memory. `open` does this once; a process that stays up for
+    /// weeks (the background server) calls it periodically so neither grows
+    /// forever.
     pub fn prune(&mut self) -> Result<()> {
         if prune_expired(&self.conn) > 0 {
-            self.mem = load_verdicts(&self.conn, &self.rubric_hash)?;
+            let (mem, reasons) = load_verdicts(&self.conn, &self.rubric_hash)?;
+            self.mem = mem;
+            self.reasons = reasons;
+            self.overrides = load_overrides(&self.conn)?;
         }
         Ok(())
     }
@@ -820,59 +1227,131 @@ fn unix_now() -> i64 {
         .unwrap_or(0)
 }
 
-/// Deletes verdicts past the retention window, returning how many went.
-fn prune_expired(conn: &Connection) -> usize {
-    let cutoff = unix_now() - RETENTION_DAYS * 86400;
-    let pruned = conn
-        .execute(
-            "DELETE FROM verdicts WHERE classified_at < ?1",
-            params![cutoff],
-        )
-        .unwrap_or(0);
-    if pruned > 0 {
-        tracing::info!(pruned, "filter.db: pruned old entries");
+fn verdict_int(decision: FilterDecision) -> i64 {
+    match decision {
+        FilterDecision::Keep => 0,
+        FilterDecision::Hide => 1,
     }
-    pruned
 }
 
-/// Load every persisted verdict for one rubric hash into a fresh in-memory
-/// map. Shared by `FilterCache::open` and `FilterCache::rekey`.
-fn load_verdicts(conn: &Connection, rubric_hash: &str) -> Result<HashMap<String, FilterDecision>> {
+fn decision_from_int(v: i64) -> FilterDecision {
+    if v == 1 {
+        FilterDecision::Hide
+    } else {
+        FilterDecision::Keep
+    }
+}
+
+/// Bumped by SQLite whenever another connection commits to the database.
+fn data_version(conn: &Connection) -> i64 {
+    conn.query_row("PRAGMA data_version", [], |r| r.get(0))
+        .unwrap_or(0)
+}
+
+/// Adds the `reason` column to a `filter.db` from before HIDEs named their
+/// rule. Another process opening the file may add it first, which is fine.
+fn ensure_reason_column(conn: &Connection) -> Result<()> {
+    let has_reason = |conn: &Connection| {
+        conn.prepare("SELECT 1 FROM pragma_table_info('verdicts') WHERE name = 'reason'")
+            .and_then(|mut stmt| stmt.exists([]))
+            .unwrap_or(false)
+    };
+    if has_reason(conn) {
+        return Ok(());
+    }
+    match conn.execute("ALTER TABLE verdicts ADD COLUMN reason TEXT", []) {
+        Ok(_) => Ok(()),
+        Err(_) if has_reason(conn) => Ok(()),
+        Err(e) => Err(Error::Config(format!("add filter.db reason column: {e}"))),
+    }
+}
+
+/// Deletes verdicts and overrides past their retention windows, returning
+/// how many rows went.
+fn prune_expired(conn: &Connection) -> usize {
+    let now = unix_now();
+    let verdicts = conn
+        .execute(
+            "DELETE FROM verdicts WHERE classified_at < ?1",
+            params![now - RETENTION_DAYS * 86400],
+        )
+        .unwrap_or(0);
+    let overrides = conn
+        .execute(
+            "DELETE FROM overrides WHERE set_at < ?1",
+            params![now - OVERRIDE_RETENTION_DAYS * 86400],
+        )
+        .unwrap_or(0);
+    if verdicts + overrides > 0 {
+        tracing::info!(verdicts, overrides, "filter.db: pruned old entries");
+    }
+    verdicts + overrides
+}
+
+/// Verdicts by post id, and the rule behind each HIDE that named one.
+type LoadedVerdicts = (HashMap<String, FilterDecision>, HashMap<String, Arc<str>>);
+
+/// Every persisted verdict for one rubric hash, and the rules behind its
+/// HIDEs, with equal rule labels sharing one allocation. Shared by
+/// `FilterCache::open` and `FilterCache::rekey`.
+fn load_verdicts(conn: &Connection, rubric_hash: &str) -> Result<LoadedVerdicts> {
     let mut stmt = conn
-        .prepare("SELECT tweet_id, verdict FROM verdicts WHERE rubric_hash = ?1")
+        .prepare("SELECT tweet_id, verdict, reason FROM verdicts WHERE rubric_hash = ?1")
         .map_err(|e| Error::Config(format!("prepare load: {e}")))?;
     let rows = stmt
         .query_map(params![rubric_hash], |row| {
-            let id: String = row.get(0)?;
-            let v: i64 = row.get(1)?;
-            let decision = if v == 1 {
-                FilterDecision::Hide
-            } else {
-                FilterDecision::Keep
-            };
-            Ok((id, decision))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
         })
         .map_err(|e| Error::Config(format!("query verdicts: {e}")))?;
     let mut mem = HashMap::new();
+    let mut reasons = HashMap::new();
+    let mut labels: HashMap<String, Arc<str>> = HashMap::new();
     for row in rows {
-        let (id, decision) = row.map_err(|e| Error::Config(format!("row decode: {e}")))?;
-        mem.insert(id, decision);
+        let (id, verdict, reason) = row.map_err(|e| Error::Config(format!("row decode: {e}")))?;
+        if let Some(reason) = reason {
+            let label = labels
+                .entry(reason)
+                .or_insert_with_key(|r| Arc::from(r.as_str()))
+                .clone();
+            reasons.insert(id.clone(), label);
+        }
+        mem.insert(id, decision_from_int(verdict));
     }
-    Ok(mem)
+    Ok((mem, reasons))
+}
+
+fn load_overrides(conn: &Connection) -> Result<HashMap<String, FilterDecision>> {
+    let mut stmt = conn
+        .prepare("SELECT tweet_id, verdict FROM overrides")
+        .map_err(|e| Error::Config(format!("prepare overrides: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(|e| Error::Config(format!("query overrides: {e}")))?;
+    rows.map(|row| {
+        row.map(|(id, v)| (id, decision_from_int(v)))
+            .map_err(|e| Error::Config(format!("override decode: {e}")))
+    })
+    .collect()
 }
 
 pub struct Classifier {
     http: reqwest::Client,
     llm: LlmConfig,
     sem: Arc<Semaphore>,
-    system_prompt: Arc<RwLock<Arc<String>>>,
+    rubric: Arc<RwLock<Arc<Rubric>>>,
 }
 
-/// Grab the current system prompt out of the shared slot: an `Arc` clone,
-/// not a copy of the multi-KB prompt string. Poisoning is impossible in
-/// practice (writers only assign an `Arc`), but recover anyway rather than
-/// panicking inside the classification path.
-fn current_system_prompt(slot: &RwLock<Arc<String>>) -> Arc<String> {
+/// Grab the current rubric out of the shared slot: an `Arc` clone, not a
+/// copy of the multi-KB prompt. Poisoning is impossible in practice (writers
+/// only assign an `Arc`), but recover anyway rather than panicking inside the
+/// classification path.
+fn current_rubric(slot: &RwLock<Arc<Rubric>>) -> Arc<Rubric> {
     slot.read().unwrap_or_else(PoisonError::into_inner).clone()
 }
 
@@ -888,20 +1367,17 @@ impl Classifier {
             http: cfg.llm.build_client(),
             llm: cfg.llm.clone(),
             sem: Arc::new(Semaphore::new(8)),
-            system_prompt: Arc::new(RwLock::new(Arc::new(build_system_prompt(cfg)))),
+            rubric: Arc::new(RwLock::new(Arc::new(Rubric::new(cfg)))),
         }
     }
 
-    /// Rebuild the classification system prompt from an edited config, in
-    /// place. Every live `ClassifierHandle` shares the same prompt slot, so
-    /// the background ingest worker and any in-flight handles pick up the
-    /// new rubric on their next classification — no restart required.
+    /// Rebuild the rubric from an edited config, in place. Every live
+    /// `ClassifierHandle` shares the same slot, so the background ingest
+    /// worker and any in-flight handles pick up the new rubric on their next
+    /// classification — no restart required.
     pub fn set_rubric(&self, cfg: &FilterConfig) {
-        let prompt = Arc::new(build_system_prompt(cfg));
-        *self
-            .system_prompt
-            .write()
-            .unwrap_or_else(PoisonError::into_inner) = prompt;
+        let rubric = Arc::new(Rubric::new(cfg));
+        *self.rubric.write().unwrap_or_else(PoisonError::into_inner) = rubric;
     }
 
     pub async fn init(&mut self) -> Result<()> {
@@ -952,12 +1428,12 @@ impl Classifier {
         let http = self.http.clone();
         let llm = self.llm.clone();
         let sem = self.sem.clone();
-        let system_prompt = self.system_prompt.clone();
+        let rubric = self.rubric.clone();
         tokio::spawn(async move {
             let _permit = sem.acquire_owned().await.ok();
-            let prompt = current_system_prompt(&system_prompt);
+            let rubric = current_rubric(&rubric);
             let verdict =
-                classify_once(&http, &llm, &prompt, &payload.rest_id, &payload.text).await;
+                classify_once(&http, &llm, &rubric, &payload.rest_id, &payload.text).await;
             let _ = tx.send(Event::TweetClassified {
                 rest_id: payload.rest_id,
                 verdict,
@@ -974,7 +1450,7 @@ impl Classifier {
             http: self.http.clone(),
             llm: self.llm.clone(),
             sem: self.sem.clone(),
-            system_prompt: self.system_prompt.clone(),
+            rubric: self.rubric.clone(),
         }
     }
 }
@@ -984,16 +1460,16 @@ pub struct ClassifierHandle {
     http: reqwest::Client,
     llm: LlmConfig,
     sem: Arc<Semaphore>,
-    system_prompt: Arc<RwLock<Arc<String>>>,
+    rubric: Arc<RwLock<Arc<Rubric>>>,
 }
 
 impl ClassifierHandle {
     /// Classify one tweet and return the verdict directly (no event channel).
     /// Shares the concurrency semaphore so it never overwhelms the backend.
-    pub async fn classify(&self, rest_id: &str, text: &str) -> Option<FilterDecision> {
+    pub async fn classify(&self, rest_id: &str, text: &str) -> Option<Judgement> {
         let _permit = self.sem.acquire().await.ok();
-        let prompt = current_system_prompt(&self.system_prompt);
-        classify_once(&self.http, &self.llm, &prompt, rest_id, text).await
+        let rubric = current_rubric(&self.rubric);
+        classify_once(&self.http, &self.llm, &rubric, rest_id, text).await
     }
 
     /// The backend this handle classifies with, including the model an
@@ -1003,8 +1479,8 @@ impl ClassifierHandle {
     }
 
     #[cfg(test)]
-    pub(crate) fn system_prompt_snapshot(&self) -> Arc<String> {
-        current_system_prompt(&self.system_prompt)
+    pub(crate) fn system_prompt_snapshot(&self) -> String {
+        current_rubric(&self.rubric).prompt().to_string()
     }
 
     /// Quick liveness probe so the ingest worker skips classification entirely
@@ -1024,36 +1500,41 @@ impl ClassifierHandle {
 /// `None` when the backend never produced an answer (unreachable, timed out,
 /// malformed reply). Callers show the tweet but must not cache anything: a
 /// cold-loading model or a restart would otherwise pin a fake KEEP onto every
-/// tweet in flight for the whole retention window.
+/// tweet in flight for the whole retention window. A rubric with no rules
+/// keeps everything without asking.
 async fn classify_once(
     http: &reqwest::Client,
     llm: &LlmConfig,
-    system_prompt: &str,
+    rubric: &Rubric,
     rest_id: &str,
     text: &str,
-) -> Option<FilterDecision> {
+) -> Option<Judgement> {
+    if !rubric.has_rules() {
+        return Some(FilterDecision::Keep.into());
+    }
     let started = std::time::Instant::now();
     let req = ChatRequest {
         messages: vec![
-            serde_json::json!({ "role": "system", "content": system_prompt }),
+            serde_json::json!({ "role": "system", "content": rubric.prompt() }),
             serde_json::json!({ "role": "user", "content": text }),
         ],
         thinking: false,
         temperature: 0.0,
-        max_tokens: 3,
+        max_tokens: ANSWER_MAX_TOKENS,
     };
     debug!(rest_id, text_len = text.len(), "filter dispatch");
     match llm.chat_with_client(req, http).await {
         Ok(reply) => {
-            let parsed = parse_verdict(&reply.content);
+            let judged = rubric.judge(&reply.content);
             debug!(
                 rest_id,
                 raw = %reply.content,
-                parsed = ?parsed,
+                parsed = ?judged.decision,
+                reason = judged.reason.as_deref().unwrap_or(""),
                 elapsed_ms = started.elapsed().as_millis() as u64,
                 "filter verdict",
             );
-            Some(parsed)
+            Some(judged)
         }
         Err(e) => {
             warn!("filter classify failed for {rest_id}: {e}");
@@ -1215,6 +1696,7 @@ mod tests {
         FilterConfig {
             drop_topics: topics.into_iter().map(String::from).collect(),
             extra_guidance: guidance.into(),
+            strictness: Default::default(),
             llm: ollama_cfg(),
         }
     }
@@ -1386,22 +1868,112 @@ mod tests {
     }
 
     #[test]
-    fn system_prompt_has_topics() {
-        let c = cfg(vec!["war", "politics"], "keep humor");
+    fn system_prompt_numbers_the_topics() {
+        let c = cfg(vec!["war", " ", "politics"], "keep humor");
         let prompt = build_system_prompt(&c);
-        assert!(prompt.contains("- war"));
-        assert!(prompt.contains("- politics"));
+        assert!(prompt.contains("\n1. war\n2. politics\n"), "{prompt}");
         assert!(prompt.contains("keep humor"));
         assert!(prompt.contains("HIDE or KEEP"));
+        assert!(prompt.ends_with("like HIDE 3."));
     }
 
     #[test]
-    fn system_prompt_includes_negative_action_signals() {
+    fn balanced_adds_the_rage_bait_rules_and_keeps_what_it_is_unsure_of() {
         let prompt = build_system_prompt(&cfg(vec!["war"], ""));
-        assert!(prompt.contains("Not interested"));
-        assert!(prompt.contains("subtweets"));
+        assert!(prompt.contains("\n2. subtweets"));
         assert!(prompt.contains("ratio bait"));
-        assert!(prompt.contains("engagement farming"));
+        assert!(prompt.contains("\n4. engagement farming"));
+        assert!(prompt.contains("KEEP short replies"));
+        assert!(prompt.contains("When in doubt, KEEP."));
+        assert!(!prompt.contains("primarily known"));
+    }
+
+    #[test]
+    fn relaxed_asks_about_the_topics_alone() {
+        let mut c = cfg(vec!["war"], "");
+        c.strictness = Strictness::Relaxed;
+        let prompt = build_system_prompt(&c);
+        assert!(
+            prompt.contains("clearly its main subject:\n1. war\n\n"),
+            "{prompt}"
+        );
+        assert!(!prompt.contains("subtweets"));
+        assert!(prompt.contains("When in doubt, KEEP."));
+    }
+
+    #[test]
+    fn strict_hides_what_it_is_unsure_of_and_judges_authors() {
+        let mut c = cfg(vec!["war"], "");
+        c.strictness = Strictness::Strict;
+        let prompt = build_system_prompt(&c);
+        assert!(prompt.contains("written by someone primarily known for one"));
+        assert!(prompt.contains("subtweets"));
+        assert!(!prompt.contains("KEEP short replies"));
+        assert!(prompt.contains("When in doubt, HIDE."));
+    }
+
+    #[test]
+    fn rubric_hash_changes_with_strictness() {
+        let a = cfg(vec!["war"], "");
+        let mut b = a.clone();
+        b.strictness = Strictness::Strict;
+        assert_ne!(a.rubric_hash(), b.rubric_hash());
+    }
+
+    #[test]
+    fn strictness_defaults_to_balanced_and_is_written_back() {
+        let older: String = DEFAULT_CONFIG
+            .lines()
+            .filter(|l| !l.starts_with("strictness"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parsed: FilterConfig = toml::from_str(&older).unwrap();
+        assert_eq!(parsed.strictness, Strictness::Balanced);
+        let mut edited = parsed.clone();
+        edited.strictness = Strictness::Relaxed;
+        let written = edited.write_rules_into(&older).unwrap();
+        let reparsed: FilterConfig = toml::from_str(&written).unwrap();
+        assert_eq!(reparsed.strictness, Strictness::Relaxed);
+        assert!(
+            written.find("strictness =").unwrap() < written.find("[llm]").unwrap(),
+            "the key stays with the rules, not inside [llm]"
+        );
+        let default: FilterConfig = toml::from_str(DEFAULT_CONFIG).unwrap();
+        assert_eq!(default.strictness, Strictness::Balanced);
+    }
+
+    #[test]
+    fn answers_name_the_rule_they_cite() {
+        assert_eq!(parse_answer("HIDE 3"), (FilterDecision::Hide, Some(3)));
+        assert_eq!(parse_answer("HIDE: 12\n"), (FilterDecision::Hide, Some(12)));
+        assert_eq!(
+            parse_answer("hide (rule 4)"),
+            (FilterDecision::Hide, Some(4))
+        );
+        assert_eq!(parse_answer("HIDE"), (FilterDecision::Hide, None));
+        assert_eq!(parse_answer("KEEP"), (FilterDecision::Keep, None));
+        assert_eq!(parse_answer("KEEP 3"), (FilterDecision::Keep, None));
+    }
+
+    #[test]
+    fn a_rule_number_maps_to_its_label() {
+        let rubric = Rubric::new(&cfg(vec!["war", "politics"], ""));
+        let label = |answer: &str| rubric.judge(answer).reason.map(|r| r.to_string());
+        assert_eq!(label("HIDE 2").as_deref(), Some("politics"));
+        assert_eq!(label("HIDE 5").as_deref(), Some("engagement farming"));
+        assert_eq!(label("HIDE 0"), None);
+        assert_eq!(label("HIDE 8"), None);
+        assert_eq!(label("HIDE"), None);
+        assert_eq!(rubric.judge("HIDE 9").decision, FilterDecision::Hide);
+    }
+
+    #[tokio::test]
+    async fn a_rubric_with_no_rules_keeps_everything_without_asking() {
+        let mut c = cfg(vec![], "");
+        c.strictness = Strictness::Relaxed;
+        c.llm.host = "http://127.0.0.1:9".into();
+        let judged = Classifier::new(&c).handle().classify("1", "anything").await;
+        assert_eq!(judged, Some(FilterDecision::Keep.into()));
     }
 
     #[test]
@@ -1426,12 +1998,12 @@ mod tests {
     fn set_rubric_propagates_to_existing_handles() {
         let classifier = Classifier::new(&cfg(vec!["war"], ""));
         let handle = classifier.handle();
-        assert!(handle.system_prompt_snapshot().contains("- war"));
-        assert!(!handle.system_prompt_snapshot().contains("- crypto"));
+        assert!(handle.system_prompt_snapshot().contains("1. war"));
+        assert!(!handle.system_prompt_snapshot().contains("crypto"));
         classifier.set_rubric(&cfg(vec!["war", "crypto"], "keep humor"));
         let prompt = handle.system_prompt_snapshot();
         assert!(
-            prompt.contains("- crypto") && prompt.contains("keep humor"),
+            prompt.contains("2. crypto") && prompt.contains("keep humor"),
             "a handle taken before the rubric edit must see the new prompt"
         );
     }
@@ -1561,6 +2133,197 @@ mod tests {
         cache.rekey("hash-b".into()).unwrap();
         cache.put_if_current_rubric("hash-a", "tweet1", FilterDecision::Hide);
         assert!(!cache.contains("tweet1"));
+    }
+
+    fn judged(decision: FilterDecision, reason: &str) -> Judgement {
+        Judgement {
+            decision,
+            reason: Some(Arc::from(reason)),
+        }
+    }
+
+    #[test]
+    fn the_rule_behind_a_hide_survives_a_reopen() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        {
+            let mut cache = FilterCache::open(tmp.path(), "r".into()).unwrap();
+            cache.put_judgements(&[
+                ("1", judged(FilterDecision::Hide, "war")),
+                ("2", FilterDecision::Keep.into()),
+            ]);
+        }
+        let cache = FilterCache::open(tmp.path(), "r".into()).unwrap();
+        let hidden = cache.lookup("1").unwrap();
+        assert_eq!(hidden.decision, FilterDecision::Hide);
+        assert_eq!(hidden.reason.as_deref(), Some("war"));
+        assert!(!hidden.overridden);
+        assert_eq!(cache.lookup("2").unwrap().reason, None);
+    }
+
+    #[test]
+    fn a_filter_db_from_before_reasons_gains_the_column() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        {
+            let conn = Connection::open(tmp.path()).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE verdicts (
+                    tweet_id TEXT NOT NULL, rubric_hash TEXT NOT NULL,
+                    verdict INTEGER NOT NULL, classified_at INTEGER NOT NULL,
+                    PRIMARY KEY (tweet_id, rubric_hash));",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO verdicts VALUES ('old', 'r', 1, ?1)",
+                params![unix_now()],
+            )
+            .unwrap();
+        }
+        let mut cache = FilterCache::open(tmp.path(), "r".into()).unwrap();
+        assert_eq!(cache.get("old"), Some(FilterDecision::Hide));
+        cache.put_judgements(&[("new", judged(FilterDecision::Hide, "war"))]);
+        let reopened = FilterCache::open(tmp.path(), "r".into()).unwrap();
+        assert_eq!(
+            reopened.lookup("new").unwrap().reason.as_deref(),
+            Some("war")
+        );
+    }
+
+    #[test]
+    fn opening_waits_for_another_process_writing_instead_of_failing() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "PRAGMA journal_mode = WAL;
+                CREATE TABLE verdicts (
+                    tweet_id TEXT NOT NULL, rubric_hash TEXT NOT NULL,
+                    verdict INTEGER NOT NULL, classified_at INTEGER NOT NULL,
+                    PRIMARY KEY (tweet_id, rubric_hash));",
+            )
+            .unwrap();
+        }
+        let (locked_tx, locked) = std::sync::mpsc::channel();
+        let writer = {
+            let path = path.clone();
+            std::thread::spawn(move || {
+                let conn = Connection::open(&path).unwrap();
+                conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+                locked_tx.send(()).unwrap();
+                std::thread::sleep(Duration::from_millis(300));
+                conn.execute_batch("COMMIT").unwrap();
+            })
+        };
+        locked.recv().unwrap();
+
+        let opened = FilterCache::open(&path, "r".into());
+        writer.join().unwrap();
+
+        assert!(opened.is_ok(), "{:?}", opened.err());
+    }
+
+    #[test]
+    fn the_users_own_call_outranks_the_model_and_outlives_rule_changes() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut cache = FilterCache::open(tmp.path(), "a".into()).unwrap();
+        cache.put_judgements(&[("1", judged(FilterDecision::Hide, "war"))]);
+        cache
+            .set_override(&["1"], Some(FilterDecision::Keep))
+            .unwrap();
+        cache
+            .set_override(&["2"], Some(FilterDecision::Hide))
+            .unwrap();
+        let shown = cache.lookup("1").unwrap();
+        assert_eq!(
+            (shown.decision, shown.overridden),
+            (FilterDecision::Keep, true)
+        );
+        assert_eq!(shown.reason, None);
+
+        cache.rekey("b".into()).unwrap();
+        assert_eq!(cache.get("1"), Some(FilterDecision::Keep));
+        assert_eq!(cache.get("2"), Some(FilterDecision::Hide));
+
+        cache.set_override(&["1"], None).unwrap();
+        assert_eq!(
+            cache.get("1"),
+            None,
+            "handed back to the model, unjudged under b"
+        );
+        let reopened = FilterCache::open(tmp.path(), "a".into()).unwrap();
+        assert_eq!(reopened.lookup("1").unwrap().reason.as_deref(), Some("war"));
+        assert!(reopened.lookup("2").unwrap().overridden);
+    }
+
+    #[test]
+    fn overrides_set_by_another_process_are_picked_up() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut tui = FilterCache::open(tmp.path(), "r".into()).unwrap();
+        tui.put("1", FilterDecision::Hide);
+        let mut server = FilterCache::open(tmp.path(), "r".into()).unwrap();
+        server
+            .set_override(&["1"], Some(FilterDecision::Keep))
+            .unwrap();
+        assert_eq!(tui.get("1"), Some(FilterDecision::Hide));
+        tui.refresh_overrides();
+        assert_eq!(tui.get("1"), Some(FilterDecision::Keep));
+    }
+
+    #[test]
+    fn the_users_own_posts_are_always_kept_and_never_stored() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut cache = FilterCache::open(tmp.path(), "r".into()).unwrap();
+        cache.put("mine", FilterDecision::Hide);
+        cache.exempt(["mine", "also-mine"]);
+        assert_eq!(cache.get("mine"), Some(FilterDecision::Keep));
+        assert_eq!(cache.get("also-mine"), Some(FilterDecision::Keep));
+        assert!(!cache.contains("also-mine"));
+    }
+
+    #[test]
+    fn seeding_fills_gaps_without_overwriting_or_writing() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut cache = FilterCache::open(tmp.path(), "r".into()).unwrap();
+        cache.put_judgements(&[("1", judged(FilterDecision::Hide, "war"))]);
+        cache.seed("1", FilterDecision::Keep);
+        cache.seed("2", FilterDecision::Hide);
+        assert_eq!(cache.lookup("1").unwrap().reason.as_deref(), Some("war"));
+        assert_eq!(cache.get("2"), Some(FilterDecision::Hide));
+        let reopened = FilterCache::open(tmp.path(), "r".into()).unwrap();
+        assert!(!reopened.contains("2"));
+    }
+
+    #[test]
+    fn stats_count_hides_per_rule_under_the_current_rubric() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut cache = FilterCache::open(tmp.path(), "old".into()).unwrap();
+        cache.put_judgements(&[("0", judged(FilterDecision::Hide, "war"))]);
+        cache.rekey("new".into()).unwrap();
+        cache.put_judgements(&[
+            ("1", judged(FilterDecision::Hide, "war")),
+            ("2", judged(FilterDecision::Hide, "war")),
+            ("3", judged(FilterDecision::Hide, "doom-posting")),
+            ("4", FilterDecision::Hide.into()),
+            ("5", FilterDecision::Keep.into()),
+        ]);
+        cache
+            .set_override(&["6"], Some(FilterDecision::Hide))
+            .unwrap();
+        cache
+            .set_override(&["7", "8"], Some(FilterDecision::Keep))
+            .unwrap();
+        let stats = cache.stats().unwrap();
+        assert_eq!((stats.checked, stats.hidden), (5, 4));
+        assert_eq!(
+            stats.hidden_by_reason,
+            vec![
+                (Some("war".to_string()), 2),
+                (None, 1),
+                (Some("doom-posting".to_string()), 1),
+            ]
+        );
+        assert!(stats.since.is_some());
+        assert_eq!((stats.hidden_by_user, stats.shown_by_user), (1, 2));
     }
 
     #[test]

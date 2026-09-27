@@ -5,7 +5,7 @@ use crate::tui::brief::{self, BriefView};
 use crate::tui::event::Event;
 use crate::tui::filter::{
     self, Classifier, FilterCache, FilterConfig, FilterDecision, FilterMode, FilterState,
-    TweetPayload,
+    Judgement, TweetPayload,
 };
 use crate::tui::focus::{self, FocusEntry};
 use crate::tui::source::SourceKind;
@@ -82,6 +82,24 @@ impl App {
         self.set_status(msg);
     }
 
+    /// Brings the verdict cache up to date before a page is filtered: the
+    /// user's own posts are marked as never hidden, and posts the user showed
+    /// or hid from another client (the browser extension) are picked up.
+    pub(super) fn prepare_filter_cache(&mut self, tweets: &[Tweet]) {
+        let Some(cache) = self.filter_cache.as_mut() else {
+            return;
+        };
+        cache.refresh_overrides();
+        if let Some(me) = self.client.self_user_id() {
+            cache.exempt(
+                tweets
+                    .iter()
+                    .filter(|t| t.author.rest_id == me)
+                    .map(|t| t.rest_id.as_str()),
+            );
+        }
+    }
+
     pub(super) fn queue_filter_classification(&mut self, tweets: Vec<Tweet>) {
         if !matches!(self.filter_mode, FilterMode::On) {
             return;
@@ -130,16 +148,13 @@ impl App {
         }
     }
 
-    pub(super) fn handle_tweet_classified(
-        &mut self,
-        rest_id: String,
-        verdict: Option<FilterDecision>,
-    ) {
+    pub(super) fn handle_tweet_classified(&mut self, rest_id: String, verdict: Option<Judgement>) {
         self.filter_inflight.remove(&rest_id);
-        if let (Some(cache), Some(v)) = (self.filter_cache.as_mut(), verdict) {
-            cache.put(&rest_id, v);
+        let decision = verdict.as_ref().map(|j| j.decision);
+        if let (Some(cache), Some(judged)) = (self.filter_cache.as_mut(), verdict) {
+            cache.put_judgements(&[(rest_id.as_str(), judged)]);
         }
-        let verdict = verdict.unwrap_or(FilterDecision::Keep);
+        let verdict = decision.unwrap_or(FilterDecision::Keep);
         self.filter_verdicts
             .insert(rest_id.clone(), FilterState::Classified(verdict));
         let mut removed_from_source = false;

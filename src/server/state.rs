@@ -145,6 +145,30 @@ impl AppState {
         }
     }
 
+    /// Whether `id` is a post the signed-in user wrote, going by what this
+    /// server recently sent a client and the Home buffer; X is never asked.
+    /// The filter never judges those.
+    pub async fn is_own_post(&self, id: &str) -> bool {
+        let Some(me) = self.gql.self_user_id() else {
+            return false;
+        };
+        let recent = self
+            .recent_tweets
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .peek(id)
+            .map(|t| t.author.rest_id == me);
+        match recent {
+            Some(own) => own,
+            None => self
+                .feed
+                .lock()
+                .await
+                .tweet(id)
+                .is_some_and(|t| t.author.rest_id == me),
+        }
+    }
+
     /// A tweet by id: from what this server recently sent, then the Home
     /// buffer, and only then from X.
     pub async fn tweet(&self, id: &str) -> Result<Tweet> {

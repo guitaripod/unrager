@@ -1251,6 +1251,69 @@ mod tests {
         }
     }
 
+    /// A first page the filter mostly hides leaves the feed short of its
+    /// target once every verdict is in; the next page must be fetched rather
+    /// than the feed waiting forever behind "collecting…".
+    #[tokio::test]
+    async fn a_mostly_hidden_first_page_fetches_the_next_one() {
+        let (mut app, _rx, _tmp) = dummy_app();
+        let cache_tmp = NamedTempFile::new().unwrap();
+        app.filter_cache = Some(FilterCache::open(cache_tmp.path(), "h".into()).unwrap());
+        let cfg = crate::tui::filter::FilterConfig {
+            drop_topics: vec![],
+            extra_guidance: String::new(),
+            llm: crate::tui::filter::LlmConfig {
+                backend: crate::tui::filter::LlmBackend::Ollama,
+                model: "test".into(),
+                host: "http://127.0.0.1:1".into(),
+                timeout_seconds: 1,
+                keep_alive: "10s".into(),
+                api_key: None,
+            },
+        };
+        app.filter_classifier = Some(crate::tui::filter::Classifier::new(&cfg));
+        app.filter_mode = crate::tui::filter::FilterMode::On;
+        let kind = SourceKind::Home { following: false };
+        app.source = Source::new(kind.clone());
+        app.fetch_source(false, false);
+        let mut page = make_page((0..30).map(|i| make_tweet(&format!("t{i}"), "x")).collect());
+        page.next_cursor = Some("c".into());
+        app.handle_timeline_loaded(kind.clone(), Ok(page), false, false);
+        for i in 0..30 {
+            let verdict = if i < 20 {
+                FilterDecision::Hide
+            } else {
+                FilterDecision::Keep
+            };
+            app.handle_tweet_classified(format!("t{i}"), Some(verdict));
+        }
+        assert!(app.pending_classification.is_empty());
+        assert_eq!(app.source.tweets.len(), 10);
+        assert!(
+            app.source.fetch_in_flight,
+            "the next page was never requested"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_late_page_from_the_previous_feed_leaves_the_current_fetch_alone() {
+        let (mut app, _rx, _tmp) = dummy_app();
+        app.source = Source::new(SourceKind::Home { following: true });
+        app.fetch_source(false, false);
+        assert!(app.source.loading && app.source.fetch_in_flight);
+
+        let late = make_page(vec![make_tweet("old", "from the feed left behind")]);
+        app.handle_timeline_loaded(
+            SourceKind::Home { following: false },
+            Ok(late),
+            false,
+            false,
+        );
+
+        assert!(app.source.loading && app.source.fetch_in_flight);
+        assert!(app.source.tweets.is_empty());
+    }
+
     /// Home feeds stay hidden behind the "collecting…" curtain while the feed
     /// is below the render target and still actively loading, then reveal once
     /// the target is reached.

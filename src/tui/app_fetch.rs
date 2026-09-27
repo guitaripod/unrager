@@ -170,6 +170,7 @@ impl App {
             self.source.silent_refreshing = true;
         } else {
             self.source.loading = true;
+            self.source.fetch_in_flight = true;
         }
         if self.fetch_baseline.is_none() {
             self.fetch_baseline = Some(self.source.tweets.len());
@@ -235,17 +236,14 @@ impl App {
         silent: bool,
     ) {
         if self.source.kind.as_ref() != Some(&kind) {
-            if silent {
-                self.source.silent_refreshing = false;
-            } else {
-                self.source.loading = false;
-            }
+            tracing::debug!(kind = ?kind, append, silent, "dropping a page for a feed no longer shown");
             return;
         }
         if silent {
             self.source.silent_refreshing = false;
         } else {
             self.source.loading = false;
+            self.source.fetch_in_flight = false;
         }
         match result {
             Ok(mut page) => {

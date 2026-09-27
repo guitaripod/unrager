@@ -94,7 +94,12 @@ pub struct Source {
     pub kind: Option<SourceKind>,
     pub tweets: Vec<Tweet>,
     pub cursor: Option<String>,
+    /// Shown as the loading spinner: a fetch in flight, or the classifier
+    /// still judging the last page.
     pub loading: bool,
+    /// Only a non-silent fetch in flight, which `loading` can't tell apart
+    /// from a page still being classified.
+    pub fetch_in_flight: bool,
     pub silent_refreshing: bool,
     pub exhausted: bool,
     /// Consecutive `append` fetches that added no net-new tweets. Drives

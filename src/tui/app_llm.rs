@@ -273,13 +273,14 @@ impl App {
             && self.source.empty_appends < super::app::EMPTY_APPEND_LIMIT;
 
         if total_eventual < target && can_fetch_more {
-            if !self.source.loading {
+            if !self.source.fetch_in_flight {
                 tracing::debug!(
                     total = self.source.tweets.len(),
                     pending = self.pending_classification.len(),
                     target,
                     "fetch target short, paginating more"
                 );
+                self.source.loading = false;
                 self.fetch_source(true, false);
             }
             return;

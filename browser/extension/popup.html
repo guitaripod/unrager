@@ -33,16 +33,31 @@
       <span>Show hidden posts</span>
       <input type="checkbox" role="switch" id="reveal">
     </label>
+    <p class="hint">Right-click a post on your Home timeline to hide it, or to make sure it always shows.</p>
   </section>
 
   <details class="panel" id="rules">
     <summary>What gets hidden</summary>
+    <p class="tally" id="tally" hidden></p>
+    <fieldset class="strictness">
+      <legend class="field-label">How strict</legend>
+      <div class="segments">
+        <label><input type="radio" name="strictness" value="relaxed"><span>Relaxed</span></label>
+        <label><input type="radio" name="strictness" value="balanced"><span>Balanced</span></label>
+        <label><input type="radio" name="strictness" value="strict"><span>Strict</span></label>
+      </div>
+      <p class="hint" id="strictness-hint"></p>
+    </fieldset>
     <p class="hint" id="rules-hint">Posts mainly about one of these topics disappear. A post that only mentions one in passing stays.</p>
     <ol class="topics" id="topics"></ol>
     <form class="add" id="add-topic">
       <input type="text" id="new-topic" placeholder="Add a topic" aria-label="New topic" autocomplete="off">
       <button type="submit">Add</button>
     </form>
+    <div class="builtins" id="builtins" hidden>
+      <p class="field-label">Also hidden</p>
+      <ul id="builtin-list"></ul>
+    </div>
     <label class="field-label" for="guidance">Anything else the model should know</label>
     <textarea id="guidance" rows="4" spellcheck="false"></textarea>
     <div class="row">

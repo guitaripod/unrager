@@ -254,8 +254,95 @@ button.action {
 .topics li {
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: 6px;
+  gap: 2px 6px;
   align-items: start;
+}
+
+.topics .count {
+  grid-column: 1;
+  padding-left: 2px;
+}
+
+.count {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.tally {
+  margin: 4px 0 10px;
+  font-size: 13px;
+}
+
+.strictness {
+  margin: 0 0 4px;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.strictness legend {
+  padding: 0;
+}
+
+.segments {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  padding: 2px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.segments label {
+  position: relative;
+  cursor: pointer;
+}
+
+.segments input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  margin: 0;
+  cursor: pointer;
+}
+
+.segments span {
+  display: block;
+  padding: 4px 0;
+  border-radius: 6px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.segments input:checked + span {
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.segments input:focus-visible + span {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.strictness .hint {
+  margin: 6px 0 4px;
+}
+
+.builtins ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+  font-size: 13px;
+}
+
+.builtins li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 textarea,

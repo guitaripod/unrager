@@ -88,7 +88,7 @@
         </li>
         <li>
           <h3>The rage-bait never shows</h3>
-          <p>Posts it says to hide are removed from the page, usually before you've scrolled to them. Everything else stays exactly as X made it.</p>
+          <p>New posts wait out of view for the moment it takes your model to read them, so the ones it hides never appear. Everything else stays exactly as X made it.</p>
         </li>
       </ol>
     </section>
@@ -159,10 +159,10 @@ timeout_seconds = 120</code></pre>
       <div class="rules-copy">
         <h2 id="rules-heading">You write the rules</h2>
         <p>unrager starts with a list of the usual suspects: electoral politics, culture-war fights, doom, engagement farming, crypto shilling. Change any of it from the extension's popup, in plain words.</p>
-        <p>A post is hidden when a topic is the point of it, not when it mentions one in passing, so a physicist's joke about the election stays. The model also drops what you'd mute on sight: ratio bait, subtweets, "RT if you agree".</p>
-        <p>Curious what it caught? <b>Show hidden posts</b> brings them back, dimmed and labelled, until you switch it off.</p>
+        <p>A post is hidden when a topic is the point of it, not when it mentions one in passing, so a physicist's joke about the election stays. The model also drops what you'd mute on sight: ratio bait, subtweets, "RT if you agree". A post it isn't sure about stays, unless you set it to strict.</p>
+        <p>Curious what it caught? <b>Show hidden posts</b> brings them back, dimmed and labelled with the rule that caught each one. <b>Show this post</b> keeps one for good, and right-clicking any post hides it by hand.</p>
       </div>
-      <figure class="popup-mock" aria-label="The extension's popup: 12 posts hidden, 148 checked, and the list of topics that get hidden">
+      <figure class="popup-mock" aria-label="The extension's popup: 12 posts hidden, 148 checked, the filter set to balanced, and the topics that get hidden with how many posts each one hid">
         <div class="pm-top"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect x="0.5" y="0.5" width="31" height="31" rx="7"/><path d="M5 16.5 Q7.4 3.5 9.8 16.5 Q12 26.5 14.2 16.5 Q15.6 11 17 16.5 L27 16.5"/></svg><b>unrager</b></div>
         <div class="pm-status">
           <p class="pm-headline">12 posts hidden</p>
@@ -172,11 +172,13 @@ timeout_seconds = 120</code></pre>
         <p class="pm-switch"><span>Show hidden posts</span><i></i></p>
         <div class="pm-panel">
           <p class="pm-summary is-open">What gets hidden</p>
+          <p class="pm-label">How strict</p>
+          <p class="pm-strict"><span>Relaxed</span><b>Balanced</b><span>Strict</span></p>
           <ul class="pm-topics">
-            <li><span>american electoral politics, presidents, congress, partisan fights</span><b>Remove</b></li>
-            <li><span>economic fearmongering: tariff panic, inflation doom, market-crash prophecies</span><b>Remove</b></li>
-            <li><span>rage-bait reply farming, ratio threads, inflammatory hot takes</span><b>Remove</b></li>
-            <li><span>crypto and NFT shilling, pump-and-dump hype</span><b>Remove</b></li>
+            <li><span>american electoral politics, presidents, congress, partisan fights</span><b>Remove</b><small>41 hidden</small></li>
+            <li><span>economic fearmongering: tariff panic, inflation doom, market-crash prophecies</span><b>Remove</b><small>23 hidden</small></li>
+            <li><span>rage-bait reply farming, ratio threads, inflammatory hot takes</span><b>Remove</b><small>17 hidden</small></li>
+            <li><span>crypto and NFT shilling, pump-and-dump hype</span><b>Remove</b><small>6 hidden</small></li>
           </ul>
           <p class="pm-add"><span>Add a topic</span><b>Add</b></p>
           <p class="pm-save"><b>Save rules</b></p>
@@ -194,7 +196,7 @@ timeout_seconds = 120</code></pre>
         </details>
         <details>
           <summary>What if my model is off, or slow?</summary>
-          <p>X works as usual. unrager fails open: a post stays visible until its verdict arrives, a failed check is never remembered, and unrager asks again shortly. The toolbar badge shows <code>!</code> while posts can't be checked, and the popup says what to run.</p>
+          <p>X works as usual. unrager fails open: a new post waits a couple of seconds for its verdict and then shows anyway, a failed check is never remembered, and unrager asks again shortly. The toolbar badge shows <code>!</code> while posts can't be checked, and the popup says what to run.</p>
         </details>
         <details>
           <summary>Which models work?</summary>

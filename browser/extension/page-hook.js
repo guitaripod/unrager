@@ -1,19 +1,21 @@
 /// Runs in the page's own JS world (manifest `"world": "MAIN"`), so its
 /// patches are the XMLHttpRequest/fetch X's bundle actually calls. It only
-/// observes: the response X consumes is never delayed or rewritten. Timeline
-/// bodies go to the isolated-world content script via postMessage, which
-/// structured-clones across worlds (a plain string, so nothing is lost).
+/// observes: the response X consumes is never rewritten.
 (() => {
   const OPS = new Set(["HomeTimeline", "HomeLatestTimeline"]);
-  const origin = window.location.origin;
 
   const opFor = (url) => {
     const m = /\/graphql\/[^/?]+\/([A-Za-z]+)/.exec(String(url || ""));
     return m && OPS.has(m[1]) ? m[1] : null;
   };
 
+  /// Hands a timeline body to the isolated-world content script. A DOM
+  /// event runs every world's listeners before `dispatchEvent` returns, so
+  /// the content script knows the posts before React paints them; a posted
+  /// message could arrive a frame after they're already on screen. A string
+  /// `detail` crosses worlds as is.
   const post = (op, body) =>
-    window.postMessage({ source: "unrager-page", type: "timeline", op, body }, origin);
+    document.dispatchEvent(new CustomEvent(`unrager:${op}`, { detail: body }));
 
   /// X's web client issues its GraphQL calls through XMLHttpRequest.
   function hookXhr() {

@@ -2,6 +2,11 @@ const DEFAULT_SERVER = "http://localhost:7777";
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1"]);
 const BACKEND_NAMES = { ollama: "Ollama", openai: "an OpenAI-compatible server" };
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
+const STRICTNESS_HINTS = {
+  relaxed: "Only posts clearly about one of your topics.",
+  balanced: "Your topics, plus rage bait and dunking. A post the model isn't sure about stays.",
+  strict: "Also posts by people known for a topic, and anything the model isn't sure about.",
+};
 
 const $ = (id) => document.getElementById(id);
 
@@ -184,6 +189,8 @@ function tabView(tab, paused) {
 }
 
 let rulesLoaded = false;
+/// Hidden posts per rule under the current rules, once loaded.
+let hiddenByRule = null;
 
 async function refresh() {
   const server = await serverUrl();
@@ -232,32 +239,109 @@ function autosize(textarea) {
   textarea.style.height = `${textarea.scrollHeight}px`;
 }
 
-function addTopicRow(text) {
+/// "12 hidden" for a rule, once the counts are in; nothing before then or
+/// for a topic that was edited since.
+function countLabel(rule) {
+  if (!hiddenByRule) return "";
+  const n = hiddenByRule.get(rule) || 0;
+  return n ? `${n.toLocaleString()} hidden` : "none hidden";
+}
+
+function renderCounts() {
+  for (const li of $("topics").children) {
+    const field = li.querySelector("textarea");
+    li.querySelector(".count").textContent = field.dataset.saved === field.value ? countLabel(field.value.trim()) : "";
+  }
+  for (const li of $("builtin-list").children) {
+    li.querySelector(".count").textContent = countLabel(li.dataset.rule);
+  }
+}
+
+function addTopicRow(text, saved) {
   const li = document.createElement("li");
   const field = document.createElement("textarea");
   field.rows = 1;
   field.value = text;
+  if (saved) field.dataset.saved = text;
   field.spellcheck = false;
   field.setAttribute("aria-label", "Topic");
-  field.addEventListener("input", () => autosize(field));
+  field.addEventListener("input", () => {
+    autosize(field);
+    renderCounts();
+  });
   const remove = document.createElement("button");
   remove.type = "button";
   remove.className = "remove";
   remove.textContent = "Remove";
   remove.addEventListener("click", () => li.remove());
-  li.append(field, remove);
+  const count = document.createElement("span");
+  count.className = "count";
+  li.append(field, remove, count);
   $("topics").append(li);
   requestAnimationFrame(() => autosize(field));
+}
+
+function selectedStrictness() {
+  const checked = document.querySelector('input[name="strictness"]:checked');
+  return checked ? checked.value : "balanced";
+}
+
+function showStrictness(value) {
+  for (const radio of document.querySelectorAll('input[name="strictness"]')) radio.checked = radio.value === value;
+  $("strictness-hint").textContent = STRICTNESS_HINTS[value] || "";
+  $("builtins").hidden = value === "relaxed" || !$("builtin-list").children.length;
+}
+
+function renderBuiltins(labels) {
+  $("builtin-list").replaceChildren(
+    ...labels.map((label) => {
+      const li = document.createElement("li");
+      li.dataset.rule = label;
+      const name = document.createElement("span");
+      name.textContent = label;
+      const count = document.createElement("span");
+      count.className = "count";
+      li.append(name, count);
+      return li;
+    })
+  );
+}
+
+function renderTally(stats) {
+  const tally = $("tally");
+  if (!stats.checked) {
+    tally.textContent = "Nothing checked since the rules last changed.";
+  } else {
+    const share = Math.round((100 * stats.hidden) / stats.checked);
+    tally.textContent = `These rules hid ${stats.hidden.toLocaleString()} of the ${stats.checked.toLocaleString()} posts checked since they last changed (${share}%).`;
+  }
+  const { hidden, shown } = stats.you || {};
+  if (hidden || shown) tally.textContent += ` You hid ${hidden || 0} and showed ${shown || 0} yourself.`;
+  tally.hidden = false;
+}
+
+/// Counts are a guide for tuning the rules, so failing to load them only
+/// leaves them out.
+async function loadStats(server) {
+  try {
+    const stats = await request(`${server}/api/filter/stats`);
+    hiddenByRule = new Map(stats.rules.filter((r) => r.rule).map((r) => [r.rule, r.hidden]));
+    renderTally(stats);
+    renderCounts();
+  } catch (_) {}
 }
 
 async function loadRules(server) {
   try {
     const rules = await request(`${server}/api/config/filter`);
     $("topics").replaceChildren();
-    for (const topic of rules.drop_topics || []) addTopicRow(topic);
+    for (const topic of rules.drop_topics || []) addTopicRow(topic, true);
     $("guidance").value = rules.extra_guidance || "";
+    renderBuiltins(rules.built_in_rules || []);
+    showStrictness(rules.strictness || "balanced");
     rulesLoaded = true;
     setRulesAvailable(true);
+    loadStats(server);
   } catch (e) {
     setRulesAvailable(false);
     $("rules-note").textContent = `Couldn't load your rules: ${e.message}`;
@@ -276,10 +360,15 @@ async function saveRules() {
     const server = await serverUrl();
     await request(`${server}/api/config/filter`, {
       method: "PATCH",
-      body: { drop_topics: topics, extra_guidance: $("guidance").value.trim() },
+      body: {
+        drop_topics: topics,
+        extra_guidance: $("guidance").value.trim(),
+        strictness: selectedStrictness(),
+      },
     });
     await chrome.storage.local.set({ rulesChangedAt: Date.now() });
     note.textContent = "Saved. Open x.com tabs are being checked again.";
+    await loadRules(server);
   } catch (e) {
     note.textContent = `Couldn't save: ${e.message}`;
   } finally {
@@ -336,9 +425,12 @@ $("add-topic").addEventListener("submit", (e) => {
   const input = $("new-topic");
   const text = input.value.trim();
   if (!text) return;
-  addTopicRow(text);
+  addTopicRow(text, false);
   input.value = "";
 });
+for (const radio of document.querySelectorAll('input[name="strictness"]')) {
+  radio.addEventListener("change", () => showStrictness(radio.value));
+}
 $("save-rules").addEventListener("click", saveRules);
 $("server-form").addEventListener("submit", saveServer);
 $("rules").addEventListener("toggle", () => {

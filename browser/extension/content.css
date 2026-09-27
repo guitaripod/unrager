@@ -1,18 +1,54 @@
-html:not([data-unrager-paused]):not([data-unrager-reveal]) [data-testid="cellInnerDiv"][data-unrager="hidden"] {
+html:not([data-unrager-paused]):not([data-unrager-reveal]):not([data-unrager-away])
+  [data-testid="cellInnerDiv"]:is([data-unrager="hidden"], [data-unrager="held"]) {
   display: none !important;
 }
 
-html[data-unrager-reveal]:not([data-unrager-paused]) [data-testid="cellInnerDiv"][data-unrager="hidden"] > * {
+html[data-unrager-reveal]:not([data-unrager-paused]):not([data-unrager-away])
+  [data-testid="cellInnerDiv"][data-unrager="hidden"] > :not(.unrager-note) {
   opacity: 0.4;
 }
 
-html[data-unrager-reveal]:not([data-unrager-paused]) [data-testid="cellInnerDiv"][data-unrager="hidden"]::before {
-  content: "Hidden by unrager";
-  display: inline-block;
+html:is([data-unrager-paused], [data-unrager-away]) .unrager-note,
+html:not([data-unrager-reveal]) .unrager-note {
+  display: none;
+}
+
+.unrager-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin: 10px 16px 0;
+  font: 600 12px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.unrager-reason {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   padding: 2px 10px;
   border-radius: 999px;
   background: #1d6f8b;
   color: #ffffff;
-  font: 600 12px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.unrager-note button {
+  flex: none;
+  cursor: pointer;
+  padding: 1px 10px;
+  border: 1px solid #1d6f8b;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #1d6f8b;
+  font: inherit;
+}
+
+.unrager-note button:hover {
+  background: #1d6f8b;
+  color: #ffffff;
+}
+
+.unrager-note button:focus-visible {
+  outline: 2px solid #62b6d0;
+  outline-offset: 2px;
 }

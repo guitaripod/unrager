@@ -31,7 +31,11 @@ const unragerTimeline = (() => {
     const u = (node.core && node.core.user_results && node.core.user_results.result) || {};
     const core = u.core || {};
     const legacy = u.legacy || {};
-    return { handle: core.screen_name || legacy.screen_name || "", name: core.name || legacy.name || "" };
+    return {
+      id: u.rest_id || null,
+      handle: core.screen_name || legacy.screen_name || "",
+      name: core.name || legacy.name || "",
+    };
   }
 
   /// Mirrors `filter::build_classification_text`, so a verdict computed here
@@ -47,37 +51,53 @@ const unragerTimeline = (() => {
     return Array.from(s).slice(0, MAX_TEXT_CHARS).join("");
   }
 
-  /// A retweet's own id never appears in the DOM: X renders the original
-  /// tweet, whose permalink is what a cell can be matched on.
-  function domIdOf(node) {
-    const original = unwrap(
-      node.legacy.retweeted_status_result && node.legacy.retweeted_status_result.result
-    );
-    return original && original.rest_id ? original.rest_id : node.rest_id;
-  }
-
   function collectTweet(itemContent, out) {
     if (!itemContent || itemContent.itemType !== "TimelineTweet") return;
     if (itemContent.promotedMetadata != null) return;
     const node = unwrap(itemContent.tweet_results && itemContent.tweet_results.result);
     if (!node || node.__typename !== "Tweet" || !node.legacy) return;
-    out.push({ id: node.rest_id, domId: domIdOf(node), text: classificationText(node) });
+    const original = unwrap(
+      node.legacy.retweeted_status_result && node.legacy.retweeted_status_result.result
+    );
+    const authors = [author(node).id];
+    if (original && original.__typename === "Tweet") authors.push(author(original).id);
+    out.push({
+      id: node.rest_id,
+      domId: original && original.rest_id ? original.rest_id : node.rest_id,
+      text: classificationText(node),
+      authors: authors.filter(Boolean),
+      own: false,
+    });
   }
 
-  function collectFromEntry(entry, out) {
+  /// The user's own posts, retweets of them, and every post in a
+  /// conversation the user took part in are never hidden: hiding the post a
+  /// reply of theirs answers would leave the reply hanging.
+  function markOwn(group, selfId) {
+    if (!selfId || !group.some((t) => t.authors.includes(selfId))) return;
+    for (const t of group) t.own = true;
+  }
+
+  /// Collects an entry's posts. A retweet's own id never appears in the DOM:
+  /// X renders the original, whose permalink is what `domId` matches cells on.
+  function collectFromEntry(entry, out, selfId) {
     const content = entry && entry.content;
     if (!content) return;
     const entryType = content.entryType || content.__typename;
+    const group = [];
     if (entryType === "TimelineTimelineItem") {
-      collectTweet(content.itemContent, out);
+      collectTweet(content.itemContent, group);
     } else if (entryType === "TimelineTimelineModule") {
-      for (const item of content.items || []) collectTweet(item.item && item.item.itemContent, out);
+      for (const item of content.items || []) collectTweet(item.item && item.item.itemContent, group);
     }
+    markOwn(group, selfId);
+    out.push(...group);
   }
 
   /// Returns the tweets found plus a `problem` string when the shape looks
   /// wrong, so drift surfaces as a warning instead of a silently idle filter.
-  function extractTweets(json) {
+  /// `selfId` is the signed-in account's id, for marking the user's own posts.
+  function extractTweets(json, selfId) {
     const instructions =
       json && json.data && json.data.home && json.data.home.home_timeline_urt
         ? json.data.home.home_timeline_urt.instructions
@@ -88,11 +108,14 @@ const unragerTimeline = (() => {
     const tweets = [];
     for (const block of instructions) {
       if (block.type === "TimelineAddEntries") {
-        for (const entry of block.entries || []) collectFromEntry(entry, tweets);
+        for (const entry of block.entries || []) collectFromEntry(entry, tweets, selfId);
       } else if (block.type === "TimelineAddToModule") {
-        for (const item of block.moduleItems || []) collectTweet(item.item && item.item.itemContent, tweets);
+        const group = [];
+        for (const item of block.moduleItems || []) collectTweet(item.item && item.item.itemContent, group);
+        markOwn(group, selfId);
+        tweets.push(...group);
       } else if (block.type === "TimelineReplaceEntry" || block.type === "TimelinePinEntry") {
-        collectFromEntry(block.entry, tweets);
+        collectFromEntry(block.entry, tweets, selfId);
       }
     }
     const hadEntries = instructions.some(

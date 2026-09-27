@@ -426,16 +426,29 @@ h1 span {
   margin-top: 2px;
 }
 
-.pill {
+.note {
   display: none;
   grid-column: 1 / -1;
   justify-self: start;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.pill {
   padding: 1px 10px;
   border-radius: 999px;
   background: #1d6f8b;
   color: #ffffff;
-  font-size: 12px;
-  font-weight: 600;
+}
+
+.pill-action {
+  padding: 0 10px;
+  border: 1px solid #1d6f8b;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #1d6f8b;
 }
 
 .feed.is-revealing .post.is-hidden {
@@ -444,8 +457,8 @@ h1 span {
   border-bottom-color: var(--x-line);
 }
 
-.feed.is-revealing .post.is-hidden .pill {
-  display: inline-block;
+.feed.is-revealing .post.is-hidden .note {
+  display: inline-flex;
 }
 
 .feed.is-revealing .post.is-hidden .avatar,
@@ -885,6 +898,48 @@ h3 {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 6px;
   align-items: start;
+}
+
+.pm-topics li {
+  row-gap: 2px;
+}
+
+.pm-topics small {
+  grid-column: 1;
+  padding-left: 2px;
+  font-size: 12px;
+  color: var(--pm-muted);
+}
+
+.pm-label {
+  margin: 8px 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pm-strict {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  padding: 2px;
+  border-radius: 8px;
+  border: 1px solid var(--pm-line);
+  background: var(--pm-surface);
+  font-size: 13px;
+  text-align: center;
+}
+
+.pm-strict span,
+.pm-strict b {
+  padding: 4px 0;
+  border-radius: 6px;
+  color: var(--pm-muted);
+  font-weight: 400;
+}
+
+.pm-strict b {
+  background: var(--pm-accent);
+  color: var(--pm-accent-ink);
+  font-weight: 600;
 }
 
 .pm-topics span,

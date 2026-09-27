@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/extension.png" alt="An x.com Home timeline with the unrager extension and Show hidden posts on: four calm posts, two rage-bait posts dimmed and labelled Hidden by unrager, and the toolbar badge counting them" width="520">
+  <img src="assets/extension.png" alt="An x.com Home timeline with the unrager extension and Show hidden posts on: four calm posts, two rage-bait posts dimmed, each labelled with the rule that hid it and a Show this post button, and the toolbar badge counting them" width="520">
 </p>
 
 unrager is a browser extension for the x.com you already use. As X loads your Home timeline, a language model running on your computer reads each post and hides the ones that match your rules: the outrage, the ratio bait, the doom and the engagement farming. You keep X's own app, your account and every feature; you lose the posts that exist to make you angry.
@@ -48,7 +48,7 @@ The installer runs `unrager setup`, which checks that your model answers, starts
    - Linux: `~/.local/share/unrager/browser-extension`
    - macOS: `~/Library/Application Support/unrager/browser-extension`
 
-Open x.com. Posts that match your rules disappear from For you and Following as they load, and the unrager icon counts them.
+Open x.com. Posts that match your rules never show up in For you and Following: each new post waits out of view for the moment your model takes to read it, and the unrager icon counts the ones it hid.
 
 <details>
 <summary><strong>Other ways to install</strong></summary>
@@ -92,20 +92,22 @@ then remove the unrager card from `chrome://extensions`.
 ## Using it
 
 <p align="center">
-  <img src="assets/popup.png" alt="The unrager popup: 12 posts hidden and 148 checked on this tab, the pause and show-hidden switches, and the editable list of topics that get hidden" width="340">
+  <img src="assets/popup.png" alt="The unrager popup: 12 posts hidden and 148 checked on this tab, the pause and show-hidden switches, how strict the filter is, and the editable list of topics with how many posts each one hid" width="340">
 </p>
 
 Click the unrager icon for its popup:
 
 - **Status** says whether the filter is working on this tab, how many posts it hid, and, when something's wrong, what to run to fix it (unrager isn't running, the model isn't answering, a tab needs a reload, an update needs finishing).
 - **Pause filtering** shows X exactly as it is until you switch it back on.
-- **Show hidden posts** brings hidden posts back, dimmed and labelled *Hidden by unrager*, so you can check the model's judgment.
-- **What gets hidden** is your rules: add, edit or remove topics and save. Open x.com tabs are checked again under the new rules right away.
+- **Show hidden posts** brings hidden posts back, dimmed and labelled with the rule that hid each one, so you can check the model's judgment. **Show this post** keeps one on screen for good.
+- **What gets hidden** is your rules: how strict the filter is, and the topics to add, edit or remove, each with how many posts it hid since the rules last changed. Save, and open x.com tabs are checked again under the new rules right away; what's hidden stays hidden until then.
 - **Settings** points the extension at unrager on another computer, such as the desktop with the GPU (see [Running the model on another computer](#running-the-model-on-another-computer)).
 
-The toolbar badge shows how many posts were hidden on the current tab, `off` while paused and `!` when posts can't be checked.
+Right-click any post on your Home timeline for **Hide this post** or **Show this post**. unrager remembers the choice: it outranks the model in the extension, the terminal client and the iPhone app, and survives rule changes.
 
-Only your Home timeline (For you and Following) is filtered. Profiles, search, threads and notifications are always shown in full: the filter exists for the feed you didn't choose, not for the places you went looking.
+The toolbar badge shows how many posts were hidden on the current tab, `off` while paused, `!` when posts can't be checked and `↑` when the extension and unrager are different versions (open the popup to finish updating).
+
+Only your Home timeline (For you and Following) is filtered. Profiles, search, threads and notifications are always shown in full: the filter exists for the feed you didn't choose, not for the places you went looking. Your own posts, and the conversations you've replied in, are never hidden.
 
 ## Your rules
 
@@ -174,10 +176,10 @@ Then, in the extension's popup on the other computer, open **Settings** and ente
 `unrager doctor` checks everything the extension needs (the model, the background server, the unpacked extension) and prints a fix for anything that's wrong. The popup covers the rest from the browser's side.
 
 - **Posts aren't being hidden.** Open the popup. If it says *Reload this tab*, the tab was open before the extension was added or updated. If the badge shows `!`, unrager or the model isn't answering; `unrager doctor` says which.
-- **Something was hidden that shouldn't have been.** Turn on *Show hidden posts* to see what the model hid, then sharpen the topic or add a line to *Anything else the model should know*. Small models misjudge more; a bigger or better-tuned one is the other lever.
+- **Something was hidden that shouldn't have been.** Turn on *Show hidden posts*: each hidden post says which rule hid it, and *Show this post* brings one back for good. When one rule hides too much (the popup counts what each one hid), sharpen it or add a line to *Anything else the model should know*; when everything does, set *How strict* to Relaxed. Small models misjudge more; a bigger or better-tuned one is the other lever.
 - **Logs.** The background server logs to `journalctl --user -u unrager-serve` (Linux) or `~/Library/Logs/unrager-serve.log` (macOS), and every unrager process writes to `~/.cache/unrager/unrager.log.<date>` (macOS: `~/Library/Caches/unrager/`), keeping the 14 most recent. On x.com, `window.__unrager_status()` in the page console shows what the extension did on that tab.
 
-If the model isn't answering, X keeps working as usual: unrager fails open. Posts stay visible until their verdict arrives, a failed check is never remembered, and those posts are asked about again shortly.
+If the model isn't answering, X keeps working as usual: unrager fails open. A new post waits at most two and a half seconds for its verdict and then shows anyway, a failed check is never remembered, and those posts are asked about again shortly.
 
 ## Privacy
 

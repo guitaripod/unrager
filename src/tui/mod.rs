@@ -65,12 +65,101 @@ pub async fn run() -> Result<()> {
     result
 }
 
+/// Whether the terminal's background is dark, from its answer to an OSC 11
+/// query. No answer (or no terminal) counts as dark, the common setup.
 fn detect_is_dark() -> bool {
-    match termbg::theme(Duration::from_millis(100)) {
-        Ok(termbg::Theme::Dark) => true,
-        Ok(termbg::Theme::Light) => false,
-        Err(_) => true,
+    match terminal_background(Duration::from_millis(100)) {
+        Some((r, g, b)) => {
+            let dark =
+                f64::from(r) * 0.299 + f64::from(g) * 0.587 + f64::from(b) * 0.114 <= 32768.0;
+            tracing::info!(r, g, b, dark, "terminal background");
+            dark
+        }
+        None => {
+            tracing::info!("terminal didn't report its background; assuming dark");
+            true
+        }
     }
+}
+
+#[cfg(unix)]
+fn terminal_background(timeout: Duration) -> Option<(u16, u16, u16)> {
+    use std::io::IsTerminal;
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        return None;
+    }
+    crossterm::terminal::enable_raw_mode().ok()?;
+    let reply = ask_background(timeout);
+    let _ = crossterm::terminal::disable_raw_mode();
+    parse_background_reply(&reply?)
+}
+
+#[cfg(not(unix))]
+fn terminal_background(_timeout: Duration) -> Option<(u16, u16, u16)> {
+    None
+}
+
+/// Sends the plain xterm query, which tmux answers itself, and reads the
+/// reply byte by byte straight off stdin behind `poll`, so a terminal that
+/// never answers costs `timeout` and leaves nothing behind. termbg sent tmux
+/// a passthrough query it drops by default, and the reader it left blocked on
+/// stdin hung startup until the first key, which it then swallowed.
+#[cfg(unix)]
+fn ask_background(timeout: Duration) -> Option<Vec<u8>> {
+    use std::io::Write;
+    let mut out = std::io::stdout();
+    out.write_all(b"\x1b]11;?\x1b\\").ok()?;
+    out.flush().ok()?;
+    let deadline = std::time::Instant::now() + timeout;
+    let mut reply = Vec::new();
+    while reply.len() < 64 {
+        let left = deadline.checked_duration_since(std::time::Instant::now())?;
+        let mut stdin = libc::pollfd {
+            fd: libc::STDIN_FILENO,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let millis = left.as_millis().min(i32::MAX as u128) as i32;
+        if unsafe { libc::poll(&mut stdin, 1, millis) } <= 0 {
+            return None;
+        }
+        let mut byte = 0u8;
+        let read = unsafe {
+            libc::read(
+                libc::STDIN_FILENO,
+                (&mut byte as *mut u8).cast::<libc::c_void>(),
+                1,
+            )
+        };
+        if read != 1 {
+            return None;
+        }
+        reply.push(byte);
+        if byte == 0x07 || reply.ends_with(b"\x1b\\") {
+            return Some(reply);
+        }
+    }
+    None
+}
+
+/// `rgb:RRRR/GGGG/BBBB` out of an OSC 11 reply, each channel scaled to 16
+/// bits whatever its width (terminals answer with 1 to 4 hex digits).
+fn parse_background_reply(reply: &[u8]) -> Option<(u16, u16, u16)> {
+    let text = std::str::from_utf8(reply).ok()?;
+    let rgb = &text[text.find("rgb:")? + 4..];
+    let end = rgb
+        .find(|c: char| !(c.is_ascii_hexdigit() || c == '/'))
+        .unwrap_or(rgb.len());
+    let mut channels = rgb[..end].split('/').map(|hex| {
+        let digits = u32::try_from(hex.len())
+            .ok()
+            .filter(|d| (1..=4).contains(d))?;
+        let value = u32::from_str_radix(hex, 16).ok()?;
+        let max = 16u32.pow(digits) - 1;
+        Some((value * 0xffff / max) as u16)
+    });
+    let rgb = (channels.next()??, channels.next()??, channels.next()??);
+    channels.next().is_none().then_some(rgb)
 }
 
 async fn run_inner(terminal: &mut ratatui::DefaultTerminal, is_dark: bool) -> Result<()> {
@@ -92,4 +181,33 @@ async fn run_inner(terminal: &mut ratatui::DefaultTerminal, is_dark: bool) -> Re
     }
     app.save_session();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_background_reply;
+
+    #[test]
+    fn osc11_replies_parse_at_any_channel_width() {
+        assert_eq!(
+            parse_background_reply(b"\x1b]11;rgb:1e1e/1e1e/2e2e\x1b\\"),
+            Some((0x1e1e, 0x1e1e, 0x2e2e))
+        );
+        assert_eq!(
+            parse_background_reply(b"\x1b]11;rgb:ff/ff/ff\x07"),
+            Some((0xffff, 0xffff, 0xffff))
+        );
+        assert_eq!(
+            parse_background_reply(b"\x1b]11;rgb:0/0/0\x07"),
+            Some((0, 0, 0))
+        );
+    }
+
+    #[test]
+    fn malformed_replies_are_rejected() {
+        assert_eq!(parse_background_reply(b"\x1b]11;?\x07"), None);
+        assert_eq!(parse_background_reply(b"\x1b]11;rgb:12/34\x07"), None);
+        assert_eq!(parse_background_reply(b"\x1b]11;rgb:12345/0/0\x07"), None);
+        assert_eq!(parse_background_reply(b"\x1b]11;rgb:zz/00/00\x07"), None);
+    }
 }

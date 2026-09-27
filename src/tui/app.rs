@@ -142,8 +142,8 @@ pub struct App {
     pub spinner_frame: usize,
     pub is_dark: bool,
     /// The host terminal's background brightness, captured once at startup
-    /// via termbg's OSC 11 query. Frozen for the lifetime of the process —
-    /// re-running termbg inside the TUI would fight crossterm's
+    /// via an OSC 11 query. Frozen for the lifetime of the process —
+    /// re-running the query inside the TUI would fight crossterm's
     /// `EventStream` for stdin, so mid-session system light↔dark toggles
     /// are not auto-detected. Users whose system theme changes can work
     /// around this with `:theme x-light` / `:theme x-dark` (which flips
@@ -651,7 +651,7 @@ impl App {
     /// and the host terminal are dark — a light terminal would bleed cream
     /// through transparent cells, and a light theme would clash with the
     /// fiery palette. Using both signals means a runtime `:theme` switch
-    /// propagates the tint live via `is_dark`, while startup termbg still
+    /// propagates the tint live via `is_dark`, while startup detection still
     /// guards against session/terminal mismatches (e.g. x-dark theme saved
     /// from a prior dark-terminal run, now opened in a light terminal).
     pub fn apply_effective_theme(&self) {

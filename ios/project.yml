@@ -65,6 +65,7 @@ targets:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown
         ITSAppUsesNonExemptEncryption: false
+        NSLocalNetworkUsageDescription: Unrager connects to your unrager server on this network.
         NSPhotoLibraryAddUsageDescription: Unrager saves tweet photos and videos to your photo library when you choose Save from a tweet.
         UIBackgroundModes: [fetch]
         BGTaskSchedulerPermittedIdentifiers: [com.guitaripod.unrager.refresh]

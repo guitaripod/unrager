@@ -25,6 +25,18 @@ public final class SocialAPI: Sendable {
         try await perform(method: .delete, path: "api/users/\(segment(userID))/follow")
     }
 
+    /// `POST /api/users/{id}/mute` to mute, `DELETE` to unmute.
+    @discardableResult
+    public func setMuted(userID: String, muted: Bool) async throws -> MuteResult {
+        try await perform(method: muted ? .post : .delete, path: "api/users/\(segment(userID))/mute")
+    }
+
+    /// `POST /api/users/{id}/block` to block, `DELETE` to unblock.
+    @discardableResult
+    public func setBlocked(userID: String, blocked: Bool) async throws -> BlockResult {
+        try await perform(method: blocked ? .post : .delete, path: "api/users/\(segment(userID))/block")
+    }
+
     /// `GET /api/users/{id}/followers` — one page of the followers list.
     public func followers(userID: String, cursor: String? = nil, count: Int? = nil) async throws -> UserListPage {
         try await userList(kind: "followers", userID: userID, cursor: cursor, count: count)
@@ -45,9 +57,12 @@ public final class SocialAPI: Sendable {
     }
 
     /// `GET /api/profile/{handle}` decoded with the additive `followed_by_me`
-    /// flag alongside the shared `User`.
-    public func profile(handle: String) async throws -> ProfileRelationshipView {
-        try await perform(method: .get, path: "api/profile/\(segment(handle))")
+    /// flag alongside the shared `User`. `includeTweets: false` asks for the
+    /// account alone (`?tweets=false`: no recent posts, pinned post or cursor),
+    /// for a header that doesn't need the timeline.
+    public func profile(handle: String, includeTweets: Bool = true) async throws -> ProfileRelationshipView {
+        let query = includeTweets ? [] : [URLQueryItem(name: "tweets", value: "false")]
+        return try await perform(method: .get, path: "api/profile/\(segment(handle))", query: query)
     }
 
     private func userList(kind: String, userID: String, cursor: String?, count: Int?) async throws -> UserListPage {

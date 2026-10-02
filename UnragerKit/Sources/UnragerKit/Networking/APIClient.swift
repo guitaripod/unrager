@@ -105,6 +105,21 @@ public final class APIClient: Sendable {
         return try await get("api/thread/\(pathSegment(id))", query: query, as: ThreadView.self)
     }
 
+    /// One page of the posts quoting `tweetID`, newest first; the same page
+    /// shape a search returns.
+    public func quotes(tweetID: String, cursor: String? = nil) async throws -> TimelinePage {
+        var query: [URLQueryItem] = []
+        append(&query, cursor: cursor, count: nil)
+        return try await get("api/tweets/\(pathSegment(tweetID))/quotes", query: query, as: TimelinePage.self)
+    }
+
+    /// Deletes one of the signed-in account's own posts. Deleting a post that
+    /// is already gone succeeds with `idempotent` set.
+    @discardableResult
+    public func deleteTweet(id: String) async throws -> DeleteTweetResult {
+        try await perform(HTTPRequest(method: .delete, url: url("api/tweets/\(pathSegment(id))")))
+    }
+
     /// X's analytics for one of the signed-in account's own posts, or nil for
     /// anyone else's (X sends nothing, and the server answers 404).
     public func postAnalytics(tweetID: String) async throws -> PostAnalytics? {
@@ -117,9 +132,13 @@ public final class APIClient: Sendable {
 
     // MARK: - Profiles / Likers
 
-    public func profile(handle: String, includeReplies: Bool = false) async throws -> ProfileView {
+    /// The profile and its recent posts. `includeTweets: false` asks for the
+    /// account alone (`?tweets=false`: empty `recent`, no pinned post or
+    /// cursor).
+    public func profile(handle: String, includeReplies: Bool = false, includeTweets: Bool = true) async throws -> ProfileView {
         var query: [URLQueryItem] = []
         if includeReplies { query.append(URLQueryItem(name: "include_replies", value: "true")) }
+        if !includeTweets { query.append(URLQueryItem(name: "tweets", value: "false")) }
         return try await get("api/profile/\(pathSegment(handle))", query: query, as: ProfileView.self)
     }
 

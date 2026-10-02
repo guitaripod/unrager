@@ -97,7 +97,7 @@ enum RequestPlumbing {
     /// The typed error for a non-2xx response, from its JSON body.
     static func apiError(from response: HTTPResponse) -> APIError {
         let body = try? UnragerJSON.decoder.decode(ServerError.self, from: response.body)
-        return APIError.from(status: response.status, body: body)
+        return APIError.from(status: response.status, body: body, headers: response.headers)
     }
 
     /// How long a GET waits before its one retry.

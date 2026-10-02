@@ -3,16 +3,21 @@ import Foundation
 public struct TimelinePage: Decodable, Sendable {
     public let tweets: [Tweet]
     public let cursor: String?
+    /// The account's pinned post, on a profile's posts, replies or a post's
+    /// quotes when the server sends it.
+    public let pinned: Tweet?
 
     enum CodingKeys: String, CodingKey {
-        case tweets, cursor
+        case tweets, cursor, pinned
     }
 
-    /// A tweet the client can't decode is skipped rather than failing the page.
+    /// A tweet the client can't decode is skipped rather than failing the page,
+    /// and so is a pinned post.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         tweets = try c.decodeLossy(Tweet.self, forKey: .tweets)
         cursor = try c.decodeIfPresent(String.self, forKey: .cursor)
+        pinned = try? c.decodeIfPresent(Tweet.self, forKey: .pinned)
     }
 }
 
@@ -72,7 +77,7 @@ public struct ProfileView: Decodable, Sendable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         user = try c.decode(User.self, forKey: .user)
-        pinned = try c.decodeIfPresent(Tweet.self, forKey: .pinned)
+        pinned = try? c.decodeIfPresent(Tweet.self, forKey: .pinned)
         recent = try c.decodeLossy(Tweet.self, forKey: .recent)
         cursor = try c.decodeIfPresent(String.self, forKey: .cursor)
     }
@@ -121,6 +126,21 @@ public struct ComposeResult: Decodable, Sendable {
 public struct EngageResult: Decodable, Sendable {
     public let ok: Bool
     public let idempotent: Bool?
+}
+
+/// `DELETE /api/tweets/{id}`.
+public struct DeleteTweetResult: Decodable, Sendable {
+    public let ok: Bool
+    /// True when the post was already gone.
+    public let idempotent: Bool
+
+    enum CodingKeys: String, CodingKey { case ok, idempotent }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        ok = try c.decode(Bool.self, forKey: .ok)
+        idempotent = try c.decodeIfPresent(Bool.self, forKey: .idempotent) ?? false
+    }
 }
 
 public struct MarkSeenRequest: Encodable, Sendable {

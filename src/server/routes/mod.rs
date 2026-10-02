@@ -7,6 +7,8 @@ pub mod feed;
 pub mod filter;
 pub mod health;
 pub mod media;
+pub mod moderation;
+pub mod posts;
 pub mod profile;
 pub mod seen;
 pub mod session;

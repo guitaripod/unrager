@@ -62,6 +62,7 @@ pub async fn home(
             TimelinePage {
                 tweets: apply_mode(tweets, q.mode.as_deref()),
                 cursor: page.next_cursor,
+                pinned: None,
             }
         }
         None => home_live(&state, q.following, count, cursor, q.mode.as_deref()).await?,
@@ -98,6 +99,7 @@ async fn home_live(
     Ok(TimelinePage {
         tweets: apply_mode(page.tweets, mode),
         cursor: page.next_cursor,
+        pinned: None,
     })
 }
 
@@ -111,11 +113,7 @@ fn apply_mode(tweets: Vec<Tweet>, mode: Option<&str>) -> Vec<Tweet> {
 
 fn filter_originals(v: Vec<Tweet>) -> Vec<Tweet> {
     v.into_iter()
-        .filter(|t| {
-            t.in_reply_to_tweet_id.is_none()
-                && t.quoted_tweet.is_none()
-                && !t.text.starts_with("RT @")
-        })
+        .filter(|t| t.in_reply_to_tweet_id.is_none() && t.quoted_tweet.is_none() && !t.is_repost())
         .collect()
 }
 
@@ -186,6 +184,7 @@ async fn user_timeline(
         TimelinePage {
             tweets: page.tweets,
             cursor: page.next_cursor,
+            pinned: page.pinned,
         },
     ))
 }
@@ -232,6 +231,7 @@ pub async fn search(
         TimelinePage {
             tweets: page.tweets,
             cursor: page.next_cursor,
+            pinned: None,
         },
     ))
 }
@@ -303,6 +303,7 @@ pub async fn mentions(
         TimelinePage {
             tweets: page.tweets,
             cursor: page.next_cursor,
+            pinned: None,
         },
     ))
 }
@@ -356,6 +357,7 @@ pub async fn bookmarks(
         TimelinePage {
             tweets: page.tweets,
             cursor: page.next_cursor,
+            pinned: None,
         },
     ))
 }

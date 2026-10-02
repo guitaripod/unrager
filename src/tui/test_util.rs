@@ -129,6 +129,13 @@ pub fn make_tweet(id: &str, text: &str) -> Tweet {
             avatar_url: None,
             followed_by_me: None,
             banner_url: None,
+            description: None,
+            location: None,
+            website: None,
+            joined_at: None,
+            protected: false,
+            muting: None,
+            blocking: None,
         },
         created_at: Utc::now(),
         text: text.to_string(),
@@ -148,6 +155,7 @@ pub fn make_tweet(id: &str, text: &str) -> Tweet {
         media: vec![],
         url: format!("https://x.com/test/status/{id}"),
         urls: vec![],
+        retweeted_by: None,
     }
 }
 
@@ -157,5 +165,6 @@ pub fn make_page(tweets: Vec<Tweet>) -> TimelinePage {
         next_cursor: None,
         top_cursor: None,
         profile_user: None,
+        pinned: None,
     }
 }

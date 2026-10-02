@@ -54,6 +54,9 @@ fn unwrap_visibility(node: &Value) -> Result<&Value> {
 }
 
 fn parse_tweet_node(node: &Value) -> Result<Tweet> {
+    if let Some(original) = parse_reposted_original(node) {
+        return Ok(original);
+    }
     let rest_id = node
         .get("rest_id")
         .and_then(Value::as_str)
@@ -150,7 +153,22 @@ fn parse_tweet_node(node: &Value) -> Result<Tweet> {
         media,
         url,
         urls,
+        retweeted_by: None,
     })
+}
+
+/// A repost arrives as the reposter's own tweet (`RT @alice: …`, cut short,
+/// with the repost's own zero counts) wrapping the original in
+/// `retweeted_status_result`. The original is what the timeline should show,
+/// so it is parsed in the repost's place and remembers who reposted it. A
+/// repost whose original can't be read (deleted, withheld) stays the repost.
+fn parse_reposted_original(node: &Value) -> Option<Tweet> {
+    let inner = node
+        .pointer("/legacy/retweeted_status_result/result")
+        .or_else(|| node.pointer("/retweeted_status_result/result"))?;
+    let mut original = parse_tweet_result(inner).ok()?;
+    original.retweeted_by = parse_author(node).ok();
+    Some(original)
 }
 
 /// Collects entities.urls[] entries that aren't already consumed by the
@@ -974,6 +992,95 @@ mod tests {
         let err = parse_tweet_result(&v).unwrap_err();
         assert!(err.to_string().contains("tombstone"));
         assert!(err.to_string().contains("deleted"));
+    }
+
+    fn author_json(rest_id: &str, handle: &str) -> Value {
+        json!({
+            "__typename": "User",
+            "rest_id": rest_id,
+            "is_blue_verified": false,
+            "core": { "screen_name": handle, "name": handle.to_uppercase() },
+            "legacy": { "followers_count": 10, "friends_count": 10 }
+        })
+    }
+
+    fn repost_json(rest_id: &str, reposter: &str, original: Value) -> Value {
+        let mut wrapper = minimal_tweet_json(rest_id, "RT @testuser: the first 140 chars of it…");
+        wrapper["core"]["user_results"]["result"] = author_json("900", reposter);
+        wrapper["legacy"]["favorite_count"] = json!(0);
+        wrapper["legacy"]["retweet_count"] = json!(0);
+        wrapper["legacy"]["retweeted_status_result"] = json!({ "result": original });
+        wrapper
+    }
+
+    #[test]
+    fn repost_is_read_as_its_original_with_the_reposter() {
+        let tweet = parse_tweet_result(&repost_json(
+            "5000",
+            "bob",
+            minimal_tweet_json("111", "hello world"),
+        ))
+        .unwrap();
+        assert_eq!(tweet.rest_id, "111");
+        assert_eq!(tweet.text, "hello world");
+        assert_eq!(tweet.author.handle, "testuser");
+        assert_eq!(tweet.like_count, 42);
+        assert_eq!(tweet.url, "https://x.com/testuser/status/111");
+        let reposter = tweet.retweeted_by.as_ref().unwrap();
+        assert_eq!(
+            (reposter.handle.as_str(), reposter.rest_id.as_str()),
+            ("bob", "900")
+        );
+        assert!(tweet.is_repost());
+    }
+
+    #[test]
+    fn repost_of_a_long_form_note_keeps_the_whole_note() {
+        let long = "a long post".repeat(40);
+        let mut original = minimal_tweet_json("111", "a long post a long post…");
+        original["note_tweet"] = json!({
+            "note_tweet_results": { "result": { "text": long } }
+        });
+        let wrapped = json!({ "__typename": "TweetWithVisibilityResults", "tweet": original });
+        let tweet = parse_tweet_result(&repost_json("5000", "bob", wrapped)).unwrap();
+        assert_eq!(tweet.rest_id, "111");
+        assert_eq!(tweet.text, long);
+        assert_eq!(tweet.retweeted_by.unwrap().handle, "bob");
+    }
+
+    #[test]
+    fn repost_of_a_quote_keeps_the_quote_and_reply_context() {
+        let mut original = minimal_tweet_json("111", "my take");
+        original["legacy"]["in_reply_to_status_id_str"] = json!("50");
+        original["legacy"]["in_reply_to_screen_name"] = json!("carol");
+        original["quoted_status_result"] = json!({ "result": minimal_tweet_json("99", "quoted") });
+        let tweet = parse_tweet_result(&repost_json("5000", "bob", original)).unwrap();
+        assert_eq!(tweet.quoted_tweet.as_ref().unwrap().rest_id, "99");
+        assert!(tweet.quoted_tweet.as_ref().unwrap().retweeted_by.is_none());
+        assert_eq!(tweet.in_reply_to_tweet_id.as_deref(), Some("50"));
+        assert_eq!(tweet.in_reply_to_handle.as_deref(), Some("carol"));
+        assert_eq!(tweet.retweeted_by.unwrap().handle, "bob");
+    }
+
+    #[test]
+    fn repost_of_an_unreadable_original_stays_the_repost() {
+        let gone = json!({
+            "__typename": "TweetTombstone",
+            "tombstone": { "text": { "text": "This Tweet was deleted" } }
+        });
+        let tweet = parse_tweet_result(&repost_json("5000", "bob", gone)).unwrap();
+        assert_eq!(tweet.rest_id, "5000");
+        assert!(tweet.retweeted_by.is_none());
+        assert!(tweet.is_repost());
+    }
+
+    #[test]
+    fn ordinary_post_has_no_reposter_on_the_wire() {
+        let tweet = parse_tweet_result(&minimal_tweet_json("111", "hello")).unwrap();
+        assert!(tweet.retweeted_by.is_none());
+        assert!(!tweet.is_repost());
+        let v = serde_json::to_value(&tweet).unwrap();
+        assert!(v.get("retweeted_by").is_none());
     }
 
     #[test]

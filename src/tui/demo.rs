@@ -28,6 +28,13 @@ fn user(handle: &str, name: &str, verified: bool, followers: u64) -> User {
         avatar_url: None,
         followed_by_me: None,
         banner_url: None,
+        description: None,
+        location: None,
+        website: None,
+        joined_at: None,
+        protected: false,
+        muting: None,
+        blocking: None,
     }
 }
 
@@ -62,6 +69,7 @@ fn tweet(
         media: Vec::new(),
         url: format!("https://x.com/{}/status/demo_{id}", author.handle),
         urls: Vec::new(),
+        retweeted_by: None,
     }
 }
 
@@ -222,5 +230,6 @@ pub fn page() -> TimelinePage {
         next_cursor: None,
         top_cursor: None,
         profile_user: None,
+        pinned: None,
     }
 }

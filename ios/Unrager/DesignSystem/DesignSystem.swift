@@ -10,9 +10,9 @@ enum DesignSystem {
         /// text and white-on-blue buttons clear 4.5:1 contrast.
         static var accent: UIColor {
             UIColor { trait in
-                trait.userInterfaceStyle == .dark
+                (trait.userInterfaceStyle == .dark
                     ? UIColor(red: 0.231, green: 0.671, blue: 0.961, alpha: 1)
-                    : UIColor(red: 0.05, green: 0.47, blue: 0.80, alpha: 1)
+                    : UIColor(red: 0.05, green: 0.47, blue: 0.80, alpha: 1)).forContrast(of: trait)
             }
         }
         static var background: UIColor { .systemBackground }
@@ -25,16 +25,16 @@ enum DesignSystem {
 
         static var like: UIColor {
             UIColor { trait in
-                trait.userInterfaceStyle == .dark
+                (trait.userInterfaceStyle == .dark
                     ? UIColor(red: 0.976, green: 0.231, blue: 0.518, alpha: 1)
-                    : UIColor(red: 0.85, green: 0.12, blue: 0.42, alpha: 1)
+                    : UIColor(red: 0.85, green: 0.12, blue: 0.42, alpha: 1)).forContrast(of: trait)
             }
         }
         static var retweet: UIColor {
             UIColor { trait in
-                trait.userInterfaceStyle == .dark
+                (trait.userInterfaceStyle == .dark
                     ? UIColor(red: 0.0, green: 0.729, blue: 0.408, alpha: 1)
-                    : UIColor(red: 0.0, green: 0.52, blue: 0.28, alpha: 1)
+                    : UIColor(red: 0.0, green: 0.52, blue: 0.28, alpha: 1)).forContrast(of: trait)
             }
         }
         static var quote: UIColor { UIColor(red: 0.471, green: 0.353, blue: 0.961, alpha: 1) }
@@ -59,26 +59,31 @@ enum DesignSystem {
         return handlePalette[Int(hash % UInt64(handlePalette.count))]
     }
 
-    @MainActor
-    private static let handlePalette: [UIColor] = [
-        dynamic(light: 0x1B6FB0, dark: 0x4FB4FF),
-        dynamic(light: 0x0E7C8C, dark: 0x3FD4E6),
-        dynamic(light: 0x0E8C5A, dark: 0x36E0A0),
-        dynamic(light: 0x4F8C0E, dark: 0x9BE055),
-        dynamic(light: 0x8C7C0E, dark: 0xE0D44F),
-        dynamic(light: 0xB07A1B, dark: 0xFFC04F),
-        dynamic(light: 0xB0561B, dark: 0xFF8A4F),
-        dynamic(light: 0xB01B3A, dark: 0xFF6B8A),
-        dynamic(light: 0xA01B7A, dark: 0xFF6BD4),
-        dynamic(light: 0x7A1BA0, dark: 0xC06BFF),
-        dynamic(light: 0x4F35C0, dark: 0x9B8AFF),
-        dynamic(light: 0x355AC0, dark: 0x6B9BFF),
+    /// Each handle tint as packed light- and dark-mode RGB. Every light tint
+    /// clears 4.5:1 on white and every dark one 4.5:1 on black, so a name or
+    /// mention reads as body text does (checked by `HandlePaletteTests`).
+    static let handlePaletteRGB: [(light: Int, dark: Int)] = [
+        (0x1B6FB0, 0x4FB4FF),
+        (0x0E7C8C, 0x3FD4E6),
+        (0x0B7A4E, 0x36E0A0),
+        (0x427A0A, 0x9BE055),
+        (0x76690B, 0xE0D44F),
+        (0x94650F, 0xFFC04F),
+        (0xB0561B, 0xFF8A4F),
+        (0xB01B3A, 0xFF6B8A),
+        (0xA01B7A, 0xFF6BD4),
+        (0x7A1BA0, 0xC06BFF),
+        (0x4F35C0, 0x9B8AFF),
+        (0x355AC0, 0x6B9BFF),
     ]
+
+    @MainActor
+    private static let handlePalette: [UIColor] = handlePaletteRGB.map { dynamic(light: $0.light, dark: $0.dark) }
 
     @MainActor
     private static func dynamic(light: Int, dark: Int) -> UIColor {
         UIColor { trait in
-            UIColor(rgb: trait.userInterfaceStyle == .dark ? dark : light)
+            UIColor(rgb: trait.userInterfaceStyle == .dark ? dark : light).forContrast(of: trait)
         }
     }
 
@@ -144,6 +149,22 @@ enum DesignSystem {
 }
 
 extension UIColor {
+    /// The colour as drawn under `trait`: unchanged normally, and with
+    /// Increase Contrast on a step further from the background, darker in
+    /// light mode and lighter in dark mode.
+    func forContrast(of trait: UITraitCollection) -> UIColor {
+        guard trait.accessibilityContrast == .high else { return self }
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        guard getRed(&red, green: &green, blue: &blue, alpha: &alpha) else { return self }
+        if trait.userInterfaceStyle == .dark {
+            let lift: CGFloat = 0.3
+            return UIColor(red: red + (1 - red) * lift, green: green + (1 - green) * lift,
+                           blue: blue + (1 - blue) * lift, alpha: alpha)
+        }
+        let deepen: CGFloat = 0.78
+        return UIColor(red: red * deepen, green: green * deepen, blue: blue * deepen, alpha: alpha)
+    }
+
     /// Builds an opaque color from a packed `0xRRGGBB` integer.
     convenience init(rgb: Int) {
         self.init(

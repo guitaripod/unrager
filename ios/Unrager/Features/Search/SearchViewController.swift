@@ -75,6 +75,7 @@ final class SearchViewController: FeedViewController {
     private func runSearch() {
         let query = searchController.searchBar.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !query.isEmpty else { return }
+        if openPastedLink(in: query) { return }
         ClientSettings.addRecentSearch(query)
         if product == .people {
             viewModel.updateSource(.search(query: "", product: .top))
@@ -84,6 +85,22 @@ final class SearchViewController: FeedViewController {
             viewModel.updateSource(.search(query: query, product: product))
         }
         refreshRecents()
+    }
+
+    /// Opens the post or profile a pasted x.com / twitter.com address points
+    /// at, instead of searching for the address as text. A bare `@handle` still
+    /// searches, so only text with a path in it counts.
+    private func openPastedLink(in query: String) -> Bool {
+        guard query.contains("/"), let link = XLink.reference(in: query) else { return false }
+        switch link {
+        case .post(let id):
+            navigationController?.pushViewController(ThreadViewController(tweetID: id), animated: true)
+        case .profile(let handle):
+            navigationController?.pushViewController(ProfileViewController(handle: handle), animated: true)
+        case .web:
+            return false
+        }
+        return true
     }
 
     // MARK: - Recent searches

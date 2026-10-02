@@ -204,7 +204,7 @@ final class SettingsViewController: UIViewController {
     // MARK: - Rows
 
     private func configure(_ cell: UICollectionViewListCell, for item: Item) {
-        var content = UIListContentConfiguration.valueCell()
+        var content = isAccessibilitySize ? UIListContentConfiguration.subtitleCell() : UIListContentConfiguration.valueCell()
         content.textProperties.font = DesignSystem.Typography.body()
         content.secondaryTextProperties.font = DesignSystem.Typography.body()
         content.secondaryTextProperties.color = DesignSystem.Color.secondaryLabel

@@ -82,6 +82,17 @@ public enum NotificationPrefs {
         static let quietHoursStart = "unrager.notifications.quietHours.startMinute"
         static let quietHoursEnd = "unrager.notifications.quietHours.endMinute"
         static let deliveredBannerIDs = "unrager.notifications.deliveredBannerIDs"
+        static let lastBackgroundRefreshAt = "unrager.notifications.lastBackgroundRefreshAt"
+    }
+
+    /// When a background refresh last ran, for a diagnostics screen; nil
+    /// until the system has run one.
+    public static var lastBackgroundRefreshAt: Date? {
+        get {
+            let raw = defaults.double(forKey: Key.lastBackgroundRefreshAt)
+            return raw == 0 ? nil : Date(timeIntervalSince1970: raw)
+        }
+        set { defaults.set(newValue?.timeIntervalSince1970 ?? 0, forKey: Key.lastBackgroundRefreshAt) }
     }
 
     /// The master switch: when on (and the system permission is granted) the

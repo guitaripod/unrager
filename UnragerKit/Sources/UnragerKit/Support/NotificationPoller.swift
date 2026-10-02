@@ -22,6 +22,19 @@ import Foundation
 /// host explicitly drives a one-shot `poll()`.
 @MainActor
 public final class NotificationPoller {
+    /// Where cross-client seen-marker sync stands, for a diagnostics screen.
+    public enum SeenSyncState: Sendable, Equatable {
+        /// Not tried yet with this server, or no seen API was given.
+        case unknown
+        /// The last exchange with `/api/notifications/seen` succeeded.
+        case ok
+        /// The server predates the endpoint; tracking is local only until the
+        /// server address changes.
+        case unsupported
+        /// The last exchange failed for another reason; the next poll retries.
+        case failed
+    }
+
     /// Reports the current unread count (notifications newer than last-seen).
     public var onUnreadCount: ((Int) -> Void)?
     /// Reports notifications that appeared since the previous successful poll,
@@ -33,17 +46,26 @@ public final class NotificationPoller {
     private let cadence: TimeInterval
     private var timer: Timer?
     private var inFlight = false
-    /// IDs observed on the most recent successful poll. Used to compute "what's
-    /// new since last poll" without re-alerting on the whole page each tick.
-    private var knownIDs: Set<String> = []
+    /// IDs observed on the most recent successful poll, each with the newest
+    /// timestamp seen for it. Used to compute "what's new since last poll"
+    /// without re-alerting on the whole page each tick. A grouped notification
+    /// keeps its id while X folds more people into it and moves its timestamp
+    /// forward, so a newer timestamp under a known id is news too.
+    private var knownIDs: [String: Date] = [:]
     /// True until the first successful poll establishes the baseline. The first
     /// poll seeds `knownIDs` without firing `onNewNotifications`, so the host
     /// isn't flooded with banners for the existing backlog on launch.
     private var primed = false
-    /// Whether the server understands `/api/notifications/seen`. Unknown until
-    /// the first probe; a 404 latches it off for the rest of the session so an
-    /// old server isn't hammered with doomed requests.
-    private var serverSeenSupported: Bool?
+    /// Whether the server understands `/api/notifications/seen`, and how the
+    /// last exchange went. Unknown until the first probe; a 404 latches it to
+    /// `.unsupported` until the server address changes, so an old server isn't
+    /// hammered with doomed requests.
+    public private(set) var seenSyncState: SeenSyncState = .unknown
+    /// When the last poll finished, successfully or not.
+    public private(set) var lastPollAt: Date?
+    /// Why the last poll failed, or nil when it succeeded.
+    public private(set) var lastPollError: String?
+    nonisolated(unsafe) private var serverObserver: (any NSObjectProtocol)?
     /// The newest notification (by timestamp) the poller has fetched — the
     /// authoritative "newest the app has seen", used to mark seen so the badge
     /// can't be re-lit by a head-of-feed item the viewer never loaded.
@@ -56,6 +78,15 @@ public final class NotificationPoller {
         self.api = api
         self.seenAPI = seenAPI
         self.cadence = cadence
+        serverObserver = NotificationCenter.default.addObserver(
+            forName: AppSettings.serverURLDidChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.serverURLChanged() }
+        }
+    }
+
+    deinit {
+        if let serverObserver { NotificationCenter.default.removeObserver(serverObserver) }
     }
 
     /// Whether the repeating timer is currently scheduled.
@@ -91,6 +122,24 @@ public final class NotificationPoller {
     public func resetDiffBaseline() {
         primed = false
         knownIDs.removeAll()
+    }
+
+    /// Forgets everything learned from the previous server: whether it
+    /// supports the seen marker, the diff baseline (so the new server's
+    /// backlog isn't announced as news) and the last page. Runs on its own when
+    /// `AppSettings.serverURLDidChange` is posted.
+    public func serverChanged() {
+        seenSyncState = .unknown
+        resetDiffBaseline()
+        lastPage = []
+        latestFetched = nil
+        lastPollError = nil
+        AppLogger.shared.info("notification poller reset for a new server", category: .api)
+    }
+
+    private func serverURLChanged() {
+        serverChanged()
+        if isRunning { pollOnce() }
     }
 
     /// Marks everything fetched so far as seen — up to the newest notification the
@@ -139,8 +188,12 @@ public final class NotificationPoller {
             return false
         } catch {
             AppLogger.shared.warn("notification poll failed: \(error)", category: .api)
+            lastPollAt = Date()
+            lastPollError = error.localizedDescription
             return false
         }
+        lastPollAt = Date()
+        lastPollError = nil
         let notifications = page.notifications
         lastPage = notifications
         latestFetched = notifications.max { $0.timestamp < $1.timestamp }
@@ -149,9 +202,10 @@ public final class NotificationPoller {
         let unread = NotificationPrefs.unreadCount(in: notifications)
         onUnreadCount?(unread)
 
-        let pageIDs = Set(notifications.map(\.id))
+        let known = knownIDs
+        knownIDs = Dictionary(notifications.map { ($0.id, $0.timestamp) }, uniquingKeysWith: max)
         if primed {
-            let fresh = notifications.filter { !knownIDs.contains($0.id) && isUnread($0) }
+            let fresh = notifications.filter { isFresh($0, known: known) && isUnread($0) }
             if !fresh.isEmpty {
                 AppLogger.shared.info(
                     "notification poll: \(fresh.count) new, \(unread) unread", category: .api)
@@ -163,8 +217,14 @@ public final class NotificationPoller {
                 "notification poll primed: \(notifications.count) items, \(unread) unread",
                 category: .api)
         }
-        knownIDs = pageIDs
         return true
+    }
+
+    /// Whether the previous poll didn't hold this notification, or held it at
+    /// an older timestamp (a group that grew).
+    private func isFresh(_ notification: XNotification, known: [String: Date]) -> Bool {
+        guard let previous = known[notification.id] else { return true }
+        return NotificationPrefs.isNewer(notification.timestamp, than: previous)
     }
 
     /// Whether a notification is newer than the seen marker. One the marker
@@ -192,18 +252,21 @@ public final class NotificationPoller {
     /// server's is newer (monotonic — a lagging server can't re-light cleared
     /// badges). A 404 marks the endpoint unsupported for the session.
     private func adoptServerSeenMarker() async {
-        guard let seenAPI, serverSeenSupported != false else { return }
+        guard let seenAPI, seenSyncState != .unsupported else { return }
         do {
             let marker = try await seenAPI.fetch()
-            serverSeenSupported = true
+            seenSyncState = .ok
             if let timestamp = marker.timestamp,
                NotificationPrefs.markSeen(timestamp: timestamp) {
                 AppLogger.shared.info("adopted server seen marker: \(timestamp)", category: .api)
             }
         } catch APIError.notFound {
-            serverSeenSupported = false
+            seenSyncState = .unsupported
             AppLogger.shared.info("server lacks /api/notifications/seen · local-only", category: .api)
+        } catch where error.isCancellation {
+            return
         } catch {
+            seenSyncState = .failed
             AppLogger.shared.debug("seen marker fetch failed: \(error)", category: .api)
         }
     }
@@ -212,15 +275,18 @@ public final class NotificationPoller {
     /// clients of the same account clear their badges too. No-op when the
     /// server predates the endpoint.
     public func pushSeenMarker() {
-        guard let seenAPI, serverSeenSupported != false,
+        guard let seenAPI, seenSyncState != .unsupported,
               let timestamp = NotificationPrefs.lastSeenTimestamp else { return }
         Task { [weak self] in
             do {
                 try await seenAPI.update(NotificationSeenMarker(timestamp: timestamp))
-                await MainActor.run { self?.serverSeenSupported = true }
+                self?.seenSyncState = .ok
             } catch APIError.notFound {
-                await MainActor.run { self?.serverSeenSupported = false }
+                self?.seenSyncState = .unsupported
+            } catch where error.isCancellation {
+                return
             } catch {
+                self?.seenSyncState = .failed
                 AppLogger.shared.debug("seen marker push failed: \(error)", category: .api)
             }
         }

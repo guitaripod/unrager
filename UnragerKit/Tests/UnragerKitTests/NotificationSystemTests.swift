@@ -92,6 +92,7 @@ struct NotificationPrefsTests {
         "unrager.notifications.quietHours.startMinute",
         "unrager.notifications.quietHours.endMinute",
         "unrager.notifications.deliveredBannerIDs",
+        "unrager.notifications.lastBackgroundRefreshAt",
     ] + NotificationKind.allCases.map { "unrager.notifications.kind.\($0.rawValue)" }
 
     private func withCleanPrefs(_ body: () throws -> Void) rethrows {
@@ -221,6 +222,18 @@ struct NotificationPrefsTests {
         }
     }
 
+    @Test("The last background refresh time persists and clears")
+    func lastBackgroundRefresh() {
+        withCleanPrefs {
+            #expect(NotificationPrefs.lastBackgroundRefreshAt == nil)
+            let date = Date(timeIntervalSince1970: 1_790_000_000)
+            NotificationPrefs.lastBackgroundRefreshAt = date
+            #expect(NotificationPrefs.lastBackgroundRefreshAt == date)
+            NotificationPrefs.lastBackgroundRefreshAt = nil
+            #expect(NotificationPrefs.lastBackgroundRefreshAt == nil)
+        }
+    }
+
     @Test("Delivered-banner ids dedupe and stay capped")
     func deliveredBannerCap() {
         withCleanPrefs {
@@ -330,6 +343,87 @@ struct NotificationPollerTests {
             #expect(await poller.poll())
             #expect(alerted.count == 1)
             #expect(alerted.first?.map(\.id) == ["n2"])
+        }
+    }
+
+    @MainActor
+    @Test("A group that grew keeps its id but moves forward, and is reported as new")
+    func grownGroupIsNews() async {
+        await withCleanMarker {
+            let transport = StubTransport(notificationBodies: [
+                page([("g-like-1", "2026-07-01T10:00:00.120Z"), ("n0", "2026-07-01T09:00:00Z")]),
+                page([("g-like-1", "2026-07-01T10:00:00.120Z"), ("n0", "2026-07-01T09:00:00Z")]),
+                page([("g-like-1", "2026-07-01T10:05:00.450Z"), ("n0", "2026-07-01T09:00:00Z")]),
+            ])
+            let api = APIClient(transport: transport, baseURL: { URL(string: "http://test:7777")! })
+            let poller = NotificationPoller(api: api)
+            var unreadCounts: [Int] = []
+            var alerted: [[XNotification]] = []
+            poller.onUnreadCount = { unreadCounts.append($0) }
+            poller.onNewNotifications = { alerted.append($0) }
+
+            #expect(await poller.poll())
+            #expect(await poller.poll())
+            #expect(alerted.isEmpty)
+            #expect(await poller.poll())
+            #expect(alerted.map { $0.map(\.id) } == [["g-like-1"]])
+            #expect(unreadCounts == [0, 0, 1])
+            #expect(poller.lastPollError == nil)
+            #expect(poller.lastPollAt != nil)
+        }
+    }
+
+    @MainActor
+    @Test("A failed poll is recorded for diagnostics, and a success clears it")
+    func pollDiagnostics() async {
+        await withCleanMarker {
+            let transport = ScriptedTransport([
+                .response(status: 503, body: #"{"error":"down","kind":"internal"}"#),
+                .response(status: 200, body: page([("n1", "2026-07-01T10:00:00Z")])),
+            ])
+            let poller = NotificationPoller(api: APIClient(transport: transport, baseURL: { .testServer }))
+            #expect(!(await poller.poll()))
+            #expect(poller.lastPollError == "down")
+            #expect(poller.lastPollAt != nil)
+            #expect(await poller.poll())
+            #expect(poller.lastPollError == nil)
+        }
+    }
+
+    @MainActor
+    @Test("Changing the server forgets the latched seen-marker support and the diff baseline")
+    func serverChangeResets() async {
+        await withCleanMarker {
+            let marker = NotificationSeenMarker(timestamp: Date(timeIntervalSince1970: 1_000))
+            let transport = StubTransport(
+                notificationBodies: [
+                    page([("n1", "2026-07-01T10:00:00Z")]),
+                    page([("n1", "2026-07-01T10:00:00Z")]),
+                    page([("n2", "2026-07-01T11:00:00Z"), ("n1", "2026-07-01T10:00:00Z")]),
+                ],
+                seenResponses: [
+                    (404, #"{"error":"no route","kind":"not_found"}"#),
+                    (200, #"{"marker":"\#(marker.marker!)"}"#),
+                ])
+            let api = APIClient(transport: transport, baseURL: { URL(string: "http://test:7777")! })
+            let seen = NotificationSeenAPI(transport: transport, baseURL: { URL(string: "http://test:7777")! })
+            let poller = NotificationPoller(api: api, seenAPI: seen)
+            var alerted: [[XNotification]] = []
+            poller.onNewNotifications = { alerted.append($0) }
+
+            #expect(poller.seenSyncState == .unknown)
+            #expect(await poller.poll())
+            #expect(poller.seenSyncState == .unsupported)
+            #expect(await poller.poll())
+            #expect(poller.seenSyncState == .unsupported)
+
+            NotificationCenter.default.post(name: AppSettings.serverURLDidChange, object: nil)
+            #expect(poller.seenSyncState == .unknown)
+            #expect(poller.lastPage.isEmpty)
+
+            #expect(await poller.poll())
+            #expect(poller.seenSyncState == .ok)
+            #expect(alerted.isEmpty)
         }
     }
 

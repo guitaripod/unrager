@@ -397,6 +397,7 @@ mod tests {
         assert!(s.get("600").unwrap().as_ref().unwrap().community);
     }
 
+    #[cfg(feature = "server")]
     #[tokio::test]
     async fn resolve_answers_from_the_community_cache_and_stores_it() {
         use crate::store::community::test_support::serve;

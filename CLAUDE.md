@@ -19,6 +19,8 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
+CI also lints every feature flavor (`cargo clippy --workspace --all-targets --no-default-features --features tui -- -D warnings`, and again with just `--no-default-features`); code or tests that need `axum` or another server-only dependency must be gated on `feature = "server"`, or the tui and cli flavors stop compiling.
+
 Always run the CI gate after making changes, without waiting to be asked. Then `cargo install --path .` so the user can immediately run the updated binary.
 
 ## Releasing a new version

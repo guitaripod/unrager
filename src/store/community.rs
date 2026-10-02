@@ -265,7 +265,7 @@ fn text(value: Option<&Value>) -> Option<String> {
         .then(|| trimmed.to_string())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 pub(crate) mod test_support {
     use super::*;
     use axum::Router;
@@ -312,7 +312,7 @@ pub(crate) mod test_support {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod tests {
     use super::test_support::serve;
     use super::*;

@@ -396,4 +396,11 @@ struct LossyDecodingTests {
         #expect(page.tweets.map(\.restID) == ["1", "3"])
         #expect(page.cursor == "c")
     }
+
+    @Test("Elements that aren't objects are skipped too, and decoding finishes")
+    func nonObjectElements() throws {
+        let json = #"{"tweets":[null,"x",3,[1],{"a":[2]},"# + tweetJSON(id: "5") + #",true],"cursor":null}"#
+        let page = try UnragerJSON.decode(TimelinePage.self, from: Data(json.utf8))
+        #expect(page.tweets.map(\.restID) == ["5"])
+    }
 }

@@ -20,7 +20,13 @@ struct LossyArray<Element: Decodable>: Decodable {
         elements = kept
     }
 
-    private struct Skipped: Decodable {}
+    /// Accepts any JSON value without reading it, so the container always moves
+    /// past an element that failed to decode, whether it is an object, `null`,
+    /// a string, a number or a nested array. A type that only decoded from an
+    /// object would leave the index in place and loop forever.
+    private struct Skipped: Decodable {
+        init(from decoder: Decoder) throws {}
+    }
 }
 
 extension KeyedDecodingContainer {

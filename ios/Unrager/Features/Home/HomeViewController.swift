@@ -204,6 +204,16 @@ final class HomeViewController: FeedViewController {
     /// without persisting the mode, so a QA run can't contaminate later runs
     /// (or the user's real preference).
     func debugSwitchToFollowing() { switchHome(following: true, persist: false) }
+
+    /// Screenshot router: scrolls the feed `points` past its top once it has
+    /// had time to load.
+    func debugScroll(by points: CGFloat) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
+            guard let self else { return }
+            self.collectionView.setContentOffset(
+                CGPoint(x: 0, y: points - self.collectionView.adjustedContentInset.top), animated: false)
+        }
+    }
     #endif
 
     private func toggleOriginals() {

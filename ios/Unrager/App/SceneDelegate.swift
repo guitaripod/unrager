@@ -58,7 +58,9 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             switch parts.first {
             case "following":
                 root.selectedIndex = 0
-                (homeNav()?.viewControllers.first as? HomeViewController)?.debugSwitchToFollowing()
+                let home = homeNav()?.viewControllers.first as? HomeViewController
+                home?.debugSwitchToFollowing()
+                if parts.count > 1, let points = Double(parts[1]) { home?.debugScroll(by: CGFloat(points)) }
             case "search": root.selectedIndex = 1
             case "toast":
                 let json = """

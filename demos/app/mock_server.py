@@ -27,7 +27,7 @@ import demo_world as dw  # noqa: E402
 
 PAGE = 8
 LATENCY = {"api": 0.0, "assets": 0.0}
-STATE = {"filter_enabled": True, "likes": set(), "bookmarks": set(), "retweets": set(), "overrides": {},
+STATE = {"injected": [], "seen": dw.ago(minutes=100), "filter_enabled": True, "likes": set(), "bookmarks": set(), "retweets": set(), "overrides": {},
          "deleted": set(), "muting": {"hottakeshourly"}, "blocking": set(), "replies": []}
 
 
@@ -104,6 +104,22 @@ class Handler(BaseHTTPRequestHandler):
         events = [{"token": w, "done": False} for w in words] + [{"token": "", "done": True}]
         self.sse(events, delay)
 
+
+    def inject_notification(self, kind, handle, text, others, tweet_key):
+        """Adds a notification that arrives "now", for a demo that needs one to show up on cue."""
+        w = self.world
+        user = w.users[handle]
+        target = w.by_key[tweet_key]
+        actor = {"handle": user["handle"], "name": user["name"], "rest_id": user["rest_id"],
+                 "verified": user["verified"], "avatar_url": user["avatar_url"]}
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        item = {"id": f"live{len(STATE['injected'])}", "type": kind, "actors": [actor],
+                "target_tweet_id": target["rest_id"], "target_tweet_snippet": text or target["text"],
+                "target_tweet_like_count": 0, "target_media": [], "timestamp": stamp}
+        if others:
+            item["others_count"] = int(others)
+        STATE["injected"].insert(0, item)
+        return item["id"]
 
     def serve_asset(self, path: str):
         rel = path[len("/assets/"):]
@@ -205,10 +221,13 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/api/sources/mentions", "/api/sources/bookmarks"):
             keys = ["r3a", "q1"] if path.endswith("mentions") else ["f1", "f10"]
             return self.send_json({"tweets": [w.tweet(k) for k in keys], "cursor": None})
+        if path == "/__inject":
+            return self.send_json({"ok": True, "injected": self.inject_notification(q("type", "Reply"), q("handle", "tomasbuilds"),
+                                                                                     q("text", ""), q("others"), q("tweet", "o1"))})
         if path == "/api/sources/notifications":
-            return self.send_json({"notifications": w.notifications(), "cursor": None})
+            return self.send_json({"notifications": STATE["injected"] + w.notifications(), "cursor": None})
         if path == "/api/notifications/seen":
-            return self.send_json({"marker": None})
+            return self.send_json({"marker": STATE["seen"]})
         m = re.fullmatch(r"/api/tweet/(\d+)", path)
         if m:
             key = w.tweet_by_id(m.group(1))
@@ -312,6 +331,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_PATCH(self):
         path = urlparse(self.path).path
         body = json.loads(self.read_body() or b"{}")
+        if path == "/api/notifications/seen":
+            STATE["seen"] = body.get("marker")
+            return self.send_json({"marker": STATE["seen"]})
         if path == "/api/session":
             if "filter_enabled" in body:
                 STATE["filter_enabled"] = bool(body["filter_enabled"])

@@ -22,7 +22,20 @@ final class NotificationCenterService: NSObject {
 
     private let poller = NotificationPoller(
         api: AppEnvironment.shared.api,
-        seenAPI: NotificationSeenAPI(baseURL: { AppSettings.serverURL }))
+        seenAPI: NotificationSeenAPI(baseURL: { AppSettings.serverURL }),
+        cadence: NotificationCenterService.pollCadence)
+
+    /// Seconds between polls: fifteen, or whatever `UNRAGER_POLL_SECONDS` says
+    /// in a debug build, so a demo recording doesn't wait on an arrival.
+    private static var pollCadence: TimeInterval {
+        #if DEBUG
+        if let raw = ProcessInfo.processInfo.environment["UNRAGER_POLL_SECONDS"], let seconds = TimeInterval(raw),
+           seconds >= 1 {
+            return seconds
+        }
+        #endif
+        return 15
+    }
     private weak var root: RootViewController?
     private var unreadCount = 0
     private var observersInstalled = false

@@ -4,6 +4,9 @@
     python3 compose.py render [--out FILE] [--jobs N]
     python3 compose.py stills 4.5 20 33       # PNGs of single moments
 
+`UNRAGER_EDIT=edit_notifications` renders another cut (a module of the same
+shape as `edit.py`) from the same clips.
+
 The picture is a pure function of time, `frame_at(t)`: a background that
 pulses with the song's beat, phones playing the recordings, captions, shock
 rings and flashes, all laid out in `edit.py` in beats rather than seconds.
@@ -15,8 +18,10 @@ from __future__ import annotations
 
 import argparse
 import functools
+import importlib
 import json
 import math
+import os
 import shutil
 import subprocess
 import sys
@@ -27,7 +32,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-import edit
+edit = importlib.import_module(os.environ.get("UNRAGER_EDIT", "edit"))
 
 W, H, FPS = edit.WIDTH, edit.HEIGHT, edit.FPS
 CHUNK_FRAMES = 60

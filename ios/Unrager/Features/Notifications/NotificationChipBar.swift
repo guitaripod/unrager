@@ -15,7 +15,7 @@ final class NotificationChipBar: UIView {
     private let scroll = UIScrollView()
     private let backdrop = FadeBackdropView()
     private let stack = UIStackView()
-    private var buttons: [NotificationCategory: UIButton] = [:]
+    private var chips: [NotificationCategory: ChipControl] = [:]
     private var dots: [NotificationCategory: UIView] = [:]
 
     init(selected: NotificationCategory) {
@@ -46,12 +46,11 @@ final class NotificationChipBar: UIView {
             scroll.contentLayoutGuide.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
         ])
         for category in NotificationCategory.allCases {
-            let button = UIButton(configuration: .glass())
-            button.addAction(UIAction { [weak self] _ in self?.tapped(category) }, for: .touchUpInside)
-            button.accessibilityLabel = category.title
-            addDot(for: category, to: button)
-            buttons[category] = button
-            stack.addArrangedSubview(button)
+            let chip = ChipControl(title: category.title)
+            chip.addAction(UIAction { [weak self] _ in self?.tapped(category) }, for: .touchUpInside)
+            addDot(for: category, to: chip)
+            chips[category] = chip
+            stack.addArrangedSubview(chip)
         }
         refreshStyles()
     }
@@ -73,9 +72,9 @@ final class NotificationChipBar: UIView {
         for (category, dot) in dots {
             dot.isHidden = category == selected || !categories.contains(category)
         }
-        for (category, button) in buttons {
+        for (category, chip) in chips {
             let unread = dots[category]?.isHidden == false
-            button.accessibilityValue = unread ? "Unread activity" : nil
+            chip.accessibilityValue = unread ? "Unread activity" : nil
         }
     }
 
@@ -86,47 +85,32 @@ final class NotificationChipBar: UIView {
         onSelect?(category)
     }
 
-    private func addDot(for category: NotificationCategory, to button: UIButton) {
+    private func addDot(for category: NotificationCategory, to chip: ChipControl) {
         let dot = UIView()
         dot.backgroundColor = DesignSystem.Color.badge
         dot.layer.cornerRadius = 4.5
         dot.isUserInteractionEnabled = false
         dot.isHidden = true
         dot.translatesAutoresizingMaskIntoConstraints = false
-        button.addSubview(dot)
+        chip.addSubview(dot)
         NSLayoutConstraint.activate([
             dot.widthAnchor.constraint(equalToConstant: 9),
             dot.heightAnchor.constraint(equalToConstant: 9),
-            dot.topAnchor.constraint(equalTo: button.topAnchor, constant: 1),
-            dot.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -1),
+            dot.topAnchor.constraint(equalTo: chip.topAnchor, constant: 1),
+            dot.trailingAnchor.constraint(equalTo: chip.trailingAnchor, constant: -1),
         ])
         dots[category] = dot
     }
 
     private func refreshStyles() {
-        for (category, button) in buttons {
-            let isSelected = category == selected
-            var config: UIButton.Configuration = isSelected ? .prominentGlass() : .glass()
-            config.title = category.title
-            config.cornerStyle = .capsule
-            config.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 13, bottom: 8, trailing: 13)
-            if isSelected { config.baseBackgroundColor = DesignSystem.Color.accent }
-            config.baseForegroundColor = isSelected ? .white : DesignSystem.Color.label
-            config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
-                var outgoing = incoming
-                outgoing.font = DesignSystem.Typography.system(14, weight: .semibold)
-                return outgoing
-            }
-            button.configuration = config
-            button.accessibilityTraits = isSelected ? [.button, .selected] : .button
-        }
+        for (category, chip) in chips { chip.isChosen = category == selected }
     }
 
     /// Brings the chosen chip fully into view when the row scrolls.
     private func scrollToReveal(_ category: NotificationCategory) {
-        guard let button = buttons[category] else { return }
+        guard let chip = chips[category] else { return }
         layoutIfNeeded()
-        scroll.scrollRectToVisible(button.frame.insetBy(dx: -16, dy: 0), animated: true)
+        scroll.scrollRectToVisible(chip.frame.insetBy(dx: -16, dy: 0), animated: true)
     }
 }
 
@@ -157,5 +141,57 @@ private final class FadeBackdropView: UIView {
         (layer as! CAGradientLayer).colors = [base.cgColor,
                                               base.withAlphaComponent(0.97).cgColor,
                                               base.withAlphaComponent(0).cgColor]
+    }
+}
+
+/// One filter chip: a glass capsule sized to its title, tinted solid when it is
+/// the one chosen.
+private final class ChipControl: UIControl {
+    private let glass = UIVisualEffectView()
+    private let label = UILabel()
+
+    var isChosen = false {
+        didSet {
+            guard isChosen != oldValue else { return }
+            refresh()
+        }
+    }
+
+    init(title: String) {
+        super.init(frame: .zero)
+        label.text = title
+        label.font = DesignSystem.Typography.system(14, weight: .semibold)
+        glass.isUserInteractionEnabled = false
+        glass.translatesAutoresizingMaskIntoConstraints = false
+        glass.setCapsuleCorners()
+        addSubview(glass)
+        glass.pinEdges(to: self)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        glass.contentView.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: glass.contentView.leadingAnchor, constant: 14),
+            label.trailingAnchor.constraint(equalTo: glass.contentView.trailingAnchor, constant: -14),
+            label.topAnchor.constraint(equalTo: glass.contentView.topAnchor, constant: 9),
+            label.bottomAnchor.constraint(equalTo: glass.contentView.bottomAnchor, constant: -9),
+        ])
+        isAccessibilityElement = true
+        accessibilityLabel = title
+        refresh()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var isHighlighted: Bool {
+        didSet { alpha = isHighlighted ? 0.7 : 1 }
+    }
+
+    private func refresh() {
+        let effect = UIGlassEffect(style: .regular)
+        effect.isInteractive = true
+        if isChosen { effect.tintColor = DesignSystem.Color.accent }
+        glass.effect = effect
+        label.textColor = isChosen ? .white : DesignSystem.Color.label
+        accessibilityTraits = isChosen ? [.button, .selected] : .button
     }
 }

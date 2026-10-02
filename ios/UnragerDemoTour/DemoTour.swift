@@ -141,6 +141,83 @@ final class DemoTour: XCTestCase {
         pause(1.6)
     }
 
+
+    // MARK: - Notifications
+
+    /// The list: New with its digest, then Today, Yesterday and the week, a long
+    /// way down and back.
+    func testScene09NotifList() {
+        launchNotifications()
+        pause(3.2)
+        scroll(by: 560, seconds: 2.4)
+        pause(1.4)
+        scroll(by: 640, seconds: 2.4)
+        pause(1.4)
+        scroll(by: 640, seconds: 2.4)
+        pause(1.6)
+        scroll(by: 640, seconds: 2.4)
+        pause(1.2)
+        scroll(by: -2400, seconds: 1.2)
+        pause(1.6)
+    }
+
+    /// The filter chips: likes, reposts, follows, and mentions as full posts.
+    func testScene10NotifChips() {
+        launchNotifications()
+        pause(2.4)
+        tapChip("Likes")
+        pause(2.6)
+        tapChip("Reposts")
+        pause(2.0)
+        tapChip("Follows")
+        pause(2.6)
+        tapChip("Mentions")
+        pause(3.0)
+        tapChip("All")
+        pause(2.4)
+    }
+
+    /// What a row lets you do: follow back, see everyone behind a group, the
+    /// long-press menu, and read it all.
+    func testScene11NotifActions() {
+        launchNotifications()
+        pause(2.4)
+        let followBack = app.buttons["Follow back"].firstMatch
+        if followBack.waitForExistence(timeout: 3) { followBack.tap() }
+        pause(2.4)
+        let first = app.cells.firstMatch
+        first.coordinate(withNormalizedOffset: CGVector(dx: 0.11, dy: 0.25)).tap()
+        pause(2.6)
+        let back = app.navigationBars.buttons.firstMatch
+        if back.exists { back.tap() }
+        pause(1.2)
+        let second = app.cells.element(boundBy: 1)
+        second.press(forDuration: 1.1)
+        pause(2.8)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12)).tap()
+        pause(1.2)
+        let markRead = app.buttons["Mark all read"].firstMatch
+        if markRead.waitForExistence(timeout: 3) { markRead.tap() }
+        pause(3.4)
+    }
+
+    /// Arrivals: new activity lands while the list is open and glows in; with
+    /// the reader scrolled away, a pill waits to take them back to the top.
+    func testScene12NotifLive() {
+        launchNotifications(pollSeconds: 3)
+        pause(2.6)
+        inject(type: "Reply", handle: "tomasbuilds", text: "Wait, you shipped it already? Looks great.")
+        pause(5.0)
+        scroll(by: 760, seconds: 1.8)
+        pause(1.0)
+        inject(type: "Mention", handle: "lenapark", text: "@noralind the new notifications are lovely")
+        inject(type: "Like", handle: "orbitaldaily", text: "", others: "27")
+        pause(6.0)
+        let pill = app.buttons.matching(NSPredicate(format: "label CONTAINS 'new notifications'")).firstMatch
+        if pill.waitForExistence(timeout: 3) { pill.tap() }
+        pause(3.6)
+    }
+
     // MARK: - Moves
 
     private func launch() {
@@ -153,6 +230,34 @@ final class DemoTour: XCTestCase {
         XCUIDevice.shared.press(.home)
         pause(1.2)
         app.launch()
+    }
+
+
+    /// Opens the app on its Notifications tab (the mock server says the last
+    /// visit was a hundred minutes back, so the newest activity reads as
+    /// unread), with polling fast enough that an arrival doesn't keep a viewer
+    /// waiting.
+    private func launchNotifications(pollSeconds: Int = 15) {
+        app.launchEnvironment["UNRAGER_POLL_SECONDS"] = String(pollSeconds)
+        launchFromHomeScreen()
+        pause(1.6)
+        app.tabBars.buttons["Notifications"].tap()
+    }
+
+    private func tapChip(_ title: String) {
+        let chip = app.buttons[title].firstMatch
+        if chip.waitForExistence(timeout: 3) { chip.tap() }
+    }
+
+    /// Has the mock server add a notification that arrives now.
+    private func inject(type: String, handle: String, text: String, others: String? = nil) {
+        var components = URLComponents(string: "http://127.0.0.1:8790/__inject")!
+        components.queryItems = [URLQueryItem(name: "type", value: type), URLQueryItem(name: "handle", value: handle),
+                                 URLQueryItem(name: "text", value: text)]
+        if let others { components.queryItems?.append(URLQueryItem(name: "others", value: others)) }
+        let done = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: components.url!) { _, _, _ in done.signal() }.resume()
+        _ = done.wait(timeout: .now() + 5)
     }
 
     private func pause(_ seconds: Double) {

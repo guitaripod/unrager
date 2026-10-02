@@ -289,16 +289,18 @@ fn stream_body(
     let (failure_tx, failure_rx) = tokio::sync::oneshot::channel::<String>();
 
     tokio::spawn(async move {
-        let outcome = llm
-            .stream_chat(
-                req,
-                label,
-                move |token| {
-                    let _ = tx.send(token.to_string());
-                },
-                |_| {},
-            )
-            .await;
+        let client = tx.clone();
+        let generation = llm.stream_chat(
+            req,
+            label,
+            move |token| {
+                let _ = tx.send(token.to_string());
+            },
+            |_| {},
+        );
+        let Some(outcome) = unless_client_left(generation, &client, label).await else {
+            return;
+        };
         if let Err(message) = outcome {
             tracing::warn!(label, "llm stream failed: {message}");
             let _ = failure_tx.send(message);
@@ -317,6 +319,25 @@ fn stream_body(
         yield Ok(Event::default().data("[DONE]"));
     };
     Sse::new(s).keep_alive(KeepAlive::new())
+}
+
+/// Runs a generation until it finishes or the SSE client goes away (Stop, or
+/// leaving the screen drops the response body and with it the token
+/// receiver). Dropping the generation drops its HTTP response, which is what
+/// makes Ollama or llama.cpp stop generating, so the GPU is free for the
+/// filter again instead of finishing an answer nobody reads.
+async fn unless_client_left<T>(
+    generation: impl Future<Output = T>,
+    client: &mpsc::UnboundedSender<String>,
+    label: &'static str,
+) -> Option<T> {
+    tokio::select! {
+        outcome = generation => Some(outcome),
+        () = client.closed() => {
+            tracing::info!(label, "client left; stream aborted");
+            None
+        }
+    }
 }
 
 /// Lossless channel between the sync `stream_chat` token callback and the SSE
@@ -370,6 +391,26 @@ mod tests {
         assert_eq!(received.len(), total);
         assert_eq!(received.first().map(String::as_str), Some("t0"));
         assert_eq!(received.last().map(String::as_str), Some("t4095"));
+    }
+
+    #[tokio::test]
+    async fn generation_stops_when_the_client_leaves() {
+        let (tx, rx) = token_channel();
+        let generation = futures::future::pending::<()>();
+        let watched = tokio::spawn(async move { unless_client_left(generation, &tx, "ask").await });
+        drop(rx);
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(1), watched)
+            .await
+            .expect("a dropped client ends the generation at once")
+            .unwrap();
+        assert!(outcome.is_none());
+    }
+
+    #[tokio::test]
+    async fn generation_finishes_while_the_client_stays() {
+        let (tx, _rx) = token_channel();
+        let outcome = unless_client_left(async { 7 }, &tx, "ask").await;
+        assert_eq!(outcome, Some(7));
     }
 
     #[test]

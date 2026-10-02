@@ -12,14 +12,14 @@ struct TweetTextTests {
 
     private func link(in text: NSAttributedString, at fragment: String) -> URL? {
         let range = (text.string as NSString).range(of: fragment)
-        return text.attribute(.link, at: range.location, effectiveRange: nil) as? URL
+        return text.attribute(TweetText.linkKey, at: range.location, effectiveRange: nil) as? URL
     }
 
     @Test("A mention is linked without the comma that follows it")
     func mentionStopsAtPunctuation() {
         let text = render("thanks @alice, see you")
         let comma = (text.string as NSString).range(of: ",")
-        #expect(text.attribute(.link, at: comma.location, effectiveRange: nil) == nil)
+        #expect(text.attribute(TweetText.linkKey, at: comma.location, effectiveRange: nil) == nil)
         #expect(link(in: text, at: "@alice")?.absoluteString == "unrager://profile/alice")
     }
 
@@ -27,7 +27,7 @@ struct TweetTextTests {
     func hashtagStopsAtPunctuation() {
         let text = render("big news #rustlang!")
         let bang = (text.string as NSString).range(of: "!")
-        #expect(text.attribute(.link, at: bang.location, effectiveRange: nil) == nil)
+        #expect(text.attribute(TweetText.linkKey, at: bang.location, effectiveRange: nil) == nil)
         #expect(link(in: text, at: "#rustlang")?.absoluteString == "unrager://hashtag/rustlang")
     }
 
@@ -36,7 +36,7 @@ struct TweetTextTests {
         let text = render("read https://example.com/a. Then reply")
         #expect(link(in: text, at: "https://example.com/a")?.absoluteString == "https://example.com/a")
         let stop = (text.string as NSString).range(of: ". ")
-        #expect(text.attribute(.link, at: stop.location, effectiveRange: nil) == nil)
+        #expect(text.attribute(TweetText.linkKey, at: stop.location, effectiveRange: nil) == nil)
     }
 
     @Test("An address keeps its own closing bracket")

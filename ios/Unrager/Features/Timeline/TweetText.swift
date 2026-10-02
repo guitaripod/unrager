@@ -8,7 +8,12 @@ import UnragerKit
 /// `unrager://` scheme for in-app routing (profiles / search) and the real
 /// expanded URL for links; a `UITextView` host routes them via its delegate.
 enum TweetText {
-    /// In-app routing schemes emitted as `.link` attributes on body runs.
+    /// The attribute that carries a run's tap target. Not `.link`: a label
+    /// paints `.link` runs in the system link colour, over the colours the
+    /// text sets for itself.
+    static let linkKey = NSAttributedString.Key("unrager.link")
+
+    /// In-app routing schemes emitted as `linkKey` attributes on body runs.
     enum Route {
         case profile(handle: String)
         case hashtag(query: String)
@@ -61,7 +66,7 @@ enum TweetText {
             let range = NSRange(location: token.location, length: match.length)
             result.addAttribute(.foregroundColor, value: match.color, range: range)
             if let route = match.route, let link = link(for: route) {
-                result.addAttribute(.link, value: link, range: range)
+                result.addAttribute(linkKey, value: link, range: range)
             }
         }
         TwemojiText.substituteCachedEmoji(in: result, font: font)

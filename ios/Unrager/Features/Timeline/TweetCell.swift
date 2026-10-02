@@ -78,9 +78,9 @@ final class TweetCell: UICollectionViewCell {
     private let nameLabel = UILabel()
     private let flagLabel = UILabel()
     private let verifiedBadge = UIImageView()
-    private let replyCaption = TweetBodyTextView()
+    private let replyCaption = LinkLabel()
     private let handleTimeLabel = UILabel()
-    private let bodyView = TweetBodyTextView()
+    private let bodyView = LinkLabel()
     private let mediaContent = MediaContentView(compact: false)
     private let quotedContainer = UIView()
     private let quotedWrap = UIView()
@@ -98,11 +98,11 @@ final class TweetCell: UICollectionViewCell {
 
     private static let maxIndent = 3
 
-    private let replyButton = TweetCell.makeActionButton(symbol: "bubble.left")
-    private let retweetButton = TweetCell.makeActionButton(symbol: "arrow.2.squarepath")
-    private let likeButton = TweetCell.makeActionButton(symbol: "heart")
-    private let bookmarkButton = TweetCell.makeActionButton(symbol: "bookmark")
-    private let shareButton = TweetCell.makeActionButton(symbol: "square.and.arrow.up")
+    private let replyButton = ActionButton(symbol: "bubble.left")
+    private let retweetButton = ActionButton(symbol: "arrow.2.squarepath")
+    private let likeButton = ActionButton(symbol: "heart")
+    private let bookmarkButton = ActionButton(symbol: "bookmark")
+    private let shareButton = ActionButton(symbol: "square.and.arrow.up")
     private let viewsLabel = UILabel()
     private let showMoreButton = TweetCell.makeShowMoreButton()
     private let likeLongPress = UILongPressGestureRecognizer()
@@ -139,6 +139,16 @@ final class TweetCell: UICollectionViewCell {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    override func preferredLayoutAttributesFitting(
+        _ layoutAttributes: UICollectionViewLayoutAttributes
+    ) -> UICollectionViewLayoutAttributes {
+        PerfProbe.time("sizing") { super.preferredLayoutAttributesFitting(layoutAttributes) }
+    }
+
+    override func layoutSubviews() {
+        PerfProbe.time("layout") { super.layoutSubviews() }
+    }
 
     override func prepareForReuse() {
         super.prepareForReuse()
@@ -201,38 +211,51 @@ final class TweetCell: UICollectionViewCell {
         boundTweet = tweet
         applyFonts()
         setIndent(indentLevel)
-        nameLabel.attributedText = TwemojiText.attributed(
-            tweet.author.name, font: DesignSystem.Typography.name(), color: DesignSystem.Color.label)
+        PerfProbe.time("cfg.name") {
+            nameLabel.attributedText = TwemojiText.attributed(
+                tweet.author.name, font: DesignSystem.Typography.name(), color: DesignSystem.Color.label)
+        }
         setFlag(nil)
         verifiedBadge.isHidden = !tweet.author.verified
         configureReplyCaption(for: tweet, implied: impliedReplyHandles)
         handleTimeLabel.attributedText = Self.handleTime(tweet, absolute: focal)
-        let body = TweetText.attributed(
-            for: tweet, seen: seen, font: DesignSystem.Typography.body())
-        applyBodyLimit(body, limit: bodyLineLimit, contentWidth: contentWidth - 2 * Self.sideMargin)
-        bodyView.attributedText = body
+        let body = PerfProbe.time("cfg.text") {
+            TweetText.attributed(for: tweet, seen: seen, font: DesignSystem.Typography.body())
+        }
+        PerfProbe.time("cfg.limit") {
+            applyBodyLimit(body, limit: bodyLineLimit, contentWidth: contentWidth - 2 * Self.sideMargin)
+        }
+        PerfProbe.time("cfg.body") { bodyView.attributedText = body }
         bodyView.isHidden = body.length == 0
         bodyView.onTapMention = { [weak self] in self?.onTapMention?($0) }
         bodyView.onTapHashtag = { [weak self] in self?.onTapHashtag?($0) }
         bodyView.onTapURL = { [weak self] in self?.onTapCard?($0) }
         contentView.alpha = seen ? 0.85 : 1
 
-        loadAvatar(into: avatar, url: tweet.author.avatarURL, size: Self.avatarSize, fallbackPoint: 30,
-                   enabled: imagesEnabled)
+        PerfProbe.time("cfg.avatar") {
+            loadAvatar(into: avatar, url: tweet.author.avatarURL, size: Self.avatarSize, fallbackPoint: 30,
+                       enabled: imagesEnabled)
+        }
 
         mediaContent.onTapPhoto = { [weak self] index in self?.onTapPhoto?(index) }
         mediaContent.onTapCard = { [weak self] url in self?.onTapCard?(url) }
         mediaContent.bleedsEdgeToEdge = indentLevel == 0
-        mediaContent.configure(with: tweet, imagesEnabled: imagesEnabled, contentWidth: contentWidth)
+        PerfProbe.time("cfg.media") {
+            mediaContent.configure(with: tweet, imagesEnabled: imagesEnabled, contentWidth: contentWidth)
+        }
 
-        configureQuoted(tweet.quotedTweet, imagesEnabled: imagesEnabled,
-                        contentWidth: contentWidth - 2 * Self.sideMargin - 22)
-        configureActions(tweet)
+        PerfProbe.time("cfg.quote") {
+            configureQuoted(tweet.quotedTweet, imagesEnabled: imagesEnabled,
+                            contentWidth: contentWidth - 2 * Self.sideMargin - 22)
+        }
+        PerfProbe.time("cfg.actions") { configureActions(tweet) }
         analyticsView.configure(tweet, visible: focal && ownTweet)
         analyticsWrap.isHidden = analyticsView.isHidden
-        configureAccessibility(tweet, seen: seen)
-        isAccessibilityElement = true
-        refreshAccessibility(seen: seen)
+        PerfProbe.time("cfg.a11y") {
+            configureAccessibility(tweet, seen: seen)
+            isAccessibilityElement = true
+            refreshAccessibility(seen: seen)
+        }
     }
 
     /// Shows the small "Replying to @a" line above a reply's text, or hides it
@@ -269,6 +292,7 @@ final class TweetCell: UICollectionViewCell {
     /// already built rather than waiting for a relaunch.
     private func applyFonts() {
         quotedBodyLabel.font = DesignSystem.Typography.metric()
+        [replyButton, retweetButton, likeButton, bookmarkButton].forEach { $0.refreshFont() }
     }
 
     /// Dims or restores the row for a changed read state without rebuilding it:
@@ -289,7 +313,7 @@ final class TweetCell: UICollectionViewCell {
     /// would make "Show more" feel like a cheat — and measures against the
     /// row's real text width so the decision matches what renders.
     private func applyBodyLimit(_ body: NSAttributedString, limit: Int, contentWidth: CGFloat) {
-        guard limit > 0, body.length > 0,
+        guard limit > 0, Self.mayExceedLimit(body.string, limit: limit),
               Self.bodyExceedsLimit(body, limit: limit, contentWidth: contentWidth) else {
             setBodyLines(0, truncating: false)
             showMoreButton.isHidden = true
@@ -299,13 +323,23 @@ final class TweetCell: UICollectionViewCell {
         showMoreButton.isHidden = false
     }
 
-    /// Caps the body at `lines` (0 = unlimited) and makes the text view measure
-    /// again: a text view that already laid out keeps its old height when only
-    /// the container's line cap changes, so "Show more" would reveal nothing.
+    /// Caps the body at `lines` (0 = unlimited) and makes it measure again, so
+    /// "Show more" reveals the rest of the text.
     private func setBodyLines(_ lines: Int, truncating: Bool) {
-        bodyView.textContainer.maximumNumberOfLines = lines
-        bodyView.textContainer.lineBreakMode = truncating ? .byTruncatingTail : .byWordWrapping
+        bodyView.numberOfLines = lines
+        bodyView.lineBreakMode = truncating ? .byTruncatingTail : .byWordWrapping
         bodyView.invalidateIntrinsicContentSize()
+    }
+
+    /// A cheap test that rules out the many posts too short to reach `limit`
+    /// lines, so only long ones pay for measuring the text.
+    static func mayExceedLimit(_ text: String, limit: Int) -> Bool {
+        guard !text.isEmpty else { return false }
+        let characters = text.utf16.count
+        guard characters > limit * 20 else {
+            return text.reduce(0) { $1 == "\n" ? $0 + 1 : $0 } >= limit / 2
+        }
+        return true
     }
 
     /// Whether `body` renders meaningfully past `limit` lines at `contentWidth`
@@ -339,6 +373,9 @@ final class TweetCell: UICollectionViewCell {
     /// depth; the postcard renders flat and never calls this.
     func setIndent(_ level: Int) {
         let clamped = min(max(0, level), Self.maxIndent)
+        guard threadRail.level != clamped || columnLeading.constant != CGFloat(clamped) * ThreadRailView.step else {
+            return
+        }
         columnLeading.constant = CGFloat(clamped) * ThreadRailView.step
         railWidth.constant = CGFloat(clamped) * ThreadRailView.step
         threadRail.level = clamped
@@ -407,11 +444,23 @@ final class TweetCell: UICollectionViewCell {
     }
 
     private func configureActions(_ tweet: Tweet) {
-        replyButton.configuration?.title = label(tweet.replyCount)
-        viewsLabel.attributedText = Self.viewsText(tweet.viewCount)
-        applyLike(favorited: tweet.favorited, count: tweet.likeCount)
-        applyRetweet(retweeted: tweet.retweeted, count: tweet.retweetCount)
-        applyBookmark(bookmarked: tweet.bookmarked, count: tweet.bookmarkCount)
+        PerfProbe.time("act.reply") { replyButton.set(title: label(tweet.replyCount)) }
+        PerfProbe.time("act.views") { viewsLabel.attributedText = Self.viewsText(tweet.viewCount) }
+        PerfProbe.time("act.like") { applyLike(favorited: tweet.favorited, count: tweet.likeCount) }
+        PerfProbe.time("act.rt") { applyRetweet(retweeted: tweet.retweeted, count: tweet.retweetCount) }
+        PerfProbe.time("act.bm") { applyBookmark(bookmarked: tweet.bookmarked, count: tweet.bookmarkCount) }
+    }
+
+    private nonisolated(unsafe) static var glyphs: [String: UIImage] = [:]
+
+    /// The action bar's 15 pt glyph for `name`, built once: a symbol image is
+    /// rebuilt from its configuration every time otherwise, for every button of
+    /// every row that scrolls into view.
+    private static func glyph(_ name: String) -> UIImage? {
+        if let cached = glyphs[name] { return cached }
+        let made = DesignSystem.icon(name, pointSize: 15)
+        glyphs[name] = made
+        return made
     }
 
     /// The passive views metric — a glyph + count rendered as plain text, so it
@@ -439,9 +488,8 @@ final class TweetCell: UICollectionViewCell {
     func applyLike(favorited: Bool, count: Int) {
         isLiked = favorited
         shownLikeCount = count
-        likeButton.configuration?.title = label(count)
-        likeButton.configuration?.image = DesignSystem.icon(favorited ? "heart.fill" : "heart", pointSize: 15)
-        likeButton.configuration?.baseForegroundColor = favorited ? DesignSystem.Color.like : DesignSystem.Color.secondaryLabel
+        likeButton.set(title: label(count), image: Self.glyph(favorited ? "heart.fill" : "heart"),
+                       tint: favorited ? DesignSystem.Color.like : DesignSystem.Color.secondaryLabel)
         likeButton.accessibilityLabel = favorited ? "Unlike" : "Like"
         refreshAccessibility()
     }
@@ -453,9 +501,8 @@ final class TweetCell: UICollectionViewCell {
     func applyRetweet(retweeted: Bool, count: Int) {
         isRetweeted = retweeted
         shownRetweetCount = count
-        retweetButton.configuration?.title = label(count)
-        retweetButton.configuration?.baseForegroundColor =
-            retweeted ? DesignSystem.Color.retweet : DesignSystem.Color.secondaryLabel
+        retweetButton.set(title: label(count),
+                          tint: retweeted ? DesignSystem.Color.retweet : DesignSystem.Color.secondaryLabel)
         retweetButton.accessibilityLabel = retweeted ? "Reposted, \(count)" : "Repost, \(count)"
         refreshAccessibility()
     }
@@ -465,10 +512,8 @@ final class TweetCell: UICollectionViewCell {
     func applyBookmark(bookmarked: Bool, count: Int) {
         isBookmarked = bookmarked
         shownBookmarkCount = count
-        bookmarkButton.configuration?.title = label(count)
-        bookmarkButton.configuration?.image = DesignSystem.icon(bookmarked ? "bookmark.fill" : "bookmark", pointSize: 15)
-        bookmarkButton.configuration?.baseForegroundColor =
-            bookmarked ? DesignSystem.Color.accent : DesignSystem.Color.secondaryLabel
+        bookmarkButton.set(title: label(count), image: Self.glyph(bookmarked ? "bookmark.fill" : "bookmark"),
+                           tint: bookmarked ? DesignSystem.Color.accent : DesignSystem.Color.secondaryLabel)
         bookmarkButton.accessibilityLabel = bookmarked ? "Remove bookmark, \(count)" : "Bookmark, \(count)"
         refreshAccessibility()
     }
@@ -615,7 +660,7 @@ final class TweetCell: UICollectionViewCell {
         verifiedBadge.isAccessibilityElement = false
 
         replyCaption.isHidden = true
-        replyCaption.textContainerInset = UIEdgeInsets(top: 0, left: Self.sideMargin, bottom: 0, right: Self.sideMargin)
+        replyCaption.textInsets = UIEdgeInsets(top: 0, left: Self.sideMargin, bottom: 0, right: Self.sideMargin)
         replyCaption.onTapPlain = { [weak self] in self?.onTapReplyCaption?() }
         replyCaption.onTapMention = { [weak self] in self?.onTapMention?($0) }
 
@@ -671,7 +716,7 @@ final class TweetCell: UICollectionViewCell {
         showMoreButton.isHidden = true
         showMoreButton.addTarget(self, action: #selector(showMoreTapped), for: .touchUpInside)
 
-        bodyView.textContainerInset = UIEdgeInsets(top: 0, left: Self.sideMargin, bottom: 0, right: Self.sideMargin)
+        bodyView.textInsets = UIEdgeInsets(top: 0, left: Self.sideMargin, bottom: 0, right: Self.sideMargin)
         showMoreButton.configuration?.contentInsets = NSDirectionalEdgeInsets(
             top: 2, leading: Self.sideMargin, bottom: 2, trailing: Self.sideMargin)
         quotedWrap.addManaged(quotedContainer)
@@ -774,55 +819,28 @@ final class TweetCell: UICollectionViewCell {
         return button
     }
 
-    private static func makeActionButton(symbol: String) -> UIButton {
-        var config = UIButton.Configuration.plain()
-        config.image = DesignSystem.icon(symbol, pointSize: 15)
-        config.baseForegroundColor = DesignSystem.Color.secondaryLabel
-        config.imagePadding = 6
-        config.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0)
-        config.titleLineBreakMode = .byClipping
-        config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
-            var out = incoming
-            out.font = DesignSystem.Typography.metric()
-            return out
-        }
-        let button = UIButton(configuration: config)
-        button.contentHorizontalAlignment = .leading
-        button.setContentCompressionResistancePriority(.required, for: .horizontal)
-        return button
-    }
-
     /// The repost affordance: a tap opens Repost / Undo repost / Quote (X's
     /// repost sheet), never fires a blind toggle. Deferred + uncached so the
     /// first item's title always reflects the current repost state, including
     /// an optimistic flip made moments earlier.
     private func configureRetweetMenu() {
-        retweetButton.showsMenuAsPrimaryAction = true
         retweetButton.accessibilityHint = "Shows repost and quote options"
-        retweetButton.menu = UIMenu(children: [
-            UIDeferredMenuElement.uncached { [weak self] completion in
-                guard let self else {
-                    completion([])
-                    return
-                }
-                let toggle = UIAction(
-                    title: self.isRetweeted ? "Undo repost" : "Repost",
-                    image: DesignSystem.icon("arrow.2.squarepath"),
-                    attributes: self.isRetweeted ? [.destructive] : []
-                ) { [weak self] _ in
-                    Haptics.tap()
-                    self?.onToggleRetweet?()
-                }
-                let quote = UIAction(
-                    title: "Quote",
-                    image: DesignSystem.icon("quote.bubble")
-                ) { [weak self] _ in
-                    Haptics.tap()
-                    self?.onQuote?()
-                }
-                completion([toggle, quote])
+        retweetButton.menuProvider = { [weak self] in
+            guard let self else { return UIMenu() }
+            let toggle = UIAction(
+                title: self.isRetweeted ? "Undo repost" : "Repost",
+                image: DesignSystem.icon("arrow.2.squarepath"),
+                attributes: self.isRetweeted ? [.destructive] : []
+            ) { [weak self] _ in
+                Haptics.tap()
+                self?.onToggleRetweet?()
             }
-        ])
+            let quote = UIAction(title: "Quote", image: DesignSystem.icon("quote.bubble")) { [weak self] _ in
+                Haptics.tap()
+                self?.onQuote?()
+            }
+            return UIMenu(children: [toggle, quote])
+        }
     }
 
     /// Expands the action buttons' effective touch target to the HIG's

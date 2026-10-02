@@ -70,9 +70,9 @@ class FeedViewController: UIViewController, TweetActionHandling {
     private lazy var cellRegistration = UICollectionView.CellRegistration<TweetCell, String> {
         [weak self] cell, indexPath, id in
         guard let self, let tweet = self.tweetsByID[id] else { return }
-        cell.configure(with: tweet, imagesEnabled: AppSettings.imagesEnabled,
+        PerfProbe.time("configure") { cell.configure(with: tweet, imagesEnabled: AppSettings.imagesEnabled,
                        contentWidth: max(120, self.collectionView.bounds.width), seen: self.viewModel.isSeen(tweet.restID),
-                       bodyLineLimit: self.expandedBodies.contains(id) ? 0 : TweetCell.feedBodyLineLimit)
+                       bodyLineLimit: self.expandedBodies.contains(id) ? 0 : TweetCell.feedBodyLineLimit) }
         self.applyFlag(to: cell, author: tweet.author)
         cell.onTapAuthor = { [weak self] in self?.handleProfile(tweet.author.handle) }
         cell.onTapPhoto = { [weak self] index in self?.openMedia(tweet, at: index) }
@@ -138,6 +138,11 @@ class FeedViewController: UIViewController, TweetActionHandling {
         settleVideoPlayback()
         freshnessDismissed = false
         startFreshnessTimer()
+        if ScrollBenchmark.isRequested, case .home = viewModel.source {
+            ScrollBenchmark.shared.start(on: collectionView) { [weak self] in
+                self?.dataSource.snapshot().numberOfItems ?? 0
+            }
+        }
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -583,8 +588,10 @@ class FeedViewController: UIViewController, TweetActionHandling {
         let anchor = (hadItems && !tweets.isEmpty && !growsBottomOnly && collectionView.contentOffset.y > 1)
             ? scrollAnchor(in: snapshot) : nil
         let animated = anchor == nil && !growsBottomOnly && !tweets.isEmpty
-        dataSource.apply(snapshot, animatingDifferences: animated) { [weak self] in
-            if let anchor { self?.restoreScrollAnchor(anchor) }
+        PerfProbe.time("snapshot") {
+            dataSource.apply(snapshot, animatingDifferences: animated) { [weak self] in
+                if let anchor { self?.restoreScrollAnchor(anchor) }
+            }
         }
         updateChrome()
         updateUnreadCount()
@@ -649,6 +656,10 @@ class FeedViewController: UIViewController, TweetActionHandling {
     /// viewport and pauses the rest — the "one video at a time, only at rest"
     /// rule. Called when the feed settles; never while scrolling.
     func settleVideoPlayback() {
+        PerfProbe.time("settle") { settleVideoPlaybackNow() }
+    }
+
+    private func settleVideoPlaybackNow() {
         isScrolling = false
         guard Self.autoplaysVideo, isViewLoaded, view.window != nil else {
             pauseAllVideos()

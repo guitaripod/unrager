@@ -33,6 +33,16 @@ struct TweetBodyLimitTests {
         #expect(!TweetCell.bodyExceedsLimit(body(text), limit: TweetCell.feedBodyLineLimit, contentWidth: 300))
     }
 
+    @Test("Short posts are ruled out without measuring, long or tall ones are not")
+    @MainActor
+    func cheapPrecheck() {
+        #expect(!TweetCell.mayExceedLimit("", limit: 10))
+        #expect(!TweetCell.mayExceedLimit("a short post", limit: 10))
+        #expect(!TweetCell.mayExceedLimit(String(repeating: "x", count: 200), limit: 10))
+        #expect(TweetCell.mayExceedLimit(String(repeating: "x", count: 201), limit: 10))
+        #expect(TweetCell.mayExceedLimit(Array(repeating: "a", count: 8).joined(separator: "\n"), limit: 10))
+    }
+
     @Test("Zero limit means unlimited")
     @MainActor
     func focalUnlimited() {

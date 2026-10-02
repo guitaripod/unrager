@@ -22,7 +22,7 @@ enum TwemojiText {
     @MainActor
     static func substituteCachedEmoji(in string: NSMutableAttributedString, font: UIFont) {
         let ns = string.string as NSString
-        guard ns.length > 0 else { return }
+        guard ns.length > 0, !isPlainASCII(string.string) else { return }
         var replacements: [(NSRange, CGImage)] = []
         var misses: Set<String> = []
 
@@ -43,6 +43,13 @@ enum TwemojiText {
         guard !misses.isEmpty else { return }
         let pending = misses.joined()
         Task { await TwemojiCache.shared.prewarm(graphemesIn: pending) }
+    }
+
+    /// Whether `text` is plain ASCII, which holds no emoji: most posts, and
+    /// walking their graphemes one by one would be the bulk of building them.
+    private static func isPlainASCII(_ text: String) -> Bool {
+        var text = text
+        return text.withUTF8 { $0.allSatisfy { $0 < 0x80 } }
     }
 
     /// `text` in `font` and `color` with every emoji whose Twemoji art is cached

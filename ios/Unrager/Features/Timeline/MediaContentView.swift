@@ -234,13 +234,18 @@ final class MediaContentView: UIView {
 
     // MARK: - View swapping
 
+    /// Shows `view` and takes the previous surface out of the hierarchy. A
+    /// hidden view still counts in layout: a photo grid or player left behind
+    /// by the row's last post kept its own height wanted (its constraints stay
+    /// pinned top to bottom), and the card was stretched to it, leaving a gap
+    /// between its cover and its labels.
     private func swap(to view: UIView, inset: CGFloat) {
         directionalLayoutMargins = NSDirectionalEdgeInsets(top: 0, leading: inset, bottom: 0, trailing: inset)
         if activeView === view {
             view.isHidden = false
             return
         }
-        activeView?.isHidden = true
+        activeView?.removeFromSuperview()
         if view.superview !== self {
             view.translatesAutoresizingMaskIntoConstraints = false
             addManaged(view)
@@ -257,7 +262,7 @@ final class MediaContentView: UIView {
 
     private func hideAll() {
         player?.tearDown()
-        [grid, player, poll, card].compactMap { $0 }.forEach { $0.isHidden = true }
+        [grid, player, poll, card].compactMap { $0 }.forEach { $0.removeFromSuperview() }
         activeView = nil
     }
 

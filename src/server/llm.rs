@@ -3,34 +3,27 @@ use crate::gql::endpoints;
 use crate::gql::query_ids::Operation;
 use crate::model::Tweet;
 use crate::parse::timeline;
-use crate::parse::tweet as parse_tweet;
-use crate::tui::source;
 use unrager_model::AskPreset;
 
-pub async fn fetch_tweet(gql: &crate::gql::GqlClient, tweet_id: &str) -> Result<Tweet> {
-    let response = gql
-        .get(
-            Operation::TweetResultByRestId,
-            &endpoints::tweet_by_rest_id_variables(tweet_id),
-            &endpoints::tweet_read_features(),
-        )
-        .await?;
-    parse_tweet::parse_tweet_result_by_rest_id(&response)
-}
+/// Posts a brief reads; [`tweets_as_brief_context`] keeps no more.
+pub const BRIEF_POSTS: usize = 200;
+/// Pages a brief fetches at most, one throttled X request each, all before
+/// the first token.
+pub const BRIEF_PAGES: u32 = 5;
 
+/// An account's recent posts for a brief: pages of `UserTweets` until
+/// [`BRIEF_POSTS`] are in hand, the timeline ends, or [`BRIEF_PAGES`] pages.
 pub async fn fetch_tweets_for_brief(
     gql: &crate::gql::GqlClient,
-    handle: &str,
-    max_pages: u32,
+    user_id: &str,
 ) -> Result<Vec<Tweet>> {
-    let user_id = source::resolve_user_id(gql, handle).await?;
     let mut all = Vec::new();
     let mut cursor: Option<String> = None;
-    for _ in 0..max_pages {
+    for _ in 0..BRIEF_PAGES {
         let response = gql
             .get(
                 Operation::UserTweets,
-                &endpoints::user_tweets_variables(&user_id, 40, cursor.as_deref()),
+                &endpoints::user_tweets_variables(user_id, 40, cursor.as_deref()),
                 &endpoints::user_tweets_features(),
             )
             .await?;
@@ -46,6 +39,9 @@ pub async fn fetch_tweets_for_brief(
             break;
         }
         all.extend(page.tweets);
+        if all.len() >= BRIEF_POSTS {
+            break;
+        }
         match page.next_cursor {
             Some(c) => cursor = Some(c),
             None => break,
@@ -88,7 +84,7 @@ pub fn tweet_as_prompt_text(t: &Tweet) -> String {
 
 pub fn tweets_as_brief_context(tweets: &[Tweet]) -> String {
     let mut out = String::new();
-    for t in tweets.iter().take(200) {
+    for t in tweets.iter().take(BRIEF_POSTS) {
         out.push_str("- ");
         let snippet: String = t.text.chars().take(280).collect();
         out.push_str(&snippet.replace('\n', " "));

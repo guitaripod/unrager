@@ -1,7 +1,6 @@
 use crate::gql::endpoints;
 use crate::gql::query_ids::Operation;
 use crate::parse::timeline;
-use crate::parse::user as parse_user;
 use crate::server::error::ApiError;
 use crate::server::state::AppState;
 use crate::tui::focus;
@@ -26,20 +25,7 @@ pub async fn profile(
     if screen.is_empty() {
         return Err(ApiError::bad_request("empty handle"));
     }
-    let user_response = state
-        .gql
-        .get(
-            Operation::UserByScreenName,
-            &endpoints::user_by_screen_name_variables(screen),
-            &endpoints::user_by_screen_name_features(),
-        )
-        .await?;
-    let user_node = user_response
-        .pointer("/data/user/result")
-        .or_else(|| user_response.pointer("/data/user_v2/result"))
-        .ok_or_else(|| ApiError::bad_request("user not found"))?;
-    let user = parse_user::parse_user_result(user_node)
-        .ok_or_else(|| ApiError::bad_request("user response shape unexpected"))?;
+    let user = state.user(screen).await?;
 
     let op = if q.include_replies {
         Operation::UserTweetsAndReplies
@@ -62,6 +48,7 @@ pub async fn profile(
         ],
     )?;
     let page = timeline::walk(instructions);
+    state.remember(&page.tweets);
 
     Ok(Json(ProfileView {
         user,

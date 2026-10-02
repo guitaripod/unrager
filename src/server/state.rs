@@ -1,16 +1,22 @@
 use crate::auth::chromium;
 use crate::config::{self, FeedConfig};
-use crate::error::Result;
+use crate::error::{Error, Result};
+use crate::gql::endpoints;
+use crate::gql::query_ids::Operation;
 use crate::gql::{GqlClient, QueryIdStore};
-use crate::model::Tweet;
+use crate::model::{Tweet, User};
+use crate::parse::tweet as parse_tweet;
+use crate::parse::user as parse_user;
 use crate::store::about::{self, AboutFetcher, AboutStore};
 use crate::store::feed::FeedStore;
 use crate::store::ingest::Activity;
 use crate::tui::filter::{Classifier, FilterCache, FilterConfig};
 use crate::tui::seen::SeenStore;
+use serde_json::Value;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::{Arc, PoisonError};
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use unrager_model::SessionState;
 
@@ -54,6 +60,11 @@ pub struct AppState {
     /// them (its filter verdict, ask, translate) is answered without another
     /// throttled GraphQL round trip to X.
     pub recent_tweets: std::sync::Mutex<lru::LruCache<String, Tweet>>,
+    /// Lowercased handle → (numeric id, when it was looked up).
+    user_ids: std::sync::Mutex<lru::LruCache<String, (String, Instant)>>,
+    /// The signed-in account's (id, handle), so Mentions doesn't ask X who
+    /// the user is on every load.
+    viewer: std::sync::Mutex<Option<(String, String)>>,
     pub feed_cfg: FeedConfig,
     pub feed_db_path: PathBuf,
     pub lock_path: PathBuf,
@@ -123,6 +134,8 @@ impl AppState {
             about_fetcher,
             followers_op_dead: std::sync::atomic::AtomicBool::new(false),
             recent_tweets: std::sync::Mutex::new(lru::LruCache::new(RECENT_TWEETS)),
+            user_ids: std::sync::Mutex::new(lru::LruCache::new(USER_IDS)),
+            viewer: std::sync::Mutex::new(None),
             feed_cfg: app_config.feed.clone(),
             feed_db_path,
             lock_path: cache_dir.join("server.lock"),
@@ -184,10 +197,162 @@ impl AppState {
         let stored = self.feed.lock().await.tweet(id);
         let tweet = match stored {
             Some(tweet) => tweet,
-            None => crate::server::llm::fetch_tweet(&self.gql, id).await?,
+            None => fetch_tweet(&self.gql, id).await?,
         };
         self.remember([&tweet]);
         Ok(tweet)
+    }
+
+    /// An account by handle, fresh from X, remembering its id for
+    /// [`user_id`](Self::user_id).
+    pub async fn user(&self, handle: &str) -> Result<User> {
+        let response = self
+            .gql
+            .get(
+                Operation::UserByScreenName,
+                &endpoints::user_by_screen_name_variables(handle),
+                &endpoints::user_by_screen_name_features(),
+            )
+            .await?;
+        let user = user_from_response(&response, handle)?;
+        self.user_ids
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .put(handle_key(handle), (user.rest_id.clone(), Instant::now()));
+        Ok(user)
+    }
+
+    /// An account's numeric id by handle. Handles rarely change hands, so a
+    /// profile's every page and a brief don't each cost a lookup on X first.
+    pub async fn user_id(&self, handle: &str) -> Result<String> {
+        let cached = self
+            .user_ids
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&handle_key(handle))
+            .filter(|(_, at)| at.elapsed() < USER_ID_TTL)
+            .map(|(id, _)| id.clone());
+        match cached {
+            Some(id) => Ok(id),
+            None => Ok(self.user(handle).await?.rest_id),
+        }
+    }
+
+    /// The signed-in account's handle, asked of X once per session.
+    pub async fn viewer_handle(&self) -> Result<String> {
+        let me = self.gql.self_user_id();
+        let cached = self
+            .viewer
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some((id, handle)) = cached
+            && me.as_ref() == Some(&id)
+        {
+            return Ok(handle);
+        }
+        let handle = crate::cli::common::current_handle(&self.gql).await?;
+        if let Some(id) = me {
+            *self.viewer.lock().unwrap_or_else(PoisonError::into_inner) =
+                Some((id, handle.clone()));
+        }
+        Ok(handle)
+    }
+}
+
+/// How long a handle's id is trusted before it's looked up again, in case
+/// the account was renamed and the handle taken by someone else.
+const USER_ID_TTL: Duration = Duration::from_secs(6 * 60 * 60);
+const USER_IDS: NonZeroUsize = NonZeroUsize::new(512).unwrap();
+
+fn handle_key(handle: &str) -> String {
+    handle.trim_start_matches('@').to_ascii_lowercase()
+}
+
+/// A post by id from X, telling a deleted or withheld post apart from a
+/// failed request.
+pub async fn fetch_tweet(gql: &GqlClient, id: &str) -> Result<Tweet> {
+    let response = gql
+        .get(
+            Operation::TweetResultByRestId,
+            &endpoints::tweet_by_rest_id_variables(id),
+            &endpoints::tweet_read_features(),
+        )
+        .await?;
+    if let Some(gone) = tweet_unavailability(&response) {
+        return Err(gone);
+    }
+    parse_tweet::parse_tweet_result_by_rest_id(&response)
+}
+
+/// Why X won't show a post, read from a `TweetResultByRestId` answer: no
+/// result at all (deleted, or never existed), a tombstone, or
+/// `TweetUnavailable` with its reason. `None` for a post X does show.
+fn tweet_unavailability(response: &Value) -> Option<Error> {
+    let wrapper = response.pointer("/data/tweetResult")?;
+    let Some(result) = wrapper.get("result") else {
+        return Some(Error::NotFound("post not found or deleted".into()));
+    };
+    match result.get("__typename").and_then(Value::as_str) {
+        Some("TweetTombstone") => {
+            let text = result
+                .pointer("/tombstone/text/text")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            Some(Error::Unavailable {
+                reason: unavailable_reason(text, "deleted").into(),
+            })
+        }
+        Some("TweetUnavailable") => {
+            let reason = result.get("reason").and_then(Value::as_str).unwrap_or("");
+            Some(Error::Unavailable {
+                reason: unavailable_reason(reason, "unavailable").into(),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// An account from a `UserByScreenName` answer: no result means no such
+/// account (or one deactivated or renamed), `UserUnavailable` one X
+/// withholds, with its reason.
+fn user_from_response(response: &Value, handle: &str) -> Result<User> {
+    let Some(node) = response
+        .pointer("/data/user/result")
+        .or_else(|| response.pointer("/data/user_v2/result"))
+    else {
+        return Err(Error::NotFound(format!("no account @{handle}")));
+    };
+    if node.get("__typename").and_then(Value::as_str) == Some("UserUnavailable") {
+        let said = [node.get("reason"), node.get("message")]
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(" ");
+        return Err(Error::Unavailable {
+            reason: unavailable_reason(&said, "unavailable").into(),
+        });
+    }
+    parse_user::parse_user_result(node)
+        .ok_or_else(|| Error::GraphqlShape(format!("@{handle} missing required user fields")))
+}
+
+/// Maps X's own wording (a reason code or a tombstone sentence) onto the
+/// small set clients understand: `suspended`, `protected`, `deleted` or
+/// `unavailable`; `fallback` when the wording names none of them.
+fn unavailable_reason(said: &str, fallback: &'static str) -> &'static str {
+    let lowered = said.to_ascii_lowercase();
+    if lowered.contains("suspend") {
+        "suspended"
+    } else if lowered.contains("protect") || lowered.contains("limits who can view") {
+        "protected"
+    } else if lowered.contains("delet") {
+        "deleted"
+    } else if lowered.is_empty() {
+        fallback
+    } else {
+        "unavailable"
     }
 }
 
@@ -202,4 +367,105 @@ pub fn save_session_state(path: &std::path::Path, state: &SessionState) -> std::
     }
     let txt = serde_json::to_string_pretty(state).unwrap_or_else(|_| "{}".into());
     std::fs::write(path, txt)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn reason(error: Option<Error>) -> Option<String> {
+        match error {
+            Some(Error::Unavailable { reason }) => Some(reason),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_missing_account_is_not_found() {
+        let response = json!({"data": {"user": {}}});
+        assert!(matches!(
+            user_from_response(&response, "nobody"),
+            Err(Error::NotFound(_))
+        ));
+        assert!(matches!(
+            user_from_response(&json!({"data": {}}), "nobody"),
+            Err(Error::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn a_withheld_account_says_why() {
+        let suspended = json!({"data": {"user": {"result": {
+            "__typename": "UserUnavailable",
+            "reason": "Suspended",
+            "message": "User is suspended"
+        }}}});
+        assert_eq!(
+            reason(user_from_response(&suspended, "gone").err()).as_deref(),
+            Some("suspended")
+        );
+        let unexplained = json!({"data": {"user": {"result": {"__typename": "UserUnavailable"}}}});
+        assert_eq!(
+            reason(user_from_response(&unexplained, "gone").err()).as_deref(),
+            Some("unavailable")
+        );
+    }
+
+    #[test]
+    fn a_withheld_post_says_why() {
+        let deleted = json!({"data": {"tweetResult": {"result": {
+            "__typename": "TweetTombstone",
+            "tombstone": {"text": {"text": "This Post was deleted by the Post author. Learn more"}}
+        }}}});
+        assert_eq!(
+            reason(tweet_unavailability(&deleted)).as_deref(),
+            Some("deleted")
+        );
+        let protected = json!({"data": {"tweetResult": {"result": {
+            "__typename": "TweetTombstone",
+            "tombstone": {"text": {"text": "You're unable to view this Post because this account owner limits who can view their Posts."}}
+        }}}});
+        assert_eq!(
+            reason(tweet_unavailability(&protected)).as_deref(),
+            Some("protected")
+        );
+        let suspended = json!({"data": {"tweetResult": {"result": {
+            "__typename": "TweetUnavailable",
+            "reason": "Suspended"
+        }}}});
+        assert_eq!(
+            reason(tweet_unavailability(&suspended)).as_deref(),
+            Some("suspended")
+        );
+        let odd = json!({"data": {"tweetResult": {"result": {
+            "__typename": "TweetUnavailable",
+            "reason": "NsfwLoggedOut"
+        }}}});
+        assert_eq!(
+            reason(tweet_unavailability(&odd)).as_deref(),
+            Some("unavailable")
+        );
+    }
+
+    #[test]
+    fn a_vanished_post_is_not_found_and_a_shown_one_passes() {
+        let vanished = json!({"data": {"tweetResult": {}}});
+        assert!(matches!(
+            tweet_unavailability(&vanished),
+            Some(Error::NotFound(_))
+        ));
+        let shown = json!({"data": {"tweetResult": {"result": {"__typename": "Tweet"}}}});
+        assert!(tweet_unavailability(&shown).is_none());
+        let wrapped = json!({"data": {"tweetResult": {"result": {
+            "__typename": "TweetWithVisibilityResults",
+            "tweet": {}
+        }}}});
+        assert!(tweet_unavailability(&wrapped).is_none());
+    }
+
+    #[test]
+    fn handles_are_cached_case_insensitively() {
+        assert_eq!(handle_key("@MiraKoski"), handle_key("mirakoski"));
+    }
 }

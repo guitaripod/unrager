@@ -3,7 +3,6 @@ use crate::gql::query_ids::Operation;
 use crate::parse::user as parse_user;
 use crate::server::error::ApiError;
 use crate::server::state::AppState;
-use crate::tui::source;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use serde::Deserialize;
@@ -136,5 +135,5 @@ async fn resolve_rest_id(
     if trimmed.chars().all(|c| c.is_ascii_digit()) {
         return Ok(trimmed.to_string());
     }
-    Ok(source::resolve_user_id(&state.gql, trimmed).await?)
+    Ok(state.user_id(trimmed).await?)
 }

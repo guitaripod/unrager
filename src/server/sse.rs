@@ -224,7 +224,8 @@ pub async fn brief_stream(
 ) -> std::result::Result<Sse<impl Stream<Item = std::result::Result<Event, Infallible>>>, ApiError>
 {
     let handle = q.handle.trim_start_matches('@').to_string();
-    let tweets = llm::fetch_tweets_for_brief(&state.gql, &handle, 8).await?;
+    let user_id = state.user_id(&handle).await?;
+    let tweets = llm::fetch_tweets_for_brief(&state.gql, &user_id).await?;
     let cfg = state.filter_config.lock().await.clone();
     let user = format!(
         "Handle: @{handle}\n\nTweets:\n{}",

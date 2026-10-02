@@ -1,11 +1,9 @@
-use crate::cli::common;
 use crate::gql::endpoints;
 use crate::gql::query_ids::Operation;
 use crate::parse::timeline;
 use crate::server::error::ApiError;
 use crate::server::state::AppState;
 use crate::store::feed::FeedVariant;
-use crate::tui::source;
 use crate::tui::whisper;
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -159,7 +157,7 @@ async fn user_timeline(
         return Err(ApiError::bad_request("empty handle"));
     }
     let count = q.count.unwrap_or(DEFAULT_COUNT);
-    let user_id = source::resolve_user_id(&state.gql, screen).await?;
+    let user_id = state.user_id(screen).await?;
     let op = if include_replies {
         Operation::UserTweetsAndReplies
     } else {
@@ -282,7 +280,7 @@ pub async fn mentions(
     State(state): State<Arc<AppState>>,
     Query(q): Query<PageQuery>,
 ) -> std::result::Result<Json<TimelinePage>, ApiError> {
-    let handle = common::current_handle(&state.gql).await?;
+    let handle = state.viewer_handle().await?;
     let query = format!("@{handle} -from:{handle}");
     let count = q.count.unwrap_or(DEFAULT_COUNT);
     let response = state

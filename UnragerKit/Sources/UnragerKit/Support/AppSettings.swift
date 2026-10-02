@@ -87,6 +87,19 @@ public enum AppSettings {
     /// live in the view controllers.
     public static let fontScaleDidChange = Notification.Name("unrager.fontScaleDidChange")
 
+    /// Posted by Settings after the user changes what rows show (images on or
+    /// off, the post stats mode) so rows already on screen configure again.
+    public static let displayDidChange = Notification.Name("unrager.displayDidChange")
+
+    /// Posted by Settings after the server address changes, so every screen
+    /// that holds server state (Home, notifications, the saved timelines, the
+    /// filter setting) starts over against the new server.
+    public static let serverURLDidChange = Notification.Name("unrager.serverURLDidChange")
+
+    /// Posted by the filter editor after the rules or the strictness are saved,
+    /// so Home judges its posts again under them.
+    public static let filterRulesDidChange = Notification.Name("unrager.filterRulesDidChange")
+
     /// One-time cleanup: earlier builds auto-applied the server's (dark) TUI
     /// theme to the app appearance, leaving a non-chosen `.dark` persisted.
     /// Clear that once so the app honors the system default until the user

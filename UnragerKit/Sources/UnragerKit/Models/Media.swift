@@ -67,7 +67,9 @@ extension MediaKind: Codable {
             case "photo": self = .photo
             case "video": self = .video
             case "animated_gif": self = .animatedGif
-            default: self = .photo
+            default:
+                throw DecodingError.dataCorruptedError(
+                    in: single, debugDescription: "Unknown MediaKind: \(tag)")
             }
             return
         }

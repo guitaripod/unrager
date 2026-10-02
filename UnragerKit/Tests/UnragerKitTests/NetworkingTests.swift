@@ -19,6 +19,14 @@ struct TransportConfigurationTests {
         #expect(transport.session !== transport.streamSession)
     }
 
+    @Test("The shared transport is one instance with both sessions configured")
+    func sharedTransport() {
+        let shared = URLSessionTransport.shared
+        #expect(shared === URLSessionTransport.shared)
+        #expect(shared.session.configuration.timeoutIntervalForResource == 60)
+        #expect(shared.streamSession.configuration.timeoutIntervalForResource >= 3_600)
+    }
+
     @Test("An injected session backs both paths")
     func injectedSessionIsShared() {
         let session = URLSession(configuration: .ephemeral)
@@ -93,6 +101,19 @@ struct APIErrorMessageTests {
         #expect(refused.contains("Could not connect"))
         #expect(offline != refused)
         #expect(APIError.network("").errorDescription?.contains("()") == false)
+    }
+}
+
+@Suite("Cancellation")
+struct CancellationTests {
+    @Test("Every form of cancellation reads as one, and nothing else does")
+    func recognisesCancellation() {
+        #expect(CancellationError().isCancellation)
+        #expect(APIError.cancelled.isCancellation)
+        #expect(URLError(.cancelled).isCancellation)
+        #expect(!APIError.timeout.isCancellation)
+        #expect(!URLError(.timedOut).isCancellation)
+        #expect(!APIError.network("x").isCancellation)
     }
 }
 

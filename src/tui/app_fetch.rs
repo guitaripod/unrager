@@ -144,6 +144,7 @@ impl App {
             next_cursor: page.next_cursor,
             top_cursor: None,
             profile_user: None,
+            pinned: None,
         };
         tracing::info!(
             ?kind,
@@ -1255,9 +1256,7 @@ pub fn filter_incoming_page(
 ) -> usize {
     if matches!(feed_mode, FeedMode::Originals) && matches!(kind, SourceKind::Home { .. }) {
         page.tweets.retain(|t| {
-            t.in_reply_to_tweet_id.is_none()
-                && t.quoted_tweet.is_none()
-                && !t.text.starts_with("RT @")
+            t.in_reply_to_tweet_id.is_none() && t.quoted_tweet.is_none() && !t.is_repost()
         });
     }
     let mut hidden = 0;

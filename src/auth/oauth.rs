@@ -22,6 +22,7 @@ const TOKEN_URL: &str = "https://api.x.com/2/oauth2/token";
 const SCOPES: &str = "tweet.read tweet.write users.read media.write offline.access";
 const CALLBACK_TIMEOUT: StdDuration = StdDuration::from_secs(300);
 const REFRESH_MARGIN: Duration = Duration::seconds(60);
+const REFRESH_TIMEOUT: StdDuration = StdDuration::from_secs(20);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tokens {
@@ -94,6 +95,48 @@ pub async fn load_or_authorize() -> Result<Tokens> {
             Ok(fresh)
         }
     }
+}
+
+/// The saved token, refreshed when it expired, without ever running the
+/// browser authorization: for `unrager serve`, where a browser opened on the
+/// server would wait minutes for a person who is holding a phone elsewhere.
+pub async fn load_or_refresh() -> Result<Tokens> {
+    load_or_refresh_at(&tokens_path()?).await
+}
+
+async fn load_or_refresh_at(path: &std::path::Path) -> Result<Tokens> {
+    let tokens = match load(path) {
+        Ok(Some(tokens)) => tokens,
+        Ok(None) => return Err(not_authorized("no saved X authorization")),
+        Err(e) => {
+            tracing::warn!("token cache unreadable: {e}");
+            return Err(not_authorized("the saved X authorization is unreadable"));
+        }
+    };
+    if !tokens.is_expired() {
+        return Ok(tokens);
+    }
+    let Some(refresh) = tokens.refresh_token.as_deref() else {
+        return Err(not_authorized("the saved X authorization expired"));
+    };
+    match refresh_tokens(refresh).await {
+        Ok(fresh) => {
+            save(path, &fresh)?;
+            Ok(fresh)
+        }
+        Err(e) => {
+            tracing::warn!("token refresh failed: {e}");
+            Err(not_authorized(
+                "the saved X authorization expired and could not be refreshed",
+            ))
+        }
+    }
+}
+
+fn not_authorized(what: &str) -> Error {
+    Error::PostingNotAuthorized(format!(
+        "{what}; run `unrager auth login` in a terminal on the server to authorize posting"
+    ))
 }
 
 pub fn tokens_path() -> Result<PathBuf> {
@@ -293,7 +336,10 @@ async fn exchange_code(code: &str, verifier: &str, client_id: &str) -> Result<To
 
 async fn refresh_tokens(refresh_token: &str) -> Result<Tokens> {
     let client_id = client_id()?;
-    let http = reqwest::Client::new();
+    let http = reqwest::Client::builder()
+        .connect_timeout(StdDuration::from_secs(10))
+        .timeout(REFRESH_TIMEOUT)
+        .build()?;
     let params = [
         ("grant_type", "refresh_token"),
         ("refresh_token", refresh_token),
@@ -395,6 +441,47 @@ mod tests {
             "expected a Config error that mentions the env var name, got {err:?}"
         );
         unsafe { std::env::remove_var(CLIENT_ID_ENV) };
+    }
+
+    fn saved(dir: &tempfile::TempDir, expires_in: i64, refresh: Option<&str>) -> PathBuf {
+        let path = dir.path().join("tokens.json");
+        let tokens = Tokens {
+            access_token: "a".into(),
+            refresh_token: refresh.map(str::to_string),
+            expires_at: Utc::now() + Duration::seconds(expires_in),
+            scope: None,
+        };
+        save(&path, &tokens).unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn the_server_uses_a_live_token_as_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = saved(&dir, 600, None);
+        let tokens = load_or_refresh_at(&path).await.unwrap();
+        assert_eq!(tokens.access_token, "a");
+    }
+
+    #[tokio::test]
+    async fn the_server_never_authorizes_without_a_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let quick = std::time::Duration::from_secs(1);
+        let missing =
+            tokio::time::timeout(quick, load_or_refresh_at(&dir.path().join("tokens.json")))
+                .await
+                .expect("no browser flow to wait on");
+        assert!(matches!(missing, Err(Error::PostingNotAuthorized(_))));
+
+        let path = saved(&dir, -600, None);
+        let expired = tokio::time::timeout(quick, load_or_refresh_at(&path))
+            .await
+            .expect("no browser flow to wait on");
+        assert!(matches!(expired, Err(Error::PostingNotAuthorized(_))));
+
+        std::fs::write(&path, b"not json").unwrap();
+        let unreadable = load_or_refresh_at(&path).await;
+        assert!(matches!(unreadable, Err(Error::PostingNotAuthorized(_))));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use crate::server::error::ApiError;
 use crate::server::llm;
 use crate::server::routes::classify::verdict_event;
+use crate::server::routes::filter::is_post_id;
 use crate::server::state::AppState;
 use crate::tui::ask;
 use crate::tui::filter::{
@@ -63,16 +64,34 @@ async fn verdict_for(state: &AppState, rubric: &str, id: String) -> Option<Filte
     Some(verdict_event(id, verdict))
 }
 
-pub async fn filter_stream(
-    State(state): State<Arc<AppState>>,
-    Query(q): Query<FilterQuery>,
-) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
-    let ids: Vec<String> = q
-        .ids
+/// Posts one filter stream judges at most. Each one X hasn't sent this
+/// server costs a lookup on X's read budget, which Home and threads share.
+const FILTER_STREAM_MAX_IDS: usize = 100;
+
+/// The comma-separated post ids of a filter stream, or why they're refused.
+fn filter_ids(raw: &str) -> std::result::Result<Vec<String>, ApiError> {
+    let ids: Vec<String> = raw
         .split(',')
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
+    if ids.len() > FILTER_STREAM_MAX_IDS {
+        return Err(ApiError::bad_request(format!(
+            "at most {FILTER_STREAM_MAX_IDS} ids per stream"
+        )));
+    }
+    if let Some(bad) = ids.iter().find(|id| !is_post_id(id)) {
+        return Err(ApiError::bad_request(format!("not a post id: {bad}")));
+    }
+    Ok(ids)
+}
+
+pub async fn filter_stream(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<FilterQuery>,
+) -> std::result::Result<Sse<impl Stream<Item = std::result::Result<Event, Infallible>>>, ApiError>
+{
+    let ids = filter_ids(&q.ids)?;
 
     let (tx, mut rx) = mpsc::channel::<FilterVerdictEvent>(64);
 
@@ -101,7 +120,7 @@ pub async fn filter_stream(
         }
         yield Ok(Event::default().data("[DONE]"));
     };
-    Sse::new(s).keep_alive(KeepAlive::new())
+    Ok(Sse::new(s).keep_alive(KeepAlive::new()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -224,7 +243,8 @@ pub async fn brief_stream(
 ) -> std::result::Result<Sse<impl Stream<Item = std::result::Result<Event, Infallible>>>, ApiError>
 {
     let handle = q.handle.trim_start_matches('@').to_string();
-    let tweets = llm::fetch_tweets_for_brief(&state.gql, &handle, 8).await?;
+    let user_id = state.user_id(&handle).await?;
+    let tweets = llm::fetch_tweets_for_brief(&state.gql, &user_id).await?;
     let cfg = state.filter_config.lock().await.clone();
     let user = format!(
         "Handle: @{handle}\n\nTweets:\n{}",
@@ -289,16 +309,18 @@ fn stream_body(
     let (failure_tx, failure_rx) = tokio::sync::oneshot::channel::<String>();
 
     tokio::spawn(async move {
-        let outcome = llm
-            .stream_chat(
-                req,
-                label,
-                move |token| {
-                    let _ = tx.send(token.to_string());
-                },
-                |_| {},
-            )
-            .await;
+        let client = tx.clone();
+        let generation = llm.stream_chat(
+            req,
+            label,
+            move |token| {
+                let _ = tx.send(token.to_string());
+            },
+            |_| {},
+        );
+        let Some(outcome) = unless_client_left(generation, &client, label).await else {
+            return;
+        };
         if let Err(message) = outcome {
             tracing::warn!(label, "llm stream failed: {message}");
             let _ = failure_tx.send(message);
@@ -317,6 +339,25 @@ fn stream_body(
         yield Ok(Event::default().data("[DONE]"));
     };
     Sse::new(s).keep_alive(KeepAlive::new())
+}
+
+/// Runs a generation until it finishes or the SSE client goes away (Stop, or
+/// leaving the screen drops the response body and with it the token
+/// receiver). Dropping the generation drops its HTTP response, which is what
+/// makes Ollama or llama.cpp stop generating, so the GPU is free for the
+/// filter again instead of finishing an answer nobody reads.
+async fn unless_client_left<T>(
+    generation: impl Future<Output = T>,
+    client: &mpsc::UnboundedSender<String>,
+    label: &'static str,
+) -> Option<T> {
+    tokio::select! {
+        outcome = generation => Some(outcome),
+        () = client.closed() => {
+            tracing::info!(label, "client left; stream aborted");
+            None
+        }
+    }
 }
 
 /// Lossless channel between the sync `stream_chat` token callback and the SSE
@@ -370,6 +411,41 @@ mod tests {
         assert_eq!(received.len(), total);
         assert_eq!(received.first().map(String::as_str), Some("t0"));
         assert_eq!(received.last().map(String::as_str), Some("t4095"));
+    }
+
+    #[test]
+    fn filter_ids_are_bounded_and_numeric() {
+        assert_eq!(
+            filter_ids(" 1900000000000000001, ,2 ").unwrap(),
+            ["1900000000000000001", "2"]
+        );
+        assert!(filter_ids("").unwrap().is_empty());
+        let hundred = vec!["1"; 100].join(",");
+        assert_eq!(filter_ids(&hundred).unwrap().len(), 100);
+        let too_many = vec!["1"; 101].join(",");
+        assert_eq!(filter_ids(&too_many).unwrap_err().kind, "bad_request");
+        assert_eq!(filter_ids("1,abc").unwrap_err().kind, "bad_request");
+        assert!(filter_ids("1,-5").is_err());
+    }
+
+    #[tokio::test]
+    async fn generation_stops_when_the_client_leaves() {
+        let (tx, rx) = token_channel();
+        let generation = futures::future::pending::<()>();
+        let watched = tokio::spawn(async move { unless_client_left(generation, &tx, "ask").await });
+        drop(rx);
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(1), watched)
+            .await
+            .expect("a dropped client ends the generation at once")
+            .unwrap();
+        assert!(outcome.is_none());
+    }
+
+    #[tokio::test]
+    async fn generation_finishes_while_the_client_stays() {
+        let (tx, _rx) = token_channel();
+        let outcome = unless_client_left(async { 7 }, &tx, "ask").await;
+        assert_eq!(outcome, Some(7));
     }
 
     #[test]

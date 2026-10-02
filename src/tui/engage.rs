@@ -97,6 +97,13 @@ mod tests {
                 avatar_url: None,
                 followed_by_me: None,
                 banner_url: None,
+                description: None,
+                location: None,
+                website: None,
+                joined_at: None,
+                protected: false,
+                muting: None,
+                blocking: None,
             },
             created_at: Utc::now(),
             text: "test".into(),
@@ -116,6 +123,7 @@ mod tests {
             media: vec![],
             url: "https://x.com/alice/status/1".into(),
             urls: vec![],
+            retweeted_by: None,
         }
     }
 

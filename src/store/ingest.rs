@@ -357,6 +357,13 @@ mod tests {
                 avatar_url: None,
                 followed_by_me: None,
                 banner_url: None,
+                description: None,
+                location: None,
+                website: None,
+                joined_at: None,
+                protected: false,
+                muting: None,
+                blocking: None,
             },
             created_at: DateTime::from_timestamp(created_ts, 0).unwrap(),
             text: "hi".into(),
@@ -376,6 +383,7 @@ mod tests {
             media: Vec::new(),
             url: format!("https://x.com/a/status/{rest_id}"),
             urls: Vec::new(),
+            retweeted_by: None,
         }
     }
 

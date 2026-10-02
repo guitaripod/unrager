@@ -1,11 +1,9 @@
-use crate::cli::common;
 use crate::gql::endpoints;
 use crate::gql::query_ids::Operation;
 use crate::parse::timeline;
 use crate::server::error::ApiError;
 use crate::server::state::AppState;
 use crate::store::feed::FeedVariant;
-use crate::tui::source;
 use crate::tui::whisper;
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -22,6 +20,13 @@ pub struct PageQuery {
 }
 
 const DEFAULT_COUNT: u32 = 20;
+const MAX_COUNT: u32 = 100;
+
+/// A page size the client asked for, kept to 1..=100 so one request can't
+/// ask X for an outsized page.
+pub(crate) fn page_count(requested: Option<u32>, default: u32) -> u32 {
+    requested.unwrap_or(default).clamp(1, MAX_COUNT)
+}
 
 #[derive(Debug, Deserialize, Default)]
 pub struct HomeQuery {
@@ -40,7 +45,7 @@ pub async fn home(
     Query(q): Query<HomeQuery>,
 ) -> std::result::Result<Json<TimelinePage>, ApiError> {
     state.activity.touch();
-    let count = q.count.unwrap_or(DEFAULT_COUNT);
+    let count = page_count(q.count, DEFAULT_COUNT);
     let variant = FeedVariant::from_following(q.following);
     let cursor = q.cursor.as_deref().filter(|c| !c.is_empty());
 
@@ -62,6 +67,7 @@ pub async fn home(
             TimelinePage {
                 tweets: apply_mode(tweets, q.mode.as_deref()),
                 cursor: page.next_cursor,
+                pinned: None,
             }
         }
         None => home_live(&state, q.following, count, cursor, q.mode.as_deref()).await?,
@@ -98,6 +104,7 @@ async fn home_live(
     Ok(TimelinePage {
         tweets: apply_mode(page.tweets, mode),
         cursor: page.next_cursor,
+        pinned: None,
     })
 }
 
@@ -111,11 +118,7 @@ fn apply_mode(tweets: Vec<Tweet>, mode: Option<&str>) -> Vec<Tweet> {
 
 fn filter_originals(v: Vec<Tweet>) -> Vec<Tweet> {
     v.into_iter()
-        .filter(|t| {
-            t.in_reply_to_tweet_id.is_none()
-                && t.quoted_tweet.is_none()
-                && !t.text.starts_with("RT @")
-        })
+        .filter(|t| t.in_reply_to_tweet_id.is_none() && t.quoted_tweet.is_none() && !t.is_repost())
         .collect()
 }
 
@@ -158,8 +161,8 @@ async fn user_timeline(
     if screen.is_empty() {
         return Err(ApiError::bad_request("empty handle"));
     }
-    let count = q.count.unwrap_or(DEFAULT_COUNT);
-    let user_id = source::resolve_user_id(&state.gql, screen).await?;
+    let count = page_count(q.count, DEFAULT_COUNT);
+    let user_id = state.user_id(screen).await?;
     let op = if include_replies {
         Operation::UserTweetsAndReplies
     } else {
@@ -186,6 +189,7 @@ async fn user_timeline(
         TimelinePage {
             tweets: page.tweets,
             cursor: page.next_cursor,
+            pinned: page.pinned,
         },
     ))
 }
@@ -212,7 +216,7 @@ pub async fn search(
     if q.q.trim().is_empty() {
         return Err(ApiError::bad_request("empty query"));
     }
-    let count = q.count.unwrap_or(DEFAULT_COUNT);
+    let count = page_count(q.count, DEFAULT_COUNT);
     let product = normalize_product(&q.product);
     let response = state
         .gql
@@ -232,6 +236,7 @@ pub async fn search(
         TimelinePage {
             tweets: page.tweets,
             cursor: page.next_cursor,
+            pinned: None,
         },
     ))
 }
@@ -246,7 +251,7 @@ pub async fn search_people(
     if q.q.trim().is_empty() {
         return Err(ApiError::bad_request("empty query"));
     }
-    let count = q.count.unwrap_or(DEFAULT_COUNT);
+    let count = page_count(q.count, DEFAULT_COUNT);
     let response = state
         .gql
         .post(
@@ -282,9 +287,9 @@ pub async fn mentions(
     State(state): State<Arc<AppState>>,
     Query(q): Query<PageQuery>,
 ) -> std::result::Result<Json<TimelinePage>, ApiError> {
-    let handle = common::current_handle(&state.gql).await?;
+    let handle = state.viewer_handle().await?;
     let query = format!("@{handle} -from:{handle}");
-    let count = q.count.unwrap_or(DEFAULT_COUNT);
+    let count = page_count(q.count, DEFAULT_COUNT);
     let response = state
         .gql
         .post(
@@ -303,6 +308,7 @@ pub async fn mentions(
         TimelinePage {
             tweets: page.tweets,
             cursor: page.next_cursor,
+            pinned: None,
         },
     ))
 }
@@ -323,7 +329,7 @@ pub async fn bookmarks(
     State(state): State<Arc<AppState>>,
     Query(q): Query<BookmarkQuery>,
 ) -> std::result::Result<Json<TimelinePage>, ApiError> {
-    let count = q.count.unwrap_or(DEFAULT_COUNT);
+    let count = page_count(q.count, DEFAULT_COUNT);
     let query = q.q.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let (response, path) = match query {
         Some(search) => (
@@ -356,6 +362,7 @@ pub async fn bookmarks(
         TimelinePage {
             tweets: page.tweets,
             cursor: page.next_cursor,
+            pinned: None,
         },
     ))
 }
@@ -364,7 +371,7 @@ pub async fn notifications(
     State(state): State<Arc<AppState>>,
     Query(q): Query<PageQuery>,
 ) -> std::result::Result<Json<unrager_model::NotificationsPage>, ApiError> {
-    let count = q.count.unwrap_or(40);
+    let count = page_count(q.count, 40);
     let page = whisper::fetch_notifications(&state.gql, q.cursor.as_deref(), count).await?;
     let notifications: Vec<unrager_model::Notification> = page
         .notifications
@@ -403,4 +410,17 @@ pub async fn notifications(
 fn serve(state: &AppState, page: TimelinePage) -> Json<TimelinePage> {
     state.remember(&page.tweets);
     Json(page)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn page_sizes_stay_within_bounds() {
+        assert_eq!(page_count(None, DEFAULT_COUNT), DEFAULT_COUNT);
+        assert_eq!(page_count(Some(0), DEFAULT_COUNT), 1);
+        assert_eq!(page_count(Some(35), DEFAULT_COUNT), 35);
+        assert_eq!(page_count(Some(100_000), DEFAULT_COUNT), MAX_COUNT);
+    }
 }

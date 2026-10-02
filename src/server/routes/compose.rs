@@ -102,7 +102,7 @@ async fn do_compose(
         .map(|t| MediaFile::from_path(t.path()))
         .collect::<crate::error::Result<Vec<_>>>()?;
 
-    let api = ApiClient::new().await?;
+    let api = ApiClient::non_interactive().await?;
     let posted = api
         .post_composed(
             &text,

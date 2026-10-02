@@ -57,13 +57,13 @@ public struct XNotification: Decodable, Sendable, Hashable, Identifiable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
         type = try c.decode(String.self, forKey: .type)
-        actors = try c.decodeIfPresent([NotificationActor].self, forKey: .actors) ?? []
+        actors = try c.decodeLossy(NotificationActor.self, forKey: .actors)
         othersCount = try c.decodeIfPresent(Int.self, forKey: .othersCount)
         message = try c.decodeIfPresent(String.self, forKey: .message)
         targetTweetID = try c.decodeIfPresent(String.self, forKey: .targetTweetID)
         targetTweetSnippet = try c.decodeIfPresent(String.self, forKey: .targetTweetSnippet)
         targetTweetLikeCount = try c.decodeIfPresent(Int.self, forKey: .targetTweetLikeCount)
-        targetMedia = try c.decodeIfPresent([Media].self, forKey: .targetMedia) ?? []
+        targetMedia = try c.decodeLossy(Media.self, forKey: .targetMedia)
         timestamp = try c.decode(Date.self, forKey: .timestamp)
     }
 
@@ -91,4 +91,14 @@ public struct XNotification: Decodable, Sendable, Hashable, Identifiable {
 public struct NotificationsPage: Decodable, Sendable {
     public let notifications: [XNotification]
     public let cursor: String?
+
+    enum CodingKeys: String, CodingKey { case notifications, cursor }
+
+    /// A notification the client can't decode is skipped rather than failing
+    /// the page, which would blank the tab and stall the poller.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        notifications = try c.decodeLossy(XNotification.self, forKey: .notifications)
+        cursor = try c.decodeIfPresent(String.self, forKey: .cursor)
+    }
 }

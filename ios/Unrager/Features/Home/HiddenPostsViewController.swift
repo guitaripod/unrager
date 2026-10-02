@@ -40,6 +40,7 @@ final class HiddenPostsViewController: UIViewController {
         cell.accessories = [.customView(configuration: .init(
             customView: self.showButton(for: post), placement: .trailing(), maintainsFixedSize: true))]
         cell.accessibilityLabel = "Hidden: \(post.reason ?? "the filter"). @\(post.tweet.author.handle): \(post.tweet.text)"
+        cell.accessibilityHint = "Opens the post."
         cell.accessibilityCustomActions = [UIAccessibilityCustomAction(name: "Show this post") { [weak self] _ in
             self?.show(post)
             return true
@@ -53,6 +54,17 @@ final class HiddenPostsViewController: UIViewController {
 
         var config = UICollectionLayoutListConfiguration(appearance: .plain)
         config.backgroundColor = .clear
+        config.leadingSwipeActionsConfigurationProvider = { [weak self] indexPath in
+            guard let self, let id = self.dataSource.itemIdentifier(for: indexPath),
+                  let post = self.postsByID[id] else { return nil }
+            let action = UIContextualAction(style: .normal, title: "Open") { _, _, done in
+                self.open(post)
+                done(true)
+            }
+            action.image = DesignSystem.icon("text.bubble")
+            action.backgroundColor = DesignSystem.Color.secondaryLabel
+            return UISwipeActionsConfiguration(actions: [action])
+        }
         config.trailingSwipeActionsConfigurationProvider = { [weak self] indexPath in
             guard let self, let id = self.dataSource.itemIdentifier(for: indexPath),
                   let post = self.postsByID[id] else { return nil }
@@ -66,6 +78,7 @@ final class HiddenPostsViewController: UIViewController {
         collectionView = UICollectionView(frame: view.bounds,
                                           collectionViewLayout: UICollectionViewCompositionalLayout.list(using: config))
         collectionView.backgroundColor = .clear
+        collectionView.delegate = self
         view.addManaged(collectionView)
         collectionView.pinEdges(to: view)
 
@@ -117,6 +130,12 @@ final class HiddenPostsViewController: UIViewController {
         return button
     }
 
+    /// Opens the whole post, so one cut off at five lines, or hidden for its
+    /// photo or quote, can be read before deciding to show it.
+    private func open(_ post: HiddenPost) {
+        navigationController?.pushViewController(ThreadViewController(tweetID: post.id), animated: true)
+    }
+
     private func show(_ post: HiddenPost) {
         guard showing.insert(post.id).inserted else { return }
         Haptics.selection()
@@ -130,5 +149,13 @@ final class HiddenPostsViewController: UIViewController {
                 present(AlertFactory.error(error, title: "Couldn't show the post"), animated: true)
             }
         }
+    }
+}
+
+extension HiddenPostsViewController: UICollectionViewDelegate {
+    func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+        collectionView.deselectItem(at: indexPath, animated: true)
+        guard let id = dataSource.itemIdentifier(for: indexPath), let post = postsByID[id] else { return }
+        open(post)
     }
 }

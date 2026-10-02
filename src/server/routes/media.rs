@@ -5,7 +5,7 @@ use axum::Json;
 use axum::body::{Body, Bytes};
 use axum::extract::{FromRequest, Multipart, Path, Request, State};
 use axum::http::{StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use std::io::Write;
 use std::sync::Arc;
 use unrager_model::{MediaKind, MediaUploadResult};
@@ -50,11 +50,13 @@ pub async fn proxy(
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     if !upstream.status().is_success() {
-        return Ok((
-            StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
-            "upstream error",
-        )
-            .into_response());
+        let status =
+            StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+        return Err(ApiError::new(
+            status,
+            "upstream",
+            format!("X's media server answered {status}"),
+        ));
     }
 
     let content_type = upstream
@@ -160,7 +162,7 @@ fn oauth_configured() -> bool {
 }
 
 async fn upload_v2(file: &MediaFile) -> crate::error::Result<String> {
-    let api = ApiClient::new().await?;
+    let api = ApiClient::non_interactive().await?;
     api.upload_media(file).await
 }
 

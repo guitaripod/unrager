@@ -391,7 +391,7 @@ fn classify_media_error(status: u16, body: &str) -> Error {
             || body.contains("credits to fulfill")
             || body.contains("\"type\":\"https://api.twitter.com/2/problems/credits\""))
     {
-        return Error::Config(format!(
+        return Error::CreditsDepleted(format!(
             "{status}: credits depleted. Media uploads ARE billed on pay-per-use; \
              top up at console.x.com > Billing > Credits. Raw: {body}"
         ));
@@ -407,7 +407,7 @@ fn classify_media_error(status: u16, body: &str) -> Error {
         ));
     }
     if status == 401 {
-        return Error::Config(format!(
+        return Error::PostingNotAuthorized(format!(
             "401: access token rejected during media upload. \
              Delete ~/.config/unrager/tokens.json and re-authorize. Raw: {body}"
         ));

@@ -16,11 +16,17 @@ public final class TimelineCache: Sendable {
     /// without bloating the on-disk snapshot.
     private static let entryCap = 40
 
-    /// Entries older than this are still left on disk but not painted as a seed
-    /// — very stale data shouldn't flash before the fresh fetch lands.
+    /// Entries older than this are not painted as a seed (very stale data
+    /// shouldn't flash before the fresh fetch lands) and are deleted.
     public static let maxSeedAge: TimeInterval = 24 * 60 * 60
 
+    /// Saved timelines kept on disk, the most recently written first. Every
+    /// profile visited and every search gets its own file, so without a cap
+    /// the directory only grows.
+    static let defaultMaxFiles = 50
+
     private let directory: URL?
+    private let maxFiles: Int
     private let queue = DispatchQueue(label: "cc.midgar.unrager.timelinecache", qos: .utility)
 
     private struct Entry: Codable {
@@ -28,37 +34,54 @@ public final class TimelineCache: Sendable {
         let tweets: [Tweet]
     }
 
-    public init() {
-        if let caches = try? FileManager.default.url(
+    public convenience init() {
+        self.init(directory: Self.defaultDirectory())
+    }
+
+    init(directory: URL?, maxFiles: Int = TimelineCache.defaultMaxFiles) {
+        if let directory {
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        self.directory = directory
+        self.maxFiles = maxFiles
+    }
+
+    private static func defaultDirectory() -> URL? {
+        try? FileManager.default.url(
             for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true
-        ).appendingPathComponent("unrager/timeline", isDirectory: true) {
-            try? FileManager.default.createDirectory(at: caches, withIntermediateDirectories: true)
-            directory = caches
-        } else {
-            directory = nil
-        }
+        ).appendingPathComponent("unrager/timeline", isDirectory: true)
     }
 
-    /// The most-recently-saved snapshot for `key`, paired with its age. Returns
-    /// `nil` when absent, empty, undecodable, or older than `maxSeedAge` — every
-    /// failure is silent so a bad cache never blocks the feed.
-    public func load(key: String) -> (tweets: [Tweet], age: TimeInterval)? {
+    /// The most-recently-saved snapshot for `key`, paired with its age, read and
+    /// decoded off the caller's thread. Returns `nil` when absent, empty,
+    /// undecodable, or older than `maxSeedAge` (an undecodable or expired file
+    /// is deleted); every failure is silent so a bad cache never blocks the
+    /// feed.
+    public func load(key: String) async -> (tweets: [Tweet], age: TimeInterval)? {
         guard let url = fileURL(for: key) else { return nil }
-        return queue.sync {
-            guard let data = try? Data(contentsOf: url) else { return nil }
-            guard let entry = try? UnragerJSON.decoder.decode(Entry.self, from: data) else {
-                try? FileManager.default.removeItem(at: url)
-                return nil
-            }
-            let age = Date().timeIntervalSince(entry.savedAt)
-            guard !entry.tweets.isEmpty, age <= Self.maxSeedAge else { return nil }
-            return (entry.tweets, age)
+        return await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: Self.read(url)) }
         }
     }
 
-    /// Overwrites the snapshot for `key` with the most recent `entryCap` tweets.
-    /// An empty array clears the entry. Writes happen off-caller on a utility
-    /// queue; failures are swallowed.
+    private static func read(_ url: URL) -> (tweets: [Tweet], age: TimeInterval)? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        guard let entry = try? UnragerJSON.decoder.decode(Entry.self, from: data) else {
+            try? FileManager.default.removeItem(at: url)
+            return nil
+        }
+        let age = Date().timeIntervalSince(entry.savedAt)
+        guard age <= maxSeedAge else {
+            try? FileManager.default.removeItem(at: url)
+            return nil
+        }
+        guard !entry.tweets.isEmpty else { return nil }
+        return (entry.tweets, age)
+    }
+
+    /// Overwrites the snapshot for `key` with the most recent `entryCap` tweets,
+    /// then prunes the directory. An empty array clears the entry. Writes happen
+    /// off-caller on a utility queue; failures are swallowed.
     public func save(_ tweets: [Tweet], key: String) {
         guard let url = fileURL(for: key) else { return }
         let capped = Array(tweets.prefix(Self.entryCap))
@@ -70,6 +93,30 @@ public final class TimelineCache: Sendable {
             let entry = Entry(savedAt: Date(), tweets: capped)
             guard let data = try? UnragerJSON.encoder.encode(entry) else { return }
             try? data.write(to: url, options: .atomic)
+            self.prune()
+        }
+    }
+
+    /// Deletes saved timelines older than `maxSeedAge`, then the least recently
+    /// written beyond `maxFiles`. Runs on `queue`.
+    private func prune() {
+        guard let directory,
+              let files = try? FileManager.default.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+        let cutoff = Date().addingTimeInterval(-Self.maxSeedAge)
+        let dated = files.map { url in
+            (url, (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast)
+        }
+        .sorted { $0.1 > $1.1 }
+        for (index, file) in dated.enumerated() where index >= maxFiles || file.1 < cutoff {
+            try? FileManager.default.removeItem(at: file.0)
+        }
+    }
+
+    /// Waits for every queued write and prune to finish.
+    func flush() async {
+        await withCheckedContinuation { continuation in
+            queue.async { continuation.resume() }
         }
     }
 
@@ -102,7 +149,7 @@ public final class TimelineCache: Sendable {
 
     /// Maps an arbitrary cache key to a filesystem-safe `<sanitized>.json` URL so
     /// keys like `search-#foo/bar` can't escape the cache directory.
-    private func fileURL(for key: String) -> URL? {
+    func fileURL(for key: String) -> URL? {
         guard let directory else { return nil }
         let safe = key.unicodeScalars.map { scalar -> Character in
             let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))

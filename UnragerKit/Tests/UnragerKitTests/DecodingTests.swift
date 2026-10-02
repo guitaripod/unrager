@@ -294,38 +294,6 @@ struct DecodingTests {
         #expect(reDecoded.url == original.url)
         #expect(reDecoded.urls == original.urls)
     }
-
-    @Test("TimelineCache seeds then revalidation overwrites; stale/corrupt ignored")
-    func timelineCache() throws {
-        let cache = TimelineCache()
-        let key = "test-\(UUID().uuidString)"
-        defer { cache.clear(key: key) }
-
-        #expect(cache.load(key: key) == nil)
-
-        func tweet(_ id: String, _ text: String) -> Tweet {
-            let json = """
-            {"rest_id":"\(id)","author":{"rest_id":"1","handle":"a","name":"A","verified":false,
-              "followers":0,"following":0},"created_at":"2026-06-19T12:00:00Z","text":"\(text)",
-              "reply_count":0,"retweet_count":0,"like_count":0,"quote_count":0,"view_count":null,
-              "url":"https://x.com/a/status/\(id)"}
-            """
-            return try! UnragerJSON.decode(Tweet.self, from: Data(json.utf8))
-        }
-
-        let first = [tweet("1", "one"), tweet("2", "two")]
-        cache.save(first, key: key)
-        let loaded = cache.load(key: key)
-        #expect(loaded?.tweets.map(\.restID) == ["1", "2"])
-        #expect((loaded?.age ?? .greatestFiniteMagnitude) < 60)
-
-        let fresh = [tweet("3", "three"), tweet("1", "one")]
-        cache.save(fresh, key: key)
-        #expect(cache.load(key: key)?.tweets.map(\.restID) == ["3", "1"])
-
-        cache.save([], key: key)
-        #expect(cache.load(key: key) == nil)
-    }
 }
 
 @Suite("Filter config contract")
@@ -395,5 +363,68 @@ struct LossyDecodingTests {
         let page = try UnragerJSON.decode(TimelinePage.self, from: Data(json.utf8))
         #expect(page.tweets.map(\.restID) == ["1", "3"])
         #expect(page.cursor == "c")
+    }
+
+    @Test("Elements that aren't objects are skipped too, and decoding finishes")
+    func nonObjectElements() throws {
+        let json = #"{"tweets":[null,"x",3,[1],{"a":[2]},"# + tweetJSON(id: "5") + #",true],"cursor":null}"#
+        let page = try UnragerJSON.decode(TimelinePage.self, from: Data(json.utf8))
+        #expect(page.tweets.map(\.restID) == ["5"])
+    }
+
+    private let userJSON = #"{"rest_id":"7","handle":"ada","name":"Ada","verified":false,"followers":1,"following":2}"#
+
+    @Test("A bad notification, actor or attachment is skipped; the page survives")
+    func notificationsPage() throws {
+        let json = """
+        {"notifications":[
+          {"id":"n1","type":"like","timestamp":"2026-10-02T10:00:00Z",
+           "actors":[{"handle":"ada","name":"Ada","rest_id":"7"},{"handle":5}],
+           "target_media":[{"kind":"audio","url":"a"},{"kind":{"hologram":{}},"url":"h"},{"kind":"photo","url":"p"}]},
+          {"id":"n2","type":"like"},
+          null,
+          {"id":"n3","type":"follow","timestamp":"2026-10-02T11:00:00Z"}
+        ],"cursor":"c"}
+        """
+        let page = try UnragerJSON.decode(NotificationsPage.self, from: Data(json.utf8))
+        #expect(page.notifications.map(\.id) == ["n1", "n3"])
+        #expect(page.notifications[0].actors.map(\.handle) == ["ada"])
+        #expect(page.notifications[0].targetMedia.map(\.url) == ["p"])
+        #expect(page.cursor == "c")
+    }
+
+    @Test("A media kind this client doesn't know is dropped, never shown as a photo")
+    func unknownUnitMediaKind() throws {
+        let json = #"{"tweets":["# + tweetJSON(id: "1", media: #"[{"kind":"audio","url":"a"},{"kind":"animated_gif","url":"g"}]"#) + #"],"cursor":null}"#
+        let page = try UnragerJSON.decode(TimelinePage.self, from: Data(json.utf8))
+        #expect(page.tweets.first?.media.map(\.url) == ["g"])
+        #expect(page.tweets.first?.media.first?.kind == .animatedGif)
+    }
+
+    @Test("A source kind this client doesn't know leaves the rest of the session intact")
+    func unknownSourceKind() throws {
+        let json = #"{"current_source":{"type":"lists","list_id":"9"},"feed_mode":"originals","filter_enabled":true,"theme":"dark"}"#
+        let session = try UnragerJSON.decode(SessionState.self, from: Data(json.utf8))
+        #expect(session.currentSource == nil)
+        #expect(session.filterEnabled)
+        #expect(session.feedMode == .originals)
+        #expect(session.theme == "dark")
+    }
+
+    @Test("A bad tweet in a profile's recent posts is skipped")
+    func profileRecent() throws {
+        let json = #"{"user":"# + userJSON + #","pinned":null,"recent":["# + tweetJSON(id: "1") + #",{"rest_id":2},"# + tweetJSON(id: "3") + #"],"cursor":null}"#
+        let profile = try UnragerJSON.decode(ProfileView.self, from: Data(json.utf8))
+        #expect(profile.recent.map(\.restID) == ["1", "3"])
+        let relationship = try UnragerJSON.decode(ProfileRelationshipView.self, from: Data(json.utf8))
+        #expect(relationship.recent.map(\.restID) == ["1", "3"])
+    }
+
+    @Test("A bad user in a likers page is skipped")
+    func likersPage() throws {
+        let json = #"{"users":[{"handle":"x"},"# + userJSON + #"],"cursor":"next"}"#
+        let page = try UnragerJSON.decode(LikersPage.self, from: Data(json.utf8))
+        #expect(page.users.map(\.handle) == ["ada"])
+        #expect(page.cursor == "next")
     }
 }

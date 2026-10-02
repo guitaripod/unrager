@@ -294,7 +294,18 @@ pub async fn fetch_user(
     let user_id = profile.rest_id.clone();
     let mut page = fetch_user_tweets_by_id(client, &user_id, cursor).await?;
     page.profile_user = Some(profile);
+    show_pinned_first(&mut page);
     Ok(page)
+}
+
+/// The TUI's profile view lists the pinned post above the others, as x.com
+/// does. X sends it only with the first page.
+fn show_pinned_first(page: &mut TimelinePage) {
+    if let Some(pinned) = page.pinned.take()
+        && !page.tweets.iter().any(|t| t.rest_id == pinned.rest_id)
+    {
+        page.tweets.insert(0, pinned);
+    }
 }
 
 pub async fn fetch_user_tweets_by_id(
@@ -409,4 +420,24 @@ pub async fn fetch_single_tweet(client: &GqlClient, id: &str) -> Result<Tweet> {
         )
         .await?;
     crate::parse::tweet::parse_tweet_result_by_rest_id(&response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::test_util::{make_page, make_tweet};
+
+    #[test]
+    fn pinned_post_leads_the_profile_once() {
+        let mut page = make_page(vec![make_tweet("2", "newest")]);
+        page.pinned = Some(make_tweet("1", "pinned"));
+        show_pinned_first(&mut page);
+        let ids: Vec<&str> = page.tweets.iter().map(|t| t.rest_id.as_str()).collect();
+        assert_eq!(ids, ["1", "2"]);
+
+        let mut repeated = make_page(vec![make_tweet("1", "pinned")]);
+        repeated.pinned = Some(make_tweet("1", "pinned"));
+        show_pinned_first(&mut repeated);
+        assert_eq!(repeated.tweets.len(), 1);
+    }
 }

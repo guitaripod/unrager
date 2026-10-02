@@ -242,12 +242,17 @@ final class TimelineViewModel {
     /// while the real fetch is in flight. Seeds display only: it never touches
     /// `seenIDs`, `cursor`, `hasLoadedOnce`, or `exhausted`, so the pending fetch
     /// still runs and fully replaces these tweets — fresh content can't be
-    /// suppressed by the seed. No-op once any tweets are loaded.
+    /// suppressed by the seed. No-op once any tweets are loaded. The snapshot is
+    /// read off the main thread and dropped if the fetch (or a source change)
+    /// got there first.
     private func seedFromCache() {
         guard tweets.value.isEmpty, let key = cacheKey else { return }
-        guard let cached = TimelineCache.shared.load(key: key), !cached.tweets.isEmpty else { return }
-        tweets.send(cached.tweets)
-        AppLogger.shared.debug("seeded \(cached.tweets.count) cached tweets for \(key)", category: .timeline)
+        Task { [weak self] in
+            guard let cached = await TimelineCache.shared.load(key: key), !cached.tweets.isEmpty,
+                  let self, self.tweets.value.isEmpty, !self.hasLoadedOnce, self.cacheKey == key else { return }
+            self.tweets.send(cached.tweets)
+            AppLogger.shared.debug("seeded \(cached.tweets.count) cached tweets for \(key)", category: .timeline)
+        }
     }
 
     /// The seed's key: the source's own, plus whether the rage filter is on for

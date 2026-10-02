@@ -92,6 +92,13 @@ pub fn parse_user_result(node: &Value) -> Option<User> {
         .or_else(|| node.pointer("/legacy/following"))
         .and_then(Value::as_bool);
 
+    let banner_url = node
+        .pointer("/banner/image_url")
+        .or_else(|| node.pointer("/legacy/profile_banner_url"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(banner_at_header_size);
+
     Some(User {
         rest_id,
         handle,
@@ -101,7 +108,21 @@ pub fn parse_user_result(node: &Value) -> Option<User> {
         following,
         avatar_url,
         followed_by_me,
+        banner_url,
     })
+}
+
+/// X serves a banner at `…/profile_banners/<id>/<stamp>` and resizes it when a
+/// size is appended; the widest one is 1500×500.
+fn banner_at_header_size(url: &str) -> String {
+    let base = url.trim_end_matches('/');
+    let last = base.rsplit('/').next().unwrap_or("");
+    let sized = last.contains('x') && last.chars().all(|c| c.is_ascii_digit() || c == 'x');
+    if sized {
+        base.to_string()
+    } else {
+        format!("{base}/1500x500")
+    }
 }
 
 #[cfg(test)]
@@ -199,6 +220,35 @@ mod tests {
         });
         let user = parse_user_result(&older).unwrap();
         assert_eq!((user.followers, user.following), (10, 5));
+    }
+
+    #[test]
+    fn banner_is_read_at_header_size() {
+        let node = json!({
+            "rest_id": "7",
+            "core": { "screen_name": "bob", "name": "Bob" },
+            "banner": { "image_url": "https://pbs.twimg.com/profile_banners/7/1700000000" },
+            "legacy": {}
+        });
+        assert_eq!(
+            parse_user_result(&node).unwrap().banner_url.as_deref(),
+            Some("https://pbs.twimg.com/profile_banners/7/1700000000/1500x500")
+        );
+        let sized = json!({
+            "rest_id": "7",
+            "core": { "screen_name": "bob", "name": "Bob" },
+            "legacy": { "profile_banner_url": "https://pbs.twimg.com/profile_banners/7/1700000000/600x200" }
+        });
+        assert_eq!(
+            parse_user_result(&sized).unwrap().banner_url.as_deref(),
+            Some("https://pbs.twimg.com/profile_banners/7/1700000000/600x200")
+        );
+        let none = json!({
+            "rest_id": "7",
+            "core": { "screen_name": "bob", "name": "Bob" },
+            "legacy": {}
+        });
+        assert_eq!(parse_user_result(&none).unwrap().banner_url, None);
     }
 
     #[test]

@@ -17,6 +17,11 @@ pub struct User {
     /// and is omitted from the wire when unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub followed_by_me: Option<bool>,
+    /// The profile's header image, sized for a phone-width banner. Populated
+    /// on profile payloads only; absent when the account has none or on
+    /// older servers, and omitted from the wire when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub banner_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

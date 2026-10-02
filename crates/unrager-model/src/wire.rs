@@ -486,6 +486,7 @@ mod tests {
                 following: 0,
                 avatar_url: None,
                 followed_by_me: None,
+                banner_url: None,
             }],
             cursor: Some("next".into()),
             verified_only: true,
@@ -571,6 +572,26 @@ mod tests {
         assert_eq!(followed.followed_by_me, Some(true));
         let v = serde_json::to_value(&followed).unwrap();
         assert_eq!(v["followed_by_me"], json!(true));
+    }
+
+    #[test]
+    fn user_banner_url_is_optional_and_omitted_when_absent() {
+        let bare: crate::User = serde_json::from_str(
+            r#"{"rest_id":"1","handle":"a","name":"A","verified":false,
+                "followers":0,"following":0}"#,
+        )
+        .unwrap();
+        assert_eq!(bare.banner_url, None);
+        let v = serde_json::to_value(&bare).unwrap();
+        assert!(!v.as_object().unwrap().contains_key("banner_url"));
+
+        let with: crate::User = serde_json::from_str(
+            r#"{"rest_id":"1","handle":"a","name":"A","verified":false,
+                "followers":0,"following":0,"banner_url":"https://pbs.twimg.com/b/1500x500"}"#,
+        )
+        .unwrap();
+        let v = serde_json::to_value(&with).unwrap();
+        assert_eq!(v["banner_url"], json!("https://pbs.twimg.com/b/1500x500"));
     }
 
     #[test]

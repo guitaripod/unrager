@@ -1985,6 +1985,7 @@ mod tests {
                 following: 0,
                 avatar_url: None,
                 followed_by_me: None,
+                banner_url: None,
             },
             created_at: Utc::now(),
             text: text.into(),

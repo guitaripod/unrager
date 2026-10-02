@@ -112,6 +112,20 @@ struct SocialAPITests {
         let profile = try await api.profile(handle: "nasa")
         #expect(profile.user.handle == "nasa")
         #expect(profile.followedByMe == true)
+        #expect(profile.user.bannerURL == nil)
+    }
+
+    @Test("profile decodes the header image URL")
+    func profileBanner() async throws {
+        let json = """
+        {"user":{"rest_id":"11","handle":"nasa","name":"NASA","verified":true,
+                 "followers":1,"following":1,"avatar_url":null,
+                 "banner_url":"https://pbs.twimg.com/profile_banners/11/1/1500x500"},
+         "pinned":null,"recent":[],"cursor":null}
+        """
+        let (api, _) = makeAPI(body: json)
+        let profile = try await api.profile(handle: "nasa")
+        #expect(profile.user.bannerURL == "https://pbs.twimg.com/profile_banners/11/1/1500x500")
     }
 
     @Test("profile from an older server leaves followedByMe nil")

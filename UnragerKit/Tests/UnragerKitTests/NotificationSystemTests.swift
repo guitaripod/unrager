@@ -32,6 +32,24 @@ struct NotificationDecodingTests {
     }
 }
 
+@Suite("Notification thumbnail rendition")
+struct NotificationThumbnailTests {
+    @Test("X image URLs ask for the small rendition; others and explicit renditions are untouched")
+    func smallRendition() throws {
+        let plain = try #require(URL(string: "https://pbs.twimg.com/media/x.jpg"))
+        #expect(XNotification.smallRendition(of: plain).absoluteString == "https://pbs.twimg.com/media/x.jpg?name=small")
+
+        let withFormat = try #require(URL(string: "https://pbs.twimg.com/media/x?format=jpg"))
+        #expect(XNotification.smallRendition(of: withFormat).absoluteString == "https://pbs.twimg.com/media/x?format=jpg&name=small")
+
+        let explicit = try #require(URL(string: "https://pbs.twimg.com/media/x.jpg?name=large"))
+        #expect(XNotification.smallRendition(of: explicit) == explicit)
+
+        let other = try #require(URL(string: "https://example.com/p.png"))
+        #expect(XNotification.smallRendition(of: other) == other)
+    }
+}
+
 @Suite("Notification seen marker codec")
 struct NotificationSeenMarkerTests {
     @Test("Round-trips a timestamp through the wire string")
@@ -238,6 +256,26 @@ struct NotificationPollerTests {
             #expect(alerted.first?.map(\.id) == ["n2"])
             #expect(poller.latestFetched?.id == "n2")
             #expect(poller.lastPage.count == 2)
+        }
+    }
+
+    @MainActor
+    @Test("An item the seen marker already covers is not reported as new")
+    func alreadyReadItemsAreNotNews() async {
+        await withCleanMarker {
+            let transport = StubTransport(notificationBodies: [
+                page([("n1", "2026-07-01T10:00:00Z")]),
+                page([("old", "2026-06-01T10:00:00Z"), ("n2", "2026-07-01T11:00:00Z"), ("n1", "2026-07-01T10:00:00Z")]),
+            ])
+            let api = APIClient(transport: transport, baseURL: { URL(string: "http://test:7777")! })
+            let poller = NotificationPoller(api: api)
+            var alerted: [[XNotification]] = []
+            poller.onNewNotifications = { alerted.append($0) }
+
+            #expect(await poller.poll())
+            #expect(await poller.poll())
+            #expect(alerted.count == 1)
+            #expect(alerted.first?.map(\.id) == ["n2"])
         }
     }
 

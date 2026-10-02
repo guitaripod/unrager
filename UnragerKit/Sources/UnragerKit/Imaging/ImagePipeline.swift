@@ -9,14 +9,24 @@ public final class DecodedImage: @unchecked Sendable {
     public let cgImage: CGImage
     public let pixelWidth: Int
     public let pixelHeight: Int
+    let requestedMaxPixel: CGFloat
 
-    init(_ cgImage: CGImage) {
+    init(_ cgImage: CGImage, requestedMaxPixel: CGFloat = .infinity) {
         self.cgImage = cgImage
         self.pixelWidth = cgImage.width
         self.pixelHeight = cgImage.height
+        self.requestedMaxPixel = requestedMaxPixel
     }
 
     var byteCost: Int { cgImage.bytesPerRow * cgImage.height }
+
+    /// Whether this decode can stand in for one whose largest side is
+    /// `maxPixel`: it was decoded at least that large, or the source image is
+    /// smaller than what was asked for, so no larger decode exists.
+    func satisfies(_ maxPixel: CGFloat) -> Bool {
+        requestedMaxPixel >= maxPixel
+            || CGFloat(max(pixelWidth, pixelHeight)) < requestedMaxPixel - 1
+    }
 }
 
 /// Bounds the number of concurrent decodes to avoid thread explosion
@@ -66,8 +76,21 @@ public actor ImagePipeline {
         var interest: Int
     }
 
+    /// An in-flight decode is shared only between requests for the same URL at
+    /// the same size, so a small thumbnail load is never handed to a caller that
+    /// needs the full-size image.
+    private struct LoadKey: Hashable {
+        let url: URL
+        let maxPixel: Int
+
+        init(url: URL, maxPixel: CGFloat) {
+            self.url = url
+            self.maxPixel = Int(max(1, maxPixel).rounded(.up))
+        }
+    }
+
     private let cache = NSCache<NSURL, DecodedImage>()
-    private var inFlight: [URL: InFlightLoad] = [:]
+    private var inFlight: [LoadKey: InFlightLoad] = [:]
     private var prefetches: [URL: Task<Void, Never>] = [:]
     private let gate = DecodeGate(limit: 4)
     private let session: URLSession
@@ -101,14 +124,15 @@ public actor ImagePipeline {
     /// interest; the shared download is aborted only once every consumer has
     /// cancelled.
     public func image(for url: URL, maxPixel: CGFloat) async -> DecodedImage? {
-        if let hit = cache.object(forKey: url as NSURL) { return hit }
-        let task = registerInterest(url: url, maxPixel: maxPixel)
+        if let hit = cache.object(forKey: url as NSURL), hit.satisfies(maxPixel) { return hit }
+        let key = LoadKey(url: url, maxPixel: maxPixel)
+        let task = registerInterest(key: key)
         let result = await withTaskCancellationHandler {
             await task.value
         } onCancel: {
-            Task { await self.withdrawInterest(url: url, task: task) }
+            Task { await self.withdrawInterest(key: key, task: task) }
         }
-        settle(url: url, task: task, result: result)
+        settle(key: key, task: task, result: result)
         return result
     }
 
@@ -117,7 +141,8 @@ public actor ImagePipeline {
     /// consumer's refcount on the same URL is untouchable from here. At most
     /// one prefetch per URL is held at a time.
     public func prefetch(_ url: URL, maxPixel: CGFloat) {
-        guard cache.object(forKey: url as NSURL) == nil, prefetches[url] == nil else { return }
+        if let hit = cache.object(forKey: url as NSURL), hit.satisfies(maxPixel) { return }
+        guard prefetches[url] == nil else { return }
         let task = Task { _ = await self.image(for: url, maxPixel: maxPixel) }
         prefetches[url] = task
         Task {
@@ -136,11 +161,13 @@ public actor ImagePipeline {
 
     /// Joins the in-flight load for `url` as one more interested consumer, or
     /// starts the shared download with an interest of one.
-    private func registerInterest(url: URL, maxPixel: CGFloat) -> Task<DecodedImage?, Never> {
-        if let existing = inFlight[url] {
-            inFlight[url] = InFlightLoad(task: existing.task, interest: existing.interest + 1)
+    private func registerInterest(key: LoadKey) -> Task<DecodedImage?, Never> {
+        if let existing = inFlight[key] {
+            inFlight[key] = InFlightLoad(task: existing.task, interest: existing.interest + 1)
             return existing.task
         }
+        let url = key.url
+        let maxPixel = CGFloat(key.maxPixel)
         let task = Task<DecodedImage?, Never> { [session, gate] in
             await gate.acquire()
             defer { Task { await gate.release() } }
@@ -152,7 +179,7 @@ public actor ImagePipeline {
                 Self.downsample(data: data, maxPixel: maxPixel)
             }.value
         }
-        inFlight[url] = InFlightLoad(task: task, interest: 1)
+        inFlight[key] = InFlightLoad(task: task, interest: 1)
         return task
     }
 
@@ -160,25 +187,26 @@ public actor ImagePipeline {
     /// registered. The task-identity check makes a withdrawal that lands after
     /// the load finished a no-op instead of a theft from a newer load of the
     /// same URL.
-    private func withdrawInterest(url: URL, task: Task<DecodedImage?, Never>) {
-        guard var entry = inFlight[url], entry.task == task else { return }
+    private func withdrawInterest(key: LoadKey, task: Task<DecodedImage?, Never>) {
+        guard var entry = inFlight[key], entry.task == task else { return }
         entry.interest -= 1
         if entry.interest <= 0 {
             entry.task.cancel()
-            inFlight[url] = nil
+            inFlight[key] = nil
         } else {
-            inFlight[url] = entry
+            inFlight[key] = entry
         }
     }
 
     /// Clears the in-flight entry once the shared task has produced its result
     /// and publishes a successful decode to the cache. Every awaiting consumer
     /// calls this; only the first still finds the entry.
-    private func settle(url: URL, task: Task<DecodedImage?, Never>, result: DecodedImage?) {
-        if inFlight[url]?.task == task { inFlight[url] = nil }
-        if let result {
-            cache.setObject(result, forKey: url as NSURL, cost: result.byteCost)
-        }
+    private func settle(key: LoadKey, task: Task<DecodedImage?, Never>, result: DecodedImage?) {
+        if inFlight[key]?.task == task { inFlight[key] = nil }
+        guard let result else { return }
+        let url = key.url as NSURL
+        if let existing = cache.object(forKey: url), existing.satisfies(CGFloat(key.maxPixel)) { return }
+        cache.setObject(result, forKey: url, cost: result.byteCost)
     }
 
     /// Drops the prefetch bookkeeping once its load settled, unless a newer
@@ -190,7 +218,7 @@ public actor ImagePipeline {
     /// The current number of interested consumers for an in-flight load
     /// (0 when nothing is in flight). Test hook for the refcount semantics.
     func interestCount(for url: URL) -> Int {
-        inFlight[url]?.interest ?? 0
+        inFlight.filter { $0.key.url == url }.values.reduce(0) { $0 + $1.interest }
     }
 
     nonisolated static func downsample(data: Data, maxPixel: CGFloat) -> DecodedImage? {
@@ -203,6 +231,6 @@ public actor ImagePipeline {
             kCGImageSourceThumbnailMaxPixelSize: max(1, maxPixel),
         ] as CFDictionary
         guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else { return nil }
-        return DecodedImage(cgImage)
+        return DecodedImage(cgImage, requestedMaxPixel: maxPixel)
     }
 }

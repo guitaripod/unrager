@@ -1,4 +1,6 @@
 import Foundation
+import CoreGraphics
+import ImageIO
 import Testing
 @testable import UnragerKit
 
@@ -182,5 +184,57 @@ struct ImagePipelineTests {
         #expect(await second.value != nil)
         #expect(await pipeline.interestCount(for: url) == 0)
         #expect(await pipeline.cached(url) != nil)
+    }
+
+    private static func makePNG(side: Int) -> Data {
+        let context = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: CGColorSpaceCreateDeviceRGB(),
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        context.setFillColor(CGColor(red: 0.2, green: 0.4, blue: 0.8, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: side, height: side))
+        let data = NSMutableData()
+        let destination = CGImageDestinationCreateWithData(data, "public.png" as CFString, 1, nil)!
+        CGImageDestinationAddImage(destination, context.makeImage()!, nil)
+        CGImageDestinationFinalize(destination)
+        return data as Data
+    }
+
+    @Test("A small cached decode is not served to a request that needs more pixels")
+    func cacheIsSizeAware() async throws {
+        StallingURLProtocol.reset()
+        StallingURLProtocol.responseBody = Self.makePNG(side: 400)
+        let pipeline = makePipeline()
+        let url = URL(string: "https://stall.test/photo-sizes.png")!
+
+        let thumbnail = Task { await pipeline.image(for: url, maxPixel: 50) }
+        #expect(await waitForInterest(pipeline, url: url, toBe: 1))
+        StallingURLProtocol.completeAll()
+        #expect((await thumbnail.value)?.pixelWidth == 50)
+
+        let full = Task { await pipeline.image(for: url, maxPixel: 300) }
+        #expect(await waitForInterest(pipeline, url: url, toBe: 1))
+        StallingURLProtocol.completeAll()
+        #expect((await full.value)?.pixelWidth == 300)
+
+        let again = await pipeline.image(for: url, maxPixel: 120)
+        #expect(again?.pixelWidth == 300)
+        #expect(await pipeline.interestCount(for: url) == 0)
+    }
+
+    @Test("A small image is served as is when more pixels are requested than it has")
+    func smallSourceSatisfiesLargerRequests() async throws {
+        StallingURLProtocol.reset()
+        StallingURLProtocol.responseBody = Self.pngData
+        let pipeline = makePipeline()
+        let url = URL(string: "https://stall.test/tiny.png")!
+
+        let first = Task { await pipeline.image(for: url, maxPixel: 64) }
+        #expect(await waitForInterest(pipeline, url: url, toBe: 1))
+        StallingURLProtocol.completeAll()
+        #expect(await first.value != nil)
+
+        let second = await pipeline.image(for: url, maxPixel: 2_000)
+        #expect(second?.pixelWidth == 1)
+        #expect(await pipeline.interestCount(for: url) == 0)
     }
 }

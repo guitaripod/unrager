@@ -190,7 +190,7 @@ struct DecodingTests {
         #expect(notif.actors.first?.avatarURL == "https://pbs.twimg.com/a.jpg")
         #expect(notif.targetTweetLikeCount == 5)
         #expect(notif.targetMedia.first?.kind == .photo)
-        #expect(notif.thumbnailURL?.absoluteString == "https://pbs.twimg.com/media/x.jpg")
+        #expect(notif.thumbnailURL?.absoluteString == "https://pbs.twimg.com/media/x.jpg?name=small")
     }
 
     @Test("Compact count formatting")

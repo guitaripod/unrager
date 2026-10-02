@@ -148,7 +148,7 @@ public final class NotificationPoller {
 
         let pageIDs = Set(notifications.map(\.id))
         if primed {
-            let fresh = notifications.filter { !knownIDs.contains($0.id) }
+            let fresh = notifications.filter { !knownIDs.contains($0.id) && isUnread($0) }
             if !fresh.isEmpty {
                 AppLogger.shared.info(
                     "notification poll: \(fresh.count) new, \(unread) unread", category: .api)
@@ -162,6 +162,15 @@ public final class NotificationPoller {
         }
         knownIDs = pageIDs
         return true
+    }
+
+    /// Whether a notification is newer than the seen marker. One the marker
+    /// already covers — read on another device, or an old item that merely
+    /// moved back onto the first page — is not news, whatever the previous poll
+    /// held.
+    private func isUnread(_ notification: XNotification) -> Bool {
+        guard let marker = NotificationPrefs.lastSeenTimestamp else { return true }
+        return notification.timestamp > marker
     }
 
     /// Fresh-install semantics: with no local (or adoptable server) marker, the

@@ -27,7 +27,7 @@ import demo_world as dw  # noqa: E402
 
 PAGE = 8
 STATE = {"filter_enabled": True, "likes": set(), "bookmarks": set(), "retweets": set(), "overrides": {},
-         "deleted": set(), "muting": {"hottakeshourly"}, "blocking": set()}
+         "deleted": set(), "muting": {"hottakeshourly"}, "blocking": set(), "replies": []}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -173,7 +173,7 @@ class Handler(BaseHTTPRequestHandler):
             ]})
         if path == "/api/sources/home":
             keys = [k for k in w.home_keys() if w.ids[k] not in STATE["deleted"]]
-            return self.send_json(self.page([w.home_tweet(k) for k in keys], q("cursor")))
+            return self.send_json(self.page([self.engaged(w.home_tweet(k)) for k in keys], q("cursor")))
         if path.startswith("/api/sources/user/"):
             handle = path.split("/")[4]
             if handle in dw.SUSPENDED:
@@ -211,7 +211,7 @@ class Handler(BaseHTTPRequestHandler):
         m = re.fullmatch(r"/api/thread/(\d+)", path)
         if m:
             key = w.tweet_by_id(m.group(1))
-            return self.send_json(w.thread(key)) if key else self.send_error_json(404, "not_found", "no such post")
+            return self.send_json(self.with_posted_replies(w.thread(key))) if key else self.send_error_json(404, "not_found", "no such post")
         m = re.fullmatch(r"/api/profile/(\w+)", path)
         if m:
             handle = m.group(1).lower()
@@ -291,9 +291,16 @@ class Handler(BaseHTTPRequestHandler):
             return self.tokens(dw.ASK["explain"])
         if self.moderate(path, True):
             return
+        m = re.fullmatch(r"/api/engage/(\d+)/(like|unlike)", path)
+        if m:
+            (STATE["likes"].add if m.group(2) == "like" else STATE["likes"].discard)(m.group(1))
         if re.fullmatch(r"/api/(engage|tweets)/.+", path) or path.startswith("/api/users/"):
             return self.send_json({"ok": True, "idempotent": False, "following": "unfollow" not in path})
-        if path in ("/api/compose",) or path.startswith("/api/reply/"):
+        if path.startswith("/api/reply/"):
+            reply = self.posted_reply(path.rsplit("/", 1)[1], body)
+            STATE["replies"].append(reply)
+            return self.send_json({"id": reply["rest_id"], "url": reply["url"], "idempotent": False})
+        if path == "/api/compose":
             return self.send_json({"id": dw.snowflake(999), "url": "https://x.com/noralind/status/1", "idempotent": False})
         return self.send_error_json(404, "not_found", f"no route for {path}")
 
@@ -318,6 +325,45 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"ok": True, "idempotent": already})
         return self.send_json({"ok": True, "idempotent": False, "following": False})
 
+
+    @staticmethod
+    def engaged(tweet):
+        """`tweet` as the signed-in account last left it: liked, and counting
+        the replies posted to it here."""
+        tweet = dict(tweet)
+        if tweet["rest_id"] in STATE["likes"] and not tweet["favorited"]:
+            tweet["favorited"] = True
+            tweet["like_count"] += 1
+        tweet["reply_count"] += sum(r["in_reply_to_tweet_id"] == tweet["rest_id"] for r in STATE["replies"])
+        return tweet
+
+    def with_posted_replies(self, thread):
+        """The thread with the replies posted here placed under their parents."""
+        thread = dict(thread, focal=self.engaged(thread["focal"]),
+                      ancestors=[self.engaged(t) for t in thread["ancestors"]])
+        replies = [self.engaged(t) for t in thread["replies"]]
+        for posted in STATE["replies"]:
+            ids = [thread["focal"]["rest_id"]] + [t["rest_id"] for t in replies]
+            if posted["in_reply_to_tweet_id"] not in ids:
+                continue
+            parent = ids.index(posted["in_reply_to_tweet_id"])
+            replies.insert(parent, posted)
+        thread["replies"] = replies
+        return thread
+
+    def posted_reply(self, parent_id, body):
+        """The signed-in account's reply to `parent_id`, with the multipart
+        form's text."""
+        w = self.world
+        match = re.search(rb'name="text"\r\n\r\n(.*?)\r\n--', body, re.S)
+        rest_id = dw.snowflake(900 + len(STATE["replies"]))
+        parent_key = w.tweet_by_id(parent_id)
+        parent_handle = w.by_key[parent_key]["author"]["handle"] if parent_key else None
+        return dict(w.tweet("o1"), rest_id=rest_id, created_at=dw.ago(seconds=1),
+                    text=(match.group(1).decode() if match else ""), media=[], quoted_tweet=None,
+                    reply_count=0, retweet_count=0, like_count=0, quote_count=0, view_count=0, bookmark_count=0,
+                    in_reply_to_tweet_id=parent_id, in_reply_to_handle=parent_handle,
+                    url=f"https://x.com/{dw.ME}/status/{rest_id}")
 
     @staticmethod
     def page(tweets, cursor):

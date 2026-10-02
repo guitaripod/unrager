@@ -1,12 +1,14 @@
 import UIKit
+import SafariServices
 import UnragerKit
 
-/// A user's profile: a scrolling header (avatar, name, handle, tappable
-/// follower counts, follow button, "Brief" LLM summary, and a Posts/Replies
-/// toggle) above the user's timeline. Subclasses `FeedViewController` so the
-/// timeline reuses all the feed machinery; the header rides along as a
-/// boundary supplementary item. The Replies tab embeds a second feed backed
-/// by the server's tweets-and-replies source (the TUI's `R` toggle).
+/// A user's profile: a scrolling header (avatar, name, handle, bio, location,
+/// website and join date, tappable follower counts, follow button, "Brief"
+/// LLM summary, and a Posts/Replies toggle) above the user's timeline.
+/// Subclasses `FeedViewController` so the timeline reuses all the feed
+/// machinery; the header rides along as a boundary supplementary item. The
+/// Replies tab embeds a second feed backed by the server's tweets-and-replies
+/// source (the TUI's `R` toggle).
 final class ProfileViewController: FeedViewController {
     private let handle: String
     private let profileHeader = ProfileHeaderView()
@@ -18,6 +20,9 @@ final class ProfileViewController: FeedViewController {
     private var basedIn: (flag: String?, country: String?)?
     private var followRequestInFlight = false
     private var profileLoadInFlight = false
+    private var loadState = ProfileLoadState.loading
+    private let moderation = ProfileModeration()
+    private var measuredWidth: CGFloat = 0
 
     /// The Replies tab: a sibling feed over `/api/sources/user/{handle}/replies`,
     /// created lazily on first switch. It carries its own copy of the profile
@@ -55,6 +60,8 @@ final class ProfileViewController: FeedViewController {
             header.setHandle(handle)
         }
         installBanner()
+        installMenu()
+        moderation.onChange = { [weak self] in self?.applyHeaderState() }
         loadProfile()
         NotificationCenter.default.addObserver(
             self, selector: #selector(textSizeChanged), name: AppSettings.fontScaleDidChange, object: nil)
@@ -84,11 +91,15 @@ final class ProfileViewController: FeedViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        if view.bounds.width != measuredWidth {
+            measuredWidth = view.bounds.width
+            applyHeaderState()
+        }
         updateBanner(for: activeScrollView)
     }
 
     /// A pull-to-refresh reloads the header (counts, follow state) along with
-    /// the timeline.
+    /// the timeline, and asks again about an account that wasn't available.
     override func pullToRefresh() {
         super.pullToRefresh()
         loadProfile()
@@ -106,18 +117,29 @@ final class ProfileViewController: FeedViewController {
         header.onTapFollowing = { [weak self] in self?.pushUserList(mode: .following) }
         header.onSegmentChange = { [weak self] index in self?.setShowingReplies(index == 1) }
         header.onRetry = { [weak self] in self?.loadProfile() }
+        header.onTapMention = { [weak self] handle in self?.openMention(handle) }
+        header.onTapHashtag = { [weak self] query in self?.openHashtagSearch(query) }
+        header.onTapURL = { [weak self] url in self?.openInBrowser(url) }
     }
 
+    /// Loads the account alone (the feed fetches the posts itself). A failure
+    /// X won't change its mind about (suspended, missing, hidden) replaces the
+    /// header; any other one leaves a loaded header as it was, or offers a
+    /// Retry when there is none.
     private func loadProfile() {
         guard !profileLoadInFlight else { return }
         profileLoadInFlight = true
-        for header in headers { header.setLoadFailed(false) }
+        if case .failed = loadState {
+            loadState = .loading
+            applyHeaderState()
+        }
         Task {
             defer { profileLoadInFlight = false }
             do {
                 async let me = AppEnvironment.shared.whoami()
-                let profile = try await social.profile(handle: handle)
+                let profile = try await social.profile(handle: handle, includeTweets: false)
                 user = profile.user
+                loadState = .loaded
                 banner.configure(url: profile.user.bannerURL.flatMap(URL.init), handle: handle,
                                  imagesEnabled: AppSettings.imagesEnabled)
                 isOwnProfile = await me?.handle.caseInsensitiveCompare(handle) == .orderedSame
@@ -125,27 +147,59 @@ final class ProfileViewController: FeedViewController {
                 title = profile.user.name
                 titleLabel.text = profile.user.name
                 titleLabel.sizeToFit()
+                moderation.update(muting: profile.user.isMuting, blocking: profile.user.isBlocking)
                 applyHeaderState()
                 loadFlag(for: profile.user)
+            } catch where error.isCancellation {
+                AppLogger.shared.info("profile load for @\(handle) cancelled", category: .profile)
             } catch {
                 AppLogger.shared.warn("profile load failed: \(error)", category: .profile)
-                if user == nil {
-                    for header in headers { header.setLoadFailed(true) }
-                    collectionView.collectionViewLayout.invalidateLayout()
-                }
+                let failure = ProfileLoadState.failure(error)
+                guard failure.isFinal || user == nil else { return }
+                if failure.isFinal { clearAccount() }
+                loadState = failure
+                applyHeaderState()
             }
         }
+    }
+
+    /// Forgets an account that has gone away, so nothing of it stays on screen
+    /// under the header's explanation.
+    private func clearAccount() {
+        user = nil
+        isFollowing = nil
+        basedIn = nil
+        title = "@\(handle)"
+        titleLabel.text = "@\(handle)"
+        titleLabel.sizeToFit()
+        banner.configure(url: nil, handle: handle, imagesEnabled: false)
+    }
+
+    /// Whether the viewer is shut out of a protected account's posts.
+    private var postsLocked: Bool {
+        guard let user, user.isProtected, !isOwnProfile else { return false }
+        return isFollowing != true
     }
 
     /// Pushes the current user/follow/basedIn state into both header copies so
     /// the Posts and Replies tabs always show the same header.
     private func applyHeaderState() {
+        guard isViewLoaded else { return }
+        let width = view.bounds.width
         for header in headers {
-            if let user { header.configure(with: user) }
+            header.setState(loadState)
+            if let user, loadState == .loaded { header.configure(with: user) }
             header.setFollowState(following: isFollowing, isOwnProfile: isOwnProfile)
-            if let basedIn { header.setBasedIn(flag: basedIn.flag, country: basedIn.country) }
+            header.setBasedIn(flag: basedIn?.flag, country: basedIn?.country)
+            header.setModeration(muting: moderation.muting, blocking: moderation.blocking)
+            header.setPostsLocked(postsLocked, handle: handle)
+            header.setModerationActions(accessibilityActions())
             header.setSegment(showingReplies ? 1 : 0)
+            header.placeActions(width: width)
         }
+        let blank = loadState.isFinal || postsLocked
+        hidesEmptyState = blank
+        repliesController?.hidesEmptyState = blank
         collectionView.collectionViewLayout.invalidateLayout()
         repliesController?.collectionView.collectionViewLayout.invalidateLayout()
     }
@@ -157,9 +211,156 @@ final class ProfileViewController: FeedViewController {
     private func loadFlag(for user: User) {
         AppEnvironment.shared.flags.resolve(restID: user.restID, screenName: user.handle) {
             [weak self] resolved in
-            guard let self, resolved.country != nil else { return }
+            guard let self, resolved.country != nil, self.user?.restID == user.restID else { return }
             self.basedIn = (resolved.flag, resolved.country)
             self.applyHeaderState()
+        }
+    }
+
+    // MARK: - Links
+
+    private func openMention(_ mentioned: String) {
+        guard mentioned.caseInsensitiveCompare(handle) != .orderedSame else { return }
+        Haptics.selection()
+        navigationController?.pushViewController(ProfileViewController(handle: mentioned), animated: true)
+    }
+
+    private func openHashtagSearch(_ query: String) {
+        Haptics.selection()
+        navigationController?.pushViewController(SearchResultsViewController(query: query, product: .top), animated: true)
+    }
+
+    /// Opens a web address from the bio or the website line in an in-app
+    /// browser; anything else goes to the system.
+    private func openInBrowser(_ url: URL) {
+        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
+            UIApplication.shared.open(url)
+            return
+        }
+        present(SFSafariViewController(url: url), animated: true)
+    }
+
+    // MARK: - Menu
+
+    private var profileURL: URL? { URL(string: "https://x.com/\(handle)") }
+
+    /// The navigation bar's menu: open in X and copy the link for any
+    /// profile, then mute and block for someone else's once it has loaded.
+    /// Built when opened, so its titles follow the current state.
+    private func installMenu() {
+        let menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] completion in
+            completion(self?.menuElements() ?? [])
+        }])
+        let item = UIBarButtonItem(image: DesignSystem.icon("ellipsis.circle"), menu: menu)
+        item.accessibilityLabel = "More"
+        navigationHost.navigationItem.rightBarButtonItem = item
+    }
+
+    private func menuElements() -> [UIMenuElement] {
+        let open = UIAction(title: "Open in X", image: DesignSystem.icon("safari")) { [weak self] _ in
+            if let url = self?.profileURL { UIApplication.shared.open(url) }
+        }
+        let copy = UIAction(title: "Copy link", image: DesignSystem.icon("link")) { [weak self] _ in
+            self?.copyLink()
+        }
+        var elements: [UIMenuElement] = [open, copy]
+        let moderationActions = moderationKinds.map { kind in
+            let isOn = moderation.isOn(kind)
+            let action = UIAction(title: ProfileModeration.title(for: kind, isOn: isOn, handle: handle),
+                                  image: DesignSystem.icon(Self.symbol(for: kind, isOn: isOn))) { [weak self] _ in
+                self?.requestModeration(kind)
+            }
+            if kind == .block, !isOn { action.attributes.insert(.destructive) }
+            if moderation.isPending(kind) { action.attributes.insert(.disabled) }
+            return action
+        }
+        if !moderationActions.isEmpty {
+            elements.append(UIMenu(options: .displayInline, children: moderationActions))
+        }
+        return elements
+    }
+
+    /// Mute and block apply to someone else's account, once it has loaded.
+    private var moderationKinds: [ProfileModeration.Kind] {
+        guard loadState == .loaded, user != nil, !isOwnProfile else { return [] }
+        return [.mute, .block]
+    }
+
+    private static func symbol(for kind: ProfileModeration.Kind, isOn: Bool) -> String {
+        switch kind {
+        case .mute: return isOn ? "speaker.wave.2" : "speaker.slash"
+        case .block: return isOn ? "hand.raised.slash" : "hand.raised"
+        }
+    }
+
+    /// The menu's mute and block, offered to VoiceOver on the header too.
+    private func accessibilityActions() -> [UIAccessibilityCustomAction] {
+        moderationKinds.map { kind in
+            UIAccessibilityCustomAction(
+                name: ProfileModeration.title(for: kind, isOn: moderation.isOn(kind), handle: handle)
+            ) { [weak self] _ in
+                self?.requestModeration(kind)
+                return true
+            }
+        }
+    }
+
+    private func copyLink() {
+        guard let url = profileURL else { return }
+        UIPasteboard.general.url = url
+        Haptics.success()
+        showToast("Link copied")
+    }
+
+    /// Mutes or unmutes at once; blocking asks first, since it also ends any
+    /// follow between the two accounts.
+    private func requestModeration(_ kind: ProfileModeration.Kind) {
+        guard kind == .block, !moderation.blocking else {
+            applyModeration(kind)
+            return
+        }
+        let sheet = UIAlertController(
+            title: "Block @\(handle)?",
+            message: "They won't be able to follow you or see your posts, and you won't see theirs.",
+            preferredStyle: .actionSheet)
+        sheet.addAction(UIAlertAction(title: "Block @\(handle)", style: .destructive) { [weak self] _ in
+            self?.applyModeration(.block)
+        })
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        sheet.popoverPresentationController?.barButtonItem = navigationHost.navigationItem.rightBarButtonItem
+        present(sheet, animated: true)
+    }
+
+    /// Flips mute or block optimistically: the header's capsule and the menu
+    /// change now, and a refusal puts them back and says why.
+    private func applyModeration(_ kind: ProfileModeration.Kind) {
+        guard let user else { return }
+        let social = social
+        let userID = user.restID
+        let handle = handle
+        Task {
+            let outcome = await moderation.toggle(kind) { on in
+                switch kind {
+                case .mute: return try await social.setMuted(userID: userID, muted: on).muting
+                case .block: return try await social.setBlocked(userID: userID, blocked: on).blocking
+                }
+            }
+            switch outcome {
+            case let .success(on)?:
+                Haptics.success()
+                if kind == .block, on, isFollowing == true { isFollowing = false }
+                applyHeaderState()
+                UIAccessibility.post(notification: .announcement,
+                                     argument: ProfileModeration.confirmation(for: kind, isOn: on, handle: handle))
+                AppLogger.shared.info("\(kind == .mute ? "mute" : "block") @\(handle) → \(on)", category: .profile)
+            case let .failure(error)?:
+                AppLogger.shared.warn("\(kind == .mute ? "mute" : "block") toggle failed: \(error)", category: .profile)
+                guard !error.isCancellation else { return }
+                Haptics.error()
+                showToast(error.localizedDescription)
+            case nil:
+                break
+            }
         }
     }
 
@@ -303,6 +504,14 @@ final class ProfileViewController: FeedViewController {
         setShowingReplies(true)
         applyHeaderState()
     }
+
+    /// Screenshot-QA hook: asks to block the account once it has loaded, as
+    /// the menu's Block would.
+    func debugRequestBlock() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            self?.requestModeration(.block)
+        }
+    }
     #endif
 
     /// Builds the replies feed on first use: the same feed machinery over the
@@ -319,6 +528,7 @@ final class ProfileViewController: FeedViewController {
         controller.didMove(toParent: self)
         controller.view.backgroundColor = .clear
         controller.onScroll = { [weak self] scrollView in self?.updateBanner(for: scrollView) }
+        controller.hidesEmptyState = hidesEmptyState
         repliesController = controller
     }
 }
@@ -333,278 +543,5 @@ private final class ProfileRepliesFeedViewController: FeedViewController {
     override func pullToRefresh() {
         super.pullToRefresh()
         onPullToRefresh?()
-    }
-}
-
-/// The scrolling profile header, shared (as independent copies) by the Posts
-/// and Replies tabs.
-private final class ProfileHeaderView: UIView {
-    /// How much of the header image shows below the navigation bar at rest.
-    static let bannerHeight: CGFloat = 96
-    private static let avatarSize: CGFloat = 76
-    private static let avatarRing: CGFloat = 4
-
-    private let avatar = AsyncImageView(frame: .zero)
-    private let panel = UIView()
-    private let nameLabel = UILabel()
-    private let handleLabel = UILabel()
-    private let basedInLabel = UILabel()
-    private let followingButton = UIButton(configuration: .plain())
-    private let followersButton = UIButton(configuration: .plain())
-    private let followButton = UIButton(configuration: .filled())
-    private let briefButton = UIButton(configuration: .tinted())
-    private let segment = UISegmentedControl(items: ["Posts", "Replies"])
-    private let separator = HairlineView()
-    private let counts = UIStackView()
-
-    var onBrief: (() -> Void)?
-    var onFollowToggle: (() -> Void)?
-    var onTapFollowers: (() -> Void)?
-    var onTapFollowing: (() -> Void)?
-    var onSegmentChange: ((Int) -> Void)?
-    var onRetry: (() -> Void)?
-    private var basedIn: (flag: String?, country: String?)?
-    private let retryButton = UIButton(configuration: .tinted())
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        backgroundColor = .clear
-        panel.backgroundColor = DesignSystem.Color.background
-        avatar.translatesAutoresizingMaskIntoConstraints = false
-        avatar.setRounded(Self.avatarSize / 2)
-        avatar.layer.borderWidth = Self.avatarRing
-        avatar.layer.borderColor = DesignSystem.Color.background.cgColor
-        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: ProfileHeaderView, _) in
-            view.avatar.layer.borderColor = DesignSystem.Color.background.cgColor
-        }
-
-        nameLabel.textColor = DesignSystem.Color.label
-        nameLabel.numberOfLines = 1
-        handleLabel.textColor = DesignSystem.Color.secondaryLabel
-        basedInLabel.textColor = DesignSystem.Color.secondaryLabel
-        basedInLabel.isHidden = true
-
-        for button in [followingButton, followersButton] {
-            button.configuration?.contentInsets = .zero
-            button.configuration?.baseForegroundColor = DesignSystem.Color.secondaryLabel
-        }
-        followingButton.addAction(UIAction { [weak self] _ in self?.onTapFollowing?() }, for: .touchUpInside)
-        followersButton.addAction(UIAction { [weak self] _ in self?.onTapFollowers?() }, for: .touchUpInside)
-        followingButton.accessibilityHint = "Shows the accounts this user follows"
-        followersButton.accessibilityHint = "Shows this user's followers"
-
-        followButton.isHidden = true
-        followButton.configuration?.cornerStyle = .capsule
-        followButton.addAction(UIAction { [weak self] _ in self?.onFollowToggle?() }, for: .touchUpInside)
-
-        var config = UIButton.Configuration.tinted()
-        config.title = "Brief"
-        config.image = DesignSystem.icon("sparkles", pointSize: 14)
-        config.imagePadding = 6
-        config.cornerStyle = .capsule
-        briefButton.configuration = config
-        briefButton.addAction(UIAction { [weak self] _ in self?.onBrief?() }, for: .touchUpInside)
-
-        segment.selectedSegmentIndex = 0
-        segment.addAction(UIAction { [weak self] _ in
-            guard let self else { return }
-            self.onSegmentChange?(self.segment.selectedSegmentIndex)
-        }, for: .valueChanged)
-        segment.accessibilityLabel = "Timeline mode"
-
-        let text = UIStackView(arrangedSubviews: [nameLabel, handleLabel, basedInLabel])
-        text.axis = .vertical
-        text.spacing = 2
-
-        [followingButton, followersButton, UIView()].forEach(counts.addArrangedSubview)
-        counts.spacing = DesignSystem.Spacing.l
-
-        let actions = UIStackView(arrangedSubviews: [UIView(), followButton, briefButton])
-        actions.axis = .horizontal
-        actions.spacing = DesignSystem.Spacing.s
-        actions.alignment = .center
-
-        var retryConfig = UIButton.Configuration.tinted()
-        retryConfig.title = "Couldn't load this profile — Retry"
-        retryConfig.image = DesignSystem.icon("arrow.clockwise", pointSize: 13)
-        retryConfig.imagePadding = 6
-        retryConfig.cornerStyle = .capsule
-        retryButton.configuration = retryConfig
-        retryButton.isHidden = true
-        retryButton.addAction(UIAction { [weak self] _ in self?.onRetry?() }, for: .touchUpInside)
-
-        for button in [followingButton, followersButton, followButton, briefButton] {
-            button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
-        }
-
-        let column = UIStackView(arrangedSubviews: [actions, text, retryButton, counts, segment])
-        column.axis = .vertical
-        column.spacing = DesignSystem.Spacing.m
-        column.alignment = .fill
-        column.setCustomSpacing(DesignSystem.Spacing.s, after: actions)
-
-        addManaged(panel)
-        panel.addManaged(column)
-        panel.addManaged(separator)
-        addManaged(avatar)
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(emojiLoaded), name: TwemojiCache.imagesDidLoad, object: nil)
-        applyFonts()
-        NSLayoutConstraint.activate([
-            panel.topAnchor.constraint(equalTo: topAnchor, constant: Self.bannerHeight),
-            panel.leadingAnchor.constraint(equalTo: leadingAnchor),
-            panel.trailingAnchor.constraint(equalTo: trailingAnchor),
-            panel.bottomAnchor.constraint(equalTo: bottomAnchor),
-            column.topAnchor.constraint(equalTo: panel.topAnchor, constant: DesignSystem.Spacing.s),
-            column.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 16),
-            column.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -16),
-            column.bottomAnchor.constraint(equalTo: panel.bottomAnchor, constant: -12),
-            avatar.widthAnchor.constraint(equalToConstant: Self.avatarSize),
-            avatar.heightAnchor.constraint(equalToConstant: Self.avatarSize),
-            avatar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            avatar.centerYAnchor.constraint(equalTo: panel.topAnchor),
-            separator.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
-            separator.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
-            separator.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
-        ])
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    /// Re-resolves every font from the current text size; the caller then
-    /// redraws the user's details (`configure`, `setBasedIn`) and re-measures.
-    func applyFonts() {
-        nameLabel.font = DesignSystem.Typography.title()
-        handleLabel.font = DesignSystem.Typography.handle()
-        basedInLabel.font = DesignSystem.Typography.metric()
-        let stacked = traitCollection.preferredContentSizeCategory.isAccessibilityCategory
-        counts.axis = stacked ? .vertical : .horizontal
-        counts.alignment = stacked ? .leading : .fill
-        counts.spacing = stacked ? 0 : DesignSystem.Spacing.l
-        if let basedIn { setBasedIn(flag: basedIn.flag, country: basedIn.country) }
-    }
-
-    /// Where the name ends, measured from the top of the header: the scroll
-    /// distance at which it slides under the navigation bar.
-    var nameBottom: CGFloat {
-        layoutIfNeeded()
-        return nameLabel.convert(nameLabel.bounds, to: self).maxY
-    }
-
-    /// Shrinks the avatar toward its bottom-left as the profile scrolls, so it
-    /// settles into the header instead of sliding under the bar at full size.
-    func setAvatar(scale: CGFloat, alpha: CGFloat) {
-        let half = Self.avatarSize / 2
-        avatar.transform = CGAffineTransform(scaleX: scale, y: scale)
-            .concatenating(CGAffineTransform(translationX: -half * (1 - scale), y: half * (1 - scale)))
-        avatar.alpha = alpha
-    }
-
-    /// Shows the handle straight away, before the profile request lands.
-    func setHandle(_ handle: String) {
-        handleLabel.text = "@\(handle)"
-    }
-
-    func setLoadFailed(_ failed: Bool) {
-        retryButton.isHidden = !failed
-    }
-
-    func configure(with user: User) {
-        nameLabel.attributedText = Self.nameText(for: user)
-        nameLabel.accessibilityLabel = user.verified ? "\(user.name), verified" : user.name
-        handleLabel.text = "@\(user.handle)"
-        setCount(followingButton, count: user.following, label: "following")
-        setCount(followersButton, count: user.followers, label: "followers")
-        let url = AppSettings.imagesEnabled ? user.avatarURL.flatMap(URL.init) : nil
-        avatar.load(url: url, targetSize: CGSize(width: Self.avatarSize, height: Self.avatarSize))
-    }
-
-    /// The name in Twemoji art, followed by the verified seal for a verified
-    /// account — an inline attachment, so it wraps with the name.
-    private static func nameText(for user: User) -> NSAttributedString {
-        let font = DesignSystem.Typography.title()
-        let text = NSMutableAttributedString(attributedString: TwemojiText.attributed(
-            user.name, font: font, color: DesignSystem.Color.label))
-        guard user.verified,
-              let seal = UIImage(systemName: "checkmark.seal.fill",
-                                 withConfiguration: UIImage.SymbolConfiguration(font: font, scale: .small))?
-                  .withTintColor(DesignSystem.Color.verified, renderingMode: .alwaysOriginal)
-        else { return text }
-        text.append(NSAttributedString(string: " "))
-        text.append(NSAttributedString(attachment: NSTextAttachment(image: seal)))
-        return text
-    }
-
-    /// A "1.2M followers" button: bold count, dim label — visibly one tap
-    /// target, matching X's header grammar.
-    private func setCount(_ button: UIButton, count: Int, label: String) {
-        var text = AttributedString("\(Format.count(count)) ")
-        text.font = DesignSystem.Typography.metric().withWeight(.bold)
-        text.foregroundColor = DesignSystem.Color.label
-        var suffix = AttributedString(label)
-        suffix.font = DesignSystem.Typography.metric()
-        suffix.foregroundColor = DesignSystem.Color.secondaryLabel
-        text.append(suffix)
-        button.configuration?.attributedTitle = text
-        button.accessibilityLabel = "\(Format.count(count)) \(label)"
-    }
-
-    /// Shows the Follow/Following button once the relationship is known.
-    /// Hidden on the viewer's own profile and on servers that don't report
-    /// the relationship (never guess).
-    func setFollowState(following: Bool?, isOwnProfile: Bool) {
-        guard !isOwnProfile, let following else {
-            followButton.isHidden = true
-            return
-        }
-        followButton.isHidden = false
-        var config = followButton.configuration ?? .filled()
-        config.cornerStyle = .capsule
-        config.title = following ? "Following" : "Follow"
-        config.baseBackgroundColor = following
-            ? DesignSystem.Color.elevatedBackground
-            : DesignSystem.Color.accent
-        config.baseForegroundColor = following ? DesignSystem.Color.label : .white
-        followButton.configuration = config
-        followButton.accessibilityLabel = following ? "Following, tap to unfollow" : "Follow"
-    }
-
-    /// The height of the Posts/Replies control and the margin under it: the
-    /// part of the header that stays visible when switching tabs.
-    var segmentHeight: CGFloat {
-        segment.bounds.height + 12
-    }
-
-    func setSegment(_ index: Int) {
-        guard segment.selectedSegmentIndex != index else { return }
-        segment.selectedSegmentIndex = index
-    }
-
-    /// Twemoji art for the flag landed after the line was first drawn.
-    @objc private func emojiLoaded() {
-        guard let basedIn else { return }
-        setBasedIn(flag: basedIn.flag, country: basedIn.country)
-    }
-
-    /// Shows "based in <flag> <country>" (the TUI's profile line) once the
-    /// about-account lookup resolves; hidden when X carries no country.
-    func setBasedIn(flag: String?, country: String?) {
-        basedIn = (flag, country)
-        guard let country, !country.isEmpty else {
-            basedInLabel.isHidden = true
-            return
-        }
-        let flagPrefix = flag.map { "\($0) " } ?? ""
-        basedInLabel.attributedText = TwemojiText.attributed(
-            "based in \(flagPrefix)\(country)", font: DesignSystem.Typography.metric(),
-            color: DesignSystem.Color.secondaryLabel)
-        basedInLabel.isHidden = false
-    }
-}
-
-private extension UIFont {
-    func withWeight(_ weight: UIFont.Weight) -> UIFont {
-        UIFont.systemFont(ofSize: pointSize, weight: weight)
     }
 }

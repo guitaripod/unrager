@@ -63,6 +63,12 @@ class FeedViewController: UIViewController, TweetActionHandling {
 
     /// Optional scrolling header (e.g. a profile header) shown above the feed.
     var headerView: UIView?
+
+    /// Keeps an empty feed blank (no spinner, empty or error state) for a
+    /// screen whose header already says why there are no posts.
+    var hidesEmptyState = false {
+        didSet { if oldValue != hidesEmptyState, dataSource != nil { updateChrome() } }
+    }
     static let headerKind = "feed-header"
     static let footerKind = "feed-footer"
 
@@ -719,7 +725,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
     /// "Nothing here yet" for a frame.
     private func updateChrome() {
         refreshFooter()
-        guard dataSource.snapshot().numberOfItems == 0 else {
+        guard dataSource.snapshot().numberOfItems == 0, !hidesEmptyState else {
             emptyState.isHidden = true
             loadingIndicator.stopAnimating()
             hideCollecting()

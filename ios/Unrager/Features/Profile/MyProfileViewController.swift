@@ -59,10 +59,5 @@ final class MyProfileViewController: UIViewController {
         child.didMove(toParent: self)
         profile = child
         setNeedsStatusBarAppearanceUpdate()
-        navigationItem.rightBarButtonItem = UIBarButtonItem(
-            image: DesignSystem.icon("safari"),
-            primaryAction: UIAction { _ in
-                if let url = URL(string: "https://x.com/\(handle)") { UIApplication.shared.open(url) }
-            })
     }
 }

@@ -14,10 +14,24 @@ struct PhotoMosaicTests {
         #expect(abs(mosaic.height - width / 1.5) < 0.01)
     }
 
-    @Test("A lone 9:16 photo is shown whole, a taller one stops at 9:16")
-    func tallPhotoStopsAtNineBySixteen() {
-        #expect(abs(PhotoMosaic.make(ratios: [9.0 / 16.0], width: width).height - width * 16.0 / 9.0) < 0.01)
-        #expect(abs(PhotoMosaic.make(ratios: [0.3], width: width).height - width * 16.0 / 9.0) < 0.01)
+    @Test("A lone tall photo's frame stops at 4:5, and it is shown whole when cropping would cost too much")
+    func tallPhotoStopsAtFourByFive() {
+        let slightlyTall = PhotoMosaic.make(ratios: [0.75], width: width)
+        #expect(abs(slightlyTall.height - width / 0.8) < 0.01)
+        #expect(!slightlyTall.letterboxed)
+        let veryTall = PhotoMosaic.make(ratios: [9.0 / 16.0], width: width)
+        #expect(abs(veryTall.height - width / 0.8) < 0.01)
+        #expect(veryTall.letterboxed)
+        #expect(abs(PhotoMosaic.make(ratios: [0.3], width: width).height - width / 0.8) < 0.01)
+    }
+
+    @Test("A lone photo inside the limits is never letterboxed")
+    func ordinaryPhotosFill() {
+        for ratio: CGFloat in [0.8, 1.0, 4.0 / 3.0, 16.0 / 9.0, 2.4] {
+            let mosaic = PhotoMosaic.make(ratios: [ratio], width: width)
+            #expect(!mosaic.letterboxed)
+            #expect(abs(mosaic.height - width / ratio) < 0.01)
+        }
     }
 
     @Test("Two landscape photos share one row, two portraits share one row")
@@ -69,11 +83,25 @@ struct PhotoMosaicTests {
     @Test("A group of photos never runs past a screenful")
     func groupsStayCompact() {
         for ratios in [[0.6, 0.6], [0.6, 0.6, 0.6, 0.6], [1.0, 1.0, 1.0, 1.0]] as [[CGFloat]] {
-            #expect(PhotoMosaic.make(ratios: ratios, width: width).height <= width * 1.4)
+            #expect(PhotoMosaic.make(ratios: ratios, width: width).height <= width * 1.05)
         }
     }
 
-    @Test("Media shape keeps a source's ratio inside the limits and clamps outside them")
+    @Test("A video's frame stops at square, a slight overshoot is cropped and a big one is shown whole")
+    func videoFrames() {
+        let sixteenByNine = MediaShape.frame(source: 16.0 / 9.0, tallest: MediaShape.tallestVideo, fallback: 1)
+        #expect(sixteenByNine.fills && abs(sixteenByNine.ratio - 16.0 / 9.0) < 0.0001)
+        let vertical = MediaShape.frame(source: 9.0 / 16.0, tallest: MediaShape.tallestVideo, fallback: 1)
+        #expect(vertical.ratio == 1.0 && !vertical.fills)
+        let nearlySquare = MediaShape.frame(source: 0.92, tallest: MediaShape.tallestVideo, fallback: 1)
+        #expect(nearlySquare.ratio == 1.0 && nearlySquare.fills)
+        let panorama = MediaShape.frame(source: 4.0, tallest: MediaShape.tallestVideo, fallback: 1)
+        #expect(panorama.ratio == MediaShape.widest && !panorama.fills)
+        let unknown = MediaShape.frame(source: nil, tallest: MediaShape.tallestVideo, fallback: 16.0 / 9.0)
+        #expect(unknown.fills && abs(unknown.ratio - 16.0 / 9.0) < 0.0001)
+    }
+
+    @Test("Media shape keeps a tile's ratio inside the limits and clamps outside them")
     func mediaShape() {
         let wide: CGFloat = 16.0 / 9.0
         #expect(MediaShape.ratio(wide, fallback: 1) == wide)

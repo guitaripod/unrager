@@ -165,11 +165,11 @@ final class MediaContentView: UIView {
         let isGIF: Bool = { if case .animatedGif = media.kind { return true } else { return false } }()
         let inset = sideInset(isPicture: true)
         let width = contentWidth - 2 * inset
-        let ratio = MediaShape.ratio(media.aspectRatio, fallback: 16.0 / 9.0)
+        let frame = MediaShape.frame(source: media.aspectRatio, tallest: MediaShape.tallestVideo, fallback: 16.0 / 9.0)
         view.setRounded(pictureRadius(inset: inset))
         view.configure(posterURL: imagesEnabled ? URL(string: media.url) : nil,
-                       videoURL: videoURL, isGIF: isGIF, aspectRatio: ratio,
-                       posterSize: CGSize(width: width, height: (width / ratio).rounded()),
+                       videoURL: videoURL, isGIF: isGIF, aspectRatio: frame.ratio, fills: frame.fills,
+                       posterSize: CGSize(width: width, height: (width / frame.ratio).rounded()),
                        imagesEnabled: imagesEnabled)
         swap(to: view, inset: inset)
     }

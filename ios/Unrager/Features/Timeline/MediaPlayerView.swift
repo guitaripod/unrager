@@ -4,20 +4,23 @@ import UIKit
 /// Inline, autoplaying video surface backed by a streamed `AVPlayer`. Streams
 /// from the server media proxy (which forwards real `video/mp4` bytes), shows
 /// the poster image until the first frame is ready, loops forever, and stays
-/// muted. The box takes the clip's own shape, so the picture fills it
-/// (`videoGravity = .resizeAspectFill`) with no bars; only a clip beyond
-/// `MediaShape`'s limits loses a sliver at its edges. Reuse-safe:
-/// `tearDown()` releases the player and its observers so a recycled cell never
-/// plays the previous tweet's clip.
+/// muted. The box takes the clip's own shape up to `MediaShape`'s limit, so
+/// the picture fills it with no bars. A clip taller than the box is shown whole
+/// (`.resizeAspect`) over a blurred copy of its poster rather than over black,
+/// unless it only needs a slight crop to fill. Reuse-safe: `tearDown()`
+/// releases the player and its observers so a recycled cell never plays the
+/// previous tweet's clip.
 final class MediaPlayerView: UIView {
-    override class var layerClass: AnyClass { AVPlayerLayer.self }
 
     /// Session-wide inline-audio preference. Inline clips autoplay muted (like
     /// X); tapping any clip's speaker unmutes them all for the session and
     /// switches the audio session to `.playback`. Resets to muted on relaunch.
     static var audioEnabled = false
 
-    private var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+    private let host = PlayerHostView()
+    private var playerLayer: AVPlayerLayer { host.playerLayer }
+    private let ambient = UIImageView()
+    private var ambientTask: Task<Void, Never>?
     private let poster = AsyncImageView(frame: .zero)
     private let playBadge = UIImageView()
     private let gifBadge = UILabel()
@@ -34,9 +37,17 @@ final class MediaPlayerView: UIView {
         accessibilityIgnoresInvertColors = true
         clipsToBounds = true
         backgroundColor = .black
-        playerLayer.videoGravity = .resizeAspectFill
         setAspectRatio(16.0 / 9.0)
 
+        ambient.contentMode = .scaleAspectFill
+        ambient.clipsToBounds = true
+        ambient.isHidden = true
+        ambient.translatesAutoresizingMaskIntoConstraints = false
+        addManaged(ambient)
+        ambient.pinEdges(to: self)
+        host.translatesAutoresizingMaskIntoConstraints = false
+        addManaged(host)
+        host.pinEdges(to: self)
         poster.translatesAutoresizingMaskIntoConstraints = false
         addManaged(poster)
         poster.pinEdges(to: self)
@@ -122,10 +133,14 @@ final class MediaPlayerView: UIView {
     /// starts NO decode — so scrolling a video cell into view costs nothing.
     /// Playback begins only when `play()` is called (by the feed once it's at
     /// rest and this is the focused clip).
-    func configure(posterURL: URL?, videoURL: URL, isGIF: Bool, aspectRatio: CGFloat,
+    func configure(posterURL: URL?, videoURL: URL, isGIF: Bool, aspectRatio: CGFloat, fills: Bool,
                    posterSize: CGSize, imagesEnabled: Bool) {
         tearDown()
         setAspectRatio(aspectRatio)
+        playerLayer.videoGravity = fills ? .resizeAspectFill : .resizeAspect
+        poster.contentMode = fills ? .scaleAspectFill : .scaleAspectFit
+        ambient.isHidden = fills
+        poster.onLoad = fills ? nil : { [weak self] image in self?.softenBackdrop(from: image, key: posterURL) }
         pendingVideoURL = videoURL
         self.isGIF = isGIF
         gifBadge.isHidden = !isGIF
@@ -171,7 +186,17 @@ final class MediaPlayerView: UIView {
         playBadge.isHidden = true
     }
 
+    private func softenBackdrop(from image: UIImage, key: URL?) {
+        ambientTask?.cancel()
+        ambientTask = Task { [weak self] in
+            let soft = await SoftImage.blurred(image, key: key?.absoluteString ?? "poster-\(image.hash)")
+            guard !Task.isCancelled else { return }
+            self?.ambient.image = soft
+        }
+    }
+
     func tearDown() {
+        ambientTask?.cancel()
         statusObservation?.invalidate()
         statusObservation = nil
         if let loopObserver { NotificationCenter.default.removeObserver(loopObserver) }
@@ -189,6 +214,13 @@ final class MediaPlayerView: UIView {
         statusObservation?.invalidate()
         if let loopObserver { NotificationCenter.default.removeObserver(loopObserver) }
     }
+}
+
+/// A view whose layer is the `AVPlayerLayer`, so the video can sit between the
+/// soft backdrop behind it and the poster in front.
+private final class PlayerHostView: UIView {
+    override class var layerClass: AnyClass { AVPlayerLayer.self }
+    var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
 }
 
 /// A button whose touch target reaches past its visible bounds, so a small

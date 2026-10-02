@@ -9,6 +9,9 @@ final class AsyncImageView: UIImageView {
 
     var placeholderColor: UIColor = DesignSystem.Color.surface
 
+    /// Called with the image each time one lands, from the cache or the network.
+    var onLoad: ((UIImage) -> Void)?
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         clipsToBounds = true
@@ -43,6 +46,7 @@ final class AsyncImageView: UIImageView {
             task = nil
             image = hit
             backgroundColor = .clear
+            onLoad?(hit)
             return
         }
 
@@ -52,6 +56,7 @@ final class AsyncImageView: UIImageView {
             self.task = nil
             self.image = loaded
             self.backgroundColor = loaded == nil ? self.placeholderColor : .clear
+            if let loaded { self.onLoad?(loaded) }
         }
     }
 

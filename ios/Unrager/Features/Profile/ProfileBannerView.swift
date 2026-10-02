@@ -1,4 +1,3 @@
-import CoreImage
 import UIKit
 import UnragerKit
 
@@ -111,7 +110,7 @@ final class ProfileBannerView: UIView {
         task = Task { [weak self] in
             let size = CGSize(width: 780, height: 520)
             guard let image = await ImageLoader.image(for: url, pointSize: size, scale: scale) else { return }
-            let (blurred, topBrightness) = await Task.detached { Self.softened(image) }.value
+            let (blurred, topBrightness) = await SoftImage.analyzed(image)
             guard !Task.isCancelled, let self, self.loadedURL == url else { return }
             self.picture.image = image
             self.soft.image = blurred
@@ -163,37 +162,6 @@ final class ProfileBannerView: UIView {
         ]
         wash.startPoint = CGPoint(x: 0, y: 0)
         wash.endPoint = CGPoint(x: 1, y: 1)
-    }
-
-    /// A heavily blurred, much smaller copy: cheap to hold, and stretched back
-    /// to the banner's size it reads as the same picture seen through frosted
-    /// glass. Also reports how bright the top of the picture is (0 to 1), which
-    /// decides the status bar's text colour.
-    private nonisolated static func softened(_ image: UIImage) -> (UIImage?, CGFloat) {
-        guard let source = image.cgImage else { return (nil, 1) }
-        let width: CGFloat = 96
-        let height = max(1, (width * CGFloat(source.height) / CGFloat(source.width)).rounded())
-        let small = UIGraphicsImageRenderer(size: CGSize(width: width, height: height)).image { _ in
-            image.draw(in: CGRect(x: 0, y: 0, width: width, height: height))
-        }
-        guard let input = small.cgImage.map(CIImage.init(cgImage:)) else { return (nil, 1) }
-        let context = CIContext()
-        let blurred = input.clampedToExtent().applyingGaussianBlur(sigma: 5).cropped(to: input.extent)
-        let output = context.createCGImage(blurred, from: blurred.extent).map { UIImage(cgImage: $0) }
-        return (output, topBrightness(of: input, context: context))
-    }
-
-    /// The average brightness of the top third of `image`: the part the status
-    /// bar sits on.
-    private nonisolated static func topBrightness(of image: CIImage, context: CIContext) -> CGFloat {
-        let extent = image.extent
-        let top = CGRect(x: extent.minX, y: extent.maxY - extent.height / 3, width: extent.width, height: extent.height / 3)
-        let average = image.cropped(to: top).applyingFilter(
-            "CIAreaAverage", parameters: [kCIInputExtentKey: CIVector(cgRect: top)])
-        var pixel = [UInt8](repeating: 0, count: 4)
-        context.render(average, toBitmap: &pixel, rowBytes: 4, bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
-                       format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
-        return (0.299 * CGFloat(pixel[0]) + 0.587 * CGFloat(pixel[1]) + 0.114 * CGFloat(pixel[2])) / 255
     }
 }
 

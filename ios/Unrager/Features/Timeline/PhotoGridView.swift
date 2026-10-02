@@ -10,6 +10,8 @@ final class PhotoGridView: UIView {
     var onTapPhoto: ((Int) -> Void)?
 
     private var tiles: [AsyncImageView] = []
+    private let ambient = UIImageView()
+    private var ambientTask: Task<Void, Never>?
     private let overflowLabel = UILabel()
     private var ratios: [CGFloat?] = []
     private var mosaic = PhotoMosaic(tiles: [], height: 0)
@@ -19,6 +21,11 @@ final class PhotoGridView: UIView {
         super.init(frame: frame)
         clipsToBounds = true
         layer.cornerCurve = .continuous
+        accessibilityIgnoresInvertColors = true
+        ambient.contentMode = .scaleAspectFill
+        ambient.clipsToBounds = true
+        ambient.isHidden = true
+        addSubview(ambient)
 
         overflowLabel.font = DesignSystem.Typography.system(28, weight: .bold)
         overflowLabel.textColor = .white
@@ -55,6 +62,7 @@ final class PhotoGridView: UIView {
         mosaic = PhotoMosaic.make(ratios: self.ratios, width: width)
         heightConstraint?.constant = max(1, mosaic.height.rounded())
         if tiles.count != count { rebuild(count: count) }
+        showWhole(mosaic.letterboxed, url: urls.first)
         setNeedsLayout()
         for (index, tile) in tiles.enumerated() {
             let alt = altTexts.indices.contains(index) ? altTexts[index] : nil
@@ -74,12 +82,37 @@ final class PhotoGridView: UIView {
 
     func prepareForReuse() {
         tiles.forEach { $0.cancel() }
+        ambientTask?.cancel()
         onTapPhoto = nil
+    }
+
+    /// A lone photo that doesn't fit its frame shows whole, over a blurred copy
+    /// of itself that fills the rest of the frame; any other layout fills its
+    /// tiles.
+    private func showWhole(_ whole: Bool, url: URL?) {
+        ambientTask?.cancel()
+        ambient.isHidden = !whole
+        tiles.forEach { $0.contentMode = whole ? .scaleAspectFit : .scaleAspectFill }
+        guard whole, let url, let tile = tiles.first else {
+            tiles.first?.onLoad = nil
+            return
+        }
+        tile.onLoad = { [weak self] image in
+            guard let self else { return }
+            self.ambientTask?.cancel()
+            self.ambientTask = Task { [weak self] in
+                let soft = await SoftImage.blurred(image, key: url.absoluteString)
+                guard !Task.isCancelled else { return }
+                self?.ambient.image = soft
+            }
+        }
+        if let existing = tile.image { tile.onLoad?(existing) }
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
         guard bounds.width > 0 else { return }
+        ambient.frame = bounds
         relayoutIfWidthChanged()
         for (tile, frame) in zip(tiles, mosaic.tiles) { tile.frame = frame }
     }

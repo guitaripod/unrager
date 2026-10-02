@@ -60,6 +60,24 @@ pub enum Error {
     #[error("the demo never contacts X; run `unrager` for your own timeline")]
     Offline,
 
+    /// Posting through X's developer API needs an authorization the server
+    /// can't get without a person at its browser: no saved token, one that
+    /// expired and couldn't be refreshed, or one X rejected.
+    #[error("{0}")]
+    PostingNotAuthorized(String),
+
+    /// The X developer account behind posting has run out of paid credits.
+    #[error("{0}")]
+    CreditsDepleted(String),
+
+    #[error("not found: {0}")]
+    NotFound(String),
+
+    /// X knows the account or post but won't show it. `reason` is one of
+    /// `suspended`, `protected`, `deleted` or `unavailable`.
+    #[error("unavailable on X ({reason})")]
+    Unavailable { reason: String },
+
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
 

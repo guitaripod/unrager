@@ -160,7 +160,7 @@ fn oauth_configured() -> bool {
 }
 
 async fn upload_v2(file: &MediaFile) -> crate::error::Result<String> {
-    let api = ApiClient::new().await?;
+    let api = ApiClient::non_interactive().await?;
     api.upload_media(file).await
 }
 

@@ -25,15 +25,23 @@ class PagedUserListViewController: UIViewController {
     private var collectionView: UICollectionView!
     private var dataSource: UICollectionViewDiffableDataSource<Int, String>!
     private var rowsByID: [String: UserRow] = [:]
-    private var order: [String] = []
+    private(set) var order: [String] = []
     private let emptyState = EmptyStateView()
     private let loadingIndicator = UIActivityIndicatorView(style: .medium)
     private var cursor: String?
     private var exhausted = false
     private var loading = false
     private var pagingFailed = false
+    /// A pull-to-refresh failed while rows were showing: they stay, with
+    /// "Couldn't refresh" under them.
+    private var refreshFailed = false
     private var endNote: String?
-    private var emojiObserver: AnyCancellable?
+    /// The request in flight, and a counter bumped whenever a newer one
+    /// supersedes it, so a stale answer (an old query's people, a page from
+    /// before a refresh) is dropped instead of shown.
+    private var loadTask: Task<Void, Never>?
+    private var generation = 0
+    private var redrawObserver: AnyCancellable?
     private let footer = PagingFooter()
 
     private lazy var registration = UICollectionView.CellRegistration<UserRowCell, String> {
@@ -61,7 +69,10 @@ class PagedUserListViewController: UIViewController {
         collectionView.alwaysBounceVertical = true
         collectionView.delegate = self
         footer.attach(to: collectionView)
-        footer.onRetry = { [weak self] in self?.load(reset: false) }
+        footer.onRetry = { [weak self] in
+            guard let self else { return }
+            self.load(reset: self.refreshFailed)
+        }
         view.addManaged(collectionView)
         collectionView.pinEdges(to: view)
         let refresh = UIRefreshControl()
@@ -81,7 +92,8 @@ class PagedUserListViewController: UIViewController {
         ])
 
         configureDataSource()
-        emojiObserver = NotificationCenter.default.publisher(for: TwemojiCache.imagesDidLoad)
+        redrawObserver = NotificationCenter.default.publisher(for: TwemojiCache.imagesDidLoad)
+            .merge(with: NotificationCenter.default.publisher(for: AppSettings.displayDidChange))
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let self else { return }
@@ -112,7 +124,9 @@ class PagedUserListViewController: UIViewController {
     /// nothing otherwise.
     private func updateFooter() {
         guard !order.isEmpty else { footer.set(.hidden); return }
-        if pagingFailed {
+        if refreshFailed {
+            footer.set(.failed("Couldn't refresh"))
+        } else if pagingFailed {
             footer.set(.failed("Couldn't load more"))
         } else if loading {
             footer.set(.loading("Loading more…"))
@@ -123,37 +137,66 @@ class PagedUserListViewController: UIViewController {
         }
     }
 
-    @objc private func reload() { load(reset: true) }
+    /// Pull-to-refresh: a page still loading gives way to the fresh first
+    /// page.
+    @objc private func reload() {
+        supersedeInFlightLoad()
+        load(reset: true)
+    }
 
     /// Starts again from the first page — for a screen whose query changed.
+    /// Whatever the old query still had in flight is dropped.
     func restart() {
-        loading = false
+        supersedeInFlightLoad()
         cursor = nil
         exhausted = false
+        endNote = nil
         order.removeAll()
         rowsByID.removeAll()
         pagingFailed = false
+        refreshFailed = false
         dataSource.apply(NSDiffableDataSourceSnapshot<Int, String>(), animatingDifferences: false)
         load(reset: true)
     }
 
+    private func supersedeInFlightLoad() {
+        loadTask?.cancel()
+        loadTask = nil
+        generation += 1
+        loading = false
+    }
+
+    /// Loads the first page (`reset`) or the next one. The cursor and the end
+    /// of the list are only replaced once a first page has actually arrived,
+    /// so a failed refresh leaves the rows and paging as they were.
     private func load(reset: Bool) {
         guard !loading, reset || !exhausted else { return }
         loading = true
         pagingFailed = false
-        if reset { exhausted = false; cursor = nil }
+        refreshFailed = false
+        generation += 1
+        let current = generation
+        let requestCursor = reset ? nil : cursor
         if order.isEmpty { emptyState.isHidden = true; loadingIndicator.startAnimating() }
         updateFooter()
-        Task {
+        loadTask = Task {
             defer {
-                loading = false
-                loadingIndicator.stopAnimating()
-                collectionView.refreshControl?.endRefreshing()
-                updateFooter()
+                if current == generation {
+                    loading = false
+                    loadTask = nil
+                    loadingIndicator.stopAnimating()
+                    collectionView.refreshControl?.endRefreshing()
+                    updateFooter()
+                }
             }
             do {
-                let page = try await fetchPage(cursor: reset ? nil : cursor)
-                if reset { rowsByID.removeAll(); order.removeAll() }
+                let page = try await fetchPage(cursor: requestCursor)
+                guard current == generation else { return }
+                if reset {
+                    rowsByID.removeAll()
+                    order.removeAll()
+                    exhausted = false
+                }
                 for user in page.users where rowsByID[user.restID] == nil {
                     rowsByID[user.restID] = UserRow(user)
                     order.append(user.restID)
@@ -163,11 +206,14 @@ class PagedUserListViewController: UIViewController {
                 if page.cursor == nil || page.users.isEmpty { exhausted = true }
                 apply()
             } catch {
+                guard current == generation else { return }
                 AppLogger.shared.warn("user list load failed: \(error)", category: logCategory)
                 if order.isEmpty {
                     emptyState.isHidden = false
                     emptyState.show(symbol: "exclamationmark.triangle", title: "Couldn't load",
                                     subtitle: error.localizedDescription, showRetry: true)
+                } else if reset {
+                    refreshFailed = true
                 } else {
                     pagingFailed = true
                 }
@@ -186,6 +232,16 @@ class PagedUserListViewController: UIViewController {
         emptyState.show(symbol: copy.symbol, title: copy.title, subtitle: copy.subtitle, showRetry: true)
     }
 }
+
+#if DEBUG
+extension PagedUserListViewController {
+    /// Test hook: what a pull-to-refresh does.
+    func restartFromPull() { reload() }
+
+    /// Test hook: what scrolling to the end does.
+    func loadNextPage() { load(reset: false) }
+}
+#endif
 
 extension PagedUserListViewController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {

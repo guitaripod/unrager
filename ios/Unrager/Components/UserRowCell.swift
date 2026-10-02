@@ -45,19 +45,23 @@ final class UserRowCell: UICollectionViewListCell {
             row.name, font: DesignSystem.Typography.body(), color: DesignSystem.Color.label)
         content.secondaryText = "@\(row.handle)"
         content.secondaryTextProperties.color = DesignSystem.Color.secondaryLabel
-        content.image = DesignSystem.icon("person.crop.circle.fill", pointSize: 36)
+        let size = CGSize(width: Self.avatarSize, height: Self.avatarSize)
+        let scale = traitCollection.displayScale > 0 ? traitCollection.displayScale : 3
+        let url = AppSettings.imagesEnabled ? row.avatarURL : nil
+        let cached = url.flatMap { ImageLoader.cachedImageImmediately(for: $0, pointSize: size, scale: scale) }
+        content.image = cached ?? DesignSystem.icon("person.crop.circle.fill", pointSize: Self.avatarSize)
         content.imageProperties.tintColor = DesignSystem.Color.tertiaryLabel
-        content.imageProperties.maximumSize = CGSize(width: Self.avatarSize, height: Self.avatarSize)
+        content.imageProperties.maximumSize = size
+        content.imageProperties.reservedLayoutSize = size
         content.imageProperties.cornerRadius = Self.avatarSize / 2
         contentConfiguration = content
         accessibilityLabel = "\(row.name), @\(row.handle)\(row.verified ? ", verified" : "")"
         accessibilityTraits = .button
         accessories = accessories(verified: row.verified)
 
-        guard AppSettings.imagesEnabled, let url = row.avatarURL else { return }
+        guard cached == nil, let url else { return }
         avatarTask = Task { [weak self] in
-            let image = await ImageLoader.image(
-                for: url, pointSize: CGSize(width: Self.avatarSize, height: Self.avatarSize), scale: 3)
+            let image = await ImageLoader.image(for: url, pointSize: size, scale: scale)
             guard !Task.isCancelled, let self, let image, self.boundID == row.id,
                   var content = self.contentConfiguration as? UIListContentConfiguration else { return }
             content.image = image

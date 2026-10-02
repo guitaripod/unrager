@@ -56,7 +56,7 @@ public struct ProfileRelationshipView: Decodable, Sendable {
         user = try c.decode(User.self, forKey: .user)
         followedByMe = try c.decodeIfPresent(Relationship.self, forKey: .user)?.followedByMe
         pinned = try c.decodeIfPresent(Tweet.self, forKey: .pinned)
-        recent = try c.decodeIfPresent([Tweet].self, forKey: .recent) ?? []
+        recent = try c.decodeLossy(Tweet.self, forKey: .recent)
         cursor = try c.decodeIfPresent(String.self, forKey: .cursor)
     }
 }

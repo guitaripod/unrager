@@ -73,7 +73,7 @@ public struct ProfileView: Decodable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         user = try c.decode(User.self, forKey: .user)
         pinned = try c.decodeIfPresent(Tweet.self, forKey: .pinned)
-        recent = try c.decodeIfPresent([Tweet].self, forKey: .recent) ?? []
+        recent = try c.decodeLossy(Tweet.self, forKey: .recent)
         cursor = try c.decodeIfPresent(String.self, forKey: .cursor)
     }
 }
@@ -81,6 +81,14 @@ public struct ProfileView: Decodable, Sendable {
 public struct LikersPage: Decodable, Sendable {
     public let users: [User]
     public let cursor: String?
+
+    enum CodingKeys: String, CodingKey { case users, cursor }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        users = try c.decodeLossy(User.self, forKey: .users)
+        cursor = try c.decodeIfPresent(String.self, forKey: .cursor)
+    }
 }
 
 public struct Whoami: Decodable, Sendable, Hashable {

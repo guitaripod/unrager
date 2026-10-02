@@ -403,4 +403,42 @@ struct LossyDecodingTests {
         let page = try UnragerJSON.decode(TimelinePage.self, from: Data(json.utf8))
         #expect(page.tweets.map(\.restID) == ["5"])
     }
+
+    private let userJSON = #"{"rest_id":"7","handle":"ada","name":"Ada","verified":false,"followers":1,"following":2}"#
+
+    @Test("A bad notification, actor or attachment is skipped; the page survives")
+    func notificationsPage() throws {
+        let json = """
+        {"notifications":[
+          {"id":"n1","type":"like","timestamp":"2026-10-02T10:00:00Z",
+           "actors":[{"handle":"ada","name":"Ada","rest_id":"7"},{"handle":5}],
+           "target_media":[{"kind":{"hologram":{}},"url":"h"},{"kind":"photo","url":"p"}]},
+          {"id":"n2","type":"like"},
+          null,
+          {"id":"n3","type":"follow","timestamp":"2026-10-02T11:00:00Z"}
+        ],"cursor":"c"}
+        """
+        let page = try UnragerJSON.decode(NotificationsPage.self, from: Data(json.utf8))
+        #expect(page.notifications.map(\.id) == ["n1", "n3"])
+        #expect(page.notifications[0].actors.map(\.handle) == ["ada"])
+        #expect(page.notifications[0].targetMedia.map(\.url) == ["p"])
+        #expect(page.cursor == "c")
+    }
+
+    @Test("A bad tweet in a profile's recent posts is skipped")
+    func profileRecent() throws {
+        let json = #"{"user":"# + userJSON + #","pinned":null,"recent":["# + tweetJSON(id: "1") + #",{"rest_id":2},"# + tweetJSON(id: "3") + #"],"cursor":null}"#
+        let profile = try UnragerJSON.decode(ProfileView.self, from: Data(json.utf8))
+        #expect(profile.recent.map(\.restID) == ["1", "3"])
+        let relationship = try UnragerJSON.decode(ProfileRelationshipView.self, from: Data(json.utf8))
+        #expect(relationship.recent.map(\.restID) == ["1", "3"])
+    }
+
+    @Test("A bad user in a likers page is skipped")
+    func likersPage() throws {
+        let json = #"{"users":[{"handle":"x"},"# + userJSON + #"],"cursor":"next"}"#
+        let page = try UnragerJSON.decode(LikersPage.self, from: Data(json.utf8))
+        #expect(page.users.map(\.handle) == ["ada"])
+        #expect(page.cursor == "next")
+    }
 }

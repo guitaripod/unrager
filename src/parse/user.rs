@@ -71,11 +71,13 @@ pub fn parse_user_result(node: &Value) -> Option<User> {
             .unwrap_or(false);
 
     let followers = node
-        .pointer("/legacy/followers_count")
+        .pointer("/relationship_counts/followers")
+        .or_else(|| node.pointer("/legacy/followers_count"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
     let following = node
-        .pointer("/legacy/friends_count")
+        .pointer("/relationship_counts/following")
+        .or_else(|| node.pointer("/legacy/friends_count"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
 
@@ -177,6 +179,26 @@ mod tests {
         assert_eq!(page.users.len(), 1);
         assert_eq!(page.users[0].handle, "carol");
         assert!(page.next_cursor.is_none());
+    }
+
+    #[test]
+    fn follower_counts_come_from_relationship_counts_with_a_legacy_fallback() {
+        let current = json!({
+            "rest_id": "7",
+            "core": { "screen_name": "bob", "name": "Bob" },
+            "relationship_counts": { "followers": 241_723_845u64, "following": 1414 },
+            "legacy": {}
+        });
+        let user = parse_user_result(&current).unwrap();
+        assert_eq!((user.followers, user.following), (241_723_845, 1414));
+
+        let older = json!({
+            "rest_id": "7",
+            "core": { "screen_name": "bob", "name": "Bob" },
+            "legacy": { "followers_count": 10, "friends_count": 5 }
+        });
+        let user = parse_user_result(&older).unwrap();
+        assert_eq!((user.followers, user.following), (10, 5));
     }
 
     #[test]

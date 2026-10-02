@@ -153,13 +153,15 @@ final class AskConversationViewController: UIViewController {
             inputField.topAnchor.constraint(equalTo: inputBar.topAnchor, constant: DesignSystem.Spacing.s),
             inputField.bottomAnchor.constraint(equalTo: inputBar.bottomAnchor, constant: -DesignSystem.Spacing.s),
             inputField.leadingAnchor.constraint(equalTo: inputBar.leadingAnchor, constant: DesignSystem.Spacing.l),
-            inputField.heightAnchor.constraint(equalToConstant: 36),
+            inputField.heightAnchor.constraint(greaterThanOrEqualToConstant: 36),
 
             sendButton.leadingAnchor.constraint(equalTo: inputField.trailingAnchor, constant: DesignSystem.Spacing.s),
             sendButton.trailingAnchor.constraint(equalTo: inputBar.trailingAnchor, constant: -DesignSystem.Spacing.l),
             sendButton.centerYAnchor.constraint(equalTo: inputField.centerYAnchor),
-            sendButton.widthAnchor.constraint(equalToConstant: 36),
-            sendButton.heightAnchor.constraint(equalToConstant: 36),
+            sendButton.widthAnchor.constraint(equalToConstant: 44),
+            sendButton.heightAnchor.constraint(equalToConstant: 44),
+            sendButton.topAnchor.constraint(greaterThanOrEqualTo: inputBar.topAnchor, constant: DesignSystem.Spacing.xs),
+            sendButton.bottomAnchor.constraint(lessThanOrEqualTo: inputBar.bottomAnchor, constant: -DesignSystem.Spacing.xs),
 
             retryButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             retryButton.bottomAnchor.constraint(equalTo: inputBar.topAnchor, constant: -DesignSystem.Spacing.m),
@@ -171,6 +173,7 @@ final class AskConversationViewController: UIViewController {
     private func applySendButtonState(streaming: Bool) {
         var config = UIButton.Configuration.prominentGlass()
         config.image = DesignSystem.icon(streaming ? "stop.fill" : "arrow.up", pointSize: 15, weight: .bold)
+        config.background.backgroundInsets = NSDirectionalEdgeInsets(top: 4, leading: 4, bottom: 4, trailing: 4)
         sendButton.configuration = config
         sendButton.accessibilityLabel = streaming ? "Stop answering" : "Send follow-up"
     }

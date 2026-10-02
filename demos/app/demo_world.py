@@ -9,7 +9,9 @@ country as (name, alpha2, flag)). `POSTS` rows are (key, author, minutes ago,
 text, media, counts, options): media is `("photos", [names])`, `("video", name)`,
 `("card", {...})` or `None`, counts are (replies, reposts, likes, quotes, views,
 bookmarks), and options such as `reply_to` and `hidden_from_feed` shape the
-threads, the quoted post and the signed-in account's own posts.
+threads, the quoted post and the signed-in account's own posts. `REPOSTS` maps
+the Home posts that arrive as someone's repost to the reposter's handle, and
+`quotes_of` lists the posts quoting a post.
 """
 
 from __future__ import annotations
@@ -119,7 +121,15 @@ POSTS = [
      None, (0, 0, 3, 0, 60, 0), {"reply_to": "q1", "reply_handle": "mirakoski", "text_prefix": "@mirakoski "}),
     ("q2", "tomasbuilds", 250, "Details are the whole thing. Saving this one.",
      None, (0, 0, 5, 0, 70, 0), {"reply_to": "o1", "reply_handle": "noralind", "text_prefix": "@noralind "}),
+    ("x1", "lenapark", 52, "Putting these two side by side in my design crit tomorrow. Great example of tone through shape alone.",
+     None, (2, 1, 48, 0, 1400, 6), {"quote": "f2", "hidden_from_feed": True}),
+    ("x2", "tomasbuilds", 47, "Love seeing the process, not just the final pick. More of this please.",
+     None, (0, 0, 19, 0, 620, 1), {"quote": "f2", "hidden_from_feed": True}),
+    ("x3", "junocooks", 33, "This is how I feel choosing between two bread recipes.",
+     None, (1, 0, 27, 0, 880, 0), {"quote": "f2", "hidden_from_feed": True}),
 ]
+
+REPOSTS = {"f2": "kitwren", "f14": "noralind"}
 
 TRANSLATIONS = {"f15": "Today the sea was so calm it looked like a mirror. I kept watching until the sun disappeared."}
 
@@ -234,6 +244,17 @@ class World:
         if quote:
             tweet["quoted_tweet"] = dict(self.by_key[quote])
         return tweet
+
+    def home_tweet(self, key: str) -> dict:
+        tweet = self.tweet(key)
+        reposter = REPOSTS.get(key)
+        if reposter:
+            tweet["retweeted_by"] = self.users[reposter]
+            tweet["retweeted"] = tweet["retweeted"] or reposter == ME
+        return tweet
+
+    def quotes_of(self, key: str) -> list[dict]:
+        return [self.tweet(p[0]) for p in POSTS if p[6].get("quote") == key]
 
     def tweet_by_id(self, rest_id: str):
         for key, rid in self.ids.items():

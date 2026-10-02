@@ -28,6 +28,16 @@ final class ProfileViewController: FeedViewController {
 
     private var headers: [ProfileHeaderView] { [profileHeader, repliesHeader] }
 
+    override var refreshTextColor: UIColor { .white }
+
+    override var preferredStatusBarStyle: UIStatusBarStyle {
+        statusBarOverBanner && banner.prefersLightContent ? .lightContent : .default
+    }
+
+    private var statusBarOverBanner = true
+    private let banner = ProfileBannerView()
+    private let titleLabel = UILabel()
+
     init(handle: String) {
         self.handle = handle
         super.init(viewModel: TimelineViewModel(source: .user(handle: handle)))
@@ -44,7 +54,13 @@ final class ProfileViewController: FeedViewController {
             wire(header)
             header.setHandle(handle)
         }
+        installBanner()
         loadProfile()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        updateBanner(for: activeScrollView)
     }
 
     /// A pull-to-refresh reloads the header (counts, follow state) along with
@@ -78,9 +94,13 @@ final class ProfileViewController: FeedViewController {
                 async let me = AppEnvironment.shared.whoami()
                 let profile = try await social.profile(handle: handle)
                 user = profile.user
+                banner.configure(url: profile.user.bannerURL.flatMap(URL.init), handle: handle,
+                                 imagesEnabled: AppSettings.imagesEnabled)
                 isOwnProfile = await me?.handle.caseInsensitiveCompare(handle) == .orderedSame
                 isFollowing = profile.followedByMe
                 title = profile.user.name
+                titleLabel.text = profile.user.name
+                titleLabel.sizeToFit()
                 applyHeaderState()
                 loadFlag(for: profile.user)
             } catch {
@@ -117,6 +137,48 @@ final class ProfileViewController: FeedViewController {
             self.basedIn = (resolved.flag, resolved.country)
             self.applyHeaderState()
         }
+    }
+
+    // MARK: - Banner
+
+    private var activeScrollView: UIScrollView {
+        showingReplies ? (repliesController?.collectionView ?? collectionView) : collectionView
+    }
+
+    /// Parks the header image behind the feed, shows a placeholder wash until
+    /// the profile arrives, and makes the navigation title a label that stays
+    /// hidden until the name has scrolled away.
+    private func installBanner() {
+        view.insertSubview(banner, at: 0)
+        banner.configure(url: nil, handle: handle, imagesEnabled: false)
+        titleLabel.font = DesignSystem.Typography.name()
+        titleLabel.textColor = DesignSystem.Color.label
+        titleLabel.text = "@\(handle)"
+        titleLabel.sizeToFit()
+        titleLabel.alpha = 0
+        navigationItem.titleView = titleLabel
+        banner.onBrightnessChange = { [weak self] in self?.setNeedsStatusBarAppearanceUpdate() }
+        let follow: (UIScrollView) -> Void = { [weak self] scrollView in self?.updateBanner(for: scrollView) }
+        onScroll = follow
+        repliesController?.onScroll = follow
+    }
+
+    /// Plays the banner, the avatar and the navigation title to where
+    /// `scrollView`'s position puts them. Only the tab on screen drives it.
+    private func updateBanner(for scrollView: UIScrollView) {
+        guard scrollView === activeScrollView, isViewLoaded else { return }
+        let safeTop = scrollView.adjustedContentInset.top
+        let scroll = scrollView.contentOffset.y + safeTop
+        let motion = ProfileBannerMotion.at(scroll: scroll, safeTop: safeTop, visible: ProfileHeaderView.bannerHeight)
+        banner.apply(motion)
+        let overBanner = scroll < safeTop + ProfileHeaderView.bannerHeight - 60
+        if overBanner != statusBarOverBanner {
+            statusBarOverBanner = overBanner
+            setNeedsStatusBarAppearanceUpdate()
+        }
+        for header in headers { header.setAvatar(scale: motion.avatarScale, alpha: motion.avatarAlpha) }
+        let nameBottom = (showingReplies ? repliesHeader : profileHeader).nameBottom
+        titleLabel.alpha = ProfileBannerMotion.titleAlpha(scroll: scroll, nameBottom: nameBottom)
     }
 
     // MARK: - Follow
@@ -164,9 +226,23 @@ final class ProfileViewController: FeedViewController {
         repliesController?.view.isHidden = !replies
         collectionView.isHidden = replies
         applyHeaderState()
+        setContentScrollView(activeScrollView, for: .top)
+        updateBanner(for: activeScrollView)
     }
 
     #if DEBUG
+    /// Screenshot-QA hook: scrolls `points` past the resting position (negative
+    /// pulls the profile down) once the profile has had time to load.
+    func debugScroll(by points: CGFloat) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+            guard let self else { return }
+            let scrollView = self.activeScrollView
+            scrollView.setContentOffset(
+                CGPoint(x: 0, y: points - scrollView.adjustedContentInset.top), animated: false)
+            self.updateBanner(for: scrollView)
+        }
+    }
+
     /// Screenshot-QA hook: jumps straight to the Replies tab.
     func debugShowReplies() {
         loadViewIfNeeded()
@@ -186,6 +262,8 @@ final class ProfileViewController: FeedViewController {
         view.addManaged(controller.view)
         controller.view.pinEdges(to: view)
         controller.didMove(toParent: self)
+        controller.view.backgroundColor = .clear
+        controller.onScroll = { [weak self] scrollView in self?.updateBanner(for: scrollView) }
         repliesController = controller
     }
 }
@@ -193,7 +271,13 @@ final class ProfileViewController: FeedViewController {
 /// The scrolling profile header, shared (as independent copies) by the Posts
 /// and Replies tabs.
 private final class ProfileHeaderView: UIView {
+    /// How much of the header image shows below the navigation bar at rest.
+    static let bannerHeight: CGFloat = 96
+    private static let avatarSize: CGFloat = 76
+    private static let avatarRing: CGFloat = 4
+
     private let avatar = AsyncImageView(frame: .zero)
+    private let panel = UIView()
     private let nameLabel = UILabel()
     private let handleLabel = UILabel()
     private let basedInLabel = UILabel()
@@ -215,9 +299,15 @@ private final class ProfileHeaderView: UIView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        backgroundColor = DesignSystem.Color.background
+        backgroundColor = .clear
+        panel.backgroundColor = DesignSystem.Color.background
         avatar.translatesAutoresizingMaskIntoConstraints = false
-        avatar.setRounded(32)
+        avatar.setRounded(Self.avatarSize / 2)
+        avatar.layer.borderWidth = Self.avatarRing
+        avatar.layer.borderColor = DesignSystem.Color.background.cgColor
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: ProfileHeaderView, _) in
+            view.avatar.layer.borderColor = DesignSystem.Color.background.cgColor
+        }
 
         nameLabel.font = DesignSystem.Typography.title()
         nameLabel.textColor = DesignSystem.Color.label
@@ -260,18 +350,14 @@ private final class ProfileHeaderView: UIView {
         text.axis = .vertical
         text.spacing = 2
 
-        let topRow = UIStackView(arrangedSubviews: [avatar, text])
-        topRow.axis = .horizontal
-        topRow.spacing = DesignSystem.Spacing.m
-        topRow.alignment = .center
-
         let counts = UIStackView(arrangedSubviews: [followingButton, followersButton, UIView()])
         counts.axis = .horizontal
         counts.spacing = DesignSystem.Spacing.l
 
-        let actions = UIStackView(arrangedSubviews: [followButton, briefButton, UIView()])
+        let actions = UIStackView(arrangedSubviews: [UIView(), followButton, briefButton])
         actions.axis = .horizontal
         actions.spacing = DesignSystem.Spacing.s
+        actions.alignment = .center
 
         var retryConfig = UIButton.Configuration.tinted()
         retryConfig.title = "Couldn't load this profile — Retry"
@@ -286,30 +372,55 @@ private final class ProfileHeaderView: UIView {
             button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
         }
 
-        let column = UIStackView(arrangedSubviews: [topRow, retryButton, counts, actions, segment])
+        let column = UIStackView(arrangedSubviews: [actions, text, retryButton, counts, segment])
         column.axis = .vertical
         column.spacing = DesignSystem.Spacing.m
         column.alignment = .fill
+        column.setCustomSpacing(DesignSystem.Spacing.s, after: actions)
 
-        addManaged(column)
-        addManaged(separator)
+        addManaged(panel)
+        panel.addManaged(column)
+        panel.addManaged(separator)
+        addManaged(avatar)
         NotificationCenter.default.addObserver(
             self, selector: #selector(emojiLoaded), name: TwemojiCache.imagesDidLoad, object: nil)
         NSLayoutConstraint.activate([
-            column.topAnchor.constraint(equalTo: topAnchor, constant: 12),
-            column.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            column.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
-            column.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
-            avatar.widthAnchor.constraint(equalToConstant: 64),
-            avatar.heightAnchor.constraint(equalToConstant: 64),
-            separator.leadingAnchor.constraint(equalTo: leadingAnchor),
-            separator.trailingAnchor.constraint(equalTo: trailingAnchor),
-            separator.bottomAnchor.constraint(equalTo: bottomAnchor),
+            panel.topAnchor.constraint(equalTo: topAnchor, constant: Self.bannerHeight),
+            panel.leadingAnchor.constraint(equalTo: leadingAnchor),
+            panel.trailingAnchor.constraint(equalTo: trailingAnchor),
+            panel.bottomAnchor.constraint(equalTo: bottomAnchor),
+            column.topAnchor.constraint(equalTo: panel.topAnchor, constant: DesignSystem.Spacing.s),
+            column.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 16),
+            column.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -16),
+            column.bottomAnchor.constraint(equalTo: panel.bottomAnchor, constant: -12),
+            avatar.widthAnchor.constraint(equalToConstant: Self.avatarSize),
+            avatar.heightAnchor.constraint(equalToConstant: Self.avatarSize),
+            avatar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            avatar.centerYAnchor.constraint(equalTo: panel.topAnchor),
+            separator.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
+            separator.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
+            separator.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
         ])
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    /// Where the name ends, measured from the top of the header: the scroll
+    /// distance at which it slides under the navigation bar.
+    var nameBottom: CGFloat {
+        layoutIfNeeded()
+        return nameLabel.convert(nameLabel.bounds, to: self).maxY
+    }
+
+    /// Shrinks the avatar toward its bottom-left as the profile scrolls, so it
+    /// settles into the header instead of sliding under the bar at full size.
+    func setAvatar(scale: CGFloat, alpha: CGFloat) {
+        let half = Self.avatarSize / 2
+        avatar.transform = CGAffineTransform(scaleX: scale, y: scale)
+            .concatenating(CGAffineTransform(translationX: -half * (1 - scale), y: half * (1 - scale)))
+        avatar.alpha = alpha
+    }
 
     /// Shows the handle straight away, before the profile request lands.
     func setHandle(_ handle: String) {
@@ -327,7 +438,7 @@ private final class ProfileHeaderView: UIView {
         setCount(followingButton, count: user.following, label: "following")
         setCount(followersButton, count: user.followers, label: "followers")
         if AppSettings.imagesEnabled, let url = user.avatarURL.flatMap(URL.init) {
-            avatar.load(url: url, targetSize: CGSize(width: 64, height: 64))
+            avatar.load(url: url, targetSize: CGSize(width: Self.avatarSize, height: Self.avatarSize))
         }
     }
 

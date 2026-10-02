@@ -6,6 +6,8 @@ import UnragerKit
 /// default backgrounds so iOS 26 gives them Liquid Glass automatically, and the
 /// bar minimizes on scroll-down.
 final class RootViewController: UITabBarController {
+    override var childForStatusBarStyle: UIViewController? { selectedViewController }
+
     private var selectedTabs: [TabItem] = []
     /// Timestamp of the last re-tap on the active Home tab; a second re-tap
     /// within the window is treated as a double-tap and toggles For You ↔

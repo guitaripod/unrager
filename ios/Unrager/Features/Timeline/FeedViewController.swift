@@ -62,6 +62,9 @@ class FeedViewController: UIViewController, TweetActionHandling {
     var openTweet: ((Tweet) -> Void)?
     var openProfile: ((String) -> Void)?
 
+    /// Called on every scroll of the list, for screens that animate with it.
+    var onScroll: ((UIScrollView) -> Void)?
+
     /// Optional scrolling header (e.g. a profile header) shown above the feed.
     var headerView: UIView?
     static let headerKind = "feed-header"
@@ -223,7 +226,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
         collectionView.pinEdges(to: view)
 
         let refresh = UIRefreshControl()
-        refresh.tintColor = DesignSystem.Color.secondaryLabel
+        refresh.tintColor = refreshTextColor
         refresh.addTarget(self, action: #selector(pullToRefresh), for: .valueChanged)
         collectionView.refreshControl = refresh
 
@@ -772,9 +775,13 @@ class FeedViewController: UIViewController, TweetActionHandling {
     private func refreshTitle(_ text: String) -> NSAttributedString {
         NSAttributedString(
             string: text,
-            attributes: [.foregroundColor: DesignSystem.Color.secondaryLabel,
+            attributes: [.foregroundColor: refreshTextColor,
                          .font: DesignSystem.Typography.caption()])
     }
+
+    /// The colour of the pull-to-refresh spinner and its caption; a screen
+    /// that pulls down over a picture picks one that reads on it.
+    var refreshTextColor: UIColor { DesignSystem.Color.secondaryLabel }
 
     /// Shows or hides the freshness pill and reserves a matching top strip so
     /// the first tweet clears it. The pill floats over the feed and never
@@ -1009,6 +1016,8 @@ extension FeedViewController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, didEndDisplaying cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
         (cell as? TweetCell)?.pauseVideo()
     }
+
+    func scrollViewDidScroll(_ scrollView: UIScrollView) { onScroll?(scrollView) }
 
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         isScrolling = true

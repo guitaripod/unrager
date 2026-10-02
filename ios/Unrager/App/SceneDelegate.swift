@@ -87,6 +87,9 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                 let profile = ProfileViewController(handle: parts[1])
                 homeNav()?.pushViewController(profile, animated: false)
                 if parts.count > 2, parts[2] == "replies" { profile.debugShowReplies() }
+                if parts.count > 3, parts[2] == "scroll", let points = Double(parts[3]) {
+                    profile.debugScroll(by: CGFloat(points))
+                }
             case "thread" where parts.count > 1:
                 homeNav()?.pushViewController(ThreadViewController(tweetID: parts[1]), animated: false)
             case "likers" where parts.count > 1:

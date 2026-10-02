@@ -86,11 +86,11 @@ enum TabItem: String, CaseIterable, Sendable {
     }
 
     @MainActor
-    func makeViewController() -> UINavigationController {
+    func makeViewController() -> StatusNavigationController {
         let root = makeRoot()
         root.title = title
         root.tabBarItem = UITabBarItem(title: title, image: DesignSystem.icon(symbol), selectedImage: nil)
-        let nav = UINavigationController(rootViewController: root)
+        let nav = StatusNavigationController(rootViewController: root)
         nav.navigationBar.prefersLargeTitles = prefersLargeTitles
         return nav
     }

@@ -357,7 +357,7 @@ Press `n` or `:notifs` to open notifications as a detail pane without losing you
   <img src="assets/iphone.png" alt="The unrager iPhone app, three screens with made-up posts: the For You feed with country flags and a repost, the list of hidden posts each labelled with the rule that hid it and a Show button, and an Ask answer from your own model" width="760">
 </p>
 
-The extension can't reach X's own iPhone app, so there's a native one: [`ios/`](ios/) (UIKit, iOS 26), a thin client over the API `unrager serve` exposes. It's the same idea on a phone: Home opens instantly from the server's buffer, the rage filter judges what you'd otherwise scroll past, and your own model answers when you ask. It uses your X session, so it isn't a store app; you build and sideload it yourself.
+The extension can't reach X's own iPhone app, so there's a native one: [`ios/`](ios/) (UIKit, iOS 26), a thin client over the API `unrager serve` exposes. It's the same idea on a phone: Home opens instantly from the server's buffer, the rage filter judges what you'd otherwise scroll past, and your own model answers when you ask. It uses your X session, so it isn't a store app; you build it once yourself, as below.
 
 - **Feeds and threads.** For you, Following, Mentions, Bookmarks and search, with photos, inline video, alt text and quoted posts. A repost shows the original with "Kit Wren reposted", a profile's pinned post comes first, links to x.com open in the app, and every author carries a country flag. Rows are one VoiceOver stop with actions and follow Dynamic Type up to the largest sizes.
 - **The filter, with receipts.** Posts the rage filter hides are listed with the rule that caught each one and a **Show** button, and the rules and strictness are editable in the app. Your own overrule outranks the model everywhere.
@@ -368,34 +368,32 @@ The extension can't reach X's own iPhone app, so there's a native one: [`ios/`](
 
 Country flags are what X's "About this account" says, asked one author at a time. If X rate-limits that lookup, or you'd rather not wait on it, see [Country flags](#configuration).
 
-It needs the full server rather than the extension's filter-only one, reachable from your phone:
+#### Put it on your iPhone
+
+It takes about ten minutes. You need the computer that runs unrager (signed in to x.com in a Chromium browser), [Tailscale](https://tailscale.com) on it and on your phone (free), and, for building once, a Mac with Xcode 26 and `brew install xcodegen`, plus an iPhone on iOS 26 and any Apple ID: a free one works.
+
+**1. On the computer that runs unrager**, start the full server. It prints the address the app needs:
 
 ```sh
 unrager setup --apps --bind 0.0.0.0:7777
+# ✓ iphone      in the app, open Settings → Server and enter http://100.64.0.9:7777
 ```
 
-Then point the app at the server in its settings. The server expects the network to be the trust boundary (there's no app-level login), so keep it to a private network like Tailscale with an ACL for your own devices.
+unrager has no login of its own, so keep that to a private network like Tailscale.
 
-<details>
-<summary><strong>Building the iPhone app</strong></summary>
-
-The app's models, typed async/await `APIClient` with SSE, image pipeline and logging live in the [`UnragerKit`](UnragerKit/) Swift package. Sideload with your own Apple Developer account:
+**2. On the Mac**, with Xcode signed in to your Apple ID (Xcode > Settings > Accounts) and the phone plugged in, unlocked and trusted, with Developer Mode on (Settings > Privacy & Security):
 
 ```sh
-# build the project (XcodeGen + a local Swift package; no Xcode account needed)
-cd ios && xcodegen generate          # → Unrager.xcodeproj
-
-# run in the iOS 26 simulator
-xcodebuild -scheme Unrager -destination 'generic/platform=iOS Simulator' \
-  -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
-xcrun simctl install booted build/Build/Products/Debug-iphonesimulator/Unrager.app
-
-# install on your own iPhone (one-time: register the device + mint an ad-hoc profile)
-python3 scripts/provision.py --udid <UDID> --serial <DIST_CERT_SERIAL> --name "iPhone"
-UDID=<UDID> ./scripts/install-device.sh     # build → ad-hoc sign → devicectl install + launch
+git clone https://github.com/guitaripod/unrager
+cd unrager/ios
+./scripts/install.sh
 ```
 
-</details>
+The script finds your phone and signing team, asks for the server address, builds, installs and opens the app.
+
+**3. On the phone**, trust yourself if it asks (Settings > General > VPN & Device Management), open Unrager, allow the local network, and if Home is empty enter the address under Settings > Server.
+
+To update, `git pull` and run the script again; a free Apple ID's build stops opening after 7 days and is renewed the same way. [`ios/README.md`](ios/README.md) has every step in detail, what each error means, and how to do it by hand in Xcode.
 
 ### The CLI
 

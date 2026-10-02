@@ -74,6 +74,6 @@
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
 	<key>UNRAGER_DEFAULT_SERVER</key>
-	<string>http://100.91.211.44:7777</string>
+	<string>$(UNRAGER_DEFAULT_SERVER)</string>
 </dict>
 </plist>

@@ -70,13 +70,14 @@ targets:
         UIBackgroundModes: [fetch]
         BGTaskSchedulerPermittedIdentifiers: [com.guitaripod.unrager.refresh]
         LSApplicationQueriesSchemes: [twitter]
-        UNRAGER_DEFAULT_SERVER: http://100.91.211.44:7777
+        UNRAGER_DEFAULT_SERVER: $(UNRAGER_DEFAULT_SERVER)
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.guitaripod.unrager
         PRODUCT_NAME: Unrager
+        UNRAGER_DEFAULT_SERVER: ""
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 
   UnragerTests:

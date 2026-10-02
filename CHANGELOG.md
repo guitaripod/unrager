@@ -7,6 +7,7 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 ## [Unreleased]
 
 - **`unrager setup --apps` ends by printing the address to type into the iPhone app.** With Tailscale running it prints this computer's `http://100.x.y.z:7777` (and its MagicDNS name); without it, says what to enter; and when the server listens only on this computer, warns that a phone can't reach it and gives the `--bind 0.0.0.0:7777` to use.
+- **The iPhone app installs with one script and a free Apple ID.** `ios/scripts/install.sh` finds your iPhone and signing team, asks where your server is, builds with Xcode's automatic signing under an app identifier of your own and installs it, naming the one thing to fix when something is missing; `--check` shows what it found without building. `ios/README.md` is a step-by-step guide with a troubleshooting table, and the app no longer ships pointed at the maintainer's Tailscale address: it asks for yours in Settings > Server when the script hasn't set it.
 ## [0.26.0] — 2026-10-02
 
 - **Notifications read in the app stay read.** The Notifications tab used to skip reloading when it had loaded less than two minutes earlier, so a like or reply that lit the badge in between never reached the list; the badge came back as soon as the tab was left. Opening the tab with the badge lit now always reloads, and a tapped in-app toast or banner counts as read, with everything older than it.

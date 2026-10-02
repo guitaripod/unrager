@@ -10,7 +10,8 @@
 #   TEAM            signing team id (default P4DQK6SRKR)
 #   IDENTITY        codesign identity (default Apple Distribution: Midgar Oy ...)
 #   PROFILE         provisioning profile name (default "Unrager AdHoc")
-#   SERVER          server the app points at (baked default is the Tailscale IP)
+#   SERVER          server the app starts pointed at (default: the maintainer's
+#                   Tailscale address; for your own, use install.sh)
 #   VERSION         version shown in Settings (default: the crate version in
 #                   ../Cargo.toml without any pre-release suffix, so a stale
 #                   phone build stands out against the server's version)
@@ -21,6 +22,7 @@ UDID="${UDID:?set UDID to the target device}"
 TEAM="${TEAM:-P4DQK6SRKR}"
 IDENTITY="${IDENTITY:-Apple Distribution: Midgar Oy (P4DQK6SRKR)}"
 PROFILE="${PROFILE:-Unrager AdHoc}"
+SERVER="${SERVER:-http://100.91.211.44:7777}"
 CRATE_VERSION="$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version *= *"\([^"]*\)".*/\1/p' ../Cargo.toml | head -1)"
 VERSION="${VERSION:-${CRATE_VERSION%%-*}}"
 [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]] || { echo "bad VERSION '$VERSION' (from ../Cargo.toml)" >&2; exit 1; }
@@ -36,6 +38,7 @@ xcodebuild -project Unrager.xcodeproj -scheme Unrager \
   "CODE_SIGN_IDENTITY=$IDENTITY" \
   PROVISIONING_PROFILE_SPECIFIER="$PROFILE" \
   MARKETING_VERSION="$VERSION" \
+  UNRAGER_DEFAULT_SERVER="$SERVER" \
   build | tail -1
 
 APP="build-device/Build/Products/Release-iphoneos/Unrager.app"

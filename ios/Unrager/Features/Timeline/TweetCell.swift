@@ -199,12 +199,12 @@ final class TweetCell: UICollectionViewCell {
         let body = TweetText.attributed(
             for: tweet, stripLeadingMentions: inReplyContext, seen: seen,
             font: DesignSystem.Typography.body())
+        applyBodyLimit(body, limit: bodyLineLimit, contentWidth: contentWidth)
         bodyView.attributedText = body
         bodyView.isHidden = body.length == 0
         bodyView.onTapMention = { [weak self] in self?.onTapMention?($0) }
         bodyView.onTapHashtag = { [weak self] in self?.onTapHashtag?($0) }
         bodyView.onTapURL = { [weak self] in self?.onTapCard?($0) }
-        applyBodyLimit(body, limit: bodyLineLimit, contentWidth: contentWidth)
         contentView.alpha = seen ? 0.85 : 1
 
         loadAvatar(into: avatar, url: tweet.author.avatarURL, size: 44, fallbackPoint: 36, enabled: imagesEnabled)
@@ -249,13 +249,21 @@ final class TweetCell: UICollectionViewCell {
     private func applyBodyLimit(_ body: NSAttributedString, limit: Int, contentWidth: CGFloat) {
         guard limit > 0, body.length > 0,
               Self.bodyExceedsLimit(body, limit: limit, contentWidth: contentWidth) else {
-            bodyView.textContainer.maximumNumberOfLines = 0
+            setBodyLines(0, truncating: false)
             showMoreButton.isHidden = true
             return
         }
-        bodyView.textContainer.maximumNumberOfLines = limit
-        bodyView.textContainer.lineBreakMode = .byTruncatingTail
+        setBodyLines(limit, truncating: true)
         showMoreButton.isHidden = false
+    }
+
+    /// Caps the body at `lines` (0 = unlimited) and makes the text view measure
+    /// again: a text view that already laid out keeps its old height when only
+    /// the container's line cap changes, so "Show more" would reveal nothing.
+    private func setBodyLines(_ lines: Int, truncating: Bool) {
+        bodyView.textContainer.maximumNumberOfLines = lines
+        bodyView.textContainer.lineBreakMode = truncating ? .byTruncatingTail : .byWordWrapping
+        bodyView.invalidateIntrinsicContentSize()
     }
 
     /// Whether `body` renders meaningfully past `limit` lines at `contentWidth`

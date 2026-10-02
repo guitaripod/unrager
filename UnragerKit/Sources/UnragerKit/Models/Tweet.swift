@@ -67,7 +67,7 @@ public final class Tweet: Codable, Sendable, Identifiable, Hashable {
         lang = try c.decodeIfPresent(String.self, forKey: .lang)
         inReplyToTweetID = try c.decodeIfPresent(String.self, forKey: .inReplyToTweetID)
         quotedTweet = try c.decodeIfPresent(Tweet.self, forKey: .quotedTweet)
-        media = try c.decodeIfPresent([Media].self, forKey: .media) ?? []
+        media = try c.decodeLossy(Media.self, forKey: .media)
         url = try c.decode(String.self, forKey: .url)
         urls = try c.decodeIfPresent([TweetURL].self, forKey: .urls) ?? []
     }

@@ -20,6 +20,10 @@ final class MetalCollectingView: UIView {
     /// the legacy spinner + label path alive for this case.
     let isAvailable: Bool
 
+    /// Whether this device can run the animation at all, known without building
+    /// one: creating the view compiles a shader.
+    static let isSupported: Bool = MTLCreateSystemDefaultDevice() != nil
+
     private var metalView: MTKView?
     private var renderer: CollectingRenderer?
     private let caption = UILabel()
@@ -43,6 +47,9 @@ final class MetalCollectingView: UIView {
         registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: MetalCollectingView, _) in
             view.syncAppearance()
         }
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(reduceMotionChanged),
+            name: UIAccessibility.reduceMotionStatusDidChangeNotification, object: nil)
     }
 
     @available(*, unavailable)
@@ -95,13 +102,19 @@ final class MetalCollectingView: UIView {
         progress = min(1, Float(collected) / Float(denom))
         renderer?.targetProgress = progress
         caption.text = "collecting tweets… \(collected)/\(denom)"
+        if UIAccessibility.isReduceMotionEnabled { metalView?.setNeedsDisplay() }
     }
 
-    /// Starts the display link only when actually on screen.
+    /// Starts the display link only when actually on screen. With Reduce
+    /// Motion on there is no continuous animation: the field is redrawn only
+    /// when the progress changes.
     func start() {
-        guard isAvailable else { return }
+        guard isAvailable, let metalView else { return }
         syncAppearance()
-        metalView?.isPaused = false
+        let reduceMotion = UIAccessibility.isReduceMotionEnabled
+        metalView.enableSetNeedsDisplay = reduceMotion
+        metalView.isPaused = reduceMotion
+        if reduceMotion { metalView.setNeedsDisplay() }
     }
 
     /// Stops drawing entirely — no frames, no battery — when hidden or removed.
@@ -109,9 +122,19 @@ final class MetalCollectingView: UIView {
         metalView?.isPaused = true
     }
 
+    /// Leaving the screen stops the display link; coming back mid-load starts
+    /// it again, so the animation doesn't sit frozen for the rest of the load.
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        if window == nil { stop() }
+        if window == nil {
+            stop()
+        } else if !isHidden {
+            start()
+        }
+    }
+
+    @objc private func reduceMotionChanged() {
+        if window != nil, !isHidden { start() }
     }
 
     private func syncAppearance() {

@@ -6,12 +6,13 @@ import UnragerKit
 /// `UIColor`s, never by branching at call sites.
 enum DesignSystem {
     enum Color {
-        /// X brand blue, slightly brightened in dark mode.
+        /// X brand blue, brightened in dark mode and deepened in light mode so
+        /// text and white-on-blue buttons clear 4.5:1 contrast.
         static var accent: UIColor {
             UIColor { trait in
                 trait.userInterfaceStyle == .dark
                     ? UIColor(red: 0.231, green: 0.671, blue: 0.961, alpha: 1)
-                    : UIColor(red: 0.114, green: 0.608, blue: 0.941, alpha: 1)
+                    : UIColor(red: 0.05, green: 0.47, blue: 0.80, alpha: 1)
             }
         }
         static var background: UIColor { .systemBackground }
@@ -22,8 +23,20 @@ enum DesignSystem {
         static var tertiaryLabel: UIColor { .tertiaryLabel }
         static var separator: UIColor { .separator }
 
-        static var like: UIColor { UIColor(red: 0.976, green: 0.231, blue: 0.518, alpha: 1) }
-        static var retweet: UIColor { UIColor(red: 0.0, green: 0.729, blue: 0.408, alpha: 1) }
+        static var like: UIColor {
+            UIColor { trait in
+                trait.userInterfaceStyle == .dark
+                    ? UIColor(red: 0.976, green: 0.231, blue: 0.518, alpha: 1)
+                    : UIColor(red: 0.85, green: 0.12, blue: 0.42, alpha: 1)
+            }
+        }
+        static var retweet: UIColor {
+            UIColor { trait in
+                trait.userInterfaceStyle == .dark
+                    ? UIColor(red: 0.0, green: 0.729, blue: 0.408, alpha: 1)
+                    : UIColor(red: 0.0, green: 0.52, blue: 0.28, alpha: 1)
+            }
+        }
         static var quote: UIColor { UIColor(red: 0.471, green: 0.353, blue: 0.961, alpha: 1) }
         static var verified: UIColor { accent }
         static var live: UIColor { .systemRed }
@@ -110,6 +123,7 @@ enum DesignSystem {
             let base = UIFont.preferredFont(forTextStyle: .body)
             return base.withSize(base.pointSize * scale)
         }
+        static func editor() -> UIFont { scaled(.title3, size: 20, weight: .regular) }
         static func metric() -> UIFont { scaled(.footnote, size: 13, weight: .regular) }
         static func caption() -> UIFont { scaled(.caption1, size: 12, weight: .regular) }
         static func title() -> UIFont { scaled(.title2, size: 22, weight: .heavy) }

@@ -10,13 +10,20 @@ public struct FollowResult: Decodable, Sendable {
 public struct UserListPage: Decodable, Sendable {
     public let users: [User]
     public let cursor: String?
+    /// True when X only serves the verified part of this list, so it must not
+    /// be presented as everyone.
+    public let verifiedOnly: Bool
 
-    enum CodingKeys: String, CodingKey { case users, cursor }
+    enum CodingKeys: String, CodingKey {
+        case users, cursor
+        case verifiedOnly = "verified_only"
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        users = try c.decodeIfPresent([User].self, forKey: .users) ?? []
+        users = try c.decodeLossy(User.self, forKey: .users)
         cursor = try c.decodeIfPresent(String.self, forKey: .cursor)
+        verifiedOnly = try c.decodeIfPresent(Bool.self, forKey: .verifiedOnly) ?? false
     }
 }
 

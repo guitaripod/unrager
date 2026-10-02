@@ -110,6 +110,14 @@ final class TweetCell: UICollectionViewCell {
     private(set) var isRetweeted = false
     private(set) var isLiked = false
     private(set) var isBookmarked = false
+    /// The tweet this cell currently shows, so asynchronous results (a rollback
+    /// after a slow failure) can tell whether the cell has since been reused.
+    private(set) var tweetID: String?
+    private var boundTweet: Tweet?
+    private var boundInReplyContext = false
+    private var shownLikeCount = 0
+    private var shownRetweetCount = 0
+    private var shownBookmarkCount = 0
 
     /// Feed-context body cap (v. the unlimited focal/thread rendering).
     static let feedBodyLineLimit = 10
@@ -126,6 +134,9 @@ final class TweetCell: UICollectionViewCell {
 
     override func prepareForReuse() {
         super.prepareForReuse()
+        tweetID = nil
+        boundTweet = nil
+        accessibilityCustomActions = nil
         avatar.cancel()
         quotedAvatar.cancel()
         mediaContent.prepareForReuse()
@@ -174,6 +185,10 @@ final class TweetCell: UICollectionViewCell {
         focal: Bool = false, ownTweet: Bool = false, indentLevel: Int = 0,
         bodyLineLimit: Int = 0
     ) {
+        tweetID = tweet.restID
+        boundTweet = tweet
+        boundInReplyContext = inReplyContext
+        applyFonts()
         setIndent(indentLevel)
         nameLabel.text = tweet.author.name
         setFlag(nil)
@@ -201,6 +216,30 @@ final class TweetCell: UICollectionViewCell {
         configureActions(tweet)
         analyticsView.configure(tweet, visible: focal && ownTweet)
         configureAccessibility(tweet, seen: seen)
+        isAccessibilityElement = true
+        refreshAccessibility(seen: seen)
+    }
+
+    /// Re-resolves the fonts that were set once at build time, so a change of
+    /// the app's text size reaches the name, flag and quote on rows that were
+    /// already built rather than waiting for a relaunch.
+    private func applyFonts() {
+        nameLabel.font = DesignSystem.Typography.name()
+        flagLabel.font = DesignSystem.Typography.name()
+        quotedBodyLabel.font = DesignSystem.Typography.metric()
+    }
+
+    /// Dims or restores the row for a changed read state without rebuilding it:
+    /// only the body text and the row's opacity depend on it, and a full
+    /// reconfigure would also tear down the photo grid and any playing video.
+    func setSeen(_ seen: Bool) {
+        guard let tweet = boundTweet else { return }
+        let body = TweetText.attributed(
+            for: tweet, stripLeadingMentions: boundInReplyContext, seen: seen,
+            font: DesignSystem.Typography.body())
+        bodyView.attributedText = body
+        contentView.alpha = seen ? 0.85 : 1
+        refreshAccessibility(seen: seen)
     }
 
     /// Collapses a note-length body to `limit` lines behind a tappable
@@ -347,10 +386,12 @@ final class TweetCell: UICollectionViewCell {
     /// the network confirms.
     func applyLike(favorited: Bool, count: Int) {
         isLiked = favorited
+        shownLikeCount = count
         likeButton.configuration?.title = label(count)
         likeButton.configuration?.image = DesignSystem.icon(favorited ? "heart.fill" : "heart", pointSize: 15)
         likeButton.configuration?.baseForegroundColor = favorited ? DesignSystem.Color.like : DesignSystem.Color.secondaryLabel
         likeButton.accessibilityLabel = favorited ? "Unlike" : "Like"
+        refreshAccessibility()
     }
 
     /// Reflects an optimistic repost toggle: green tint while reposted (X's
@@ -359,21 +400,25 @@ final class TweetCell: UICollectionViewCell {
     /// menu item, before the network confirms.
     func applyRetweet(retweeted: Bool, count: Int) {
         isRetweeted = retweeted
+        shownRetweetCount = count
         retweetButton.configuration?.title = label(count)
         retweetButton.configuration?.baseForegroundColor =
             retweeted ? DesignSystem.Color.retweet : DesignSystem.Color.secondaryLabel
         retweetButton.accessibilityLabel = retweeted ? "Reposted, \(count)" : "Repost, \(count)"
+        refreshAccessibility()
     }
 
     /// Reflects an optimistic bookmark toggle — filled accent glyph while
     /// bookmarked, matching the like/repost treatment.
     func applyBookmark(bookmarked: Bool, count: Int) {
         isBookmarked = bookmarked
+        shownBookmarkCount = count
         bookmarkButton.configuration?.title = label(count)
         bookmarkButton.configuration?.image = DesignSystem.icon(bookmarked ? "bookmark.fill" : "bookmark", pointSize: 15)
         bookmarkButton.configuration?.baseForegroundColor =
             bookmarked ? DesignSystem.Color.accent : DesignSystem.Color.secondaryLabel
         bookmarkButton.accessibilityLabel = bookmarked ? "Remove bookmark, \(count)" : "Bookmark, \(count)"
+        refreshAccessibility()
     }
 
     private func configureAccessibility(_ tweet: Tweet, seen: Bool) {
@@ -394,6 +439,96 @@ final class TweetCell: UICollectionViewCell {
     }
 
     private func label(_ count: Int) -> String { count > 0 ? Format.count(count) : "" }
+
+    nonisolated(unsafe) private static let spokenTime: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter
+    }()
+
+    private var boundSeen = false
+
+    /// The row as one VoiceOver element — author, text, media, quote, counts and
+    /// time read as a single utterance — with every action a sighted user has on
+    /// the row offered as a custom action, instead of ten separate stops with
+    /// the author's name read three times.
+    private func refreshAccessibility(seen: Bool? = nil) {
+        guard let tweet = boundTweet else { return }
+        if let seen { boundSeen = seen }
+        let verified = tweet.author.verified ? ", verified" : ""
+        let replying = tweet.inReplyToTweetID != nil ? ", replying" : ""
+        let when = Self.spokenTime.localizedString(for: tweet.createdAt, relativeTo: Date())
+        var parts = ["\(tweet.author.name)\(verified), @\(tweet.author.handle)\(replying), \(when)"]
+        if !tweet.text.isEmpty { parts.append(tweet.text) }
+        if let media = Self.mediaSummary(tweet.media) { parts.append(media) }
+        if let quoted = tweet.quotedTweet {
+            parts.append("Quoting \(quoted.author.name): \(quoted.text)")
+        }
+        var counts = ["\(tweet.replyCount) replies", "\(shownRetweetCount) reposts", "\(shownLikeCount) likes"]
+        if let views = tweet.viewCount, views > 0 { counts.append("\(Format.count(views)) views") }
+        parts.append(counts.joined(separator: ", "))
+        var state: [String] = []
+        if isLiked { state.append("liked") }
+        if isRetweeted { state.append("reposted") }
+        if isBookmarked { state.append("bookmarked") }
+        if boundSeen { state.append("already seen") }
+        if !state.isEmpty { parts.append(state.joined(separator: ", ")) }
+        accessibilityLabel = parts.joined(separator: ". ")
+        accessibilityCustomActions = customActions(for: tweet)
+    }
+
+    private static func mediaSummary(_ media: [Media]) -> String? {
+        let photos = media.filter { if case .photo = $0.kind { return true } else { return false } }
+        if !photos.isEmpty {
+            let described = photos.enumerated().compactMap { index, photo in
+                photo.altText.flatMap { $0.isEmpty ? nil : "Photo \(index + 1): \($0)" }
+            }
+            let head = photos.count == 1 ? "1 photo" : "\(photos.count) photos"
+            return ([head] + described).joined(separator: ". ")
+        }
+        guard let first = media.first else { return nil }
+        switch first.kind {
+        case .video: return "Video"
+        case .animatedGif: return "GIF"
+        case .poll(let options, _, _): return "Poll with \(options.count) options"
+        case .linkCard(let title, _, let domain, _): return "Link from \(domain): \(title)"
+        case .article(_, let title, _): return "Article: \(title)"
+        case .broadcast(_, let title, _, _): return "Broadcast: \(title)"
+        case .youTube: return "YouTube video"
+        case .photo: return nil
+        }
+    }
+
+    private func customActions(for tweet: Tweet) -> [UIAccessibilityCustomAction] {
+        func action(_ name: String, _ run: @escaping () -> Void) -> UIAccessibilityCustomAction {
+            UIAccessibilityCustomAction(name: name) { _ in run(); return true }
+        }
+        var actions = [
+            action("Reply") { [weak self] in self?.onReply?() },
+            action(isLiked ? "Unlike" : "Like") { [weak self] in self?.onLike?() },
+            action(isRetweeted ? "Undo repost" : "Repost") { [weak self] in self?.onToggleRetweet?() },
+            action("Quote") { [weak self] in self?.onQuote?() },
+            action(isBookmarked ? "Remove bookmark" : "Bookmark") { [weak self] in self?.onToggleBookmark?() },
+            action("Share") { [weak self] in self?.onShare?() },
+            action("Open \(tweet.author.name)'s profile") { [weak self] in self?.onTapAuthor?() },
+        ]
+        let photoCount = tweet.media.filter { if case .photo = $0.kind { return true } else { return false } }.count
+        for index in 0..<min(photoCount, 4) {
+            actions.append(action(photoCount == 1 ? "View photo" : "View photo \(index + 1)") { [weak self] in
+                self?.onTapPhoto?(index)
+            })
+        }
+        if tweet.media.contains(where: { $0.isVideo }) {
+            actions.append(action("Play video") { [weak self] in self?.onTapPhoto?(0) })
+        }
+        if tweet.quotedTweet != nil {
+            actions.append(action("Open quoted post") { [weak self] in self?.onTapQuoted?() })
+        }
+        if !showMoreButton.isHidden {
+            actions.append(action("Show more") { [weak self] in self?.onShowMore?() })
+        }
+        return actions
+    }
 
     // MARK: - Hierarchy
 

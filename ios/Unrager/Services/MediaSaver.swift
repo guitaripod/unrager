@@ -38,6 +38,20 @@ enum MediaSaver {
         }
     }
 
+    /// Writes a rendered image (a postcard) to the photo library.
+    ///
+    /// The change block must not inherit the caller's main-actor isolation:
+    /// Photos invokes it on its own background queue, and an isolated closure
+    /// trips the runtime's dispatch queue assertion (SIGTRAP). It stays
+    /// nonisolated with an explicitly `@Sendable` block.
+    static func save(image: UIImage) async throws {
+        try await ensureAuthorized()
+        let changes: @Sendable () -> Void = {
+            PHAssetChangeRequest.creationRequestForAsset(from: image)
+        }
+        try await PHPhotoLibrary.shared().performChanges(changes)
+    }
+
     /// The alert for a failed save. A denied Photos permission gets a way to
     /// the Settings page that fixes it; anything else is the plain error.
     @MainActor

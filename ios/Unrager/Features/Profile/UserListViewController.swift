@@ -60,6 +60,7 @@ final class UserListViewController: PagedUserListViewController {
         let page = mode == .followers
             ? try await social.followers(userID: userID, cursor: cursor)
             : try await social.following(userID: userID, cursor: cursor)
-        return Page(users: page.users, cursor: page.cursor)
+        return Page(users: page.users, cursor: page.cursor,
+                    endNote: page.verifiedOnly ? "X only shares this account's verified followers." : nil)
     }
 }

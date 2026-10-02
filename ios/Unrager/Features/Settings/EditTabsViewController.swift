@@ -14,6 +14,7 @@ final class EditTabsViewController: UIViewController {
     /// The selection on entry; leaving without changing it skips the tab-bar
     /// rebuild (which would wipe every tab's scroll position and pushed stack).
     private let originalTabs: [TabItem] = ClientSettings.tabs
+    private weak var rootController: RootViewController?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -38,17 +39,20 @@ final class EditTabsViewController: UIViewController {
         apply(animated: false)
     }
 
-    /// Rebuilds the live tab bar only when leaving *and* only when the
-    /// selection actually changed — rebuilding mid-edit would recreate the
-    /// Settings stack hosting this very screen, and rebuilding on a no-change
-    /// exit would needlessly destroy every tab's scroll position, pushed
-    /// screens and in-flight state. Selections persist immediately; the bar
-    /// catches up here.
-    override func viewWillDisappear(_ animated: Bool) {
-        super.viewWillDisappear(animated)
-        guard isMovingFromParent || isBeingDismissed else { return }
-        guard active != originalTabs else { return }
-        (view.window?.rootViewController as? RootViewController)?.rebuildTabs()
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        rootController = view.window?.rootViewController as? RootViewController
+    }
+
+    /// Brings the live tab bar up to date once the screen has actually gone —
+    /// not when an interactive back-swipe merely begins, which can still be
+    /// cancelled — and only when the selection changed: rebuilding mid-edit
+    /// would recreate the Settings stack hosting this very screen. Selections
+    /// persist immediately; the bar catches up here.
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        guard isMovingFromParent || isBeingDismissed, active != originalTabs else { return }
+        rootController?.rebuildTabs()
     }
 
     private func configureDataSource() {
@@ -56,17 +60,19 @@ final class EditTabsViewController: UIViewController {
             [weak self] cell, indexPath, tab in
             var content = cell.defaultContentConfiguration()
             content.text = tab.title
-            content.secondaryText = tab.subtitle
+            content.secondaryText = tab == TabItem.required ? "Always shown — it holds these settings" : tab.subtitle
             content.secondaryTextProperties.color = DesignSystem.Color.secondaryLabel
             content.image = DesignSystem.icon(tab.symbol, pointSize: 18)
             content.imageProperties.tintColor = DesignSystem.Color.accent
             cell.contentConfiguration = content
             let isActive = self?.dataSource.sectionIdentifier(for: indexPath.section) == .active
             if isActive {
-                cell.accessories = [
-                    .reorder(displayed: .always),
-                    .delete(displayed: .always, actionHandler: { [weak self] in self?.remove(tab) }),
-                ]
+                cell.accessories = tab == TabItem.required
+                    ? [.reorder(displayed: .always)]
+                    : [
+                        .reorder(displayed: .always),
+                        .delete(displayed: .always, actionHandler: { [weak self] in self?.remove(tab) }),
+                    ]
             } else {
                 cell.accessories = [
                     .insert(displayed: .always, actionHandler: { [weak self] in self?.add(tab) }),
@@ -111,16 +117,38 @@ final class EditTabsViewController: UIViewController {
     private func add(_ tab: TabItem) {
         guard active.count < TabItem.maxCount, !active.contains(tab) else {
             Haptics.error()
+            flashLimit("The bar holds \(TabItem.maxCount) tabs. Remove one to add another.")
             return
         }
         active.append(tab)
         Haptics.selection()
         persist()
         apply(animated: true)
+        refreshHeaders()
+    }
+
+    /// The Shown header carries a live count, and a header isn't a row, so a
+    /// reconfigure leaves it stale; re-render the visible ones.
+    private func refreshHeaders() {
+        let kind = UICollectionView.elementKindSectionHeader
+        for indexPath in collectionView.indexPathsForVisibleSupplementaryElements(ofKind: kind) {
+            guard let header = collectionView.supplementaryView(forElementKind: kind, at: indexPath) as? UICollectionViewListCell
+            else { continue }
+            var content = header.defaultContentConfiguration()
+            content.text = dataSource.sectionIdentifier(for: indexPath.section) == .active
+                ? "Shown · \(active.count)/\(TabItem.maxCount)"
+                : "More tabs"
+            header.contentConfiguration = content
+        }
+    }
+
+    private func flashLimit(_ message: String) {
+        UIAccessibility.post(notification: .announcement, argument: message)
+        showToast(message)
     }
 
     private func remove(_ tab: TabItem) {
-        guard active.count > 1, let index = active.firstIndex(of: tab) else {
+        guard tab != TabItem.required, active.count > 1, let index = active.firstIndex(of: tab) else {
             Haptics.error()
             return
         }
@@ -128,11 +156,12 @@ final class EditTabsViewController: UIViewController {
         Haptics.selection()
         persist()
         apply(animated: true)
+        refreshHeaders()
     }
 
     private func removeSwipe(at indexPath: IndexPath) -> UISwipeActionsConfiguration? {
         guard dataSource.sectionIdentifier(for: indexPath.section) == .active,
-              let tab = dataSource.itemIdentifier(for: indexPath) else { return nil }
+              let tab = dataSource.itemIdentifier(for: indexPath), tab != TabItem.required else { return nil }
         let action = UIContextualAction(style: .destructive, title: "Remove") { [weak self] _, _, done in
             self?.remove(tab)
             done(true)

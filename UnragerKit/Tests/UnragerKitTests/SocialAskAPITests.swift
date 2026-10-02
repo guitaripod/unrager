@@ -48,6 +48,22 @@ struct SocialAPITests {
         #expect(request.url.absoluteString == "http://server:7777/api/users/12345/follow")
     }
 
+    @Test("searchPeople GETs the people route with the query and decodes a user page")
+    func searchPeopleRoute() async throws {
+        let (api, transport) = makeAPI(body: """
+        {"users":[{"rest_id":"7","handle":"ada","name":"Ada","verified":false,"followers":1,"following":2}],"cursor":"next"}
+        """)
+        let page = try await api.searchPeople(query: "ada l", cursor: "c+1")
+        #expect(page.users.map(\.handle) == ["ada"])
+        #expect(page.cursor == "next")
+        let request = try #require(await transport.last())
+        #expect(request.method == .get)
+        #expect(request.url.path == "/api/sources/search/people")
+        let items = URLComponents(url: request.url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        #expect(items.first { $0.name == "q" }?.value == "ada l")
+        #expect(request.url.absoluteString.contains("cursor=c%2B1"))
+    }
+
     @Test("unfollow uses DELETE on the same route")
     func unfollowRoute() async throws {
         let (api, transport) = makeAPI(body: #"{"ok":true,"following":false}"#)
@@ -178,6 +194,29 @@ struct AskAPITests {
         } catch {
             #expect(error is APIError)
         }
+    }
+
+    @Test("A model failure reported on the final event surfaces as an error, not an empty answer")
+    func askStreamModelFailure() async {
+        let sse = """
+        data: {"token":"Par","done":false}
+        data: {"token":"","done":true,"error":"model unreachable"}
+        data: [DONE]
+        """
+        let transport = CapturingTransport(body: sse)
+        let api = AskAPI(transport: transport, baseURL: { URL(string: "http://server:7777")! })
+        var tokens: [String] = []
+        do {
+            for try await event in api.askStream(AskRequest(tweetID: "1", turns: [AskTurn(role: .user, text: "hi")])) {
+                tokens.append(event.token)
+            }
+            Issue.record("expected the failure to be thrown")
+        } catch let error as APIError {
+            #expect(error.errorDescription == "model unreachable")
+        } catch {
+            Issue.record("unexpected error \(error)")
+        }
+        #expect(tokens == ["Par"])
     }
 
     @Test("AskContextEntry lifts handle and text from a Tweet")

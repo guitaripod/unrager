@@ -49,8 +49,9 @@ final class TimelineViewModel {
         /// ephemeral feeds that shouldn't be seeded (e.g. an empty query).
         var cacheKey: String? {
             switch self {
-            case let .home(following, _):
-                return following ? "home-following" : "home-foryou"
+            case let .home(following, originals):
+                let base = following ? "home-following" : "home-foryou"
+                return originals ? base + "-originals" : base
             case let .user(handle):
                 let h = handle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 return h.isEmpty ? nil : "user-\(h)"
@@ -89,7 +90,6 @@ final class TimelineViewModel {
     private let api = AppEnvironment.shared.api
     private var cursor: String?
     private var exhaustion = FeedExhaustion()
-    private var seenIDs = Set<String>()
     private var loadTask: Task<Void, Never>?
     /// Monotonic id of the newest load; a superseded load must not clear the
     /// loading flags that the current load now owns.
@@ -201,16 +201,23 @@ final class TimelineViewModel {
     /// still runs and fully replaces these tweets — fresh content can't be
     /// suppressed by the seed. No-op once any tweets are loaded.
     private func seedFromCache() {
-        guard tweets.value.isEmpty, let key = source.cacheKey else { return }
+        guard tweets.value.isEmpty, let key = cacheKey else { return }
         guard let cached = TimelineCache.shared.load(key: key), !cached.tweets.isEmpty else { return }
         tweets.send(cached.tweets)
         AppLogger.shared.debug("seeded \(cached.tweets.count) cached tweets for \(key)", category: .timeline)
     }
 
+    /// The seed's key: the source's own, plus whether the rage filter is on for
+    /// it, so a feed first paints the posts the current setting would show —
+    /// not ones the filter would have hidden, or the other way round.
+    private var cacheKey: String? {
+        source.cacheKey.map { usesFilterCollect && AppSettings.filterEnabled ? $0 + "-filtered" : $0 }
+    }
+
     /// Overwrites the on-disk seed with the freshly-fetched tweets after a
     /// reset. Only primary feeds (those with a `cacheKey`) persist.
     private func persistCache(_ tweets: [Tweet]) {
-        guard let key = source.cacheKey else { return }
+        guard let key = cacheKey else { return }
         TimelineCache.shared.save(tweets, key: key)
     }
 
@@ -218,7 +225,6 @@ final class TimelineViewModel {
         cursor = nil
         exhaustion.reset()
         hasLoadedOnce = false
-        seenIDs.removeAll()
         readIDs.removeAll()
         persistTask?.cancel()
         persistTask = nil
@@ -492,10 +498,8 @@ final class TimelineViewModel {
             tweets.send([])
             return
         }
-        if reset {
-            cursor = nil
-            exhaustion.reset()
-        }
+        if usesFilterCollect { await SessionSync.awaitRestore() }
+        if Task.isCancelled { return }
         if AppSettings.filterEnabled, usesFilterCollect {
             await collectBatch(reset: reset)
         } else {
@@ -506,27 +510,26 @@ final class TimelineViewModel {
     /// Filter-off path: fetch one page and publish it immediately. A nil or
     /// echoed-back cursor exhausts the feed at once; live feeds that mint a
     /// fresh cursor per page only exhaust after `FeedExhaustion.emptyAppendLimit`
-    /// consecutive pages yield nothing new.
+    /// consecutive pages yield nothing new. A refresh that fails leaves the
+    /// list, its cursor and its read state exactly as they were, and a refresh
+    /// that succeeds replaces the list in one step.
     private func fetchPage(reset: Bool) async {
         do {
             let requestCursor = reset ? nil : cursor
             let page = try await fetch(cursor: requestCursor)
             if Task.isCancelled { return }
-            if reset {
-                seenIDs.removeAll()
-                tweets.send([])
-            }
-            var current = tweets.value
+            var current = reset ? [] : tweets.value
+            var ids = Set(current.map(\.restID))
             var newIDs: [String] = []
-            for tweet in page.tweets where !seenIDs.contains(tweet.restID) {
-                seenIDs.insert(tweet.restID)
+            for tweet in page.tweets where ids.insert(tweet.restID).inserted {
                 current.append(tweet)
                 newIDs.append(tweet.restID)
             }
+            if reset { exhaustion.reset() }
+            cursor = page.cursor
             tweets.send(current)
             persistCache(current)
             reconcileSeen(newIDs)
-            cursor = page.cursor
             exhaustion.registerPage(added: newIDs.count, pageCursor: page.cursor,
                                     requestCursor: requestCursor, isReset: reset)
             AppLogger.shared.info("feed loaded +\(newIDs.count) (\(current.count) total)", category: .timeline)
@@ -549,50 +552,72 @@ final class TimelineViewModel {
     /// exhausts, or the page cap is hit. The feed therefore never visibly
     /// inserts-then-removes a hidden tweet. If Ollama is down `filterStream`
     /// yields no hides, so every tweet survives and the batch fills from ~1 page.
+    ///
+    /// The batch works on its own copy of the cursor, the seen ids and the
+    /// exhaustion latch, and commits them together with the tweets it publishes:
+    /// a failure part-way never leaves the list, the cursor and the seen set out
+    /// of step (which would skip posts or append a page twice). Pages already
+    /// gathered when an error hits are published and the error is still reported.
     private func collectBatch(reset: Bool) async {
-        if reset {
-            seenIDs.removeAll()
-        }
+        var ids = reset ? Set<String>() : Set(tweets.value.map(\.restID))
+        var workingCursor = reset ? nil : cursor
+        var workingExhaustion = reset ? FeedExhaustion() : exhaustion
         collectingProgress.send(0)
         var survivors: [Tweet] = []
         var pages = 0
+        var failure: (any Error)?
         do {
             while survivors.count < Self.targetSurvivors, pages < Self.pageCap {
                 let isResetPage = reset && pages == 0
-                let requestCursor = isResetPage ? nil : cursor
+                let requestCursor = isResetPage ? nil : workingCursor
                 let page = try await fetch(cursor: requestCursor)
                 if Task.isCancelled { return }
                 pages += 1
-                cursor = page.cursor
+                workingCursor = page.cursor
 
-                let fresh = page.tweets.filter { seenIDs.insert($0.restID).inserted }
+                let fresh = page.tweets.filter { ids.insert($0.restID).inserted }
                 let hidden = await streamHidden(fresh.map(\.restID), baseCount: survivors.count)
                 if Task.isCancelled { return }
                 for tweet in fresh where !hidden.contains(tweet.restID) {
                     survivors.append(tweet)
                 }
                 collectingProgress.send(survivors.count)
-                exhaustion.registerPage(added: fresh.count, pageCursor: page.cursor,
-                                        requestCursor: requestCursor, isReset: isResetPage)
-                if exhaustion.isExhausted { break }
+                workingExhaustion.registerPage(added: fresh.count, pageCursor: page.cursor,
+                                               requestCursor: requestCursor, isReset: isResetPage)
+                if workingExhaustion.isExhausted { break }
             }
-            var current = reset ? [] : tweets.value
-            current.append(contentsOf: survivors)
-            tweets.send(current)
-            persistCache(current)
-            reconcileSeen(survivors.map(\.restID))
-            AppLogger.shared.info(
-                "filter batch +\(survivors.count) survivors over \(pages) page(s) (\(current.count) total)",
-                category: .timeline)
-            hasLoadedOnce = true
-            await updateFreshness()
         } catch is CancellationError {
             return
         } catch let error as APIError {
             if case .cancelled = error { return }
-            reportLoadError(error)
+            failure = error
         } catch {
-            errorMessage.send(error.localizedDescription)
+            failure = error
+        }
+        if Task.isCancelled { return }
+        guard failure == nil || !survivors.isEmpty || pages > 0 else {
+            reportLoadFailure(failure)
+            return
+        }
+        cursor = workingCursor
+        exhaustion = workingExhaustion
+        var current = reset ? [] : tweets.value
+        current.append(contentsOf: survivors)
+        tweets.send(current)
+        persistCache(current)
+        reconcileSeen(survivors.map(\.restID))
+        AppLogger.shared.info(
+            "filter batch +\(survivors.count) survivors over \(pages) page(s) (\(current.count) total)",
+            category: .timeline)
+        hasLoadedOnce = true
+        if let failure { reportLoadFailure(failure) } else { await updateFreshness() }
+    }
+
+    private func reportLoadFailure(_ failure: (any Error)?) {
+        if let error = failure as? APIError {
+            reportLoadError(error)
+        } else if let failure {
+            errorMessage.send(failure.localizedDescription)
             hasLoadedOnce = true
         }
     }
@@ -601,24 +626,34 @@ final class TimelineViewModel {
     /// model flagged `hide`. Bumps `collectingProgress` as each *keep* verdict
     /// arrives (relative to `baseCount` already-collected survivors) so the
     /// "collecting tweets… N/25" counter climbs live instead of jumping at the
-    /// end. A stream error (e.g. Ollama down) yields an empty set, so anything
-    /// without a verdict is treated as a keep — matching the prior behavior.
+    /// end. When the stream drops before every post was judged, the unjudged
+    /// ones are asked about once more; anything still without a verdict is kept,
+    /// so a model that is down never blanks the feed.
     private func streamHidden(_ ids: [String], baseCount: Int) async -> Set<String> {
         guard !ids.isEmpty else { return [] }
         var hidden = Set<String>()
+        var judged = Set<String>()
         var keeps = 0
-        do {
-            for try await verdict in api.filterStream(ids: ids) {
-                if Task.isCancelled { return hidden }
-                if verdict.verdict == .hide {
-                    hidden.insert(verdict.id)
-                } else {
-                    keeps += 1
-                    collectingProgress.send(baseCount + keeps)
+        for attempt in 0..<2 {
+            let remaining = ids.filter { !judged.contains($0) }
+            guard !remaining.isEmpty else { break }
+            do {
+                for try await verdict in api.filterStream(ids: remaining) {
+                    if Task.isCancelled { return hidden }
+                    judged.insert(verdict.id)
+                    if verdict.verdict == .hide {
+                        hidden.insert(verdict.id)
+                    } else {
+                        keeps += 1
+                        collectingProgress.send(baseCount + keeps)
+                    }
                 }
+            } catch {
+                AppLogger.shared.debug("filter stream ended (attempt \(attempt + 1)): \(error)", category: .timeline)
             }
-        } catch {
-            AppLogger.shared.debug("filter stream ended: \(error)", category: .timeline)
+        }
+        if judged.count < ids.count {
+            AppLogger.shared.warn("filter left \(ids.count - judged.count) of \(ids.count) posts unjudged; showing them", category: .timeline)
         }
         return hidden
     }

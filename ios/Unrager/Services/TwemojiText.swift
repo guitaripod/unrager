@@ -41,12 +41,8 @@ enum TwemojiText {
         }
 
         guard !misses.isEmpty else { return }
-        let pending = misses
-        Task { @MainActor in
-            for grapheme in pending {
-                _ = await TwemojiCache.shared.image(for: grapheme)
-            }
-        }
+        let pending = misses.joined()
+        Task { await TwemojiCache.shared.prewarm(graphemesIn: pending) }
     }
 
     /// An attributed string holding a single emoji attachment sized so the
@@ -55,7 +51,8 @@ enum TwemojiText {
     @MainActor
     private static func attachmentString(_ image: CGImage, font: UIFont) -> NSAttributedString {
         let attachment = NSTextAttachment()
-        attachment.image = UIImage(cgImage: image, scale: UIScreen.main.scale, orientation: .up)
+        let screenScale = UITraitCollection.current.displayScale
+        attachment.image = UIImage(cgImage: image, scale: screenScale > 0 ? screenScale : 3, orientation: .up)
         let side = font.lineHeight * 0.92
         let descent = font.descender
         attachment.bounds = CGRect(x: 0, y: descent, width: side, height: side)

@@ -33,12 +33,16 @@ public enum TweetCounter {
         maxWeightedLength - weightedLength(of: text)
     }
 
+    /// Built once: constructing a detector is far costlier than running one, and
+    /// the composer measures the draft on every keystroke. A detector is
+    /// immutable, so sharing it between threads is safe.
+    nonisolated(unsafe) private static let linkDetector =
+        try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+
     /// Detected URL ranges, in order. Emails are excluded — X renders them as
     /// plain text, not t.co links.
     private static func urlRanges(in text: String) -> [Range<String.Index>] {
-        guard !text.isEmpty,
-              let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
-        else { return [] }
+        guard !text.isEmpty, let detector = linkDetector else { return [] }
         let full = NSRange(text.startIndex..<text.endIndex, in: text)
         return detector.matches(in: text, options: [], range: full).compactMap { match in
             guard match.url?.scheme?.lowercased() != "mailto" else { return nil }

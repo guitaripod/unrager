@@ -132,6 +132,21 @@ struct NotificationPrefsTests {
         }
     }
 
+    @Test("Banners need the master switch and a mapped, unmuted kind; unmapped junk types never banner")
+    func bannerGating() {
+        withCleanPrefs {
+            #expect(!NotificationPrefs.shouldBanner(rawType: "reply"))
+            NotificationPrefs.bannersEnabled = true
+            #expect(NotificationPrefs.shouldBanner(rawType: "reply"))
+            #expect(!NotificationPrefs.shouldBanner(rawType: "like"))
+            NotificationPrefs.setBannerEnabled(false, for: .reply)
+            #expect(!NotificationPrefs.shouldBanner(rawType: "reply"))
+            #expect(!NotificationPrefs.shouldBanner(rawType: "recommendation"))
+            #expect(!NotificationPrefs.shouldBanner(rawType: "trending"))
+            #expect(!NotificationPrefs.shouldBanner(rawType: "poll"))
+        }
+    }
+
     @Test("Quiet hours match inside the window, including a midnight wrap")
     func quietHours() {
         withCleanPrefs {

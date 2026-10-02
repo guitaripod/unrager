@@ -8,7 +8,7 @@ import UnragerKit
 /// unless the focal tweet belongs to the signed-in user.
 final class TweetAnalyticsView: UIView {
     private let heading = UILabel()
-    private let statsRow = UIStackView()
+    private let statsGrid = UIStackView()
     private let rateLabel = UILabel()
     private let column = UIStackView()
 
@@ -23,42 +23,66 @@ final class TweetAnalyticsView: UIView {
         heading.font = DesignSystem.Typography.caption()
         heading.textColor = DesignSystem.Color.secondaryLabel
 
-        statsRow.axis = .horizontal
-        statsRow.spacing = DesignSystem.Spacing.l
-        statsRow.alignment = .center
-        statsRow.distribution = .fillProportionally
+        statsGrid.axis = .vertical
+        statsGrid.spacing = DesignSystem.Spacing.s
 
         rateLabel.font = DesignSystem.Typography.metric()
         rateLabel.textColor = DesignSystem.Color.secondaryLabel
-        rateLabel.numberOfLines = 1
+        rateLabel.numberOfLines = 0
 
         column.axis = .vertical
         column.spacing = DesignSystem.Spacing.s
         column.isLayoutMarginsRelativeArrangement = true
         column.directionalLayoutMargins = .init(top: 12, leading: 14, bottom: 12, trailing: 14)
         column.addArrangedSubview(heading)
-        column.addArrangedSubview(statsRow)
+        column.addArrangedSubview(statsGrid)
         column.addArrangedSubview(rateLabel)
         addManaged(column)
         column.pinEdges(to: self)
+        isAccessibilityElement = true
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: TweetAnalyticsView, _) in
+            view.layer.borderColor = DesignSystem.Color.separator.cgColor
+        }
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    private struct Stat {
+        let symbol: String
+        let name: String
+        let count: Int
+        let tint: UIColor
+    }
+
+    /// Three figures to a row, so the block wraps at large text sizes instead
+    /// of running off the side.
+    private static let columns = 3
+
     func configure(_ tweet: Tweet, visible: Bool) {
         isHidden = !visible
         guard visible else { return }
-        statsRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        statsGrid.arrangedSubviews.forEach { $0.removeFromSuperview() }
 
+        var stats: [Stat] = []
         if let views = tweet.viewCount {
-            statsRow.addArrangedSubview(stat("chart.bar", count: views, tint: DesignSystem.Color.secondaryLabel))
+            stats.append(Stat(symbol: "chart.bar", name: "views", count: views, tint: DesignSystem.Color.secondaryLabel))
         }
-        statsRow.addArrangedSubview(stat("heart.fill", count: tweet.likeCount, tint: DesignSystem.Color.like))
-        statsRow.addArrangedSubview(stat("arrow.2.squarepath", count: tweet.retweetCount, tint: DesignSystem.Color.retweet))
-        statsRow.addArrangedSubview(stat("bubble.left", count: tweet.replyCount, tint: DesignSystem.Color.accent))
-        statsRow.addArrangedSubview(stat("quote.bubble", count: tweet.quoteCount, tint: DesignSystem.Color.quote))
-        statsRow.addArrangedSubview(stat("bookmark", count: tweet.bookmarkCount, tint: DesignSystem.Color.secondaryLabel))
+        stats += [
+            Stat(symbol: "heart.fill", name: "likes", count: tweet.likeCount, tint: DesignSystem.Color.like),
+            Stat(symbol: "arrow.2.squarepath", name: "reposts", count: tweet.retweetCount, tint: DesignSystem.Color.retweet),
+            Stat(symbol: "bubble.left", name: "replies", count: tweet.replyCount, tint: DesignSystem.Color.accent),
+            Stat(symbol: "quote.bubble", name: "quotes", count: tweet.quoteCount, tint: DesignSystem.Color.quote),
+            Stat(symbol: "bookmark", name: "bookmarks", count: tweet.bookmarkCount, tint: DesignSystem.Color.secondaryLabel),
+        ]
+        for start in stride(from: 0, to: stats.count, by: Self.columns) {
+            let cells = stats[start..<min(start + Self.columns, stats.count)].map(statView)
+            let row = UIStackView(arrangedSubviews: cells)
+            row.axis = .horizontal
+            row.distribution = .fillEqually
+            row.spacing = DesignSystem.Spacing.l
+            statsGrid.addArrangedSubview(row)
+        }
 
         let engagements = tweet.likeCount + tweet.retweetCount + tweet.replyCount
             + tweet.quoteCount + tweet.bookmarkCount
@@ -66,6 +90,7 @@ final class TweetAnalyticsView: UIView {
             let rate = Double(engagements) / Double(views) * 100
             let formatted = rate >= 10 ? String(format: "%.1f%%", rate) : String(format: "%.2f%%", rate)
             rateLabel.text = "Engagement rate \(formatted) · \(Format.count(engagements)) / \(Format.count(views)) views"
+            rateLabel.numberOfLines = 0
             rateLabel.isHidden = false
         } else if engagements > 0 {
             rateLabel.text = "\(Format.count(engagements)) total engagements"
@@ -73,25 +98,23 @@ final class TweetAnalyticsView: UIView {
         } else {
             rateLabel.isHidden = true
         }
+
+        let figures = stats.map { "\(Format.count($0.count)) \($0.name)" }.joined(separator: ", ")
+        accessibilityLabel = "Post analytics. \(figures)." + (rateLabel.text.map { " \($0)." } ?? "")
     }
 
-    private func stat(_ symbol: String, count: Int, tint: UIColor) -> UIView {
-        let icon = UIImageView(image: DesignSystem.icon(symbol, pointSize: 13))
-        icon.tintColor = tint
+    private func statView(_ stat: Stat) -> UIView {
+        let icon = UIImageView(image: DesignSystem.icon(stat.symbol, pointSize: 13))
+        icon.tintColor = stat.tint
         icon.setContentHuggingPriority(.required, for: .horizontal)
         let label = UILabel()
-        label.text = Format.count(count)
+        label.text = Format.count(stat.count)
         label.font = DesignSystem.Typography.metric()
         label.textColor = DesignSystem.Color.label
-        let row = UIStackView(arrangedSubviews: [icon, label])
+        let row = UIStackView(arrangedSubviews: [icon, label, UIView()])
         row.axis = .horizontal
         row.spacing = 4
         row.alignment = .center
         return row
-    }
-
-    override func traitCollectionDidChange(_ previous: UITraitCollection?) {
-        super.traitCollectionDidChange(previous)
-        layer.borderColor = DesignSystem.Color.separator.cgColor
     }
 }

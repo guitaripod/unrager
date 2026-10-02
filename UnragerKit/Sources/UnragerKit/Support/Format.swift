@@ -40,20 +40,26 @@ public enum Format {
         if seconds < 86_400 { return "\(Int(seconds / 3_600))h" }
         if seconds < 604_800 { return "\(Int(seconds / 86_400))d" }
 
-        let calendar = Calendar.current
-        let formatter = DateFormatter()
-        if calendar.component(.year, from: date) == calendar.component(.year, from: now) {
-            formatter.dateFormat = "MMM d"
-        } else {
-            formatter.dateFormat = "MMM d, yyyy"
-        }
-        return formatter.string(from: date)
+        let sameYear = Calendar.current.component(.year, from: date) == Calendar.current.component(.year, from: now)
+        return (sameYear ? shortDate : longDate).string(from: date)
     }
 
-    /// Absolute timestamp for detail views, e.g. "3:21 PM · Jun 19, 2026".
+    /// Absolute timestamp for detail views in the reader's own conventions
+    /// (12- or 24-hour clock, day-month order), e.g. "3:21 PM · Jun 19, 2026".
     public static func absoluteTime(_ date: Date) -> String {
+        "\(clock.string(from: date)) · \(longDate.string(from: date))"
+    }
+
+    /// Formatters are costly to build and these run for every row of a list, so
+    /// each is built once. They use the user's locale through localized
+    /// templates rather than a fixed pattern.
+    nonisolated(unsafe) private static let shortDate = makeFormatter(template: "MMMd")
+    nonisolated(unsafe) private static let longDate = makeFormatter(template: "MMMdyyyy")
+    nonisolated(unsafe) private static let clock = makeFormatter(template: "jmm")
+
+    private static func makeFormatter(template: String) -> DateFormatter {
         let formatter = DateFormatter()
-        formatter.dateFormat = "h:mm a · MMM d, yyyy"
-        return formatter.string(from: date)
+        formatter.setLocalizedDateFormatFromTemplate(template)
+        return formatter
     }
 }

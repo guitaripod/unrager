@@ -33,7 +33,8 @@ final class SettingsViewController: UIViewController {
     private let filterSwitch = UISwitch()
     private let markSeenSwitch = UISwitch()
     private let officialComposeSwitch = UISwitch()
-    private let profileButton = UIButton(configuration: .gray())
+    private var openingProfile = false
+    private let fontPreviewLabel = UILabel()
     private let notificationsSwitch = UISwitch()
     private let bannerSoundSwitch = UISwitch()
     private let quietHoursSwitch = UISwitch()
@@ -49,6 +50,20 @@ final class SettingsViewController: UIViewController {
         view.backgroundColor = DesignSystem.Color.background
         navigationItem.largeTitleDisplayMode = .never
         buildLayout()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(fontScaleApplied), name: AppSettings.fontScaleDidChange, object: nil)
+    }
+
+    /// Settings is built once from fixed fonts, so a text-size change has to
+    /// rebuild it — otherwise the screen the user is adjusting is the one
+    /// screen that doesn't change.
+    @objc private func fontScaleApplied() {
+        let offset = scrollView.contentOffset
+        stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        kindSwitches.removeAll()
+        buildContent()
+        view.layoutIfNeeded()
+        scrollView.setContentOffset(offset, animated: false)
     }
 
     private func buildLayout() {
@@ -67,6 +82,10 @@ final class SettingsViewController: UIViewController {
             stack.trailingAnchor.constraint(equalTo: scrollView.frameLayoutGuide.trailingAnchor),
         ])
 
+        buildContent()
+    }
+
+    private func buildContent() {
         serverField.text = AppSettings.serverURLString
         serverField.placeholder = "http://192.168.1.10:7777"
         serverField.borderStyle = .none
@@ -85,6 +104,8 @@ final class SettingsViewController: UIViewController {
         statusLabel.textColor = DesignSystem.Color.secondaryLabel
         statusLabel.numberOfLines = 0
 
+        appearanceControl.accessibilityLabel = "Appearance"
+        fontScaleControl.accessibilityLabel = "Text size"
         appearanceControl.selectedSegmentIndex = AppSettings.appearance.rawValue
         appearanceControl.addTarget(self, action: #selector(appearanceChanged), for: .valueChanged)
 
@@ -117,11 +138,16 @@ final class SettingsViewController: UIViewController {
             navRow("Edit tabs", icon: "rectangle.grid.1x2") { [weak self] in
                 self?.navigationController?.pushViewController(EditTabsViewController(), animated: true)
             },
-        ]), footnote: "Choose up to \(TabItem.maxCount) tabs and reorder them."))
+        ]), footnote: "Choose up to \(TabItem.maxCount) tabs and reorder them. Settings always stays."))
 
+        fontPreviewLabel.text = "Aa — this is how posts will read."
+        fontPreviewLabel.font = DesignSystem.Typography.body()
+        fontPreviewLabel.textColor = DesignSystem.Color.label
+        fontPreviewLabel.numberOfLines = 0
         stack.addArrangedSubview(section("Appearance", card: card([
             contentRow(appearanceControl),
             contentRow(fontScaleControl),
+            contentRow(fontPreviewLabel),
         ]), footnote: "Text size scales the whole app."))
 
         stack.addArrangedSubview(section("Feed", card: card([
@@ -140,7 +166,7 @@ final class SettingsViewController: UIViewController {
             navRow("Edit filter rubric", icon: "slider.horizontal.3") { [weak self] in
                 self?.navigationController?.pushViewController(FilterSettingsViewController(), animated: true)
             },
-        ]), footnote: "Runs each tweet through your local Ollama classifier; matches are removed from the feed. Refresh after toggling."))
+        ]), footnote: "Runs each tweet on Home through the server's filter model; matches are removed from the feed. Refresh after toggling."))
 
         stack.addArrangedSubview(section("About", card: card([
             navRow("What's new", icon: "sparkles") { [weak self] in
@@ -297,6 +323,7 @@ final class SettingsViewController: UIViewController {
         header.text = title.uppercased()
         header.font = DesignSystem.Typography.caption()
         header.textColor = DesignSystem.Color.secondaryLabel
+        header.accessibilityTraits = .header
         header.directionalLayoutMargins = .init(top: 0, leading: 4, bottom: 0, trailing: 4)
 
         let column = UIStackView(arrangedSubviews: [headerWrap(header), card])
@@ -361,6 +388,7 @@ final class SettingsViewController: UIViewController {
         label.font = DesignSystem.Typography.body()
         label.textColor = DesignSystem.Color.label
         control.setContentHuggingPriority(.required, for: .horizontal)
+        control.accessibilityLabel = title
         let row = paddedRow([label, UIView(), control])
         return row
     }
@@ -368,6 +396,9 @@ final class SettingsViewController: UIViewController {
     private func navRow(_ title: String, icon: String, _ action: @escaping () -> Void) -> UIView {
         let button = RowButton()
         button.onTap = action
+        button.isAccessibilityElement = true
+        button.accessibilityLabel = title
+        button.accessibilityTraits = .button
         let glyph = UIImageView(image: DesignSystem.icon(icon, pointSize: 16, weight: .regular))
         glyph.tintColor = DesignSystem.Color.accent
         glyph.setContentHuggingPriority(.required, for: .horizontal)
@@ -449,20 +480,35 @@ final class SettingsViewController: UIViewController {
     /// value reverts to the previous address with a visible explanation.
     @objc private func serverEditingEnded() {
         serverField.textColor = DesignSystem.Color.secondaryLabel
+        commitServerURL()
+    }
+
+    /// Applies the address in the field. Returns whether the server URL in
+    /// force is now the one shown (unchanged or accepted), false when the text
+    /// was rejected and the previous address restored.
+    @discardableResult
+    private func commitServerURL() -> Bool {
         let candidate = (serverField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard candidate != AppSettings.serverURLString else { return }
+        guard candidate != AppSettings.serverURLString else { return true }
         guard let url = URL(string: candidate), let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https", url.host != nil else {
             serverField.text = AppSettings.serverURLString
-            statusLabel.textColor = .systemRed
-            statusLabel.text = "Not a valid server URL — kept \(AppSettings.serverURLString)"
+            showStatus("Not a valid server URL — kept \(AppSettings.serverURLString)", color: .systemRed)
             Haptics.error()
-            return
+            return false
         }
         AppSettings.serverURLString = candidate
-        statusLabel.textColor = DesignSystem.Color.secondaryLabel
-        statusLabel.text = "Server set to \(candidate)"
+        showStatus("Server set to \(candidate)", color: DesignSystem.Color.secondaryLabel)
         AppLogger.shared.info("server URL changed to \(candidate)", category: .app)
+        return true
+    }
+
+    /// Shows a result under the Server card and says it to VoiceOver, which
+    /// would otherwise never hear a label that changes on its own.
+    private func showStatus(_ text: String, color: UIColor) {
+        statusLabel.textColor = color
+        statusLabel.text = text
+        UIAccessibility.post(notification: .announcement, argument: text)
     }
 
     @objc private func appearanceChanged() {
@@ -498,10 +544,11 @@ final class SettingsViewController: UIViewController {
     }
 
     private func openMyProfile() {
+        guard !openingProfile else { return }
+        openingProfile = true
         Haptics.tap()
-        profileButton.isEnabled = false
         Task {
-            defer { profileButton.isEnabled = true }
+            defer { openingProfile = false }
             do {
                 let me = try await AppEnvironment.shared.api.whoami()
                 navigationController?.pushViewController(ProfileViewController(handle: me.handle), animated: true)
@@ -511,18 +558,19 @@ final class SettingsViewController: UIViewController {
         }
     }
 
+    /// Tests the address as shown: a field still being edited is committed
+    /// first, so the check never runs against the address it is replacing.
     private func testConnection() {
-        statusLabel.textColor = DesignSystem.Color.secondaryLabel
-        statusLabel.text = "Connecting…"
+        view.endEditing(true)
+        guard commitServerURL() else { return }
+        showStatus("Connecting…", color: DesignSystem.Color.secondaryLabel)
         Task {
             do {
                 let me = try await AppEnvironment.shared.api.whoami()
-                statusLabel.textColor = DesignSystem.Color.retweet
-                statusLabel.text = "Connected · signed in as @\(me.handle)"
+                showStatus("Connected · signed in as @\(me.handle)", color: DesignSystem.Color.retweet)
                 Haptics.success()
             } catch {
-                statusLabel.textColor = .systemRed
-                statusLabel.text = error.localizedDescription
+                showStatus(error.localizedDescription, color: .systemRed)
                 Haptics.error()
             }
         }

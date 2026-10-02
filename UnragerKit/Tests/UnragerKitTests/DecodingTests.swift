@@ -325,3 +325,73 @@ struct DecodingTests {
         #expect(cache.load(key: key) == nil)
     }
 }
+
+@Suite("Filter config contract")
+struct FilterConfigDecodingTests {
+    private func decode(_ json: String) throws -> FilterConfig {
+        try UnragerJSON.decode(FilterConfig.self, from: Data(json.utf8))
+    }
+
+    @Test("Strictness and the built-in rules decode from the current server")
+    func currentServer() throws {
+        let config = try decode("""
+        {"drop_topics":["war"],"extra_guidance":"","strictness":"strict",
+         "built_in_rules":["outrage bait","dunking"],
+         "ollama":{"backend":"ollama","model":"qwen3:4b","host":"http://localhost:11434"}}
+        """)
+        #expect(config.strictness == .strict)
+        #expect(config.builtInRules == ["outrage bait", "dunking"])
+        #expect(config.ollama?.model == "qwen3:4b")
+    }
+
+    @Test("A server that predates strictness decodes with it absent")
+    func olderServer() throws {
+        let config = try decode(#"{"drop_topics":[],"extra_guidance":"x"}"#)
+        #expect(config.strictness == nil)
+        #expect(config.builtInRules.isEmpty)
+    }
+
+    @Test("An unknown strictness value is treated as absent, not as a decoding failure")
+    func unknownStrictness() throws {
+        let config = try decode(#"{"drop_topics":["a"],"extra_guidance":"","strictness":"paranoid"}"#)
+        #expect(config.strictness == nil)
+        #expect(config.dropTopics == ["a"])
+    }
+
+    @Test("A patch sends only the fields that are set")
+    func patchEncoding() throws {
+        let data = try UnragerJSON.encoder.encode(FilterPatch(strictness: .relaxed))
+        let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["strictness"] as? String == "relaxed")
+        #expect(object["drop_topics"] == nil)
+        #expect(object["extra_guidance"] == nil)
+    }
+}
+
+@Suite("Unknown server shapes are skipped, not fatal")
+struct LossyDecodingTests {
+    private func tweetJSON(id: String, media: String = "[]") -> String {
+        """
+        {"rest_id":"\(id)","author":{"rest_id":"1","handle":"a","name":"A","verified":false,"followers":0,"following":0},
+         "created_at":"2026-06-19T12:30:00Z","text":"t","url":"https://x.com/a/status/\(id)",
+         "reply_count":0,"retweet_count":0,"like_count":0,"quote_count":0,"media":\(media)}
+        """
+    }
+
+    @Test("A media kind this client doesn't know drops that attachment and keeps the tweet")
+    func unknownMedia() throws {
+        let json = #"{"tweets":["# + tweetJSON(id: "1", media: #"[{"kind":{"hologram":{"x":1}},"url":"u"},{"kind":"photo","url":"p"}]"#) + #"],"cursor":null}"#
+        let page = try UnragerJSON.decode(TimelinePage.self, from: Data(json.utf8))
+        let tweet = try #require(page.tweets.first)
+        #expect(page.tweets.count == 1)
+        #expect(tweet.media.map(\.url) == ["p"])
+    }
+
+    @Test("A tweet that can't be decoded is skipped; the rest of the page survives")
+    func unknownTweet() throws {
+        let json = #"{"tweets":["# + tweetJSON(id: "1") + #",{"rest_id":2,"garbage":true},"# + tweetJSON(id: "3") + #"],"cursor":"c"}"#
+        let page = try UnragerJSON.decode(TimelinePage.self, from: Data(json.utf8))
+        #expect(page.tweets.map(\.restID) == ["1", "3"])
+        #expect(page.cursor == "c")
+    }
+}

@@ -458,18 +458,29 @@ final class PostcardView: UIView {
     /// bleed in and text draws exactly as laid out. Call
     /// `prefetchEmoji(entries:)` before constructing the view so the exported
     /// PNG carries flat Twemoji art rather than the system glyphs.
-    func render(scale: CGFloat) -> UIImage {
+    /// The card's natural size at the export width — what both the preview and
+    /// the exported image lay out to, so they always match.
+    func fittingSize() -> CGSize {
         translatesAutoresizingMaskIntoConstraints = true
-        let targetSize = systemLayoutSizeFitting(
+        return systemLayoutSizeFitting(
             CGSize(width: Self.renderWidth, height: UIView.layoutFittingCompressedSize.height),
             withHorizontalFittingPriority: .required,
             verticalFittingPriority: .fittingSizeLevel)
+    }
+
+    /// The tallest bitmap an export may produce, in pixels. A long thread at
+    /// the full scale would otherwise ask for a bitmap past what the GPU and
+    /// the memory budget can take.
+    private static let maxExportPixels: CGFloat = 8_192
+
+    func render(scale: CGFloat) -> UIImage {
+        let targetSize = fittingSize()
         frame = CGRect(origin: .zero, size: targetSize)
         setNeedsLayout()
         layoutIfNeeded()
 
         let format = UIGraphicsImageRendererFormat()
-        format.scale = scale
+        format.scale = min(scale, Self.maxExportPixels / max(1, targetSize.height))
         format.opaque = true
         let renderer = UIGraphicsImageRenderer(size: targetSize, format: format)
         return renderer.image { context in

@@ -203,19 +203,19 @@ public final class APIClient: Sendable {
         sseStream("api/sse/ask",
                   query: [URLQueryItem(name: "tweet_id", value: tweetID),
                           URLQueryItem(name: "preset", value: preset.rawValue)],
-                  as: TokenEvent.self)
+                  as: TokenEvent.self, failure: { $0.error })
     }
 
     public func briefStream(handle: String) -> AsyncThrowingStream<TokenEvent, Error> {
         sseStream("api/sse/brief",
                   query: [URLQueryItem(name: "handle", value: handle)],
-                  as: TokenEvent.self)
+                  as: TokenEvent.self, failure: { $0.error })
     }
 
     public func translateStream(tweetID: String) -> AsyncThrowingStream<TokenEvent, Error> {
         sseStream("api/sse/translate",
                   query: [URLQueryItem(name: "tweet_id", value: tweetID)],
-                  as: TokenEvent.self)
+                  as: TokenEvent.self, failure: { $0.error })
     }
 
     // MARK: - Request plumbing
@@ -307,7 +307,8 @@ public final class APIClient: Sendable {
     }
 
     private func sseStream<T: Decodable & Sendable>(
-        _ path: String, query: [URLQueryItem], as type: T.Type
+        _ path: String, query: [URLQueryItem], as type: T.Type,
+        failure: @escaping @Sendable (T) -> String? = { _ in nil }
     ) -> AsyncThrowingStream<T, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -327,6 +328,7 @@ public final class APIClient: Sendable {
                         if value == "[DONE]" { break }
                         if value.isEmpty { continue }
                         if let event = try? UnragerJSON.decoder.decode(T.self, from: Data(value.utf8)) {
+                            if let message = failure(event) { throw APIError.upstream(message) }
                             continuation.yield(event)
                         }
                     }

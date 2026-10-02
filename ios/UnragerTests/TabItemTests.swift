@@ -13,10 +13,19 @@ struct TabItemTests {
 
     @Test("Sanitized selections are unique, capped and never empty")
     func sanitize() {
-        #expect(TabItem.sanitized([.home, .home, .search]) == [.home, .search])
+        #expect(TabItem.sanitized([.home, .home, .search, .settings]) == [.home, .search, .settings])
         #expect(TabItem.sanitized([]) == TabItem.defaults)
         #expect(TabItem.sanitized([.home, .search, .notifications, .mentions, .bookmarks, .settings]).count
             == TabItem.maxCount)
+    }
+
+    @Test("Settings can never be dropped from the bar")
+    func settingsIsRequired() {
+        #expect(TabItem.sanitized([.home, .search]) == [.home, .search, .settings])
+        let full = TabItem.sanitized([.home, .search, .notifications, .mentions, .bookmarks])
+        #expect(full.count == TabItem.maxCount)
+        #expect(full.last == .settings)
+        #expect(full.contains(.settings))
     }
 
     @Test("Only Home carries an Edit Tabs subtitle")

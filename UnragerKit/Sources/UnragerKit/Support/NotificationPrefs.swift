@@ -105,11 +105,11 @@ public enum NotificationPrefs {
     }
 
     /// Whether a banner should be raised for a raw server type, honoring both the
-    /// master switch and the per-kind toggle. Unmapped types (no toggle) follow
-    /// the master switch alone.
+    /// master switch and the per-kind toggle. Unmapped types (Recommendation,
+    /// Trending, Spaces, Poll, …) have no toggle to mute them with, so — like
+    /// toasts — they never banner: the tab badge and the list carry those.
     public static func shouldBanner(rawType: String) -> Bool {
-        guard bannersEnabled else { return false }
-        guard let kind = NotificationKind.from(rawType: rawType) else { return true }
+        guard bannersEnabled, let kind = NotificationKind.from(rawType: rawType) else { return false }
         return bannerEnabled(for: kind)
     }
 

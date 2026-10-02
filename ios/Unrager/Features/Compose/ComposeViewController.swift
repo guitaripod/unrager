@@ -27,6 +27,9 @@ final class ComposeViewController: UIViewController {
     /// local id — a Retry after a mid-batch failure skips completed uploads.
     private var uploadedIDs: [UUID: String] = [:]
     private var isPosting = false
+    private var pendingLoads = 0
+    private lazy var cancelButton = UIBarButtonItem(
+        barButtonSystemItem: .cancel, target: self, action: #selector(cancel))
     private lazy var postButton = UIBarButtonItem(
         title: "Tweet", style: .prominent, target: self, action: #selector(post))
     private lazy var photoButton = UIBarButtonItem(
@@ -37,6 +40,11 @@ final class ComposeViewController: UIViewController {
         let id = UUID()
         let media: ComposeMedia
         let thumbnail: UIImage
+
+        init(_ loaded: ComposeMediaLoader.Loaded) {
+            media = loaded.media
+            thumbnail = loaded.thumbnail
+        }
     }
 
     private static let maxAttachments = 4
@@ -63,22 +71,26 @@ final class ComposeViewController: UIViewController {
             title = "Quote @\(tweet.author.handle)"
             placeholder.text = "Add a comment"
         }
-        navigationItem.leftBarButtonItem = UIBarButtonItem(
-            barButtonSystemItem: .cancel, target: self, action: #selector(cancel))
+        navigationItem.leftBarButtonItem = cancelButton
         navigationItem.rightBarButtonItems = [postButton, photoButton]
         postButton.isEnabled = false
 
-        textView.font = DesignSystem.Typography.system(20, weight: .regular)
+        textView.font = DesignSystem.Typography.editor()
+        textView.adjustsFontForContentSizeCategory = true
         textView.backgroundColor = .clear
         textView.delegate = self
         textView.textColor = DesignSystem.Color.label
+        textView.accessibilityLabel = title
 
-        placeholder.font = DesignSystem.Typography.system(20, weight: .regular)
+        placeholder.font = DesignSystem.Typography.editor()
+        placeholder.adjustsFontForContentSizeCategory = true
         placeholder.textColor = DesignSystem.Color.tertiaryLabel
+        placeholder.isAccessibilityElement = false
 
         counter.font = DesignSystem.Typography.metric()
         counter.textColor = DesignSystem.Color.secondaryLabel
-        updateCounter()
+        counter.accessibilityLabel = "Characters remaining"
+        refreshState()
 
         attachmentBar.axis = .horizontal
         attachmentBar.spacing = DesignSystem.Spacing.s
@@ -120,6 +132,7 @@ final class ComposeViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        navigationController?.presentationController?.delegate = self
         textView.becomeFirstResponder()
     }
 
@@ -128,7 +141,8 @@ final class ComposeViewController: UIViewController {
     private func presentPicker() {
         var config = PHPickerConfiguration()
         config.filter = .images
-        config.selectionLimit = Self.maxAttachments - attachments.count
+        config.selection = .ordered
+        config.selectionLimit = max(1, Self.maxAttachments - attachments.count - pendingLoads)
         let picker = PHPickerViewController(configuration: config)
         picker.delegate = self
         present(picker, animated: true)
@@ -152,23 +166,45 @@ final class ComposeViewController: UIViewController {
     }
 
     private func updateControls() {
-        photoButton.isEnabled = attachments.count < Self.maxAttachments
-        textViewDidChange(textView)
+        photoButton.isEnabled = !isPosting && attachments.count + pendingLoads < Self.maxAttachments
+        refreshState()
     }
 
-    /// Remaining budget under X's weighted 280 (URLs count 23, CJK/emoji count
-    /// 2), so the counter — and the post gate — agree with what X will accept.
-    private func updateCounter() {
+    /// Re-derives everything that follows from the draft, measuring it once:
+    /// the counter (X's weighted 280 — URLs count 23, CJK and emoji 2 — so it
+    /// agrees with what X will accept), the post gate, the placeholder, and
+    /// whether swiping the sheet away needs a confirmation.
+    private func refreshState() {
         let remaining = TweetCounter.remaining(for: textView.text)
         counter.text = "\(remaining)"
         counter.textColor = remaining < 0 ? .systemRed : DesignSystem.Color.secondaryLabel
+        placeholder.isHidden = !textView.text.isEmpty
+        postButton.isEnabled = !isPosting && pendingLoads == 0 && hasContent && remaining >= 0
+        let guarded = hasContent || isPosting
+        isModalInPresentation = guarded
+        navigationController?.isModalInPresentation = guarded
     }
 
     private var hasContent: Bool {
         !textView.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty
     }
 
-    @objc private func cancel() { dismiss(animated: true) }
+    @objc private func cancel() { requestDismiss() }
+
+    /// Closes the composer, asking first when there is a draft to lose.
+    private func requestDismiss() {
+        guard hasContent, !isPosting else {
+            dismiss(animated: true)
+            return
+        }
+        let sheet = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
+        sheet.addAction(UIAlertAction(title: "Discard Draft", style: .destructive) { [weak self] _ in
+            self?.dismiss(animated: true)
+        })
+        sheet.addAction(UIAlertAction(title: "Keep Editing", style: .cancel))
+        sheet.popoverPresentationController?.barButtonItem = cancelButton
+        present(sheet, animated: true)
+    }
 
     // MARK: - Posting
 
@@ -181,10 +217,36 @@ final class ComposeViewController: UIViewController {
     /// mode. Success dismisses; failure re-enables the editor and offers Retry.
     private func submit() async {
         guard hasContent, !isPosting else { return }
-        if AppSettings.composeViaOfficialApp {
-            handoffToOfficialApp()
+        guard AppSettings.composeViaOfficialApp else {
+            await postThroughServer()
             return
         }
+        if attachments.isEmpty {
+            handoffToOfficialApp()
+        } else {
+            confirmHandoffWithAttachments()
+        }
+    }
+
+    /// The X app's compose link carries text only, so a draft with photos would
+    /// lose them in the hand-off. Say so and let the user pick where to post.
+    private func confirmHandoffWithAttachments() {
+        let alert = UIAlertController(
+            title: "The X app can't take photos",
+            message: "Its compose link carries text only. Post from unrager to keep your photos, or open X without them.",
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Post from unrager", style: .default) { [weak self] _ in
+            Task { await self?.postThroughServer() }
+        })
+        alert.addAction(UIAlertAction(title: "Open X without photos", style: .destructive) { [weak self] _ in
+            self?.handoffToOfficialApp()
+        })
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        present(alert, animated: true)
+    }
+
+    private func postThroughServer() async {
+        guard !isPosting else { return }
         isPosting = true
         setEditorLocked(true)
         defer {
@@ -230,7 +292,7 @@ final class ComposeViewController: UIViewController {
         case let .quote(tweet):
             message = text.isEmpty ? tweet.url : "\(text) \(tweet.url)"
         }
-        UIPasteboard.general.string = text
+        if !text.isEmpty { UIPasteboard.general.string = text }
         autoLikeIfReply()
 
         var components = URLComponents(string: "https://x.com/intent/tweet")
@@ -268,9 +330,9 @@ final class ComposeViewController: UIViewController {
     private func setEditorLocked(_ locked: Bool) {
         textView.isEditable = !locked
         attachmentBar.isUserInteractionEnabled = !locked
-        photoButton.isEnabled = !locked && attachments.count < Self.maxAttachments
-        postButton.isEnabled = !locked && hasContent && TweetCounter.remaining(for: textView.text) >= 0
+        cancelButton.isEnabled = !locked
         if !locked { postButton.title = "Tweet" }
+        updateControls()
     }
 
     private func presentPostFailure(_ error: any Error) {
@@ -279,7 +341,7 @@ final class ComposeViewController: UIViewController {
             message: error.localizedDescription,
             preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Retry", style: .default) { [weak self] _ in
-            Task { await self?.submit() }
+            Task { await self?.postThroughServer() }
         })
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         present(alert, animated: true)
@@ -295,27 +357,48 @@ final class ComposeViewController: UIViewController {
 
 extension ComposeViewController: UITextViewDelegate {
     func textViewDidChange(_ textView: UITextView) {
-        placeholder.isHidden = !textView.text.isEmpty
-        postButton.isEnabled = !isPosting && hasContent && TweetCounter.remaining(for: textView.text) >= 0
-        updateCounter()
+        refreshState()
+    }
+}
+
+extension ComposeViewController: UIAdaptivePresentationControllerDelegate {
+    func presentationControllerDidAttemptToDismiss(_ presentationController: UIPresentationController) {
+        requestDismiss()
     }
 }
 
 extension ComposeViewController: PHPickerViewControllerDelegate {
     func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
         picker.dismiss(animated: true)
-        for result in results {
-            let provider = result.itemProvider
-            guard provider.canLoadObject(ofClass: UIImage.self) else { continue }
-            provider.loadObject(ofClass: UIImage.self) { [weak self] object, _ in
-                guard let image = object as? UIImage,
-                      let data = image.jpegData(compressionQuality: 0.85) else { return }
-                let attachment = Attachment(
-                    media: ComposeMedia(data: data, filename: "\(UUID().uuidString).jpg", mimeType: "image/jpeg"),
-                    thumbnail: image)
-                Task { @MainActor in self?.addAttachment(attachment) }
+        guard !results.isEmpty else { return }
+        pendingLoads += results.count
+        updateControls()
+        let handoffs = results.map { ComposeMediaLoader.Handoff(provider: $0.itemProvider) }
+        Task {
+            var loaded: [ComposeMediaLoader.Loaded?] = Array(repeating: nil, count: handoffs.count)
+            await withTaskGroup(of: (Int, ComposeMediaLoader.Loaded?).self) { group in
+                for (index, handoff) in handoffs.enumerated() {
+                    group.addTask { (index, try? await ComposeMediaLoader.load(handoff)) }
+                }
+                for await (index, item) in group { loaded[index] = item }
             }
+            pendingLoads -= handoffs.count
+            for item in loaded {
+                if let item, attachments.count < Self.maxAttachments { addAttachment(Attachment(item)) }
+            }
+            updateControls()
+            let failed = loaded.filter { $0 == nil }.count
+            if failed > 0 { presentPickFailure(count: failed) }
         }
+    }
+
+    private func presentPickFailure(count: Int) {
+        let alert = UIAlertController(
+            title: count == 1 ? "A photo couldn't be added" : "\(count) photos couldn't be added",
+            message: "They could not be read from your library. Try picking them again.",
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        present(alert, animated: true)
     }
 }
 
@@ -376,6 +459,7 @@ private final class AttachmentThumbnail: UIView {
         self.onRemove = onRemove
         super.init(frame: .zero)
         let imageView = UIImageView(image: image)
+        imageView.accessibilityIgnoresInvertColors = true
         imageView.contentMode = .scaleAspectFill
         imageView.clipsToBounds = true
         imageView.layer.cornerRadius = DesignSystem.Radius.control
@@ -384,21 +468,24 @@ private final class AttachmentThumbnail: UIView {
         imageView.pinEdges(to: self)
 
         let remove = UIButton(type: .system)
-        var config = UIButton.Configuration.filled()
-        config.image = DesignSystem.icon("xmark", pointSize: 11, weight: .bold)
-        config.baseBackgroundColor = UIColor.black.withAlphaComponent(0.6)
-        config.baseForegroundColor = .white
-        config.cornerStyle = .capsule
+        var config = UIButton.Configuration.plain()
+        config.image = UIImage(systemName: "xmark.circle.fill", withConfiguration: UIImage.SymbolConfiguration(
+            paletteColors: [.white, UIColor.black.withAlphaComponent(0.6)]))?
+            .applyingSymbolConfiguration(.init(pointSize: 20))
         config.contentInsets = .init(top: 3, leading: 3, bottom: 3, trailing: 3)
         remove.configuration = config
+        remove.contentHorizontalAlignment = .trailing
+        remove.contentVerticalAlignment = .top
         remove.addAction(UIAction { [weak self] _ in guard let self else { return }; self.onRemove(self) }, for: .touchUpInside)
         remove.accessibilityLabel = "Remove attachment"
         addManaged(remove)
         NSLayoutConstraint.activate([
             widthAnchor.constraint(equalToConstant: 64),
             heightAnchor.constraint(equalToConstant: 64),
-            remove.topAnchor.constraint(equalTo: topAnchor, constant: 3),
-            remove.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -3),
+            remove.topAnchor.constraint(equalTo: topAnchor),
+            remove.trailingAnchor.constraint(equalTo: trailingAnchor),
+            remove.widthAnchor.constraint(equalToConstant: 44),
+            remove.heightAnchor.constraint(equalToConstant: 44),
         ])
     }
 

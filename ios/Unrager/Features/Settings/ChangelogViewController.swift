@@ -93,17 +93,7 @@ final class ChangelogViewController: UIViewController {
         return entry
     }
 
-    /// Inline markdown (bold, code) via Foundation's parser, with the base
-    /// font/color merged in.
     private static func inline(_ text: String, font: UIFont, color: UIColor) -> NSAttributedString {
-        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        guard var attributed = try? AttributedString(markdown: text, options: options) else {
-            return NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: color])
-        }
-        var base = AttributeContainer()
-        base.font = font
-        base.foregroundColor = color
-        attributed.mergeAttributes(base, mergePolicy: .keepNew)
-        return NSAttributedString(attributed)
+        InlineMarkdown.render(text, font: font, color: color)
     }
 }

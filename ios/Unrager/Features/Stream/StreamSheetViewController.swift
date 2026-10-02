@@ -67,12 +67,33 @@ final class StreamSheetViewController: UIViewController {
                 self.spinner.stopAnimating()
                 if self.raw.isEmpty { self.textView.text = "(no response)" }
             } catch {
-                guard let self else { return }
-                self.spinner.stopAnimating()
-                self.textView.textColor = .systemRed
-                self.textView.text = error.localizedDescription
+                guard let self, !Task.isCancelled else { return }
+                self.showFailure(error)
             }
         }
+    }
+
+    /// Keeps whatever streamed before the failure and says what went wrong
+    /// under it, with a Retry in the bar that starts the request over.
+    private func showFailure(_ error: any Error) {
+        spinner.stopAnimating()
+        let shown = NSMutableAttributedString(attributedString: raw.isEmpty ? NSAttributedString() : Self.renderMarkdown(raw))
+        if shown.length > 0 { shown.append(NSAttributedString(string: "\n\n")) }
+        shown.append(NSAttributedString(string: error.localizedDescription, attributes: [
+            .font: DesignSystem.Typography.body(), .foregroundColor: UIColor.systemRed]))
+        textView.attributedText = shown
+        navigationItem.leftBarButtonItem = UIBarButtonItem(
+            image: DesignSystem.icon("arrow.clockwise"),
+            primaryAction: UIAction { [weak self] _ in self?.retry() })
+        navigationItem.leftBarButtonItem?.accessibilityLabel = "Retry"
+    }
+
+    private func retry() {
+        navigationItem.leftBarButtonItem = nil
+        raw = ""
+        textView.text = nil
+        spinner.startAnimating()
+        start()
     }
 
     /// Tears the stream down the moment the sheet goes away (Done, swipe-down,
@@ -100,15 +121,7 @@ final class StreamSheetViewController: UIViewController {
             }
             .joined(separator: "\n")
 
-        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        guard var attributed = try? AttributedString(markdown: bulletized, options: options) else {
-            return NSAttributedString(string: markdown)
-        }
-        var base = AttributeContainer()
-        base.font = DesignSystem.Typography.body()
-        base.foregroundColor = DesignSystem.Color.label
-        attributed.mergeAttributes(base, mergePolicy: .keepNew)
-        return NSAttributedString(attributed)
+        return InlineMarkdown.render(bulletized, font: DesignSystem.Typography.body(), color: DesignSystem.Color.label)
     }
 
     deinit { task?.cancel() }

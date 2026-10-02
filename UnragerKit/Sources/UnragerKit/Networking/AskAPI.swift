@@ -39,6 +39,7 @@ public final class AskAPI: Sendable {
                         if value == "[DONE]" { break }
                         if value.isEmpty { continue }
                         if let event = try? UnragerJSON.decoder.decode(TokenEvent.self, from: Data(value.utf8)) {
+                            if let message = event.error { throw APIError.upstream(message) }
                             continuation.yield(event)
                         }
                     }

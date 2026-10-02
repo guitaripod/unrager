@@ -128,7 +128,8 @@ final class MediaContentView: UIView {
         }()
         view.onTapPhoto = { [weak self] index in self?.onTapPhoto?(index) }
         let aspect = urls.count == 1 ? photos.first?.aspectRatio : nil
-        view.configure(urls: urls, contentWidth: contentWidth, imagesEnabled: imagesEnabled, aspectRatio: aspect)
+        view.configure(urls: urls, contentWidth: contentWidth, imagesEnabled: imagesEnabled, aspectRatio: aspect,
+                       altTexts: photos.map(\.altText))
         swap(to: view)
     }
 

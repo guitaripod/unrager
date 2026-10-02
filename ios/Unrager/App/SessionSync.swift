@@ -13,11 +13,26 @@ import UnragerKit
 enum SessionSync {
     private static let api = AppEnvironment.shared.api
 
+    private static var restoreTask: Task<Void, Never>?
+
     static func restore() {
-        Task {
-            guard let state = try? await api.session() else { return }
+        restoreTask = Task {
+            guard let state = try? await api.session(), !Task.isCancelled else { return }
             AppSettings.filterEnabled = state.filterEnabled
             AppLogger.shared.info("session restored: filter=\(state.filterEnabled)", category: .app)
+        }
+    }
+
+    /// Waits (at most `timeout`) for the launch-time `restore()`, so the first
+    /// Home load judges with the server's filter setting rather than the one
+    /// the app last saved. Returns at once when nothing is restoring.
+    static func awaitRestore(timeout: Duration = .seconds(2)) async {
+        guard let restoreTask else { return }
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await restoreTask.value }
+            group.addTask { try? await Task.sleep(for: timeout) }
+            await group.next()
+            group.cancelAll()
         }
     }
 
@@ -30,6 +45,7 @@ enum SessionSync {
     }
 
     static func patchFilterEnabled(_ enabled: Bool) {
+        restoreTask?.cancel()
         patch(SessionPatch(filterEnabled: enabled))
     }
 

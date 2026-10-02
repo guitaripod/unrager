@@ -67,6 +67,9 @@ struct EngagementTests {
     @Test("The full bookmarks timeline gets its own cache seed key")
     func bookmarksCacheKey() {
         #expect(TimelineViewModel.Source.bookmarks(query: "").cacheKey == "bookmarks-all")
+        #expect(TimelineViewModel.Source.home(following: false, originals: false).cacheKey == "home-foryou")
+        #expect(TimelineViewModel.Source.home(following: false, originals: true).cacheKey == "home-foryou-originals")
+        #expect(TimelineViewModel.Source.home(following: true, originals: false).cacheKey == "home-following")
         #expect(TimelineViewModel.Source.bookmarks(query: "Rust").cacheKey == "bookmarks-rust")
     }
 }

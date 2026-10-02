@@ -9,6 +9,15 @@ import UIKit
 /// Raw values persist in `UserDefaults` (see `PostcardStore`), so new cases
 /// are appended — never inserted — and `ordered` handles presentation order.
 enum PostcardTheme: Int, CaseIterable, Sendable {
+    /// The appearance "Match App" follows. A postcard is drawn off screen, where
+    /// a dynamic colour would resolve against the default (light) traits no
+    /// matter how the app looks, so the screen showing it sets this.
+    nonisolated(unsafe) static var appearance: UIUserInterfaceStyle = .unspecified
+
+    private static func matchApp(_ color: UIColor) -> UIColor {
+        color.resolvedColor(with: UITraitCollection(userInterfaceStyle: appearance))
+    }
+
     case glass
     case synthwave
     case cutout
@@ -47,7 +56,7 @@ enum PostcardTheme: Int, CaseIterable, Sendable {
         case .moss: return UIColor(rgb: 0x1E2A20)
         case .blueprint: return UIColor(rgb: 0x072B5C)
         case .arcade: return .black
-        case .matchApp: return DesignSystem.Color.background
+        case .matchApp: return Self.matchApp(DesignSystem.Color.background)
         case .paper: return UIColor(rgb: 0xFBF8F1)
         case .ember: return UIColor(rgb: 0x1A1210)
         }
@@ -73,7 +82,7 @@ enum PostcardTheme: Int, CaseIterable, Sendable {
         case .moss: return UIColor(rgb: 0xE8E4D8)
         case .blueprint: return UIColor(rgb: 0xF0F4F8)
         case .arcade: return UIColor(rgb: 0x39FF14)
-        case .matchApp: return DesignSystem.Color.label
+        case .matchApp: return Self.matchApp(DesignSystem.Color.label)
         case .paper: return UIColor(rgb: 0x2B2620)
         case .ember: return UIColor(rgb: 0xF5E3D3)
         }
@@ -87,7 +96,7 @@ enum PostcardTheme: Int, CaseIterable, Sendable {
         case .moss: return UIColor(rgb: 0x8BA08E)
         case .blueprint: return UIColor(rgb: 0x7AA4D0)
         case .arcade: return UIColor(rgb: 0x3D8E3A)
-        case .matchApp: return DesignSystem.Color.secondaryLabel
+        case .matchApp: return Self.matchApp(DesignSystem.Color.secondaryLabel)
         case .paper: return UIColor(rgb: 0x8A8073)
         case .ember: return UIColor(rgb: 0xB08A72)
         }
@@ -101,7 +110,7 @@ enum PostcardTheme: Int, CaseIterable, Sendable {
         case .moss: return UIColor(rgb: 0x9CAF88)
         case .blueprint: return UIColor(rgb: 0x22D3EE)
         case .arcade: return UIColor(rgb: 0xFF00FF)
-        case .matchApp: return DesignSystem.Color.accent
+        case .matchApp: return Self.matchApp(DesignSystem.Color.accent)
         case .paper: return UIColor(rgb: 0xB4552D)
         case .ember: return UIColor(rgb: 0xFF7A3C)
         }
@@ -113,7 +122,7 @@ enum PostcardTheme: Int, CaseIterable, Sendable {
         switch self {
         case .synthwave, .moss, .blueprint, .arcade, .ember: return true
         case .glass, .cutout, .paper: return false
-        case .matchApp: return false
+        case .matchApp: return Self.appearance == .dark
         }
     }
 }

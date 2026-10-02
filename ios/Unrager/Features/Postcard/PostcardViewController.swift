@@ -15,14 +15,19 @@ final class PostcardViewController: UIViewController {
     private var photos: [UIImage] = []
     private var quotedPhotos: [UIImage] = []
     private var exporting = false
+    private var imagesLoaded = false
     private var threadEntries: [PostcardView.Entry]?
     private var threadLoading = false
 
     private let scrollView = UIScrollView()
     private let previewContainer = UIView()
     private let cardShadow = UIView()
+    private let cardClip = UIView()
     private var cardWidthConstraint: NSLayoutConstraint?
+    private var cardHeightConstraint: NSLayoutConstraint?
     private var card: PostcardView?
+    private var cardNaturalSize: CGSize = .zero
+    private var actionButtons: [UIButton] = []
     private let loadingIndicator = UIActivityIndicatorView(style: .large)
 
     private let swatchRow = UIStackView()
@@ -46,18 +51,47 @@ final class PostcardViewController: UIViewController {
         super.viewDidLoad()
         title = "Postcard"
         view.backgroundColor = DesignSystem.Color.background
+        PostcardTheme.appearance = traitCollection.userInterfaceStyle
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (controller: PostcardViewController, _) in
+            PostcardTheme.appearance = controller.traitCollection.userInterfaceStyle
+            if controller.imagesLoaded { controller.rebuildPreview() }
+        }
         configureNavigation()
         configureLayout()
+        updateExportEnabled()
         loadImagesThenRender()
     }
 
-    /// Fits the fixed-aspect 540pt card to the screen for preview (capped at the
-    /// native render width on wide screens). The exported image is rendered from
-    /// a separate instance at the full render width, so this never softens it.
+    /// The preview is the export itself: a card laid out at the full 540 pt
+    /// width, shown shrunk to fit the screen. Laying it out at the screen's
+    /// width instead would wrap the text differently from the image that gets
+    /// saved or shared.
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        layoutPreview()
+    }
+
+    private func layoutPreview() {
         let available = view.bounds.width - DesignSystem.Spacing.l * 2
-        cardWidthConstraint?.constant = min(PostcardView.renderWidth, max(240, available))
+        let displayWidth = min(PostcardView.renderWidth, max(240, available))
+        cardWidthConstraint?.constant = displayWidth
+        guard let card, cardNaturalSize.width > 0 else { return }
+        let scale = displayWidth / cardNaturalSize.width
+        card.transform = .identity
+        card.bounds = CGRect(origin: .zero, size: cardNaturalSize)
+        card.layer.anchorPoint = .zero
+        card.layer.position = .zero
+        card.transform = CGAffineTransform(scaleX: scale, y: scale)
+        cardHeightConstraint?.constant = cardNaturalSize.height * scale
+    }
+
+    /// Export is offered only once everything it draws is in: the photos and
+    /// avatar, and — with Thread on — the thread. Earlier it would save a card
+    /// with its pictures missing.
+    private func updateExportEnabled() {
+        let ready = imagesLoaded && !threadLoading && !exporting
+        actionButtons.forEach { $0.isEnabled = ready }
+        navigationItem.rightBarButtonItem?.isEnabled = ready
     }
 
     // MARK: - Chrome
@@ -80,6 +114,11 @@ final class PostcardViewController: UIViewController {
         cardShadow.layer.shadowOpacity = 0.18
         cardShadow.layer.shadowRadius = 18
         cardShadow.layer.shadowOffset = CGSize(width: 0, height: 8)
+        cardClip.clipsToBounds = true
+        cardClip.layer.cornerRadius = DesignSystem.Radius.card
+        cardClip.layer.cornerCurve = .continuous
+        cardShadow.addManaged(cardClip)
+        cardClip.pinEdges(to: cardShadow)
         previewContainer.addManaged(cardShadow)
         scrollView.addManaged(previewContainer)
 
@@ -92,9 +131,12 @@ final class PostcardViewController: UIViewController {
 
         let cardWidth = cardShadow.widthAnchor.constraint(equalToConstant: PostcardView.renderWidth)
         cardWidthConstraint = cardWidth
+        let cardHeight = cardShadow.heightAnchor.constraint(equalToConstant: PostcardView.renderWidth)
+        cardHeightConstraint = cardHeight
 
         NSLayoutConstraint.activate([
             cardWidth,
+            cardHeight,
             controlBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             controlBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             controlBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -176,6 +218,7 @@ final class PostcardViewController: UIViewController {
     /// so labels never truncate and the switch never overlaps them.
     private func makeToggle(title: String, control: UISwitch, isOn: Bool) -> UIView {
         control.isOn = isOn
+        control.accessibilityLabel = title
         control.onTintColor = DesignSystem.Color.accent
         control.setContentHuggingPriority(.required, for: .horizontal)
         control.setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -203,6 +246,7 @@ final class PostcardViewController: UIViewController {
         let shareButton = makeActionButton(title: "Share", symbol: "square.and.arrow.up", prominent: false) { [weak self] in
             self?.share()
         }
+        actionButtons = [save, copy, shareButton]
         let row = UIStackView(arrangedSubviews: [save, copy, shareButton])
         row.axis = .horizontal
         row.spacing = DesignSystem.Spacing.m
@@ -237,7 +281,9 @@ final class PostcardViewController: UIViewController {
             self.quotedPhotos = await quotedPhotos
             await PostcardView.prefetchEmoji(entries: self.activeEntries)
             self.loadingIndicator.stopAnimating()
+            self.imagesLoaded = true
             self.rebuildPreview()
+            self.updateExportEnabled()
         }
     }
 
@@ -247,9 +293,14 @@ final class PostcardViewController: UIViewController {
         return await ImageLoader.image(for: url, pointSize: CGSize(width: 120, height: 120), scale: scale)
     }
 
-    /// Loads up to four photo (or video-poster) images, preferring the direct X
-    /// CDN URL and falling back to the server media proxy — the same path the
-    /// feed uses. Videos contribute their poster frame; polls/cards are skipped.
+    /// The widest a photo is ever drawn is the card's own width, so decoding
+    /// beyond that only spends memory.
+    private static let photoPoints = CGSize(width: PostcardView.renderWidth, height: PostcardView.renderWidth)
+
+    /// Loads up to `limit` photo (or video-poster) images, all at once and in
+    /// their original order, preferring the direct X CDN URL and falling back to
+    /// the server media proxy — the same path the feed uses. Videos contribute
+    /// their poster frame; polls/cards are skipped.
     @MainActor
     private static func loadPhotos(_ tweet: Tweet, scale: CGFloat, limit: Int = 4) async -> [UIImage] {
         guard AppSettings.imagesEnabled else { return [] }
@@ -261,13 +312,16 @@ final class PostcardViewController: UIViewController {
                 return nil
             }
         }
-        var images: [UIImage] = []
-        for url in targets.prefix(limit) {
-            if let image = await ImageLoader.image(for: url, pointSize: CGSize(width: 1080, height: 1080), scale: scale) {
-                images.append(image)
+        return await withTaskGroup(of: (Int, UIImage?).self) { group in
+            for (position, url) in targets.prefix(limit).enumerated() {
+                group.addTask { (position, await ImageLoader.image(for: url, pointSize: Self.photoPoints, scale: scale)) }
             }
+            var loaded: [(Int, UIImage)] = []
+            for await (position, image) in group {
+                if let image { loaded.append((position, image)) }
+            }
+            return loaded.sorted { $0.0 < $1.0 }.map(\.1)
         }
-        return images
     }
 
     @MainActor
@@ -288,12 +342,12 @@ final class PostcardViewController: UIViewController {
     private func rebuildPreview() {
         card?.removeFromSuperview()
         let card = PostcardView(entries: activeEntries, theme: theme, options: options)
-        cardShadow.addManaged(card)
-        card.pinEdges(to: cardShadow)
-        card.layer.cornerRadius = DesignSystem.Radius.card
-        card.layer.cornerCurve = .continuous
-        card.clipsToBounds = true
+        cardNaturalSize = card.fittingSize()
+        card.frame = CGRect(origin: .zero, size: cardNaturalSize)
+        cardClip.addSubview(card)
+        card.layoutIfNeeded()
         self.card = card
+        layoutPreview()
     }
 
     // MARK: - Actions
@@ -326,6 +380,7 @@ final class PostcardViewController: UIViewController {
             fetchThread()
         } else {
             rebuildPreview()
+            updateExportEnabled()
         }
     }
 
@@ -353,35 +408,51 @@ final class PostcardViewController: UIViewController {
     private func fetchThread() {
         threadLoading = true
         loadingIndicator.startAnimating()
+        updateExportEnabled()
         Task { [weak self] in
             guard let self else { return }
             let entries = await Self.loadThreadEntries(focal: self.tweet)
             self.threadLoading = false
             self.loadingIndicator.stopAnimating()
-            guard self.options.showsThread else { return }
+            guard self.options.showsThread else { self.updateExportEnabled(); return }
+            guard let entries else {
+                self.threadSwitch.setOn(false, animated: true)
+                self.options.showsThread = false
+                self.updateExportEnabled()
+                self.present(AlertFactory.error(ThreadUnavailable(), title: "Couldn't load the thread"), animated: true)
+                return
+            }
             self.threadEntries = entries
             self.rebuildPreview()
+            self.updateExportEnabled()
         }
+    }
+
+    private struct ThreadUnavailable: LocalizedError {
+        var errorDescription: String? { "The conversation couldn't be fetched, so the postcard shows this post alone." }
     }
 
     /// Fetches the thread and walks the parent chain from the focal tweet up to
     /// the root (cap 20, mirroring the TUI), then loads each tweet's avatar and
-    /// photos. Falls back to the focal alone if the fetch fails.
+    /// first photo, all of them at once. Nil when the thread can't be fetched,
+    /// so a failure is never kept as if it were the thread.
     @MainActor
-    private static func loadThreadEntries(focal: Tweet) async -> [PostcardView.Entry] {
-        let chain: [Tweet]
-        if let thread = try? await AppEnvironment.shared.api.thread(id: focal.restID) {
-            chain = ancestorChain(focal: thread.focal ?? focal, ancestors: thread.ancestors)
-        } else {
-            chain = [focal]
-        }
-        var entries: [PostcardView.Entry] = []
-        for tweet in chain {
-            async let avatar = loadAvatar(tweet, scale: Self.renderScale)
-            async let photos = loadPhotos(tweet, scale: Self.renderScale)
-            async let quotedPhotos = loadQuotedPhotos(tweet, scale: Self.renderScale)
-            entries.append(PostcardView.Entry(
-                tweet: tweet, avatar: await avatar, photos: await photos, quotedPhotos: await quotedPhotos))
+    private static func loadThreadEntries(focal: Tweet) async -> [PostcardView.Entry]? {
+        guard let thread = try? await AppEnvironment.shared.api.thread(id: focal.restID) else { return nil }
+        let chain = ancestorChain(focal: thread.focal ?? focal, ancestors: thread.ancestors)
+        let entries = await withTaskGroup(of: (Int, PostcardView.Entry).self) { group in
+            for (position, tweet) in chain.enumerated() {
+                group.addTask {
+                    let avatar = await loadAvatar(tweet, scale: Self.renderScale)
+                    let photos = await loadPhotos(tweet, scale: Self.renderScale, limit: 1)
+                    let quotedPhotos = await loadQuotedPhotos(tweet, scale: Self.renderScale)
+                    return (position, PostcardView.Entry(
+                        tweet: tweet, avatar: avatar, photos: photos, quotedPhotos: quotedPhotos))
+                }
+            }
+            var loaded: [(Int, PostcardView.Entry)] = []
+            for await item in group { loaded.append(item) }
+            return loaded.sorted { $0.0 < $1.0 }.map(\.1)
         }
         await PostcardView.prefetchEmoji(entries: entries)
         return entries
@@ -415,14 +486,14 @@ final class PostcardViewController: UIViewController {
     /// Serializes the export actions: renders once per tap, ignoring re-taps
     /// while a render (emoji prefetch included) is still in flight.
     private func withRenderedImage(_ handle: @escaping @MainActor (UIImage) -> Void) {
-        guard !exporting else { return }
+        guard !exporting, imagesLoaded, !threadLoading else { return }
         exporting = true
-        controls.isUserInteractionEnabled = false
+        updateExportEnabled()
         Task { [weak self] in
             guard let self else { return }
             let image = await self.renderedImage()
             self.exporting = false
-            self.controls.isUserInteractionEnabled = true
+            self.updateExportEnabled()
             handle(image)
         }
     }
@@ -432,12 +503,12 @@ final class PostcardViewController: UIViewController {
             guard let self else { return }
             Task {
                 do {
-                    try await Self.saveToPhotos(image)
+                    try await MediaSaver.save(image: image)
                     Haptics.success()
-                    self.toast("Saved to Photos")
+                    self.showToast("Saved to Photos")
                 } catch {
                     AppLogger.shared.warn("save postcard failed: \(error)", category: .media)
-                    self.present(AlertFactory.error(error, title: "Couldn't save"), animated: true)
+                    self.present(MediaSaver.alert(for: error), animated: true)
                 }
             }
         }
@@ -447,7 +518,7 @@ final class PostcardViewController: UIViewController {
         withRenderedImage { [weak self] image in
             UIPasteboard.general.image = image
             Haptics.success()
-            self?.toast("Copied")
+            self?.showToast("Copied")
         }
     }
 
@@ -458,38 +529,6 @@ final class PostcardViewController: UIViewController {
             activity.popoverPresentationController?.barButtonItem = self.navigationItem.rightBarButtonItem
             self.present(activity, animated: true)
         }
-    }
-
-    /// The change block must not inherit the caller's main-actor isolation:
-    /// Photos invokes it on its own background queue, and an isolated closure
-    /// trips the runtime's dispatch queue assertion (SIGTRAP). Keeping this
-    /// nonisolated with an explicitly `@Sendable` block keeps the runtime check
-    /// out of the picture.
-    private static func saveToPhotos(_ image: UIImage) async throws {
-        try await ensureAuthorized()
-        let changes: @Sendable () -> Void = {
-            PHAssetChangeRequest.creationRequestForAsset(from: image)
-        }
-        try await PHPhotoLibrary.shared().performChanges(changes)
-    }
-
-    private static func ensureAuthorized() async throws {
-        let status = PHPhotoLibrary.authorizationStatus(for: .addOnly)
-        switch status {
-        case .authorized, .limited:
-            return
-        case .notDetermined:
-            let granted = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
-            guard granted == .authorized || granted == .limited else { throw MediaSaver.Failure.permissionDenied }
-        default:
-            throw MediaSaver.Failure.permissionDenied
-        }
-    }
-
-    private func toast(_ message: String) {
-        let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
-        present(alert, animated: true)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { alert.dismiss(animated: true) }
     }
 }
 
@@ -509,6 +548,7 @@ private final class PostcardSwatch: UIControl {
         translatesAutoresizingMaskIntoConstraints = false
         widthAnchor.constraint(equalToConstant: Self.size).isActive = true
         heightAnchor.constraint(equalToConstant: Self.size).isActive = true
+        isAccessibilityElement = true
         accessibilityLabel = theme.title
         accessibilityTraits = .button
 
@@ -552,6 +592,7 @@ private final class PostcardSwatch: UIControl {
             ? DesignSystem.Color.accent.cgColor
             : DesignSystem.Color.separator.cgColor
         accentDot.isHidden = !selected
+        accessibilityTraits = selected ? [.button, .selected] : .button
     }
 
     @objc private func tapped() { onTap?() }

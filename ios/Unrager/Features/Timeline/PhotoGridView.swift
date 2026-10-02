@@ -14,6 +14,7 @@ final class PhotoGridView: UIView {
     private let overflowLabel = UILabel()
     private let column = UIStackView()
     private var heightConstraint: NSLayoutConstraint?
+    private var builtLayout: (count: Int, height: CGFloat)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -50,19 +51,28 @@ final class PhotoGridView: UIView {
         index >= 0 && index < tiles.count ? tiles[index] : nil
     }
 
-    func configure(urls: [URL], contentWidth: CGFloat, imagesEnabled: Bool, aspectRatio: CGFloat? = nil) {
+    /// Lays the grid out for `urls` and starts each tile's load. Reconfiguring a
+    /// grid that already has this shape keeps its tiles, so a like or a read
+    /// mark never tears the photos down and reloads them.
+    func configure(urls: [URL], contentWidth: CGFloat, imagesEnabled: Bool, aspectRatio: CGFloat? = nil,
+                   altTexts: [String?] = []) {
         let height = layoutHeight(for: urls.count, width: contentWidth, aspectRatio: aspectRatio)
-        rebuild(count: min(urls.count, 4), totalAspectHeight: height)
+        let count = min(urls.count, 4)
+        if builtLayout?.count != count || builtLayout?.height != height {
+            rebuild(count: count, totalAspectHeight: height)
+            builtLayout = (count, height)
+        }
+        for (index, tile) in tiles.enumerated() {
+            let alt = altTexts.indices.contains(index) ? altTexts[index] : nil
+            tile.accessibilityLabel = alt.flatMap { $0.isEmpty ? nil : $0 } ?? "Photo \(index + 1) of \(urls.count)"
+            tile.accessibilityHint = "Opens the photo"
+        }
         guard imagesEnabled else {
             tiles.forEach { $0.cancel() }
             return
         }
-        let single = urls.count == 1
         for (index, tile) in tiles.enumerated() where index < urls.count {
-            let tileSize = single
-                ? CGSize(width: contentWidth, height: height)
-                : CGSize(width: contentWidth / 2, height: contentWidth / 2)
-            tile.load(url: urls[index], targetSize: tileSize)
+            tile.load(url: urls[index], targetSize: tileSize(at: index, count: count, width: contentWidth, height: height))
         }
         if urls.count > 4 {
             overflowLabel.isHidden = false
@@ -75,6 +85,18 @@ final class PhotoGridView: UIView {
     func prepareForReuse() {
         tiles.forEach { $0.cancel() }
         onTapPhoto = nil
+    }
+
+    /// The size tile `index` is drawn at, so its image is decoded for that
+    /// size: a tile in a pair, or the lead of three, is half the width and the
+    /// full height, and decoding it as a half-width square would stretch it.
+    private func tileSize(at index: Int, count: Int, width: CGFloat, height: CGFloat) -> CGSize {
+        switch count {
+        case 1: return CGSize(width: width, height: height)
+        case 2: return CGSize(width: width / 2, height: height)
+        case 3: return index == 0 ? CGSize(width: width / 2, height: height) : CGSize(width: width / 2, height: height / 2)
+        default: return CGSize(width: width / 2, height: height / 2)
+        }
     }
 
     /// A lone photo gets its true aspect, clamped between a wide-panorama floor

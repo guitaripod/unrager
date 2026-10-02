@@ -14,6 +14,7 @@ final class AsyncImageView: UIImageView {
         clipsToBounds = true
         contentMode = .scaleAspectFill
         backgroundColor = placeholderColor
+        accessibilityIgnoresInvertColors = true
     }
 
     @available(*, unavailable)
@@ -38,6 +39,12 @@ final class AsyncImageView: UIImageView {
         guard let url else { task = nil; return }
         let scale = max(traitCollection.displayScale, 1)
         let size = targetSize == .zero ? CGSize(width: 400, height: 400) : targetSize
+        if let hit = ImageLoader.cachedImageImmediately(for: url, pointSize: size, scale: scale) {
+            task = nil
+            image = hit
+            backgroundColor = .clear
+            return
+        }
 
         task = Task { [weak self] in
             let loaded = await ImageLoader.image(for: url, pointSize: size, scale: scale)

@@ -10,6 +10,9 @@ class PagedUserListViewController: UIViewController {
     struct Page {
         let users: [User]
         let cursor: String?
+        /// Shown under the last row once the list has ended, for a list that
+        /// isn't everyone (X only serves part of it).
+        var endNote: String?
     }
 
     struct EmptyCopy {
@@ -28,6 +31,7 @@ class PagedUserListViewController: UIViewController {
     private var exhausted = false
     private var loading = false
     private var pagingFailed = false
+    private var endNote: String?
     private let footer = PagingFooter()
 
     private lazy var registration = UICollectionView.CellRegistration<UserRowCell, String> {
@@ -104,12 +108,26 @@ class PagedUserListViewController: UIViewController {
             footer.set(.failed("Couldn't load more"))
         } else if loading {
             footer.set(.loading("Loading more…"))
+        } else if exhausted, let endNote {
+            footer.set(.note(endNote))
         } else {
             footer.set(.hidden)
         }
     }
 
     @objc private func reload() { load(reset: true) }
+
+    /// Starts again from the first page — for a screen whose query changed.
+    func restart() {
+        loading = false
+        cursor = nil
+        exhausted = false
+        order.removeAll()
+        rowsByID.removeAll()
+        pagingFailed = false
+        dataSource.apply(NSDiffableDataSourceSnapshot<Int, String>(), animatingDifferences: false)
+        load(reset: true)
+    }
 
     private func load(reset: Bool) {
         guard !loading, reset || !exhausted else { return }
@@ -133,6 +151,7 @@ class PagedUserListViewController: UIViewController {
                     order.append(user.restID)
                 }
                 cursor = page.cursor
+                endNote = page.endNote
                 if page.cursor == nil || page.users.isEmpty { exhausted = true }
                 apply()
             } catch {

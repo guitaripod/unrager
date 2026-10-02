@@ -43,6 +43,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
     private enum Section: Int { case ancestors, focal, replies }
 
     private let footer = PagingFooter()
+    private var cancellables = Set<AnyCancellable>()
 
     /// Reply orderings offered by the sort control — the TUI's `s` cycle
     /// (newest / most liked / most replies / most reposts / most views) plus
@@ -157,7 +158,24 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
         footer.install(on: dataSource)
         renderFocalIfAvailable()
         resolveSelfHandle()
+        observeDisplayChanges()
         load()
+    }
+
+    /// A text-size change re-renders every row; Twemoji art landing re-renders
+    /// the rows on screen, whose native emoji glyphs it replaces.
+    private func observeDisplayChanges() {
+        NotificationCenter.default.publisher(for: AppSettings.fontScaleDidChange)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.dataSource.reconfigureAllItems() }
+            .store(in: &cancellables)
+        NotificationCenter.default.publisher(for: TwemojiCache.imagesDidLoad)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.dataSource.reconfigureVisibleItems(of: self.collectionView)
+            }
+            .store(in: &cancellables)
     }
 
     /// The list layout, with swipe actions on every row and a status footer
@@ -564,7 +582,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
             return
         }
         let start = min(max(0, tappedIndex), photoIndices.count - 1)
-        present(MediaViewerViewController(tweetID: tweet.restID, photoMediaIndices: photoIndices, startIndex: start), animated: true)
+        presentPhotoViewer(for: tweet, photoIndices: photoIndices, startAt: start)
     }
 
     func toggleLike(_ tweet: Tweet, cell: TweetCell?) {

@@ -44,14 +44,16 @@ actor DecodeGate {
             return
         }
         await withCheckedContinuation { waiters.append($0) }
-        active += 1
     }
 
+    /// Hands the slot straight to the next waiter, so it is never free for a
+    /// newcomer to take in the gap before that waiter runs; the count only
+    /// drops when nobody is waiting.
     func release() {
-        active -= 1
-        if !waiters.isEmpty {
-            let next = waiters.removeFirst()
-            next.resume()
+        if waiters.isEmpty {
+            active -= 1
+        } else {
+            waiters.removeFirst().resume()
         }
     }
 }
@@ -89,7 +91,9 @@ public actor ImagePipeline {
         }
     }
 
-    private let cache = NSCache<NSURL, DecodedImage>()
+    /// `NSCache` is thread-safe, so the memory cache can be read from any thread
+    /// without hopping onto this actor (see `cachedImageImmediately`).
+    nonisolated(unsafe) private let cache = NSCache<NSURL, DecodedImage>()
     private var inFlight: [LoadKey: InFlightLoad] = [:]
     private var prefetches: [URL: Task<Void, Never>] = [:]
     private let gate = DecodeGate(limit: 4)
@@ -116,6 +120,15 @@ public actor ImagePipeline {
 
     public func cached(_ url: URL) -> DecodedImage? {
         cache.object(forKey: url as NSURL)
+    }
+
+    /// The decoded image for `url` if memory already holds one big enough for
+    /// `maxPixel`, answered on the calling thread. Lets a view that is being
+    /// reconfigured show an image it has already seen at once, instead of
+    /// blanking to a placeholder for an actor hop.
+    public nonisolated func cachedImageImmediately(for url: URL, maxPixel: CGFloat) -> DecodedImage? {
+        guard let hit = cache.object(forKey: url as NSURL), hit.satisfies(maxPixel) else { return nil }
+        return hit
     }
 
     /// Returns a decoded image sized so its largest side is `maxPixel` pixels.

@@ -35,9 +35,9 @@ final class SearchViewController: FeedViewController {
         refreshRecents()
     }
 
-    /// The result types a search can show as tweets. People results are a
-    /// different kind of row the server doesn't return, so they aren't offered.
-    private static let products = SourceProduct.allCases.filter { $0 != .people }
+    /// People results are accounts rather than tweets, so they are listed by
+    /// their own screen laid over the feed.
+    private var peopleController: PeopleResultsViewController?
 
     /// A bar button titled with the active result type, so which one is in
     /// force is always visible, opening the menu that changes it.
@@ -48,7 +48,7 @@ final class SearchViewController: FeedViewController {
     }
 
     private func productMenu() -> UIMenu {
-        UIMenu(title: "Results", options: .singleSelection, children: Self.products.map { item in
+        UIMenu(title: "Results", options: .singleSelection, children: SourceProduct.allCases.map { item in
             UIAction(title: item.apiValue, state: item == product ? .on : .off) { [weak self] _ in
                 self?.selectProduct(item)
             }
@@ -65,7 +65,13 @@ final class SearchViewController: FeedViewController {
         let query = searchController.searchBar.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !query.isEmpty else { return }
         ClientSettings.addRecentSearch(query)
-        viewModel.updateSource(.search(query: query, product: product))
+        if product == .people {
+            viewModel.updateSource(.search(query: "", product: .top))
+            showPeople(for: query)
+        } else {
+            hidePeople()
+            viewModel.updateSource(.search(query: query, product: product))
+        }
         refreshRecents()
     }
 
@@ -86,7 +92,7 @@ final class SearchViewController: FeedViewController {
     /// stays in charge.
     private func refreshRecents() {
         recents = ClientSettings.recentSearches
-        let visible = viewModel.awaitingQuery && !recents.isEmpty
+        let visible = viewModel.awaitingQuery && !recents.isEmpty && peopleController?.view.isHidden != false
         recentsTable.isHidden = !visible
         if visible { recentsTable.reloadData() }
     }
@@ -94,8 +100,27 @@ final class SearchViewController: FeedViewController {
     /// Clears the results and brings the recent searches back, after the query
     /// is emptied or the search is cancelled.
     private func showRecents() {
-        viewModel.updateSource(.search(query: "", product: product))
+        hidePeople()
+        viewModel.updateSource(.search(query: "", product: product == .people ? .top : product))
         refreshRecents()
+    }
+
+    private func showPeople(for query: String) {
+        if peopleController == nil {
+            let controller = PeopleResultsViewController()
+            addChild(controller)
+            view.insertSubview(controller.view, belowSubview: recentsTable)
+            controller.view.translatesAutoresizingMaskIntoConstraints = false
+            controller.view.pinEdges(to: view)
+            controller.didMove(toParent: self)
+            peopleController = controller
+        }
+        peopleController?.view.isHidden = false
+        peopleController?.show(query: query)
+    }
+
+    private func hidePeople() {
+        peopleController?.view.isHidden = true
     }
 
     private func performRecent(_ query: String) {

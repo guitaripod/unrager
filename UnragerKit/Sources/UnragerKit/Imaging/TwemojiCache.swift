@@ -53,6 +53,7 @@ public actor TwemojiCache {
     private let directory: URL?
 
     private var resolvedBase: String?
+    private var lastResolveFailure: Date?
     private var inFlight: [String: Task<CGImage?, Never>] = [:]
     private var knownMissing: Set<String> = []
 
@@ -129,23 +130,24 @@ public actor TwemojiCache {
         inFlight[stem] = task
         let result = await task.value
         inFlight[stem] = nil
-        if let result {
-            memory.set(result, forStem: stem)
-        } else {
-            knownMissing.insert(stem)
-        }
+        if let result { memory.set(result, forStem: stem) }
         return result
     }
 
+    /// Reads one emoji image from disk or the CDN. Only an answer of "there is
+    /// no such file" (a 404) is remembered as missing for the session; a
+    /// timeout or an offline phone is a failure to try again later, not a fact
+    /// about the emoji.
     private func fetchStem(_ stem: String) async -> CGImage? {
         if let data = diskData(for: stem), let image = Self.decode(data) {
             return image
         }
         let base = await assetBase()
-        guard let url = URL(string: "\(base)/\(stem).png") else { return nil }
-        guard let (data, response) = try? await session.data(from: url),
-              (response as? HTTPURLResponse)?.statusCode == 200,
-              let image = Self.decode(data) else {
+        guard let url = URL(string: "\(base)/\(stem).png"),
+              let (data, response) = try? await session.data(from: url),
+              let status = (response as? HTTPURLResponse)?.statusCode else { return nil }
+        guard status == 200, let image = Self.decode(data) else {
+            if status == 404 { knownMissing.insert(stem) }
             return nil
         }
         writeDisk(data, for: stem)
@@ -153,23 +155,31 @@ public actor TwemojiCache {
     }
 
     /// Builds the `assets/72x72` base URL against the resolved-once version.
+    /// The base against the latest version once that has been resolved. When
+    /// the lookup fails (offline), the bundled fallback version serves this
+    /// request and the lookup is retried after a minute, rather than pinning
+    /// the fallback for the whole session.
     private func assetBase() async -> String {
         if let resolvedBase { return resolvedBase }
-        let version = await resolveVersion()
-        let base = "\(Self.repo)@\(version)/assets/72x72"
-        resolvedBase = base
-        return base
+        if let failedAt = lastResolveFailure, Date().timeIntervalSince(failedAt) < 60 {
+            return "\(Self.repo)@\(Self.fallbackVersion)/assets/72x72"
+        }
+        if let version = await resolveVersion() {
+            let base = "\(Self.repo)@\(version)/assets/72x72"
+            resolvedBase = base
+            return base
+        }
+        lastResolveFailure = Date()
+        AppLogger.shared.info("twemoji: using fallback version \(Self.fallbackVersion)", category: .media)
+        return "\(Self.repo)@\(Self.fallbackVersion)/assets/72x72"
     }
 
-    private func resolveVersion() async -> String {
+    private func resolveVersion() async -> String? {
         guard let url = URL(string: Self.resolveURL),
               let (data, response) = try? await session.data(from: url),
               (response as? HTTPURLResponse)?.statusCode == 200,
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let version = object["version"] as? String else {
-            AppLogger.shared.info("twemoji: using fallback version \(Self.fallbackVersion)", category: .media)
-            return Self.fallbackVersion
-        }
+              let version = object["version"] as? String else { return nil }
         AppLogger.shared.info("twemoji: resolved latest version \(version)", category: .media)
         return version
     }
@@ -187,9 +197,20 @@ public actor TwemojiCache {
         try? data.write(to: url, options: .atomic)
     }
 
+    /// Main-thread only.
+    nonisolated(unsafe) private static var postScheduled = false
+
+    /// Tells listeners new emoji art is in memory, at most once per quarter
+    /// second however many batches land: every listener re-renders the rows on
+    /// screen, and a feed prewarms once per tweet it prefetches.
     private static func postImagesDidLoad() {
         DispatchQueue.main.async {
-            NotificationCenter.default.post(name: Self.imagesDidLoad, object: nil)
+            guard !postScheduled else { return }
+            postScheduled = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                postScheduled = false
+                NotificationCenter.default.post(name: Self.imagesDidLoad, object: nil)
+            }
         }
     }
 

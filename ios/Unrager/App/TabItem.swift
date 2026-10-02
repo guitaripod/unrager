@@ -18,13 +18,23 @@ enum TabItem: String, CaseIterable, Sendable {
     static let defaults: [TabItem] = [.home, .search, .notifications, .settings]
     static let maxCount = 5
 
+    /// The tab that can never be removed: Settings holds the server address and
+    /// Edit Tabs itself, so a bar without it has no way back to either.
+    static let required: TabItem = .settings
+
     /// Clamps a selection to the bar's invariants: de-duplicated, capped at
-    /// `maxCount`, and never empty (falls back to the defaults).
+    /// `maxCount`, never empty (falls back to the defaults), and always
+    /// carrying `required` (which takes the last slot when the cap cut it).
     static func sanitized(_ items: [TabItem]) -> [TabItem] {
         var seen = Set<TabItem>()
         let unique = items.filter { seen.insert($0).inserted }
-        let capped = Array(unique.prefix(maxCount))
-        return capped.isEmpty ? defaults : capped
+        var capped = Array(unique.prefix(maxCount))
+        if capped.isEmpty { return defaults }
+        if !capped.contains(required) {
+            if capped.count == maxCount { capped.removeLast() }
+            capped.append(required)
+        }
+        return capped
     }
 
     /// Decodes a persisted raw value, folding the legacy separate "For You" /

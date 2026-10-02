@@ -100,6 +100,35 @@ extension TweetActionHandling {
     }
 }
 
+extension TweetActionHandling {
+    /// Opens the full-screen photo gallery for `tweet` on `start`, growing out
+    /// of the tapped tile and retracting to whichever photo is showing when it
+    /// closes.
+    func presentPhotoViewer(for tweet: Tweet, photoIndices: [Int], startAt start: Int) {
+        let sourceCell = tweetCell(for: tweet)
+        let source = sourceCell?.mediaSourceView(at: start) ?? sourceCell?.mediaSourceView
+        let viewer = MediaViewerViewController(
+            tweetID: tweet.restID, photoMediaIndices: photoIndices,
+            altTexts: photoIndices.map { tweet.media[$0].altText },
+            startIndex: start, placeholder: source?.snapshotImage())
+        viewer.enableZoom { [weak self] page in
+            guard let cell = self?.tweetCell(for: tweet) else { return nil }
+            return cell.mediaSourceView(at: page) ?? cell.mediaSourceView
+        }
+        present(viewer, animated: true)
+    }
+}
+
+extension UIView {
+    /// A bitmap of the view as it is on screen now, or nil while it has no size.
+    func snapshotImage() -> UIImage? {
+        guard bounds.width > 1, bounds.height > 1 else { return nil }
+        return UIGraphicsImageRenderer(bounds: bounds).image { _ in
+            drawHierarchy(in: bounds, afterScreenUpdates: false)
+        }
+    }
+}
+
 extension UIViewController {
     /// A brief, self-dismissing message — a title-less alert that closes itself
     /// after a second.

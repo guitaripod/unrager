@@ -30,6 +30,7 @@ final class MediaPlayerView: UIView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
+        accessibilityIgnoresInvertColors = true
         clipsToBounds = true
         backgroundColor = .black
         playerLayer.videoGravity = .resizeAspect

@@ -8,6 +8,7 @@ final class HomeViewController: FeedViewController {
     private var originals = false
     private var chronological = false
     private let titleButton = UIButton(type: .system)
+    private var filterWasEnabled = AppSettings.filterEnabled
 
     /// The Home tab reopens on whatever mode it was last left on
     /// (`ClientSettings.homeFollowing`); Originals is restored too. Local state
@@ -32,6 +33,21 @@ final class HomeViewController: FeedViewController {
         configureComposeButton()
         updateTabBarItem()
         setChronologicalSort(chronological && following)
+    }
+
+    /// Coming back from Settings, a changed rage-filter switch (or the server's
+    /// setting arriving after launch) re-judges the feed on screen: it was
+    /// loaded under the old setting.
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        guard filterWasEnabled != AppSettings.filterEnabled else { return }
+        filterWasEnabled = AppSettings.filterEnabled
+        if case .home = viewModel.source { viewModel.refresh() }
+    }
+
+    private var isHomeSource: Bool {
+        if case .home = viewModel.source { return true }
+        return false
     }
 
     /// The title rides as a *leading* bar item (X's own pattern), so its
@@ -71,7 +87,7 @@ final class HomeViewController: FeedViewController {
         let filterActive = originals || (chronological && following)
         filterButton.image = DesignSystem.icon(
             filterActive ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
-        navigationItem.rightBarButtonItems = [filterButton, unreadBarButton].compactMap { $0 }
+        navigationItem.rightBarButtonItems = [isHomeSource ? filterButton : nil, unreadBarButton].compactMap { $0 }
     }
 
     private func updateTitle() {
@@ -120,18 +136,17 @@ final class HomeViewController: FeedViewController {
 
     private func promptBookmarks() {
         let alert = UIAlertController(
-            title: "Search Bookmarks",
-            message: "X searches bookmarks by keyword — there's no \"all\" listing.",
+            title: "Bookmarks",
+            message: "Search your bookmarks by keyword, or leave it empty to see them all.",
             preferredStyle: .alert)
         alert.addTextField {
-            $0.placeholder = "keyword"
+            $0.placeholder = "keyword (optional)"
             $0.autocapitalizationType = .none
             $0.returnKeyType = .search
         }
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Search", style: .default) { [weak self] _ in
+        alert.addAction(UIAlertAction(title: "Show", style: .default) { [weak self] _ in
             let query = alert.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !query.isEmpty else { return }
             self?.viewModel.updateSource(.bookmarks(query: query))
             self?.afterSwitch()
         })
@@ -191,6 +206,7 @@ final class HomeViewController: FeedViewController {
     }
 
     private func afterSwitch() {
+        setChronologicalSort(isHomeSource && chronological && following)
         updateTitle()
         refreshRightBarItems()
         collectionView.setContentOffset(.zero, animated: false)

@@ -16,7 +16,20 @@ class FeedViewController: UIViewController, TweetActionHandling {
     private let emptyState = EmptyStateView()
     private let loadingIndicator = UIActivityIndicatorView(style: .medium)
     private let collectingLabel = UILabel()
-    private let collectingView = MetalCollectingView(frame: .zero)
+    private var collectingStorage: MetalCollectingView?
+    /// Built only when the filter's collect-then-show phase actually runs: it
+    /// owns a Metal device and compiles its shader, which feeds that never
+    /// collect (profiles, search, bookmarks) have no reason to pay for.
+    private var collectingView: MetalCollectingView {
+        if let collectingStorage { return collectingStorage }
+        let made = MetalCollectingView(frame: .zero)
+        made.isHidden = true
+        view.addManaged(made)
+        made.pinEdges(to: view)
+        view.insertSubview(made, belowSubview: collectionView)
+        collectingStorage = made
+        return made
+    }
     private var lastErrorText: String?
     /// A subtle "updated Nm ago" pill floated over the top of Home feeds,
     /// surfacing the materialized buffer's freshness. It sits in a reserved
@@ -129,6 +142,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
         super.viewWillDisappear(animated)
         freshnessTimer?.invalidate()
         freshnessTimer = nil
+        pauseAllVideos()
     }
 
     /// Ticks the freshness pill every 20s while visible so "updated Nm ago"
@@ -235,10 +249,6 @@ class FeedViewController: UIViewController, TweetActionHandling {
             collectingLabel.topAnchor.constraint(equalTo: loadingIndicator.bottomAnchor, constant: DesignSystem.Spacing.m),
         ])
 
-        collectingView.isHidden = true
-        view.addManaged(collectingView)
-        collectingView.pinEdges(to: view)
-        view.insertSubview(collectingView, belowSubview: collectionView)
     }
 
     /// Builds the freshness pill: a dim caption on a subtle capsule, pinned
@@ -285,22 +295,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
         }
         guard !photoIndices.isEmpty else { handleSelect(tweet); return }
         let start = min(max(0, tappedIndex), photoIndices.count - 1)
-        let sourceCell = cell(for: tweet)
-        // Zoom from — and seed the first page with a snapshot of — the exact
-        // tapped tile. Using the whole grid grew the entire collection before
-        // settling onto one image; per-tile keeps the App Store–style zoom clean.
-        let source = sourceCell?.mediaSourceView(at: start) ?? sourceCell?.mediaSourceView
-        let placeholder = source.flatMap(Self.snapshotImage)
-        let viewer = MediaViewerViewController(tweetID: tweet.restID, photoMediaIndices: photoIndices,
-                                               startIndex: start, placeholder: placeholder)
-        viewer.enableZoom(from: source)
-        present(viewer, animated: true)
-    }
-
-    private static func snapshotImage(of view: UIView) -> UIImage? {
-        guard view.bounds.width > 1, view.bounds.height > 1 else { return nil }
-        let renderer = UIGraphicsImageRenderer(bounds: view.bounds)
-        return renderer.image { _ in view.drawHierarchy(in: view.bounds, afterScreenUpdates: false) }
+        presentPhotoViewer(for: tweet, photoIndices: photoIndices, startAt: start)
     }
 
     /// A list-configured section so rows get native swipe actions, with the
@@ -445,7 +440,20 @@ class FeedViewController: UIViewController, TweetActionHandling {
 
         viewModel.isLoading
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.updateChrome() }
+            .sink { [weak self] loading in
+                if loading { self?.lastErrorText = nil }
+                self?.updateChrome()
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.pauseAllVideos() }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.settleVideoPlayback() }
             .store(in: &cancellables)
 
         viewModel.collectingProgress
@@ -497,13 +505,17 @@ class FeedViewController: UIViewController, TweetActionHandling {
         dataSource.apply(snapshot, animatingDifferences: false)
     }
 
+    /// Dims (or restores) the rows whose read state changed. Rows on screen are
+    /// updated in place — a reconfigure would rebuild each one's photos and
+    /// restart its video, once a second while scrolling Following — and rows off
+    /// screen pick the state up when they are next dequeued.
     private func reconfigure(_ ids: [String]) {
-        var snapshot = dataSource.snapshot()
-        let present = Set(snapshot.itemIdentifiers)
-        let visible = ids.filter { present.contains($0) }
-        guard !visible.isEmpty else { return }
-        snapshot.reconfigureItems(visible)
-        dataSource.apply(snapshot, animatingDifferences: true)
+        let changed = Set(ids)
+        for indexPath in collectionView.indexPathsForVisibleItems {
+            guard let id = dataSource.itemIdentifier(for: indexPath), changed.contains(id),
+                  let cell = collectionView.cellForItem(at: indexPath) as? TweetCell else { continue }
+            cell.setSeen(viewModel.isSeen(id))
+        }
         updateUnreadCount()
     }
 
@@ -575,6 +587,17 @@ class FeedViewController: UIViewController, TweetActionHandling {
         if !isScrolling {
             DispatchQueue.main.async { [weak self] in self?.settleVideoPlayback() }
         }
+        DispatchQueue.main.async { [weak self] in self?.pageIfContentFitsScreen() }
+    }
+
+    /// A feed whose loaded posts don't fill the screen never scrolls, so no row
+    /// reaches the point that asks for the next page; ask for it here, until the
+    /// screen is full or the feed has ended.
+    private func pageIfContentFitsScreen() {
+        let count = dataSource.snapshot().numberOfItems
+        guard isViewLoaded, view.window != nil, count > 0, collectionView.bounds.height > 0,
+              collectionView.contentSize.height < collectionView.bounds.height else { return }
+        viewModel.loadMoreIfNeeded(currentIndex: count - 1)
     }
 
     /// Flushes a deferred feed replace once the scroll comes to rest.
@@ -607,6 +630,13 @@ class FeedViewController: UIViewController, TweetActionHandling {
 
     // MARK: - Inline video playback (scroll-aware)
 
+    /// Whether clips may start on their own: not with the system's video
+    /// autoplay switched off, Reduce Motion on, or images switched off in the
+    /// app, where a clip would pull its poster and stream regardless.
+    private static var autoplaysVideo: Bool {
+        UIAccessibility.isVideoAutoplayEnabled && !UIAccessibility.isReduceMotionEnabled && AppSettings.imagesEnabled
+    }
+
     private func pauseAllVideos() {
         for case let cell as TweetCell in collectionView.visibleCells { cell.pauseVideo() }
     }
@@ -616,6 +646,10 @@ class FeedViewController: UIViewController, TweetActionHandling {
     /// rule. Called when the feed settles; never while scrolling.
     func settleVideoPlayback() {
         isScrolling = false
+        guard Self.autoplaysVideo, isViewLoaded, view.window != nil else {
+            pauseAllVideos()
+            return
+        }
         let visible = CGRect(origin: collectionView.contentOffset, size: collectionView.bounds.size)
         var best: TweetCell?
         var bestOverlap: CGFloat = 0
@@ -650,7 +684,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
             emptyState.isHidden = false
             emptyState.show(symbol: "magnifyingglass", title: "Search X",
                             subtitle: "Find tweets, people, and topics.", showRetry: false)
-        } else if viewModel.collectingProgress.value != nil, collectingView.isAvailable {
+        } else if viewModel.collectingProgress.value != nil, MetalCollectingView.isSupported {
             emptyState.isHidden = true
             loadingIndicator.stopAnimating()
             collectingLabel.isHidden = true
@@ -688,9 +722,9 @@ class FeedViewController: UIViewController, TweetActionHandling {
     /// Tears down the Metal collecting state — pauses its display link so it
     /// draws nothing while hidden.
     private func hideCollecting() {
-        guard !collectingView.isHidden else { return }
-        collectingView.isHidden = true
-        collectingView.stop()
+        guard let collectingStorage, !collectingStorage.isHidden else { return }
+        collectingStorage.isHidden = true
+        collectingStorage.stop()
     }
 
     /// While collect-then-show filtering is gathering a batch, replaces the bare
@@ -711,7 +745,23 @@ class FeedViewController: UIViewController, TweetActionHandling {
             updateChrome()
         } else {
             UINotificationFeedbackGenerator().notificationOccurred(.error)
+            showStaleNotice()
         }
+    }
+
+    /// Says so when a refresh failed over posts already on screen, which would
+    /// otherwise pass for live ones: the saved posts stay, with a note on top.
+    private func showStaleNotice() {
+        freshnessHideWork?.cancel()
+        freshnessDismissed = false
+        freshnessLabel.text = "Couldn't refresh · showing saved posts"
+        freshnessPill.isHidden = false
+        freshnessPill.alpha = 1
+        view.layoutIfNeeded()
+        freshnessPill.layer.cornerRadius = freshnessPill.bounds.height / 2
+        setFreshnessInset(freshnessPill.frame.height + DesignSystem.Spacing.s * 2)
+        scheduleFreshnessHide()
+        UIAccessibility.post(notification: .announcement, argument: freshnessLabel.text)
     }
 
     @objc func pullToRefresh() { viewModel.refresh() }
@@ -814,7 +864,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
                     : try await AppEnvironment.shared.api.unlike(tweetID: tweet.restID)
                 viewModel.applyLike(id: tweet.restID, favorited: target)
             } catch {
-                cell?.applyLike(favorited: !target, count: tweet.likeCount)
+                if cell?.tweetID == tweet.restID { cell?.applyLike(favorited: !target, count: tweet.likeCount) }
                 Haptics.error()
                 AppLogger.shared.warn("like failed: \(error)", category: .timeline)
             }
@@ -834,7 +884,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
                     : try await EngageService.engage.unretweet(tweetID: tweet.restID)
                 viewModel.applyRetweet(id: tweet.restID, retweeted: target)
             } catch {
-                cell?.applyRetweet(retweeted: !target, count: tweet.retweetCount)
+                if cell?.tweetID == tweet.restID { cell?.applyRetweet(retweeted: !target, count: tweet.retweetCount) }
                 Haptics.error()
                 AppLogger.shared.warn("retweet failed: \(error)", category: .timeline)
             }
@@ -852,7 +902,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
                     : try await EngageService.engage.unbookmark(tweetID: tweet.restID)
                 viewModel.applyBookmark(id: tweet.restID, bookmarked: target)
             } catch {
-                cell?.applyBookmark(bookmarked: !target, count: tweet.bookmarkCount)
+                if cell?.tweetID == tweet.restID { cell?.applyBookmark(bookmarked: !target, count: tweet.bookmarkCount) }
                 Haptics.error()
                 AppLogger.shared.warn("bookmark failed: \(error)", category: .timeline)
             }

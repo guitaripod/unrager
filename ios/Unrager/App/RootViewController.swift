@@ -19,12 +19,15 @@ final class RootViewController: UITabBarController {
         tabBarMinimizeBehavior = .onScrollDown
     }
 
-    /// Rebuilds the tab bar from `ClientSettings.tabs`, preserving the selected
-    /// tab kind across an edit when it survives the new selection.
+    /// Rebuilds the tab bar from `ClientSettings.tabs`, keeping the stack of
+    /// every tab that survives the edit (scroll position, pushed screens) and
+    /// the selected tab when it does.
     func rebuildTabs() {
         let previouslySelected = selectedTabs.indices.contains(selectedIndex) ? selectedTabs[selectedIndex] : nil
+        let existing = Dictionary(
+            uniqueKeysWithValues: zip(selectedTabs, viewControllers ?? []).map { ($0, $1) })
         selectedTabs = ClientSettings.tabs
-        viewControllers = selectedTabs.map { $0.makeViewController() }
+        viewControllers = selectedTabs.map { existing[$0] ?? $0.makeViewController() }
         if let previouslySelected, let index = selectedTabs.firstIndex(of: previouslySelected) {
             selectedIndex = index
         }

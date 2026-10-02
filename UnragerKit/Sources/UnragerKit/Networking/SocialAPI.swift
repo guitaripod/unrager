@@ -35,6 +35,15 @@ public final class SocialAPI: Sendable {
         try await userList(kind: "following", userID: userID, cursor: cursor, count: count)
     }
 
+    /// `GET /api/sources/search/people` — one page of accounts matching `query`
+    /// (the People tab of X search).
+    public func searchPeople(query: String, cursor: String? = nil, count: Int? = nil) async throws -> UserListPage {
+        var items = [URLQueryItem(name: "q", value: query)]
+        if let cursor { items.append(URLQueryItem(name: "cursor", value: cursor)) }
+        if let count { items.append(URLQueryItem(name: "count", value: String(count))) }
+        return try await perform(method: .get, path: "api/sources/search/people", query: items)
+    }
+
     /// `GET /api/profile/{handle}` decoded with the additive `followed_by_me`
     /// flag alongside the shared `User`.
     public func profile(handle: String) async throws -> ProfileRelationshipView {

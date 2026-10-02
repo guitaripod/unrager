@@ -3,6 +3,17 @@ import Foundation
 public struct TimelinePage: Decodable, Sendable {
     public let tweets: [Tweet]
     public let cursor: String?
+
+    enum CodingKeys: String, CodingKey {
+        case tweets, cursor
+    }
+
+    /// A tweet the client can't decode is skipped rather than failing the page.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        tweets = try c.decodeLossy(Tweet.self, forKey: .tweets)
+        cursor = try c.decodeIfPresent(String.self, forKey: .cursor)
+    }
 }
 
 /// Freshness of one materialized Home variant from `GET /api/feed/status`.
@@ -42,8 +53,8 @@ public struct ThreadView: Decodable, Sendable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         focal = try c.decodeIfPresent(Tweet.self, forKey: .focal)
-        ancestors = try c.decodeIfPresent([Tweet].self, forKey: .ancestors) ?? []
-        replies = try c.decodeIfPresent([Tweet].self, forKey: .replies) ?? []
+        ancestors = try c.decodeLossy(Tweet.self, forKey: .ancestors)
+        replies = try c.decodeLossy(Tweet.self, forKey: .replies)
         cursor = try c.decodeIfPresent(String.self, forKey: .cursor)
     }
 }
@@ -167,12 +178,16 @@ public struct FilterVerdictEvent: Decodable, Sendable {
 public struct TokenEvent: Decodable, Sendable {
     public let token: String
     public let done: Bool
+    /// Set on the final event when the model failed; a stream that ends with it
+    /// is an error, not an empty answer.
+    public let error: String?
 
-    enum CodingKeys: String, CodingKey { case token, done }
+    enum CodingKeys: String, CodingKey { case token, done, error }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         token = try c.decodeIfPresent(String.self, forKey: .token) ?? ""
         done = try c.decodeIfPresent(Bool.self, forKey: .done) ?? false
+        error = try c.decodeIfPresent(String.self, forKey: .error)
     }
 }

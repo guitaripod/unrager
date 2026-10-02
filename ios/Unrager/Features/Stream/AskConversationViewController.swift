@@ -46,14 +46,22 @@ final class AskConversationViewController: UIViewController {
     private let context: Context
     private let initialPrompt: String
     private let askAPI = AskAPI(baseURL: { AppSettings.serverURL })
+    /// The confirmed question/answer turns — exactly what the model is sent as
+    /// history, so an error or an unfinished answer never becomes part of it.
     private var turns: [AskTurn] = []
+    private var pendingPrompt: String?
     private var streamingAnswer: String?
+    private var failure: String?
     private var streamTask: Task<Void, Never>?
+    private var renderedTurns: [Int: NSAttributedString] = [:]
+    private var followTail = true
+    private var renderScheduled = false
 
     private let textView = UITextView()
     private let inputBar = UIView()
     private let inputField = UITextField()
     private let sendButton = UIButton(configuration: .prominentGlass())
+    private let retryButton = UIButton(configuration: .tinted())
     private let spinner = UIActivityIndicatorView(style: .medium)
 
     init(context: Context, initialPrompt: String) {
@@ -79,6 +87,7 @@ final class AskConversationViewController: UIViewController {
         textView.textColor = DesignSystem.Color.label
         textView.textContainerInset = .init(top: 16, left: 16, bottom: 16, right: 16)
         textView.alwaysBounceVertical = true
+        textView.delegate = self
         view.addManaged(textView)
 
         configureInputBar()
@@ -121,11 +130,18 @@ final class AskConversationViewController: UIViewController {
         inputField.delegate = self
         inputField.accessibilityLabel = "Follow-up question"
 
-        var config = UIButton.Configuration.prominentGlass()
-        config.image = DesignSystem.icon("arrow.up", pointSize: 15, weight: .bold)
-        sendButton.configuration = config
-        sendButton.accessibilityLabel = "Send follow-up"
-        sendButton.addAction(UIAction { [weak self] _ in self?.sendFromField() }, for: .touchUpInside)
+        sendButton.addAction(UIAction { [weak self] _ in self?.sendOrStop() }, for: .touchUpInside)
+        applySendButtonState(streaming: false)
+
+        var retry = UIButton.Configuration.tinted()
+        retry.title = "Retry"
+        retry.image = DesignSystem.icon("arrow.clockwise", pointSize: 13)
+        retry.imagePadding = 6
+        retry.cornerStyle = .capsule
+        retryButton.configuration = retry
+        retryButton.isHidden = true
+        retryButton.addAction(UIAction { [weak self] _ in self?.retryFailed() }, for: .touchUpInside)
+        view.addManaged(retryButton)
 
         inputBar.addManaged(inputField)
         inputBar.addManaged(sendButton)
@@ -153,27 +169,74 @@ final class AskConversationViewController: UIViewController {
             sendButton.centerYAnchor.constraint(equalTo: inputField.centerYAnchor),
             sendButton.widthAnchor.constraint(equalToConstant: 36),
             sendButton.heightAnchor.constraint(equalToConstant: 36),
+
+            retryButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            retryButton.bottomAnchor.constraint(equalTo: inputBar.topAnchor, constant: -DesignSystem.Spacing.m),
         ])
+    }
+
+    /// The send button sends a follow-up when idle and stops the answer while
+    /// one is streaming.
+    private func applySendButtonState(streaming: Bool) {
+        var config = UIButton.Configuration.prominentGlass()
+        config.image = DesignSystem.icon(streaming ? "stop.fill" : "arrow.up", pointSize: 15, weight: .bold)
+        sendButton.configuration = config
+        sendButton.accessibilityLabel = streaming ? "Stop answering" : "Send follow-up"
+    }
+
+    private func sendOrStop() {
+        if streamTask != nil {
+            stopStreaming()
+        } else {
+            sendFromField()
+        }
+    }
+
+    /// Ends the answer in progress at the user's request: what has streamed so
+    /// far is kept as the answer, and a question stopped before any text can be
+    /// retried.
+    private func stopStreaming() {
+        streamTask?.cancel()
+        let answer = streamingAnswer ?? ""
+        if answer.isEmpty {
+            finishStream(error: AskStopped())
+        } else {
+            finishStream(error: nil)
+        }
+    }
+
+    private func retryFailed() {
+        guard let prompt = pendingPrompt, streamTask == nil else { return }
+        send(prompt: prompt)
+    }
+
+    private struct AskStopped: LocalizedError {
+        var errorDescription: String? { "Stopped before an answer arrived." }
     }
 
     private func sendFromField() {
         let prompt = (inputField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, streamTask == nil else { return }
+        if pendingPrompt != nil { pendingPrompt = nil; failure = nil }
         inputField.text = nil
         send(prompt: prompt)
     }
 
-    /// Appends the user turn, fires the stream with the full history + thread
-    /// context, and folds the streamed tokens into the transcript live.
+    /// Fires the stream with the confirmed history plus this question and the
+    /// thread context, and folds the streamed tokens into the transcript live.
     private func send(prompt: String) {
-        turns.append(AskTurn(role: .user, text: prompt))
+        pendingPrompt = prompt
+        failure = nil
         streamingAnswer = ""
+        followTail = true
+        retryButton.isHidden = true
         setStreaming(true)
         render()
+        UIAccessibility.post(notification: .announcement, argument: "Asking")
 
         let request = AskRequest(
             tweetID: context.tweet.restID,
-            turns: turns,
+            turns: turns + [AskTurn(role: .user, text: prompt)],
             ancestors: context.ancestors.map(AskContextEntry.init(tweet:)),
             siblings: context.siblings.map(AskContextEntry.init(tweet:)),
             replies: context.replies.map(AskContextEntry.init(tweet:)))
@@ -185,10 +248,11 @@ final class AskConversationViewController: UIViewController {
                     guard !Task.isCancelled else { return }
                     if !event.token.isEmpty {
                         self.streamingAnswer = (self.streamingAnswer ?? "") + event.token
-                        self.render()
+                        self.scheduleRender()
                     }
                     if event.done { break }
                 }
+                guard !Task.isCancelled else { return }
                 self.finishStream(error: nil)
             } catch {
                 guard !Task.isCancelled else { return }
@@ -197,6 +261,9 @@ final class AskConversationViewController: UIViewController {
         }
     }
 
+    /// Settles the answer in flight. A complete answer joins the history; an
+    /// error or an empty reply never does, and leaves the question on screen
+    /// with a Retry, so the next follow-up isn't answered on top of a failure.
     private func finishStream(error: (any Error)?) {
         let answer = streamingAnswer ?? ""
         streamingAnswer = nil
@@ -204,54 +271,89 @@ final class AskConversationViewController: UIViewController {
         setStreaming(false)
         if let error {
             AppLogger.shared.warn("ask stream failed: \(error)", category: .thread)
-            turns.append(AskTurn(role: .assistant,
-                                 text: answer.isEmpty ? "_\(error.localizedDescription)_" : answer))
+            failure = error.localizedDescription
+            retryButton.isHidden = false
             Haptics.error()
-        } else {
-            turns.append(AskTurn(role: .assistant, text: answer.isEmpty ? "_(no response)_" : answer))
+        } else if answer.isEmpty {
+            failure = "The model returned no answer."
+            retryButton.isHidden = false
+            Haptics.error()
+        } else if let prompt = pendingPrompt {
+            turns.append(AskTurn(role: .user, text: prompt))
+            turns.append(AskTurn(role: .assistant, text: answer))
+            pendingPrompt = nil
+            UIAccessibility.post(notification: .announcement, argument: "Answer ready")
         }
         render()
     }
 
     private func setStreaming(_ streaming: Bool) {
-        sendButton.isEnabled = !streaming
-        if streaming, turns.count <= 1 { spinner.startAnimating() } else { spinner.stopAnimating() }
+        applySendButtonState(streaming: streaming)
+        if streaming, turns.isEmpty { spinner.startAnimating() } else { spinner.stopAnimating() }
+    }
+
+    /// Coalesces a burst of tokens into one transcript rebuild every ~100 ms:
+    /// re-parsing the markdown per token costs more than the answer takes to
+    /// stream, and the text would reflow faster than it can be read.
+    private func scheduleRender() {
+        guard !renderScheduled else { return }
+        renderScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self else { return }
+            self.renderScheduled = false
+            self.render()
+        }
     }
 
     /// Rebuilds the transcript: each user question as a bold accent line, each
-    /// answer rendered as markdown; the in-flight answer streams at the bottom.
+    /// answer rendered as markdown (finished answers are rendered once and
+    /// kept); the in-flight answer streams at the bottom, followed by any
+    /// failure.
     private func render() {
-        spinnerStopIfContent()
+        if streamingAnswer?.isEmpty == false { spinner.stopAnimating() }
         let transcript = NSMutableAttributedString()
-        var entries: [AskTurn] = turns
-        if let streamingAnswer {
-            entries.append(AskTurn(role: .assistant, text: streamingAnswer))
+        func separate() { if transcript.length > 0 { transcript.append(NSAttributedString(string: "\n\n")) } }
+        for (index, turn) in turns.enumerated() {
+            separate()
+            transcript.append(renderedTurn(turn, at: index))
         }
-        for (index, turn) in entries.enumerated() {
-            if index > 0 { transcript.append(NSAttributedString(string: "\n\n")) }
-            switch turn.role {
-            case .user:
-                transcript.append(NSAttributedString(
-                    string: turn.text,
-                    attributes: [.font: DesignSystem.Typography.body().withWeight(.semibold),
-                                 .foregroundColor: DesignSystem.Color.accent]))
-            case .assistant:
-                if turn.text.isEmpty {
-                    transcript.append(NSAttributedString(
-                        string: "…",
-                        attributes: [.font: DesignSystem.Typography.body(),
-                                     .foregroundColor: DesignSystem.Color.secondaryLabel]))
-                } else {
-                    transcript.append(StreamSheetViewController.renderMarkdown(turn.text))
-                }
-            }
+        if let pendingPrompt {
+            separate()
+            transcript.append(Self.questionText(pendingPrompt))
+        }
+        if let streamingAnswer {
+            separate()
+            transcript.append(streamingAnswer.isEmpty ? Self.placeholderText : StreamSheetViewController.renderMarkdown(streamingAnswer))
+        }
+        if let failure {
+            separate()
+            transcript.append(NSAttributedString(string: failure, attributes: [
+                .font: DesignSystem.Typography.body(), .foregroundColor: UIColor.systemRed]))
         }
         textView.attributedText = transcript
-        scrollToBottom()
+        if followTail { scrollToBottom() }
     }
 
-    private func spinnerStopIfContent() {
-        if streamingAnswer?.isEmpty == false { spinner.stopAnimating() }
+    private func renderedTurn(_ turn: AskTurn, at index: Int) -> NSAttributedString {
+        if let cached = renderedTurns[index] { return cached }
+        let rendered: NSAttributedString
+        switch turn.role {
+        case .user: rendered = Self.questionText(turn.text)
+        case .assistant: rendered = StreamSheetViewController.renderMarkdown(turn.text)
+        }
+        renderedTurns[index] = rendered
+        return rendered
+    }
+
+    private static func questionText(_ text: String) -> NSAttributedString {
+        NSAttributedString(string: text, attributes: [
+            .font: DesignSystem.Typography.body().withWeight(.semibold),
+            .foregroundColor: DesignSystem.Color.accent])
+    }
+
+    private static var placeholderText: NSAttributedString {
+        NSAttributedString(string: "…", attributes: [
+            .font: DesignSystem.Typography.body(), .foregroundColor: DesignSystem.Color.secondaryLabel])
     }
 
     private func scrollToBottom() {
@@ -271,6 +373,21 @@ final class AskConversationViewController: UIViewController {
     }
 
     deinit { streamTask?.cancel() }
+}
+
+extension AskConversationViewController: UITextViewDelegate {
+    /// Reading back through the answer while it streams must not be undone by
+    /// the next token pulling the view to the bottom; reaching the bottom again
+    /// resumes following.
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        followTail = false
+    }
+
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        guard scrollView.isTracking || scrollView.isDecelerating else { return }
+        let bottom = scrollView.contentOffset.y + scrollView.bounds.height - scrollView.adjustedContentInset.bottom
+        followTail = bottom >= scrollView.contentSize.height - 40
+    }
 }
 
 extension AskConversationViewController: UITextFieldDelegate {

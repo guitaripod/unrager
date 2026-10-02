@@ -82,3 +82,16 @@ struct QueryEncodingTests {
         #expect(q == "1+1 = 2")
     }
 }
+
+@Suite("APIError messages")
+struct APIErrorMessageTests {
+    @Test("A network failure names its cause, so offline and a refused connection read differently")
+    func networkCause() {
+        let offline = APIError.network("The Internet connection appears to be offline.").errorDescription ?? ""
+        let refused = APIError.network("Could not connect to the server.").errorDescription ?? ""
+        #expect(offline.contains("offline"))
+        #expect(refused.contains("Could not connect"))
+        #expect(offline != refused)
+        #expect(APIError.network("").errorDescription?.contains("()") == false)
+    }
+}

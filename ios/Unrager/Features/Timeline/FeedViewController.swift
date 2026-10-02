@@ -283,6 +283,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
         if let video = tweet.media.enumerated().first(where: { $0.element.isVideo }) {
             let url = video.element.videoURL.flatMap(URL.init)
                 ?? AppEnvironment.shared.api.mediaURL(tweetID: tweet.restID, index: video.offset)
+            pauseAllVideos()
             MediaAudioSession.activatePlayback()
             let player = AVPlayer(url: url)
             let controller = AVPlayerViewController()

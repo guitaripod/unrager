@@ -1,584 +1,541 @@
 import UIKit
 import UnragerKit
 
-/// A full-bleed tappable settings row that highlights on touch-down, used for
-/// the navigation rows inside grouped cards.
-private final class RowButton: UIControl {
-    var onTap: (() -> Void)?
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        addAction(UIAction { [weak self] _ in self?.onTap?() }, for: .touchUpInside)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    override var isHighlighted: Bool {
-        didSet { backgroundColor = isHighlighted ? DesignSystem.Color.separator.withAlphaComponent(0.25) : .clear }
-    }
-}
-
-/// Server address, appearance, image toggle, and a connection test. The server
-/// URL is the one piece of client config the app needs — everything else lives
-/// server-side.
+/// Settings: a grouped list that opens on who you are and whether the server
+/// is reachable, then everything that shapes the app, a section at a time. The
+/// server and its filter are checked live each time the screen appears, so it
+/// answers "is it working?" before it asks for anything.
 final class SettingsViewController: UIViewController {
-    private let scrollView = UIScrollView()
-    private let stack = UIStackView()
-    private let serverField = UITextField()
-    private let statusLabel = UILabel()
-    private lazy var statusRow = headerWrap(statusLabel)
-    private let appearanceControl = UISegmentedControl(items: AppearanceMode.allCases.map(\.title))
-    private let fontScaleControl = UISegmentedControl(items: FontScale.allCases.map(\.title))
-    private let imagesSwitch = UISwitch()
-    private let filterSwitch = UISwitch()
-    private let markSeenSwitch = UISwitch()
-    private let officialComposeSwitch = UISwitch()
-    private var openingProfile = false
-    private let fontPreviewLabel = UILabel()
-    private let notificationsSwitch = UISwitch()
-    private let bannerSoundSwitch = UISwitch()
-    private let quietHoursSwitch = UISwitch()
-    private let quietStartPicker = UIDatePicker()
-    private let quietEndPicker = UIDatePicker()
-    private var kindSwitches: [NotificationKind: UISwitch] = [:]
-    private var bannerOnlyRows: [UIView] = []
-    private var quietWindowRow: UIView?
+    enum Section: Int, CaseIterable {
+        case hero, server, reading, appearance, writing, notifications, data, about
+
+        var header: String? {
+            switch self {
+            case .hero: return nil
+            case .server: return "Server"
+            case .reading: return "Reading"
+            case .appearance: return "Appearance"
+            case .writing: return "Writing"
+            case .notifications: return "Notifications"
+            case .data: return "Data"
+            case .about: return "About"
+            }
+        }
+
+        var footer: String? {
+            switch self {
+            case .server:
+                return "The unrager server (`unrager serve`) does the X work: a machine you keep running, reached by its LAN or Tailscale address."
+            case .reading:
+                return "The rage filter runs each post on Home through the server's model; matches are removed from the feed. Post stats opens engagement figures under a post."
+            case .writing:
+                return "On: the compose and reply buttons open the official X app with your text prefilled. Off: posts go through the server's own OAuth client."
+            case .data:
+                return "Saved timelines let a feed paint at once on launch; they are replaced by the first fetch."
+            default:
+                return nil
+            }
+        }
+    }
+
+    enum Item: Hashable {
+        case hero
+        case serverAddress, serverStatus
+        case rageFilter, filterRules, postStats, markSeen, images
+        case theme, textSize, tabs
+        case officialCompose
+        case notifications
+        case savedTimelines, shareLogs, resetSettings
+        case whatsNew, version, source
+    }
+
+    /// What the server check last found.
+    enum Connection: Equatable {
+        case checking
+        case online(version: String, signedInAs: String?)
+        case offline(String)
+    }
+
+    private var collectionView: UICollectionView!
+    private var dataSource: UICollectionViewDiffableDataSource<Section, Item>!
+    private var connection = Connection.checking
+    private var account: Whoami?
+    private var filterSummary: String?
+    private var checkTask: Task<Void, Never>?
 
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "Settings"
         view.backgroundColor = DesignSystem.Color.background
         navigationItem.largeTitleDisplayMode = .never
-        buildLayout()
+        configureCollectionView()
+        applySnapshot()
         NotificationCenter.default.addObserver(
             self, selector: #selector(fontScaleApplied), name: AppSettings.fontScaleDidChange, object: nil)
     }
 
-    /// Settings is built once from fixed fonts, so a text-size change has to
-    /// rebuild it — otherwise the screen the user is adjusting is the one
-    /// screen that doesn't change.
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        refreshConnection()
+        reconfigure(Item.allSettingsRows)
+    }
+
+    #if DEBUG
+    /// Screenshot-QA hook: scrolls the list `points` down.
+    func debugScroll(by points: CGFloat) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+            guard let self else { return }
+            self.collectionView.setContentOffset(
+                CGPoint(x: 0, y: points - self.collectionView.adjustedContentInset.top), animated: false)
+        }
+    }
+    #endif
+
+    // MARK: - Layout
+
+    private func configureCollectionView() {
+        var configuration = UICollectionLayoutListConfiguration(appearance: .insetGrouped)
+        configuration.headerMode = .supplementary
+        configuration.footerMode = .supplementary
+        configuration.backgroundColor = DesignSystem.Color.background
+        let layout = UICollectionViewCompositionalLayout { index, environment in
+            var configuration = configuration
+            let section = Section(rawValue: index)
+            configuration.headerMode = section?.header == nil ? .none : .supplementary
+            configuration.footerMode = section?.footer == nil ? .none : .supplementary
+            return NSCollectionLayoutSection.list(using: configuration, layoutEnvironment: environment)
+        }
+        collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: layout)
+        collectionView.backgroundColor = DesignSystem.Color.background
+        collectionView.delegate = self
+        collectionView.alwaysBounceVertical = true
+        view.addManaged(collectionView)
+        collectionView.pinEdges(to: view)
+
+        let rows = UICollectionView.CellRegistration<UICollectionViewListCell, Item> { [weak self] cell, _, item in
+            self?.configure(cell, for: item)
+        }
+        let hero = UICollectionView.CellRegistration<UICollectionViewListCell, Item> { [weak self] cell, _, _ in
+            guard let self else { return }
+            cell.contentConfiguration = SettingsHeroConfiguration(account: self.account, connection: self.connection)
+            cell.backgroundConfiguration = Self.cardBackground()
+            cell.accessories = self.account == nil ? [] : [.disclosureIndicator()]
+        }
+        dataSource = UICollectionViewDiffableDataSource(collectionView: collectionView) { view, indexPath, item in
+            if item == .hero { return view.dequeueConfiguredReusableCell(using: hero, for: indexPath, item: item) }
+            return view.dequeueConfiguredReusableCell(using: rows, for: indexPath, item: item)
+        }
+        let header = UICollectionView.SupplementaryRegistration<UICollectionViewListCell>(
+            elementKind: UICollectionView.elementKindSectionHeader
+        ) { cell, _, indexPath in
+            var content = UIListContentConfiguration.groupedHeader()
+            content.text = Section(rawValue: indexPath.section)?.header
+            cell.contentConfiguration = content
+        }
+        let footer = UICollectionView.SupplementaryRegistration<UICollectionViewListCell>(
+            elementKind: UICollectionView.elementKindSectionFooter
+        ) { cell, _, indexPath in
+            var content = UIListContentConfiguration.groupedFooter()
+            content.attributedText = InlineMarkdown.render(
+                Section(rawValue: indexPath.section)?.footer ?? "", font: DesignSystem.Typography.metric(),
+                color: DesignSystem.Color.secondaryLabel)
+            cell.contentConfiguration = content
+        }
+        dataSource.supplementaryViewProvider = { view, kind, indexPath in
+            view.dequeueConfiguredReusableSupplementary(
+                using: kind == UICollectionView.elementKindSectionHeader ? header : footer, for: indexPath)
+        }
+    }
+
+    private static func cardBackground() -> UIBackgroundConfiguration {
+        var background = UIBackgroundConfiguration.listCell()
+        background.backgroundColor = DesignSystem.Color.elevatedBackground
+        return background
+    }
+
+    private func applySnapshot() {
+        var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
+        snapshot.appendSections(Section.allCases)
+        snapshot.appendItems([.hero], toSection: .hero)
+        snapshot.appendItems([.serverAddress, .serverStatus], toSection: .server)
+        snapshot.appendItems([.rageFilter, .filterRules, .postStats, .markSeen, .images], toSection: .reading)
+        snapshot.appendItems([.theme, .textSize, .tabs], toSection: .appearance)
+        snapshot.appendItems([.officialCompose], toSection: .writing)
+        snapshot.appendItems([.notifications], toSection: .notifications)
+        snapshot.appendItems([.savedTimelines, .shareLogs, .resetSettings], toSection: .data)
+        snapshot.appendItems([.whatsNew, .version, .source], toSection: .about)
+        dataSource.apply(snapshot, animatingDifferences: false)
+    }
+
+    private func reconfigure(_ items: [Item]) {
+        var snapshot = dataSource.snapshot()
+        let present = items.filter { snapshot.indexOfItem($0) != nil }
+        guard !present.isEmpty else { return }
+        snapshot.reconfigureItems(present)
+        dataSource.apply(snapshot, animatingDifferences: false)
+    }
+
+    /// A new text size re-resolves every row's font, except the slider being
+    /// dragged, which would be rebuilt under the finger.
     @objc private func fontScaleApplied() {
-        let offset = scrollView.contentOffset
-        stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        kindSwitches.removeAll()
-        buildContent()
-        view.layoutIfNeeded()
-        scrollView.setContentOffset(offset, animated: false)
+        var snapshot = dataSource.snapshot()
+        snapshot.reconfigureItems(snapshot.itemIdentifiers.filter { $0 != .textSize })
+        dataSource.apply(snapshot, animatingDifferences: false)
     }
 
-    private func buildLayout() {
-        stack.axis = .vertical
-        stack.spacing = DesignSystem.Spacing.xl
-        stack.isLayoutMarginsRelativeArrangement = true
-        stack.directionalLayoutMargins = .init(top: 18, leading: 16, bottom: 32, trailing: 16)
+    // MARK: - Rows
 
-        view.addManaged(scrollView)
-        scrollView.pinEdges(toSafeAreaOf: view)
-        scrollView.addManaged(stack)
-        NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
-            stack.leadingAnchor.constraint(equalTo: scrollView.frameLayoutGuide.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: scrollView.frameLayoutGuide.trailingAnchor),
-        ])
+    private func configure(_ cell: UICollectionViewListCell, for item: Item) {
+        var content = UIListContentConfiguration.valueCell()
+        content.textProperties.font = DesignSystem.Typography.body()
+        content.secondaryTextProperties.font = DesignSystem.Typography.body()
+        content.secondaryTextProperties.color = DesignSystem.Color.secondaryLabel
+        cell.backgroundConfiguration = Self.cardBackground()
+        cell.accessories = []
 
-        buildContent()
-    }
-
-    private func buildContent() {
-        serverField.text = AppSettings.serverURLString
-        serverField.placeholder = "http://192.168.1.10:7777"
-        serverField.borderStyle = .none
-        serverField.font = DesignSystem.Typography.body()
-        serverField.textColor = DesignSystem.Color.secondaryLabel
-        serverField.autocapitalizationType = .none
-        serverField.autocorrectionType = .no
-        serverField.keyboardType = .URL
-        serverField.returnKeyType = .done
-        serverField.clearButtonMode = .whileEditing
-        serverField.addTarget(self, action: #selector(serverEditingBegan), for: .editingDidBegin)
-        serverField.addTarget(self, action: #selector(serverEditingEnded), for: .editingDidEnd)
-        serverField.addTarget(self, action: #selector(serverReturnTapped), for: .editingDidEndOnExit)
-
-        statusLabel.font = DesignSystem.Typography.metric()
-        statusLabel.textColor = DesignSystem.Color.secondaryLabel
-        statusLabel.numberOfLines = 0
-
-        appearanceControl.accessibilityLabel = "Appearance"
-        fontScaleControl.accessibilityLabel = "Text size"
-        appearanceControl.selectedSegmentIndex = AppSettings.appearance.rawValue
-        appearanceControl.addTarget(self, action: #selector(appearanceChanged), for: .valueChanged)
-
-        fontScaleControl.selectedSegmentIndex = AppSettings.fontScale.rawValue
-        fontScaleControl.addTarget(self, action: #selector(fontScaleChanged), for: .valueChanged)
-
-        imagesSwitch.isOn = AppSettings.imagesEnabled
-        imagesSwitch.addTarget(self, action: #selector(imagesChanged), for: .valueChanged)
-
-        markSeenSwitch.isOn = ClientSettings.markSeenEnabled
-        markSeenSwitch.addTarget(self, action: #selector(markSeenChanged), for: .valueChanged)
-
-        filterSwitch.isOn = AppSettings.filterEnabled
-        filterSwitch.addTarget(self, action: #selector(filterChanged), for: .valueChanged)
-
-        officialComposeSwitch.isOn = AppSettings.composeViaOfficialApp
-        officialComposeSwitch.addTarget(self, action: #selector(officialComposeChanged), for: .valueChanged)
-
-        statusRow.isHidden = (statusLabel.text ?? "").isEmpty
-        let serverSection = section("Server", card: card([
-            labeledFieldRow("Server URL", serverField),
-            navRow("Test connection", icon: "bolt.horizontal") { [weak self] in self?.testConnection() },
-        ]), footnote: "The unrager server (`unrager serve`) — a Linux box, a Mac, any machine you keep running. Use its LAN or Tailscale address. Tap the address to edit; it applies when you finish editing.")
-        (serverSection as? UIStackView)?.insertArrangedSubview(statusRow, at: 2)
-        stack.addArrangedSubview(serverSection)
-
-        stack.addArrangedSubview(section("Account", card: card([
-            navRow("Open my profile", icon: "person.crop.circle") { [weak self] in self?.openMyProfile() },
-        ])))
-
-        stack.addArrangedSubview(section("Tabs", card: card([
-            navRow("Edit tabs", icon: "rectangle.grid.1x2") { [weak self] in
-                self?.navigationController?.pushViewController(EditTabsViewController(), animated: true)
-            },
-        ]), footnote: "Choose up to \(TabItem.maxCount) tabs and reorder them. Settings always stays."))
-
-        fontPreviewLabel.text = "Aa — this is how posts will read."
-        fontPreviewLabel.font = DesignSystem.Typography.body()
-        fontPreviewLabel.textColor = DesignSystem.Color.label
-        fontPreviewLabel.numberOfLines = 0
-        stack.addArrangedSubview(section("Appearance", card: card([
-            contentRow(appearanceControl),
-            contentRow(fontScaleControl),
-            contentRow(fontPreviewLabel),
-        ]), footnote: "Text size scales the whole app."))
-
-        stack.addArrangedSubview(section("Feed", card: card([
-            toggleRow("Load images", imagesSwitch),
-            toggleRow("Track seen tweets", markSeenSwitch),
-        ]), footnote: "Reports tweets you scroll past on Following and Mentions to the server's read tracker and dims them on reload."))
-
-        stack.addArrangedSubview(section("Composing", card: card([
-            toggleRow("Tweet with the X app", officialComposeSwitch),
-        ]), footnote: "On: the Tweet and reply buttons open the official X app with your text prefilled (and copied to the clipboard) — no developer account, no cost. Off: posts through the server's OAuth client."))
-
-        stack.addArrangedSubview(notificationsSection())
-
-        stack.addArrangedSubview(section("Rage filter", card: card([
-            toggleRow("Hide rage tweets", filterSwitch),
-            navRow("Edit filter rubric", icon: "slider.horizontal.3") { [weak self] in
-                self?.navigationController?.pushViewController(FilterSettingsViewController(), animated: true)
-            },
-        ]), footnote: "Runs each tweet on Home through the server's filter model; matches are removed from the feed. Refresh after toggling."))
-
-        stack.addArrangedSubview(section("About", card: card([
-            navRow("What's new", icon: "sparkles") { [weak self] in
-                self?.navigationController?.pushViewController(ChangelogViewController(), animated: true)
-            },
-            contentRow(captionLabel("unrager · a calm X client. The server does the X work; this app is a thin native client.")),
-        ])))
-    }
-
-    // MARK: - Notifications
-
-    /// The notifications card: per-type toggles (gating both in-app toasts and
-    /// local banners), a master banner toggle, banner sound + quiet hours
-    /// (banner-only, so they follow the master), and a row that jumps to the
-    /// system notification settings. The unread badge is independent of every
-    /// toggle here. NO PUSH: banners are foreground/best-effort.
-    private func notificationsSection() -> UIView {
-        notificationsSwitch.isOn = NotificationPrefs.bannersEnabled
-        notificationsSwitch.addTarget(self, action: #selector(notificationsChanged), for: .valueChanged)
-
-        var rows: [UIView] = NotificationKind.allCases.map { kind in
+        func tile(_ symbol: String, _ color: UIColor) {
+            content.image = IconTile.image(symbol: symbol, color: color)
+            content.imageProperties.reservedLayoutSize = CGSize(width: 30, height: 30)
+            content.imageToTextPadding = 14
+        }
+        func toggle(_ title: String, isOn: Bool, change: @escaping (Bool) -> Void) {
+            content.text = title
             let control = UISwitch()
-            control.isOn = NotificationPrefs.bannerEnabled(for: kind)
-            control.addAction(UIAction { _ in
-                NotificationPrefs.setBannerEnabled(control.isOn, for: kind)
+            control.isOn = isOn
+            control.accessibilityLabel = title
+            control.addAction(UIAction { [weak control] _ in
+                guard let control else { return }
                 Haptics.selection()
+                change(control.isOn)
             }, for: .valueChanged)
-            kindSwitches[kind] = control
-            return toggleRow(kind.title, control)
+            cell.accessories = [.customView(configuration: .init(
+                customView: control, placement: .trailing(), maintainsFixedSize: true))]
         }
-        rows.append(toggleRow("Banners", notificationsSwitch))
-
-        bannerSoundSwitch.isOn = NotificationPrefs.bannerSoundEnabled
-        bannerSoundSwitch.addTarget(self, action: #selector(bannerSoundChanged), for: .valueChanged)
-        quietHoursSwitch.isOn = NotificationPrefs.quietHoursEnabled
-        quietHoursSwitch.addTarget(self, action: #selector(quietHoursChanged), for: .valueChanged)
-        let soundRow = toggleRow("Banner sound", bannerSoundSwitch)
-        let quietRow = toggleRow("Quiet hours", quietHoursSwitch)
-        let windowRow = quietHoursWindowRow()
-        quietWindowRow = windowRow
-        bannerOnlyRows = [soundRow, quietRow, windowRow]
-        rows.append(contentsOf: bannerOnlyRows)
-
-        rows.append(navRow("System notification settings", icon: "gear") { [weak self] in
-            self?.openSystemNotificationSettings()
-        })
-
-        updateBannerRowsEnabled()
-        return section("Notifications", card: card(rows),
-                       footnote: "The type toggles gate both in-app toasts and system banners; likes and reposts are off by default. Banners are delivered by an in-app poller while Unrager is active (best-effort in the background); there is no push server, so they won't arrive when the app is closed. During quiet hours banners land silently in Notification Center. The Notifications-tab badge always counts unread activity regardless of these toggles.")
-    }
-
-    /// The "From … until …" row of compact time pickers bounding the
-    /// quiet-hours window; only enabled while quiet hours are on.
-    private func quietHoursWindowRow() -> UIView {
-        for picker in [quietStartPicker, quietEndPicker] {
-            picker.datePickerMode = .time
-            picker.preferredDatePickerStyle = .compact
-            picker.setContentHuggingPriority(.required, for: .horizontal)
+        func menu<Option: Equatable>(
+            _ title: String, current: Option, options: [Option], label: @escaping (Option) -> String,
+            select: @escaping (Option) -> Void
+        ) {
+            content.text = title
+            content.secondaryText = nil
+            let button = settingsMenuButton(current: current, options: options, title: label, select: select)
+            button.accessibilityLabel = title
+            cell.accessories = [.customView(configuration: .init(
+                customView: button, placement: .trailing(), maintainsFixedSize: true))]
         }
-        quietStartPicker.date = Self.time(minute: NotificationPrefs.quietHoursStartMinute)
-        quietEndPicker.date = Self.time(minute: NotificationPrefs.quietHoursEndMinute)
-        quietStartPicker.accessibilityLabel = "Quiet hours start"
-        quietEndPicker.accessibilityLabel = "Quiet hours end"
-        quietStartPicker.addTarget(self, action: #selector(quietWindowChanged), for: .valueChanged)
-        quietEndPicker.addTarget(self, action: #selector(quietWindowChanged), for: .valueChanged)
 
-        return paddedRow([captionLabel("From"), quietStartPicker,
-                          captionLabel("until"), quietEndPicker, UIView()])
-    }
-
-    private static func time(minute: Int) -> Date {
-        Calendar.current.date(bySettingHour: minute / 60, minute: minute % 60, second: 0, of: Date()) ?? Date()
-    }
-
-    private static func minute(of date: Date) -> Int {
-        let components = Calendar.current.dateComponents([.hour, .minute], from: date)
-        return (components.hour ?? 0) * 60 + (components.minute ?? 0)
-    }
-
-    /// Sound and quiet hours only shape system banners, so they follow the
-    /// master banner switch; the per-type rows stay live regardless because
-    /// they also gate in-app toasts.
-    private func updateBannerRowsEnabled() {
-        let enabled = notificationsSwitch.isOn
-        bannerSoundSwitch.isEnabled = enabled
-        quietHoursSwitch.isEnabled = enabled
-        let quietOn = enabled && quietHoursSwitch.isOn
-        quietStartPicker.isEnabled = quietOn
-        quietEndPicker.isEnabled = quietOn
-        for row in bannerOnlyRows { row.alpha = enabled ? 1 : 0.4 }
-        if enabled { quietWindowRow?.alpha = quietOn ? 1 : 0.4 }
-    }
-
-    @objc private func bannerSoundChanged() {
-        NotificationPrefs.bannerSoundEnabled = bannerSoundSwitch.isOn
-        Haptics.selection()
-    }
-
-    @objc private func quietHoursChanged() {
-        NotificationPrefs.quietHoursEnabled = quietHoursSwitch.isOn
-        updateBannerRowsEnabled()
-        Haptics.selection()
-    }
-
-    @objc private func quietWindowChanged() {
-        NotificationPrefs.quietHoursStartMinute = Self.minute(of: quietStartPicker.date)
-        NotificationPrefs.quietHoursEndMinute = Self.minute(of: quietEndPicker.date)
-    }
-
-    @objc private func notificationsChanged() {
-        Haptics.selection()
-        if notificationsSwitch.isOn {
-            Task { [weak self] in
-                let granted = await NotificationCenterService.shared.requestAuthorization()
-                guard let self else { return }
-                if granted {
-                    NotificationPrefs.bannersEnabled = true
-                } else {
-                    self.notificationsSwitch.setOn(false, animated: true)
-                    NotificationPrefs.bannersEnabled = false
-                    self.present(self.permissionDeniedAlert(), animated: true)
-                }
-                self.updateBannerRowsEnabled()
+        switch item {
+        case .hero:
+            break
+        case .serverAddress:
+            tile("server.rack", .systemBlue)
+            content.text = "Address"
+            content.secondaryText = SettingsFormat.host(of: AppSettings.serverURLString)
+            cell.accessories = [.customView(configuration: .init(
+                customView: Self.pencil(), placement: .trailing(), maintainsFixedSize: true))]
+        case .serverStatus:
+            tile("bolt.horizontal.fill", .systemGreen)
+            content.text = "Connection"
+            switch connection {
+            case .checking:
+                content.secondaryText = "Checking…"
+            case let .online(version, _):
+                content.secondaryText = "Connected · v\(version)"
+                content.secondaryTextProperties.color = DesignSystem.Color.retweet
+            case let .offline(reason):
+                content.secondaryText = reason
+                content.secondaryTextProperties.color = .systemRed
             }
-        } else {
-            NotificationPrefs.bannersEnabled = false
-            updateBannerRowsEnabled()
+            content.secondaryTextProperties.numberOfLines = 2
+        case .rageFilter:
+            tile("line.3.horizontal.decrease", .systemRed)
+            toggle("Rage filter", isOn: AppSettings.filterEnabled) { isOn in
+                AppSettings.filterEnabled = isOn
+                SessionSync.patchFilterEnabled(isOn)
+            }
+        case .filterRules:
+            tile("slider.horizontal.3", .systemOrange)
+            content.text = "Filter rules"
+            content.secondaryText = filterSummary
+            cell.accessories = [.disclosureIndicator()]
+        case .postStats:
+            tile("chart.bar.xaxis", .systemPurple)
+            menu("Post stats", current: AppSettings.postStatsMode, options: PostStatsMode.allCases,
+                 label: \.title) { AppSettings.postStatsMode = $0 }
+        case .markSeen:
+            tile("eye", .systemTeal)
+            toggle("Dim posts you've read", isOn: ClientSettings.markSeenEnabled) { ClientSettings.markSeenEnabled = $0 }
+        case .images:
+            tile("photo", .systemYellow)
+            toggle("Load images", isOn: AppSettings.imagesEnabled) { AppSettings.imagesEnabled = $0 }
+        case .theme:
+            tile("circle.lefthalf.filled", .systemIndigo)
+            menu("Theme", current: AppSettings.appearance, options: AppearanceMode.allCases,
+                 label: \.title) { [weak self] mode in
+                AppSettings.appearance = mode
+                self?.view.window?.overrideUserInterfaceStyle = UIUserInterfaceStyle(rawValue: mode.rawValue) ?? .unspecified
+            }
+        case .textSize:
+            cell.contentConfiguration = SettingsTextSizeConfiguration(scale: AppSettings.fontScale) { scale in
+                AppSettings.fontScale = scale
+                NotificationCenter.default.post(name: AppSettings.fontScaleDidChange, object: nil)
+            }
+            return
+        case .tabs:
+            tile("rectangle.grid.1x2", .systemMint)
+            content.text = "Tabs"
+            content.secondaryText = SettingsFormat.tabSummary(ClientSettings.tabs)
+            content.secondaryTextProperties.numberOfLines = 1
+            cell.accessories = [.disclosureIndicator()]
+        case .officialCompose:
+            tile("square.and.pencil", .systemBlue)
+            toggle("Post with the X app", isOn: AppSettings.composeViaOfficialApp) {
+                AppSettings.composeViaOfficialApp = $0
+            }
+        case .notifications:
+            tile("bell.badge.fill", .systemRed)
+            content.text = "Notifications"
+            content.secondaryText = NotificationSettingsViewController.summary
+            cell.accessories = [.disclosureIndicator()]
+        case .savedTimelines:
+            tile("clock.arrow.circlepath", .systemGray)
+            content.text = "Saved timelines"
+            content.secondaryText = SettingsFormat.bytes(TimelineCache.shared.diskUsage())
+        case .shareLogs:
+            tile("doc.text.magnifyingglass", .systemGray)
+            content.text = "Share logs"
+            cell.accessories = [.disclosureIndicator()]
+        case .resetSettings:
+            tile("arrow.counterclockwise", .systemRed)
+            content.text = "Reset settings"
+            content.textProperties.color = .systemRed
+        case .whatsNew:
+            tile("sparkles", .systemPink)
+            content.text = "What's new"
+            cell.accessories = [.disclosureIndicator()]
+        case .version:
+            tile("info.circle.fill", .systemGray)
+            content.text = "Version"
+            content.secondaryText = Self.versionText(connection: connection)
+        case .source:
+            tile("chevron.left.forwardslash.chevron.right", .systemGray)
+            content.text = "Source code"
+            cell.accessories = [.customView(configuration: .init(
+                customView: UIImageView(image: DesignSystem.icon("arrow.up.right", pointSize: 13, weight: .semibold))
+                    .tinted(DesignSystem.Color.tertiaryLabel),
+                placement: .trailing(), maintainsFixedSize: true))]
+        }
+        cell.contentConfiguration = content
+    }
+
+    private static func pencil() -> UIImageView {
+        UIImageView(image: DesignSystem.icon("pencil", pointSize: 14)).tinted(DesignSystem.Color.accent)
+    }
+
+    private static func versionText(connection: Connection) -> String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "1.0"
+        let build = info?["CFBundleVersion"] as? String ?? "1"
+        guard case let .online(serverVersion, _) = connection else { return "\(version) (\(build))" }
+        return "\(version) (\(build)) · server \(serverVersion)"
+    }
+
+    // MARK: - Server
+
+    /// Looks at the server again: is it up, is X signed in, what is the filter
+    /// set to. One round of requests, run side by side; the rows update as the
+    /// answers land.
+    private func refreshConnection() {
+        checkTask?.cancel()
+        connection = .checking
+        reconfigure([.serverStatus, .version])
+        checkTask = Task { [weak self] in
+            let api = AppEnvironment.shared.api
+            async let health = Self.result { try await api.health() }
+            async let me = AppEnvironment.shared.whoami()
+            async let rules = Self.result { try await api.filterConfig() }
+            let (healthResult, whoami, rulesResult) = await (health, me, rules)
+            guard !Task.isCancelled, let self else { return }
+            switch healthResult {
+            case let .success(info):
+                self.connection = .online(version: info.version, signedInAs: whoami?.handle)
+            case let .failure(error):
+                self.connection = .offline(Self.describe(error))
+            }
+            self.account = whoami
+            if case let .success(config) = rulesResult {
+                let strictness = config.strictness?.title.lowercased()
+                let topics = "\(config.dropTopics.count) topic\(config.dropTopics.count == 1 ? "" : "s")"
+                self.filterSummary = strictness.map { "\(topics) · \($0)" } ?? topics
+            }
+            self.reconfigure([.hero, .serverStatus, .filterRules, .version])
         }
     }
 
-    private func permissionDeniedAlert() -> UIAlertController {
+    private nonisolated static func result<T: Sendable>(_ work: @Sendable () async throws -> T) async -> Result<T, Error> {
+        do { return .success(try await work()) } catch { return .failure(error) }
+    }
+
+    private static func describe(_ error: Error) -> String {
+        let text = error.localizedDescription
+        return text.isEmpty ? "Can't reach the server" : text
+    }
+
+    private func editServerAddress() {
         let alert = UIAlertController(
-            title: "Notifications are off",
-            message: "Allow notifications for Unrager in System Settings to receive banners.",
+            title: "Server address",
+            message: "The address of your unrager server, such as http://100.64.0.1:7777.",
             preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "Open Settings", style: .default) { [weak self] _ in
-            self?.openSystemNotificationSettings()
+        alert.addTextField { field in
+            field.text = AppSettings.serverURLString
+            field.placeholder = "http://192.168.1.10:7777"
+            field.keyboardType = .URL
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+            field.clearButtonMode = .whileEditing
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Save", style: .default) { [weak self, weak alert] _ in
+            self?.commitServerAddress(alert?.textFields?.first?.text ?? "")
         })
-        alert.addAction(UIAlertAction(title: "Not Now", style: .cancel))
-        return alert
+        present(alert, animated: true)
     }
 
-    private func openSystemNotificationSettings() {
-        let urlString = UIApplication.openNotificationSettingsURLString
-        guard let url = URL(string: urlString) else { return }
-        UIApplication.shared.open(url)
-    }
-
-    // MARK: - Grouped-card building blocks
-
-    private func section(_ title: String, card: UIView, footnote: String? = nil) -> UIView {
-        let header = UILabel()
-        header.text = title.uppercased()
-        header.font = DesignSystem.Typography.caption()
-        header.textColor = DesignSystem.Color.secondaryLabel
-        header.accessibilityTraits = .header
-        header.directionalLayoutMargins = .init(top: 0, leading: 4, bottom: 0, trailing: 4)
-
-        let column = UIStackView(arrangedSubviews: [headerWrap(header), card])
-        column.axis = .vertical
-        column.spacing = DesignSystem.Spacing.xs
-        if let footnote {
-            column.addArrangedSubview(footnoteLabel(footnote))
-        }
-        return column
-    }
-
-    private func headerWrap(_ label: UILabel) -> UIView {
-        let wrap = UIView()
-        wrap.addManaged(label)
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: wrap.leadingAnchor, constant: 16),
-            label.trailingAnchor.constraint(equalTo: wrap.trailingAnchor, constant: -16),
-            label.topAnchor.constraint(equalTo: wrap.topAnchor),
-            label.bottomAnchor.constraint(equalTo: wrap.bottomAnchor),
-        ])
-        return wrap
-    }
-
-    /// A rounded, elevated container stacking rows with hairline separators
-    /// inset to the row content — the native grouped-settings card.
-    private func card(_ rows: [UIView]) -> UIView {
-        let inner = UIStackView()
-        inner.axis = .vertical
-        inner.spacing = 0
-        for (index, row) in rows.enumerated() {
-            if index > 0 { inner.addArrangedSubview(separator()) }
-            inner.addArrangedSubview(row)
-        }
-        let container = UIView()
-        container.backgroundColor = DesignSystem.Color.elevatedBackground
-        container.layer.cornerRadius = 14
-        container.layer.cornerCurve = .continuous
-        container.clipsToBounds = true
-        container.addManaged(inner)
-        inner.pinEdges(to: container)
-        return container
-    }
-
-    private func separator() -> UIView {
-        let line = UIView()
-        line.backgroundColor = DesignSystem.Color.separator
-        let wrap = UIView()
-        wrap.addManaged(line)
-        NSLayoutConstraint.activate([
-            line.heightAnchor.constraint(equalToConstant: 0.5),
-            line.leadingAnchor.constraint(equalTo: wrap.leadingAnchor, constant: 16),
-            line.trailingAnchor.constraint(equalTo: wrap.trailingAnchor),
-            line.topAnchor.constraint(equalTo: wrap.topAnchor),
-            line.bottomAnchor.constraint(equalTo: wrap.bottomAnchor),
-        ])
-        return wrap
-    }
-
-    private func toggleRow(_ title: String, _ control: UISwitch) -> UIView {
-        let label = UILabel()
-        label.text = title
-        label.font = DesignSystem.Typography.body()
-        label.textColor = DesignSystem.Color.label
-        control.setContentHuggingPriority(.required, for: .horizontal)
-        control.accessibilityLabel = title
-        let row = paddedRow([label, UIView(), control])
-        return row
-    }
-
-    private func navRow(_ title: String, icon: String, _ action: @escaping () -> Void) -> UIView {
-        let button = RowButton()
-        button.onTap = action
-        button.isAccessibilityElement = true
-        button.accessibilityLabel = title
-        button.accessibilityTraits = .button
-        let glyph = UIImageView(image: DesignSystem.icon(icon, pointSize: 16, weight: .regular))
-        glyph.tintColor = DesignSystem.Color.accent
-        glyph.setContentHuggingPriority(.required, for: .horizontal)
-        let label = UILabel()
-        label.text = title
-        label.font = DesignSystem.Typography.body()
-        label.textColor = DesignSystem.Color.label
-        let chevron = UIImageView(image: DesignSystem.icon("chevron.right", pointSize: 13, weight: .semibold))
-        chevron.tintColor = DesignSystem.Color.separator
-        chevron.setContentHuggingPriority(.required, for: .horizontal)
-        let content = UIStackView(arrangedSubviews: [glyph, label, UIView(), chevron])
-        content.axis = .horizontal
-        content.alignment = .center
-        content.spacing = DesignSystem.Spacing.m
-        content.isUserInteractionEnabled = false
-        button.addManaged(content)
-        content.pinEdges(to: button, insets: UIEdgeInsets(top: 12, left: 16, bottom: 12, right: 16))
-        return button
-    }
-
-    private func contentRow(_ view: UIView) -> UIView { paddedRow([view]) }
-
-    /// A captioned, visibly-editable field row: a small "Server URL"-style
-    /// caption above the value, with a trailing pencil glyph signalling that
-    /// the text edits in place.
-    private func labeledFieldRow(_ title: String, _ field: UITextField) -> UIView {
-        let caption = UILabel()
-        caption.text = title
-        caption.font = DesignSystem.Typography.caption()
-        caption.textColor = DesignSystem.Color.secondaryLabel
-
-        let column = UIStackView(arrangedSubviews: [caption, field])
-        column.axis = .vertical
-        column.spacing = 2
-
-        let pencil = UIImageView(image: DesignSystem.icon("pencil", pointSize: 14))
-        pencil.tintColor = DesignSystem.Color.accent
-        pencil.setContentHuggingPriority(.required, for: .horizontal)
-        pencil.isAccessibilityElement = false
-
-        return paddedRow([column, UIView(), pencil])
-    }
-
-    private func paddedRow(_ subviews: [UIView]) -> UIView {
-        let row = UIStackView(arrangedSubviews: subviews)
-        row.axis = .horizontal
-        row.alignment = .center
-        row.spacing = DesignSystem.Spacing.s
-        row.isLayoutMarginsRelativeArrangement = true
-        row.directionalLayoutMargins = .init(top: 12, leading: 16, bottom: 12, trailing: 16)
-        return row
-    }
-
-    private func footnoteLabel(_ text: String) -> UIView {
-        let label = captionLabel(text)
-        label.attributedText = InlineMarkdown.render(
-            text, font: DesignSystem.Typography.metric(), color: DesignSystem.Color.secondaryLabel)
-        return headerWrap(label)
-    }
-
-    private func captionLabel(_ text: String) -> UILabel {
-        let label = UILabel()
-        label.text = text
-        label.font = DesignSystem.Typography.metric()
-        label.textColor = DesignSystem.Color.secondaryLabel
-        label.numberOfLines = 0
-        return label
-    }
-
-    @objc private func serverEditingBegan() {
-        serverField.textColor = DesignSystem.Color.label
-    }
-
-    @objc private func serverReturnTapped() {
-        serverField.resignFirstResponder()
-    }
-
-    /// Commits the server URL once editing finishes — never per keystroke, so
-    /// background traffic can't be redirected at a half-typed host (or the
-    /// useless localhost fallback after the clear button). An invalid or empty
-    /// value reverts to the previous address with a visible explanation.
-    @objc private func serverEditingEnded() {
-        serverField.textColor = DesignSystem.Color.secondaryLabel
-        commitServerURL()
-    }
-
-    /// Applies the address in the field. Returns whether the server URL in
-    /// force is now the one shown (unchanged or accepted), false when the text
-    /// was rejected and the previous address restored.
-    @discardableResult
-    private func commitServerURL() -> Bool {
-        let candidate = (serverField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard candidate != AppSettings.serverURLString else { return true }
+    /// Applies an address typed in the alert: a valid http(s) address replaces
+    /// the current one and is checked at once, anything else is refused with a
+    /// reason and the old address stays.
+    private func commitServerAddress(_ text: String) {
+        let candidate = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard candidate != AppSettings.serverURLString else { return }
         guard let url = URL(string: candidate), let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https", url.host != nil else {
-            serverField.text = AppSettings.serverURLString
-            showStatus("Not a valid server URL — kept \(AppSettings.serverURLString)", color: .systemRed)
             Haptics.error()
-            return false
+            present(AlertFactory.error(
+                SettingsError.invalidAddress(candidate), title: "Not a server address"), animated: true)
+            return
         }
         AppSettings.serverURLString = candidate
-        showStatus("Server set to \(candidate)", color: DesignSystem.Color.secondaryLabel)
         AppLogger.shared.info("server URL changed to \(candidate)", category: .app)
-        return true
+        Haptics.success()
+        reconfigure([.serverAddress])
+        refreshConnection()
     }
 
-    /// Shows a result under the Server card and says it to VoiceOver, which
-    /// would otherwise never hear a label that changes on its own.
-    private func showStatus(_ text: String, color: UIColor) {
-        statusLabel.textColor = color
-        statusLabel.text = text
-        statusRow.isHidden = text.isEmpty
-        UIAccessibility.post(notification: .announcement, argument: text)
+    private enum SettingsError: LocalizedError {
+        case invalidAddress(String)
+
+        var errorDescription: String? {
+            switch self {
+            case let .invalidAddress(text):
+                return "\"\(text)\" isn't an http or https address. The server stays as it was."
+            }
+        }
     }
 
-    @objc private func appearanceChanged() {
-        let mode = AppearanceMode(rawValue: appearanceControl.selectedSegmentIndex) ?? .system
-        AppSettings.appearance = mode
-        view.window?.overrideUserInterfaceStyle = UIUserInterfaceStyle(rawValue: mode.rawValue) ?? .unspecified
+    // MARK: - Data
+
+    private func confirmClearTimelines() {
+        let sheet = UIAlertController(title: nil, message: "Feeds will load from the server the next time you open them.",
+                                      preferredStyle: .actionSheet)
+        sheet.addAction(UIAlertAction(title: "Clear Saved Timelines", style: .destructive) { [weak self] _ in
+            TimelineCache.shared.clearAll()
+            Haptics.success()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self?.reconfigure([.savedTimelines]) }
+        })
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        present(sheet, animated: true)
     }
 
-    @objc private func fontScaleChanged() {
-        AppSettings.fontScale = FontScale(rawValue: fontScaleControl.selectedSegmentIndex) ?? .standard
+    private func shareLogs() {
+        guard let url = AppLogger.shared.currentLogFileURL, FileManager.default.fileExists(atPath: url.path) else {
+            showToast("No log yet")
+            return
+        }
+        let activity = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        present(activity, animated: true)
+    }
+
+    private func confirmReset() {
+        let sheet = UIAlertController(
+            title: "Reset settings?",
+            message: "Text size, theme, tabs and every switch go back to how they started. Your server address stays.",
+            preferredStyle: .actionSheet)
+        sheet.addAction(UIAlertAction(title: "Reset", style: .destructive) { [weak self] _ in self?.resetSettings() })
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        present(sheet, animated: true)
+    }
+
+    /// Forgets every preference the app keeps except where its server is, and
+    /// lets the screen and the app's window catch up.
+    private func resetSettings() {
+        let defaults = UserDefaults.standard
+        let keep = "unrager.serverURL"
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("unrager.") && key != keep {
+            defaults.removeObject(forKey: key)
+        }
+        view.window?.overrideUserInterfaceStyle = .unspecified
         NotificationCenter.default.post(name: AppSettings.fontScaleDidChange, object: nil)
-        Haptics.selection()
+        Haptics.success()
+        var snapshot = dataSource.snapshot()
+        snapshot.reconfigureItems(snapshot.itemIdentifiers)
+        dataSource.apply(snapshot, animatingDifferences: false)
     }
+}
 
-    @objc private func imagesChanged() {
-        AppSettings.imagesEnabled = imagesSwitch.isOn
-    }
+extension SettingsViewController.Item {
+    /// The rows that mirror a setting another screen can change.
+    static let allSettingsRows: [Self] = [
+        .serverAddress, .rageFilter, .postStats, .markSeen, .images, .theme, .textSize, .tabs,
+        .officialCompose, .notifications, .savedTimelines,
+    ]
+}
 
-    @objc private func filterChanged() {
-        AppSettings.filterEnabled = filterSwitch.isOn
-        SessionSync.patchFilterEnabled(filterSwitch.isOn)
-        Haptics.selection()
-    }
-
-    @objc private func officialComposeChanged() {
-        AppSettings.composeViaOfficialApp = officialComposeSwitch.isOn
-        Haptics.selection()
-    }
-
-    @objc private func markSeenChanged() {
-        ClientSettings.markSeenEnabled = markSeenSwitch.isOn
-        Haptics.selection()
-    }
-
-    private func openMyProfile() {
-        guard !openingProfile else { return }
-        openingProfile = true
-        Haptics.tap()
-        Task {
-            defer { openingProfile = false }
-            do {
-                let me = try await AppEnvironment.shared.api.whoami()
-                navigationController?.pushViewController(ProfileViewController(handle: me.handle), animated: true)
-            } catch {
-                present(AlertFactory.error(error, title: "Couldn't load profile"), animated: true)
-            }
+extension SettingsViewController: UICollectionViewDelegate {
+    func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+        collectionView.deselectItem(at: indexPath, animated: true)
+        guard let item = dataSource.itemIdentifier(for: indexPath) else { return }
+        switch item {
+        case .hero:
+            guard let handle = account?.handle else { return }
+            navigationController?.pushViewController(ProfileViewController(handle: handle), animated: true)
+        case .serverAddress:
+            editServerAddress()
+        case .serverStatus:
+            Haptics.tap()
+            refreshConnection()
+        case .filterRules:
+            navigationController?.pushViewController(FilterSettingsViewController(), animated: true)
+        case .tabs:
+            navigationController?.pushViewController(EditTabsViewController(), animated: true)
+        case .notifications:
+            navigationController?.pushViewController(NotificationSettingsViewController(), animated: true)
+        case .savedTimelines:
+            confirmClearTimelines()
+        case .shareLogs:
+            shareLogs()
+        case .resetSettings:
+            confirmReset()
+        case .whatsNew:
+            navigationController?.pushViewController(ChangelogViewController(), animated: true)
+        case .source:
+            if let url = URL(string: "https://github.com/guitaripod/unrager") { UIApplication.shared.open(url) }
+        case .rageFilter, .postStats, .markSeen, .images, .theme, .textSize, .officialCompose, .version:
+            break
         }
     }
 
-    /// Tests the address as shown: a field still being edited is committed
-    /// first, so the check never runs against the address it is replacing.
-    private func testConnection() {
-        view.endEditing(true)
-        guard commitServerURL() else { return }
-        showStatus("Connecting…", color: DesignSystem.Color.secondaryLabel)
-        Task {
-            do {
-                let me = try await AppEnvironment.shared.api.whoami()
-                showStatus("Connected · signed in as @\(me.handle)", color: DesignSystem.Color.retweet)
-                Haptics.success()
-            } catch {
-                showStatus(error.localizedDescription, color: .systemRed)
-                Haptics.error()
-            }
+    func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
+        switch dataSource.itemIdentifier(for: indexPath) {
+        case .rageFilter?, .postStats?, .markSeen?, .images?, .theme?, .textSize?, .officialCompose?, .version?:
+            return false
+        default:
+            return true
         }
+    }
+}
+
+private extension UIImageView {
+    func tinted(_ color: UIColor) -> UIImageView {
+        tintColor = color
+        return self
     }
 }

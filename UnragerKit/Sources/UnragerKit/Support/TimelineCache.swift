@@ -79,6 +79,27 @@ public final class TimelineCache: Sendable {
         queue.async { try? FileManager.default.removeItem(at: url) }
     }
 
+    /// How many bytes the saved timelines take on disk.
+    public func diskUsage() -> Int {
+        guard let directory,
+              let files = try? FileManager.default.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
+        return queue.sync {
+            files.reduce(0) { total, url in
+                total + ((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+            }
+        }
+    }
+
+    /// Forgets every saved timeline; feeds paint empty until the next fetch.
+    public func clearAll() {
+        guard let directory else { return }
+        queue.async {
+            let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+            for url in files { try? FileManager.default.removeItem(at: url) }
+        }
+    }
+
     /// Maps an arbitrary cache key to a filesystem-safe `<sanitized>.json` URL so
     /// keys like `search-#foo/bar` can't escape the cache directory.
     private func fileURL(for key: String) -> URL? {

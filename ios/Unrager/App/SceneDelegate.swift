@@ -55,7 +55,17 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                     ((root.viewControllers?[2] as? UINavigationController)?
                         .viewControllers.first as? NotificationsViewController)?.debugShowMentions()
                 }
-            case "settings": root.selectedIndex = 3
+            case "notifsettings":
+                root.selectedIndex = 3
+                (root.viewControllers?[3] as? UINavigationController)?
+                    .pushViewController(NotificationSettingsViewController(), animated: false)
+            case "settings":
+                root.selectedIndex = 3
+                if parts.count > 1, let points = Double(parts[1]),
+                   let settings = (root.viewControllers?[3] as? UINavigationController)?.topViewController
+                    as? SettingsViewController {
+                    settings.debugScroll(by: CGFloat(points))
+                }
             case "filter":
                 root.selectedIndex = 3
                 (root.viewControllers?[3] as? UINavigationController)?

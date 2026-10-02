@@ -99,7 +99,7 @@ async fn user_list(
     q: &UserListQuery,
 ) -> std::result::Result<Json<UserListPage>, ApiError> {
     let rest_id = resolve_rest_id(state, user_id).await?;
-    let count = q.count.unwrap_or(USER_LIST_COUNT);
+    let count = super::timeline::page_count(q.count, USER_LIST_COUNT);
     let response = state
         .gql
         .get(

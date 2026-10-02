@@ -1,6 +1,7 @@
 use crate::server::error::ApiError;
 use crate::server::llm;
 use crate::server::routes::classify::verdict_event;
+use crate::server::routes::filter::is_post_id;
 use crate::server::state::AppState;
 use crate::tui::ask;
 use crate::tui::filter::{
@@ -63,16 +64,34 @@ async fn verdict_for(state: &AppState, rubric: &str, id: String) -> Option<Filte
     Some(verdict_event(id, verdict))
 }
 
-pub async fn filter_stream(
-    State(state): State<Arc<AppState>>,
-    Query(q): Query<FilterQuery>,
-) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
-    let ids: Vec<String> = q
-        .ids
+/// Posts one filter stream judges at most. Each one X hasn't sent this
+/// server costs a lookup on X's read budget, which Home and threads share.
+const FILTER_STREAM_MAX_IDS: usize = 100;
+
+/// The comma-separated post ids of a filter stream, or why they're refused.
+fn filter_ids(raw: &str) -> std::result::Result<Vec<String>, ApiError> {
+    let ids: Vec<String> = raw
         .split(',')
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
+    if ids.len() > FILTER_STREAM_MAX_IDS {
+        return Err(ApiError::bad_request(format!(
+            "at most {FILTER_STREAM_MAX_IDS} ids per stream"
+        )));
+    }
+    if let Some(bad) = ids.iter().find(|id| !is_post_id(id)) {
+        return Err(ApiError::bad_request(format!("not a post id: {bad}")));
+    }
+    Ok(ids)
+}
+
+pub async fn filter_stream(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<FilterQuery>,
+) -> std::result::Result<Sse<impl Stream<Item = std::result::Result<Event, Infallible>>>, ApiError>
+{
+    let ids = filter_ids(&q.ids)?;
 
     let (tx, mut rx) = mpsc::channel::<FilterVerdictEvent>(64);
 
@@ -101,7 +120,7 @@ pub async fn filter_stream(
         }
         yield Ok(Event::default().data("[DONE]"));
     };
-    Sse::new(s).keep_alive(KeepAlive::new())
+    Ok(Sse::new(s).keep_alive(KeepAlive::new()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -392,6 +411,21 @@ mod tests {
         assert_eq!(received.len(), total);
         assert_eq!(received.first().map(String::as_str), Some("t0"));
         assert_eq!(received.last().map(String::as_str), Some("t4095"));
+    }
+
+    #[test]
+    fn filter_ids_are_bounded_and_numeric() {
+        assert_eq!(
+            filter_ids(" 1900000000000000001, ,2 ").unwrap(),
+            ["1900000000000000001", "2"]
+        );
+        assert!(filter_ids("").unwrap().is_empty());
+        let hundred = vec!["1"; 100].join(",");
+        assert_eq!(filter_ids(&hundred).unwrap().len(), 100);
+        let too_many = vec!["1"; 101].join(",");
+        assert_eq!(filter_ids(&too_many).unwrap_err().kind, "bad_request");
+        assert_eq!(filter_ids("1,abc").unwrap_err().kind, "bad_request");
+        assert!(filter_ids("1,-5").is_err());
     }
 
     #[tokio::test]

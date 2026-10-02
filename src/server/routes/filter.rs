@@ -47,7 +47,7 @@ pub async fn set_overrides(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn is_post_id(id: &str) -> bool {
+pub(crate) fn is_post_id(id: &str) -> bool {
     (1..=24).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_digit())
 }
 

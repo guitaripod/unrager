@@ -149,6 +149,27 @@ final class TimelineViewModel {
         self.source = source
     }
 
+    /// What an empty, successfully loaded feed says, in the feed's own terms:
+    /// "No bookmarks", "No results for …", rather than one line for every feed.
+    var emptyContent: (symbol: String, title: String, subtitle: String) {
+        switch source {
+        case let .home(following, _):
+            return ("tray", "Nothing here yet",
+                    following ? "Follow some accounts, or pull to refresh." : "Pull to refresh.")
+        case .user:
+            return ("text.bubble", "No posts", "This account hasn't posted anything X will show.")
+        case let .search(query, _):
+            return ("magnifyingglass", "No results", "Nothing found for \"\(query)\".")
+        case .mentions:
+            return ("at", "No mentions yet", "When someone mentions you, it shows up here.")
+        case let .bookmarks(query):
+            let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty
+                ? ("bookmark", "No bookmarks", "Posts you bookmark show up here.")
+                : ("bookmark", "No matches", "None of your bookmarks mention \"\(trimmed)\".")
+        }
+    }
+
     func updateSource(_ newSource: Source) {
         guard newSource != source else { return }
         source = newSource

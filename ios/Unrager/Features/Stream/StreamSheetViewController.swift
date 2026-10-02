@@ -111,6 +111,7 @@ final class StreamSheetViewController: UIViewController {
     /// Shared with the conversational ask sheet so both render identically.
     static func renderMarkdown(_ markdown: String) -> NSAttributedString {
         let bulletized = markdown
+            .trimmingCharacters(in: .whitespacesAndNewlines)
             .split(separator: "\n", omittingEmptySubsequences: false)
             .map { line -> String in
                 let trimmed = line.drop { $0 == " " }

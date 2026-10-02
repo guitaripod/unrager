@@ -150,9 +150,12 @@ final class NotificationsViewController: UIViewController {
                 ProfileViewController(handle: actor.handle), animated: true)
         }
         var accessories: [UICellAccessory] = [
-            .customView(configuration: .init(customView: stack,
-                                             placement: .leading(displayed: .always),
-                                             maintainsFixedSize: true)),
+            .customView(configuration: {
+                var config = UICellAccessory.CustomViewConfiguration(
+                    customView: stack, placement: .leading(displayed: .always), maintainsFixedSize: true)
+                config.reservedLayoutWidth = .custom(NotificationAvatarStackView.size(for: NotificationAvatarStackView.maxAvatars).width)
+                return config
+            }()),
         ]
         if AppSettings.imagesEnabled, let thumb = notif.thumbnailURL {
             accessories.append(.customView(configuration: .init(
@@ -215,6 +218,8 @@ final class NotificationsViewController: UIViewController {
         case "follow": return .init(color: DesignSystem.Color.retweet, symbol: "person.fill.badge.plus", verb: "followed you")
         case "quote": return .init(color: DesignSystem.Color.quote, symbol: "quote.bubble.fill", verb: "quoted you")
         case "communitynote": return .init(color: DesignSystem.Color.secondaryLabel, symbol: "note.text", verb: "added a Community Note")
+        case "recommendation": return .init(color: DesignSystem.Color.accent, symbol: "sparkles", verb: "— suggested for you")
+        case "trending": return .init(color: DesignSystem.Color.accent, symbol: "chart.line.uptrend.xyaxis", verb: "— trending")
         default: return .init(color: DesignSystem.Color.accent, symbol: "bell.fill", verb: rawType.replacingOccurrences(of: "_", with: " "))
         }
     }
@@ -288,6 +293,7 @@ final class NotificationsViewController: UIViewController {
             .font: DesignSystem.Typography.handle(),
             .foregroundColor: DesignSystem.Color.secondaryLabel,
         ]))
+        TwemojiText.substituteCachedEmoji(in: result, font: DesignSystem.Typography.name())
         return result
     }
 

@@ -27,6 +27,7 @@ final class SettingsViewController: UIViewController {
     private let stack = UIStackView()
     private let serverField = UITextField()
     private let statusLabel = UILabel()
+    private lazy var statusRow = headerWrap(statusLabel)
     private let appearanceControl = UISegmentedControl(items: AppearanceMode.allCases.map(\.title))
     private let fontScaleControl = UISegmentedControl(items: FontScale.allCases.map(\.title))
     private let imagesSwitch = UISwitch()
@@ -124,11 +125,13 @@ final class SettingsViewController: UIViewController {
         officialComposeSwitch.isOn = AppSettings.composeViaOfficialApp
         officialComposeSwitch.addTarget(self, action: #selector(officialComposeChanged), for: .valueChanged)
 
-        stack.addArrangedSubview(section("Server", card: card([
+        statusRow.isHidden = (statusLabel.text ?? "").isEmpty
+        let serverSection = section("Server", card: card([
             labeledFieldRow("Server URL", serverField),
             navRow("Test connection", icon: "bolt.horizontal") { [weak self] in self?.testConnection() },
-            contentRow(statusLabel),
-        ]), footnote: "The unrager server (`unrager serve`) — a Linux box, a Mac, any machine you keep running. Use its LAN or Tailscale address. Tap the address to edit; it applies when you finish editing."))
+        ]), footnote: "The unrager server (`unrager serve`) — a Linux box, a Mac, any machine you keep running. Use its LAN or Tailscale address. Tap the address to edit; it applies when you finish editing.")
+        (serverSection as? UIStackView)?.insertArrangedSubview(statusRow, at: 2)
+        stack.addArrangedSubview(serverSection)
 
         stack.addArrangedSubview(section("Account", card: card([
             navRow("Open my profile", icon: "person.crop.circle") { [weak self] in self?.openMyProfile() },
@@ -454,6 +457,8 @@ final class SettingsViewController: UIViewController {
 
     private func footnoteLabel(_ text: String) -> UIView {
         let label = captionLabel(text)
+        label.attributedText = InlineMarkdown.render(
+            text, font: DesignSystem.Typography.metric(), color: DesignSystem.Color.secondaryLabel)
         return headerWrap(label)
     }
 
@@ -508,6 +513,7 @@ final class SettingsViewController: UIViewController {
     private func showStatus(_ text: String, color: UIColor) {
         statusLabel.textColor = color
         statusLabel.text = text
+        statusRow.isHidden = text.isEmpty
         UIAccessibility.post(notification: .announcement, argument: text)
     }
 

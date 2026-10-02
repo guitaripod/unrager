@@ -42,20 +42,31 @@ enum TweetText {
     static func attributed(
         for tweet: Tweet, stripLeadingMentions: Bool, seen: Bool, font: UIFont
     ) -> NSAttributedString {
-        let text = displayText(for: tweet, stripLeadingMentions: stripLeadingMentions)
+        attributed(for: displayText(for: tweet, stripLeadingMentions: stripLeadingMentions),
+                   urls: tweet.urls, seen: seen, font: font)
+    }
+
+    /// Colours and links the `@mentions`, `#hashtags` and URLs in `text`. Only
+    /// the mention, tag or address itself is styled: a comma or full stop that
+    /// follows it stays plain, and out of the link.
+    @MainActor
+    static func attributed(
+        for text: String, urls: [TweetURL], seen: Bool, font: UIFont
+    ) -> NSAttributedString {
         let baseColor = seen ? DesignSystem.Color.secondaryLabel : DesignSystem.Color.label
         let result = NSMutableAttributedString(string: text, attributes: [
             .font: font,
             .foregroundColor: baseColor,
         ])
-        let display = expandedDisplayMap(tweet.urls)
-        let ranges = tokenRanges(in: text)
-        for token in ranges {
-            let substring = (text as NSString).substring(with: token)
-            guard let (color, route) = classify(substring, display: display) else { continue }
-            result.addAttribute(.foregroundColor, value: color, range: token)
-            if let route, let link = link(for: route) {
-                result.addAttribute(.link, value: link, range: token)
+        let display = expandedDisplayMap(urls)
+        let ns = text as NSString
+        for token in tokenRanges(in: text) {
+            let word = ns.substring(with: token)
+            guard let match = classify(word, display: display) else { continue }
+            let range = NSRange(location: token.location, length: match.length)
+            result.addAttribute(.foregroundColor, value: match.color, range: range)
+            if let route = match.route, let link = link(for: route) {
+                result.addAttribute(.link, value: link, range: range)
             }
         }
         TwemojiText.substituteCachedEmoji(in: result, font: font)
@@ -92,24 +103,50 @@ enum TweetText {
         return ranges
     }
 
+    private struct Match {
+        let color: UIColor
+        let route: Route?
+        /// How much of the word is styled, in UTF-16 units: the whole word for
+        /// an address, `@handle` or `#tag` without what trails it.
+        let length: Int
+    }
+
+    private static let trailingPunctuation = CharacterSet(charactersIn: ".,;:!?)]}'\"”’…")
+
+    /// `word` without the sentence punctuation that followed it. A closing
+    /// bracket stays when the word opened one, as in a wiki-style address.
+    private static func trimmingTrailingPunctuation(_ word: String) -> String {
+        var trimmed = Substring(word)
+        while let last = trimmed.unicodeScalars.last, trailingPunctuation.contains(last) {
+            if last == ")", trimmed.contains("(") { break }
+            trimmed = trimmed.dropLast()
+        }
+        return String(trimmed)
+    }
+
     /// Classifies a whitespace-delimited word the way the TUI's `push_word` does.
     @MainActor
-    private static func classify(_ word: String, display: [String: URL]) -> (UIColor, Route?)? {
+    private static func classify(_ word: String, display: [String: URL]) -> Match? {
         if word.hasPrefix("@"), word.count > 1 {
             let handle = String(word.dropFirst()).prefix { $0.isLetter || $0.isNumber || $0 == "_" }
             guard !handle.isEmpty else { return nil }
-            return (DesignSystem.handleColor(String(handle)), .profile(handle: String(handle)))
+            return Match(color: DesignSystem.handleColor(String(handle)),
+                         route: .profile(handle: String(handle)), length: 1 + handle.utf16.count)
         }
         if word.hasPrefix("#"), word.count > 1 {
             let tag = String(word.dropFirst()).prefix { $0.isLetter || $0.isNumber || $0 == "_" }
             guard !tag.isEmpty else { return nil }
-            return (DesignSystem.Color.hashtag, .hashtag(query: String(tag)))
+            return Match(color: DesignSystem.Color.hashtag, route: .hashtag(query: "#" + tag),
+                         length: 1 + tag.utf16.count)
         }
-        if word.hasPrefix("http://") || word.hasPrefix("https://") {
-            return (DesignSystem.Color.accent, URL(string: word).map(Route.url))
+        let address = trimmingTrailingPunctuation(word)
+        if address.hasPrefix("http://") || address.hasPrefix("https://") {
+            return Match(color: DesignSystem.Color.accent, route: URL(string: address).map(Route.url),
+                         length: address.utf16.count)
         }
-        if let url = display[word] {
-            return (DesignSystem.Color.accent, .url(url))
+        if let url = display[address] ?? display[word] {
+            return Match(color: DesignSystem.Color.accent, route: .url(url),
+                         length: display[address] != nil ? address.utf16.count : word.utf16.count)
         }
         return nil
     }
@@ -124,28 +161,6 @@ enum TweetText {
         case let .url(url):
             return url
         }
-    }
-
-    @MainActor
-    static func attributed(
-        for text: String, urls: [TweetURL], seen: Bool, font: UIFont
-    ) -> NSAttributedString {
-        let baseColor = seen ? DesignSystem.Color.secondaryLabel : DesignSystem.Color.label
-        let result = NSMutableAttributedString(string: text, attributes: [
-            .font: font,
-            .foregroundColor: baseColor,
-        ])
-        let display = expandedDisplayMap(urls)
-        for token in tokenRanges(in: text) {
-            let substring = (text as NSString).substring(with: token)
-            guard let (color, route) = classify(substring, display: display) else { continue }
-            result.addAttribute(.foregroundColor, value: color, range: token)
-            if let route, let link = link(for: route) {
-                result.addAttribute(.link, value: link, range: token)
-            }
-        }
-        TwemojiText.substituteCachedEmoji(in: result, font: font)
-        return result
     }
 
     static func strippingLeadingMentions(_ text: String) -> String {

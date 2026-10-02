@@ -39,6 +39,7 @@ final class FilterSettingsViewController: UIViewController {
         super.viewDidLoad()
         title = "Rage Filter"
         view.backgroundColor = DesignSystem.Color.background
+        navigationItem.largeTitleDisplayMode = .never
         navigationItem.hidesBackButton = true
         navigationItem.leftBarButtonItem = cancelButton
         navigationItem.rightBarButtonItem = saveButton

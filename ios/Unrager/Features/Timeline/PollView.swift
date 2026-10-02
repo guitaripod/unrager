@@ -35,15 +35,16 @@ final class PollView: UIView {
         let leader = options.max(by: { $0.count < $1.count })?.count
         for option in options {
             let fraction = Double(option.count) / Double(total)
-            let isLeader = option.count == leader
+            let isLeader = option.count == leader && (leader ?? 0) > 0
             optionsStack.addArrangedSubview(PollBar(label: option.label, fraction: fraction, leading: isLeader))
         }
-        footer.text = Self.footerText(total: options.reduce(0) { $0 + $1.count }, endsAt: endsAt, countsFinal: countsFinal)
+        let summary = Self.footerText(total: options.reduce(0) { $0 + $1.count }, endsAt: endsAt, countsFinal: countsFinal)
+        footer.text = summary
 
         isAccessibilityElement = true
         accessibilityLabel = "Poll. " + options.map {
             "\($0.label), \(Int((Double($0.count) / Double(total) * 100).rounded())) percent"
-        }.joined(separator: ". ")
+        }.joined(separator: ". ") + ". " + summary
     }
 
     /// Mirrors the TUI's `poll_footer`: "<n> votes · 5h left" while open,
@@ -94,7 +95,7 @@ private final class PollBar: UIView {
         labelView.text = label
         labelView.font = leading ? DesignSystem.Typography.name() : DesignSystem.Typography.handle()
         labelView.textColor = DesignSystem.Color.label
-        labelView.numberOfLines = 1
+        labelView.numberOfLines = 2
 
         percentView.text = "\(Int((fraction * 100).rounded()))%"
         percentView.font = DesignSystem.Typography.metric()
@@ -104,13 +105,14 @@ private final class PollBar: UIView {
         addManaged(labelView)
         addManaged(percentView)
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 34),
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 34),
+            labelView.topAnchor.constraint(equalTo: topAnchor, constant: 7),
+            labelView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -7),
             fill.leadingAnchor.constraint(equalTo: leadingAnchor),
             fill.topAnchor.constraint(equalTo: topAnchor),
             fill.bottomAnchor.constraint(equalTo: bottomAnchor),
             fillWidth,
             labelView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            labelView.centerYAnchor.constraint(equalTo: centerYAnchor),
             percentView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             percentView.centerYAnchor.constraint(equalTo: centerYAnchor),
             labelView.trailingAnchor.constraint(lessThanOrEqualTo: percentView.leadingAnchor, constant: -8),

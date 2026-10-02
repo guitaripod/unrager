@@ -202,7 +202,7 @@ private final class ProfileHeaderView: UIView {
     private let followButton = UIButton(configuration: .filled())
     private let briefButton = UIButton(configuration: .tinted())
     private let segment = UISegmentedControl(items: ["Posts", "Replies"])
-    private let separator = UIView()
+    private let separator = HairlineView()
 
     var onBrief: (() -> Void)?
     var onFollowToggle: (() -> Void)?
@@ -210,6 +210,7 @@ private final class ProfileHeaderView: UIView {
     var onTapFollowing: (() -> Void)?
     var onSegmentChange: ((Int) -> Void)?
     var onRetry: (() -> Void)?
+    private var basedIn: (flag: String?, country: String?)?
     private let retryButton = UIButton(configuration: .tinted())
 
     override init(frame: CGRect) {
@@ -291,8 +292,9 @@ private final class ProfileHeaderView: UIView {
         column.alignment = .fill
 
         addManaged(column)
-        separator.backgroundColor = DesignSystem.Color.separator
         addManaged(separator)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(emojiLoaded), name: TwemojiCache.imagesDidLoad, object: nil)
         NSLayoutConstraint.activate([
             column.topAnchor.constraint(equalTo: topAnchor, constant: 12),
             column.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
@@ -303,7 +305,6 @@ private final class ProfileHeaderView: UIView {
             separator.leadingAnchor.constraint(equalTo: leadingAnchor),
             separator.trailingAnchor.constraint(equalTo: trailingAnchor),
             separator.bottomAnchor.constraint(equalTo: bottomAnchor),
-            separator.heightAnchor.constraint(equalToConstant: 1.0 / max(1, UITraitCollection.current.displayScale)),
         ])
     }
 
@@ -320,13 +321,30 @@ private final class ProfileHeaderView: UIView {
     }
 
     func configure(with user: User) {
-        nameLabel.text = user.name
+        nameLabel.attributedText = Self.nameText(for: user)
+        nameLabel.accessibilityLabel = user.verified ? "\(user.name), verified" : user.name
         handleLabel.text = "@\(user.handle)"
         setCount(followingButton, count: user.following, label: "following")
         setCount(followersButton, count: user.followers, label: "followers")
         if AppSettings.imagesEnabled, let url = user.avatarURL.flatMap(URL.init) {
             avatar.load(url: url, targetSize: CGSize(width: 64, height: 64))
         }
+    }
+
+    /// The name in Twemoji art, followed by the verified seal for a verified
+    /// account — an inline attachment, so it wraps with the name.
+    private static func nameText(for user: User) -> NSAttributedString {
+        let font = DesignSystem.Typography.title()
+        let text = NSMutableAttributedString(attributedString: TwemojiText.attributed(
+            user.name, font: font, color: DesignSystem.Color.label))
+        guard user.verified,
+              let seal = UIImage(systemName: "checkmark.seal.fill",
+                                 withConfiguration: UIImage.SymbolConfiguration(font: font, scale: .small))?
+                  .withTintColor(DesignSystem.Color.verified, renderingMode: .alwaysOriginal)
+        else { return text }
+        text.append(NSAttributedString(string: " "))
+        text.append(NSAttributedString(attachment: NSTextAttachment(image: seal)))
+        return text
     }
 
     /// A "1.2M followers" button: bold count, dim label — visibly one tap
@@ -368,15 +386,24 @@ private final class ProfileHeaderView: UIView {
         segment.selectedSegmentIndex = index
     }
 
+    /// Twemoji art for the flag landed after the line was first drawn.
+    @objc private func emojiLoaded() {
+        guard let basedIn else { return }
+        setBasedIn(flag: basedIn.flag, country: basedIn.country)
+    }
+
     /// Shows "based in <flag> <country>" (the TUI's profile line) once the
     /// about-account lookup resolves; hidden when X carries no country.
     func setBasedIn(flag: String?, country: String?) {
+        basedIn = (flag, country)
         guard let country, !country.isEmpty else {
             basedInLabel.isHidden = true
             return
         }
         let flagPrefix = flag.map { "\($0) " } ?? ""
-        basedInLabel.text = "based in \(flagPrefix)\(country)"
+        basedInLabel.attributedText = TwemojiText.attributed(
+            "based in \(flagPrefix)\(country)", font: DesignSystem.Typography.metric(),
+            color: DesignSystem.Color.secondaryLabel)
         basedInLabel.isHidden = false
     }
 }

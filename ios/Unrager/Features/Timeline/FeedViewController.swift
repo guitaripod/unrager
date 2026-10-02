@@ -705,7 +705,8 @@ class FeedViewController: UIViewController, TweetActionHandling {
             loadingIndicator.stopAnimating()
             hideCollecting()
             emptyState.isHidden = false
-            emptyState.show(symbol: "tray", title: "Nothing here yet", subtitle: "Pull to refresh.", showRetry: true)
+            let empty = viewModel.emptyContent
+            emptyState.show(symbol: empty.symbol, title: empty.title, subtitle: empty.subtitle, showRetry: true)
         }
     }
 

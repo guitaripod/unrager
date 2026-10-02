@@ -32,9 +32,9 @@ final class PostcardViewController: UIViewController {
 
     private let swatchRow = UIStackView()
     private var swatches: [PostcardTheme: PostcardSwatch] = [:]
-    private let nameSwitch = UISwitch()
-    private let metricsSwitch = UISwitch()
-    private let threadSwitch = UISwitch()
+    private let nameSwitch = PostcardToggle(title: "Name")
+    private let metricsSwitch = PostcardToggle(title: "Metrics")
+    private let threadSwitch = PostcardToggle(title: "Thread")
     private let controls = UIStackView()
 
     private static let renderScale: CGFloat = 3
@@ -178,16 +178,16 @@ final class PostcardViewController: UIViewController {
         swatchScroll.showsHorizontalScrollIndicator = false
         swatchScroll.addManaged(swatchRow)
 
-        let nameToggle = makeToggle(title: "Display name", control: nameSwitch, isOn: options.showsDisplayName)
+        nameSwitch.setOn(options.showsDisplayName, animated: false)
         nameSwitch.addAction(UIAction { [weak self] _ in self?.toggleName() }, for: .valueChanged)
-        let metricsToggle = makeToggle(title: "Metrics", control: metricsSwitch, isOn: options.showsMetrics)
+        metricsSwitch.setOn(options.showsMetrics, animated: false)
         metricsSwitch.addAction(UIAction { [weak self] _ in self?.toggleMetrics() }, for: .valueChanged)
-        let threadToggle = makeToggle(title: "Thread", control: threadSwitch, isOn: options.showsThread)
+        threadSwitch.setOn(options.showsThread, animated: false)
         threadSwitch.addAction(UIAction { [weak self] _ in self?.toggleThread() }, for: .valueChanged)
-        let toggleRow = UIStackView(arrangedSubviews: [nameToggle, metricsToggle, threadToggle])
-        toggleRow.axis = .vertical
+        let toggleRow = UIStackView(arrangedSubviews: [nameSwitch, metricsSwitch, threadSwitch])
+        toggleRow.axis = .horizontal
         toggleRow.spacing = DesignSystem.Spacing.s
-        toggleRow.alignment = .fill
+        toggleRow.distribution = .fillEqually
 
         let actions = makeActionRow()
 
@@ -212,28 +212,6 @@ final class PostcardViewController: UIViewController {
             controls.bottomAnchor.constraint(equalTo: bar.safeAreaLayoutGuide.bottomAnchor, constant: -DesignSystem.Spacing.m),
         ])
         return bar
-    }
-
-    /// A full-width settings-style row: label on the left, switch pinned right,
-    /// so labels never truncate and the switch never overlaps them.
-    private func makeToggle(title: String, control: UISwitch, isOn: Bool) -> UIView {
-        control.isOn = isOn
-        control.accessibilityLabel = title
-        control.onTintColor = DesignSystem.Color.accent
-        control.setContentHuggingPriority(.required, for: .horizontal)
-        control.setContentCompressionResistancePriority(.required, for: .horizontal)
-        let label = UILabel()
-        label.text = title
-        label.font = DesignSystem.Typography.handle()
-        label.textColor = DesignSystem.Color.label
-        label.setContentCompressionResistancePriority(.required, for: .horizontal)
-        let spacer = UIView()
-        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let row = UIStackView(arrangedSubviews: [label, spacer, control])
-        row.axis = .horizontal
-        row.alignment = .center
-        row.spacing = DesignSystem.Spacing.s
-        return row
     }
 
     private func makeActionRow() -> UIView {
@@ -387,7 +365,7 @@ final class PostcardViewController: UIViewController {
     #if DEBUG
     /// Screenshot-QA hook: flip the Thread toggle on as if tapped.
     func debugEnableThread() {
-        threadSwitch.isOn = true
+        threadSwitch.setOn(true, animated: false)
         toggleThread()
     }
 
@@ -604,5 +582,43 @@ enum PostcardStore {
     static var lastTheme: PostcardTheme {
         get { PostcardTheme(rawValue: UserDefaults.standard.integer(forKey: key)) ?? .glass }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
+    }
+}
+
+/// A pill that switches one of the postcard's options on or off. It reads as a
+/// chip rather than a settings row, so the three options share one line and
+/// leave the preview most of the screen.
+private final class PostcardToggle: UIButton {
+    private(set) var isOn = false
+    private let title: String
+
+    init(title: String) {
+        self.title = title
+        super.init(frame: .zero)
+        addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            self.setOn(!self.isOn, animated: true)
+            self.sendActions(for: .valueChanged)
+        }, for: .touchUpInside)
+        setOn(false, animated: false)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// Sets the state without reporting it as a change.
+    func setOn(_ on: Bool, animated: Bool) {
+        isOn = on
+        var config: UIButton.Configuration = on ? .filled() : .tinted()
+        config.title = title
+        config.image = on ? DesignSystem.icon("checkmark", pointSize: 12, weight: .bold) : nil
+        config.imagePadding = 6
+        config.cornerStyle = .capsule
+        config.baseBackgroundColor = on ? DesignSystem.Color.accent : nil
+        config.baseForegroundColor = on ? .white : DesignSystem.Color.label
+        config.contentInsets = NSDirectionalEdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 12)
+        configuration = config
+        accessibilityLabel = title
+        accessibilityTraits = on ? [.button, .selected] : .button
     }
 }

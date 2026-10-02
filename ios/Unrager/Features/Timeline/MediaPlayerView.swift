@@ -20,7 +20,7 @@ final class MediaPlayerView: UIView {
     private let poster = AsyncImageView(frame: .zero)
     private let playBadge = UIImageView()
     private let gifBadge = UILabel()
-    private let muteButton = UIButton(type: .system)
+    private let muteButton = HitSlopButton(type: .system)
     private var player: AVPlayer?
     private var pendingVideoURL: URL?
     private var isGIF = false
@@ -93,6 +93,7 @@ final class MediaPlayerView: UIView {
     private func updateMuteIcon() {
         let symbol = Self.audioEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill"
         muteButton.configuration?.image = DesignSystem.icon(symbol, pointSize: 13, weight: .semibold)
+        muteButton.accessibilityLabel = Self.audioEnabled ? "Mute" : "Unmute"
     }
 
     @available(*, unavailable)
@@ -186,5 +187,15 @@ final class MediaPlayerView: UIView {
     deinit {
         statusObservation?.invalidate()
         if let loopObserver { NotificationCenter.default.removeObserver(loopObserver) }
+    }
+}
+
+/// A button whose touch target reaches past its visible bounds, so a small
+/// control drawn over video still meets the 44 pt minimum without growing.
+private final class HitSlopButton: UIButton {
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        let dx = max(0, (44 - bounds.width) / 2)
+        let dy = max(0, (44 - bounds.height) / 2)
+        return bounds.insetBy(dx: -dx, dy: -dy).contains(point)
     }
 }

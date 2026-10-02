@@ -117,6 +117,16 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                     if wantsThread { postcard.debugEnableThread() }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 5) { postcard.debugSaveExport() }
                 }
+            case "hidden":
+                Task {
+                    guard let page = try? await api.home(following: false, originals: false, cursor: nil) else { return }
+                    let model = TimelineViewModel(source: .home(following: false, originals: false))
+                    let reasons: [String?] = ["war", "outrage bait", nil, "american electoral politics"]
+                    model.hiddenPosts.send(page.tweets.prefix(4).enumerated().map {
+                        HiddenPost(tweet: $1, reason: reasons[$0])
+                    })
+                    homeNav()?.pushViewController(HiddenPostsViewController(viewModel: model), animated: false)
+                }
             case "bookmarks":
                 homeNav()?.pushViewController(BookmarksViewController(), animated: false)
             case "compose":

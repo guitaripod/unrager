@@ -411,6 +411,9 @@ private final class QuotePreviewView: UIView {
         layer.cornerCurve = .continuous
         layer.borderWidth = 1
         layer.borderColor = DesignSystem.Color.separator.cgColor
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: QuotePreviewView, _) in
+            view.layer.borderColor = DesignSystem.Color.separator.cgColor
+        }
 
         let author = UILabel()
         author.numberOfLines = 1
@@ -444,10 +447,6 @@ private final class QuotePreviewView: UIView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    override func traitCollectionDidChange(_ previous: UITraitCollection?) {
-        super.traitCollectionDidChange(previous)
-        layer.borderColor = DesignSystem.Color.separator.cgColor
-    }
 }
 
 /// A removable square preview of a pending attachment, with a corner close

@@ -41,7 +41,8 @@ final class UserRowCell: UICollectionViewListCell {
         boundID = row.id
 
         var content = UIListContentConfiguration.subtitleCell()
-        content.text = row.name
+        content.attributedText = TwemojiText.attributed(
+            row.name, font: DesignSystem.Typography.body(), color: DesignSystem.Color.label)
         content.secondaryText = "@\(row.handle)"
         content.secondaryTextProperties.color = DesignSystem.Color.secondaryLabel
         content.image = DesignSystem.icon("person.crop.circle.fill", pointSize: 36)
@@ -71,10 +72,13 @@ final class UserRowCell: UICollectionViewListCell {
         boundID = nil
     }
 
+    /// Every row ends in the disclosure chevron; a verified account shows its
+    /// badge just before it, so verified and other rows line up.
     private func accessories(verified: Bool) -> [UICellAccessory] {
         guard verified else { return [.disclosureIndicator()] }
         let badge = UIImageView(image: DesignSystem.icon("checkmark.seal.fill", pointSize: 16))
         badge.tintColor = DesignSystem.Color.verified
-        return [.customView(configuration: .init(customView: badge, placement: .trailing()))]
+        return [.customView(configuration: .init(customView: badge, placement: .trailing())),
+                .disclosureIndicator()]
     }
 }

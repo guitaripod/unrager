@@ -13,6 +13,7 @@ final class HiddenPostsViewController: UIViewController {
     private var postsByID: [String: HiddenPost] = [:]
     private let emptyState = EmptyStateView()
     private var cancellable: AnyCancellable?
+    private var emojiObserver: AnyCancellable?
     private var showing = Set<String>()
 
     init(viewModel: TimelineViewModel) {
@@ -31,10 +32,10 @@ final class HiddenPostsViewController: UIViewController {
         content.text = "Hidden: \(post.reason ?? "the filter")"
         content.textProperties.color = DesignSystem.Color.accent
         content.textProperties.font = DesignSystem.Typography.handle()
-        content.secondaryText = "@\(post.tweet.author.handle): \(post.tweet.text)"
+        content.secondaryAttributedText = TwemojiText.attributed(
+            "@\(post.tweet.author.handle): \(Self.singleLine(post.tweet.text))",
+            font: DesignSystem.Typography.body(), color: DesignSystem.Color.label)
         content.secondaryTextProperties.numberOfLines = 5
-        content.secondaryTextProperties.color = DesignSystem.Color.label
-        content.secondaryTextProperties.font = DesignSystem.Typography.body()
         cell.contentConfiguration = content
         cell.accessories = [.customView(configuration: .init(
             customView: self.showButton(for: post), placement: .trailing(), maintainsFixedSize: true))]
@@ -81,6 +82,12 @@ final class HiddenPostsViewController: UIViewController {
         cancellable = viewModel.hiddenPosts
             .receive(on: DispatchQueue.main)
             .sink { [weak self] posts in self?.apply(posts) }
+        emojiObserver = NotificationCenter.default.publisher(for: TwemojiCache.imagesDidLoad)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.dataSource.reconfigureVisibleItems(of: self.collectionView)
+            }
     }
 
     private func apply(_ posts: [HiddenPost]) {
@@ -93,6 +100,12 @@ final class HiddenPostsViewController: UIViewController {
         emptyState.isHidden = !newest.isEmpty
     }
 
+    /// The post's text with its line breaks folded into spaces, so a preview
+    /// spends its lines on words rather than blank gaps.
+    private static func singleLine(_ text: String) -> String {
+        text.split(whereSeparator: \.isNewline).joined(separator: " ")
+    }
+
     private func showButton(for post: HiddenPost) -> UIButton {
         var config = UIButton.Configuration.tinted()
         config.title = "Show"
@@ -100,6 +113,7 @@ final class HiddenPostsViewController: UIViewController {
         let button = UIButton(configuration: config)
         button.addAction(UIAction { [weak self] _ in self?.show(post) }, for: .touchUpInside)
         button.accessibilityLabel = "Show this post"
+        button.frame = CGRect(origin: .zero, size: button.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize))
         return button
     }
 

@@ -1,3 +1,4 @@
+import Combine
 import UIKit
 import UnragerKit
 
@@ -32,6 +33,7 @@ class PagedUserListViewController: UIViewController {
     private var loading = false
     private var pagingFailed = false
     private var endNote: String?
+    private var emojiObserver: AnyCancellable?
     private let footer = PagingFooter()
 
     private lazy var registration = UICollectionView.CellRegistration<UserRowCell, String> {
@@ -79,6 +81,12 @@ class PagedUserListViewController: UIViewController {
         ])
 
         configureDataSource()
+        emojiObserver = NotificationCenter.default.publisher(for: TwemojiCache.imagesDidLoad)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.dataSource.reconfigureVisibleItems(of: self.collectionView)
+            }
         load(reset: true)
     }
 

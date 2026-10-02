@@ -87,7 +87,7 @@ final class TweetCell: UICollectionViewCell {
     private let quotedMedia = MediaContentView(compact: true)
     private let actionBar = UIStackView()
     private let analyticsView = TweetAnalyticsView()
-    private let separator = UIView()
+    private let separator = HairlineView()
     private let threadRail = ThreadRailView()
     private var avatarLeading: NSLayoutConstraint!
     private var railWidth: NSLayoutConstraint!
@@ -190,7 +190,8 @@ final class TweetCell: UICollectionViewCell {
         boundInReplyContext = inReplyContext
         applyFonts()
         setIndent(indentLevel)
-        nameLabel.text = tweet.author.name
+        nameLabel.attributedText = TwemojiText.attributed(
+            tweet.author.name, font: DesignSystem.Typography.name(), color: DesignSystem.Color.label)
         setFlag(nil)
         verifiedBadge.isHidden = !tweet.author.verified
         replyMarker.isHidden = !(tweet.inReplyToTweetID != nil && !inReplyContext)
@@ -224,8 +225,6 @@ final class TweetCell: UICollectionViewCell {
     /// the app's text size reaches the name, flag and quote on rows that were
     /// already built rather than waiting for a relaunch.
     private func applyFonts() {
-        nameLabel.font = DesignSystem.Typography.name()
-        flagLabel.font = DesignSystem.Typography.name()
         quotedBodyLabel.font = DesignSystem.Typography.metric()
     }
 
@@ -278,7 +277,9 @@ final class TweetCell: UICollectionViewCell {
     /// cell — the header is a fixed single line, so no height change and no
     /// snapshot churn.
     func setFlag(_ flag: String?) {
-        flagLabel.text = flag
+        flagLabel.attributedText = flag.map {
+            TwemojiText.attributed($0, font: DesignSystem.Typography.name(), color: DesignSystem.Color.label)
+        }
         flagLabel.isHidden = (flag ?? "").isEmpty
     }
 
@@ -351,6 +352,7 @@ final class TweetCell: UICollectionViewCell {
             .font: DesignSystem.Typography.handle(),
             .foregroundColor: DesignSystem.Color.secondaryLabel,
         ]))
+        TwemojiText.substituteCachedEmoji(in: result, font: DesignSystem.Typography.handle())
         return result
     }
 
@@ -575,9 +577,10 @@ final class TweetCell: UICollectionViewCell {
 
         viewsLabel.font = DesignSystem.Typography.metric()
         viewsLabel.textColor = DesignSystem.Color.secondaryLabel
+        viewsLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         actionBar.axis = .horizontal
-        actionBar.distribution = .fillEqually
+        actionBar.distribution = .equalSpacing
         actionBar.addArrangedSubview(replyButton)
         actionBar.addArrangedSubview(retweetButton)
         actionBar.addArrangedSubview(likeButton)
@@ -607,7 +610,6 @@ final class TweetCell: UICollectionViewCell {
         contentView.addManaged(column)
         threadRail.isHidden = true
         contentView.addManaged(threadRail)
-        separator.backgroundColor = DesignSystem.Color.separator
         contentView.addManaged(separator)
 
         let avatarLeading = avatar.leadingAnchor.constraint(
@@ -635,7 +637,6 @@ final class TweetCell: UICollectionViewCell {
             separator.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             separator.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             separator.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            separator.heightAnchor.constraint(equalToConstant: 1.0 / max(1, UITraitCollection.current.displayScale)),
         ])
     }
 
@@ -644,6 +645,9 @@ final class TweetCell: UICollectionViewCell {
         quotedContainer.layer.cornerCurve = .continuous
         quotedContainer.layer.borderWidth = 1
         quotedContainer.layer.borderColor = DesignSystem.Color.separator.cgColor
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (cell: TweetCell, _) in
+            cell.quotedContainer.layer.borderColor = DesignSystem.Color.separator.cgColor
+        }
         quotedContainer.isUserInteractionEnabled = true
         quotedContainer.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(quotedTapped)))
 
@@ -697,6 +701,7 @@ final class TweetCell: UICollectionViewCell {
         config.baseForegroundColor = DesignSystem.Color.secondaryLabel
         config.imagePadding = 6
         config.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0)
+        config.titleLineBreakMode = .byClipping
         config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
             var out = incoming
             out.font = DesignSystem.Typography.metric()
@@ -704,6 +709,7 @@ final class TweetCell: UICollectionViewCell {
         }
         let button = UIButton(configuration: config)
         button.contentHorizontalAlignment = .leading
+        button.setContentCompressionResistancePriority(.required, for: .horizontal)
         return button
     }
 
@@ -792,8 +798,4 @@ final class TweetCell: UICollectionViewCell {
         likeLongPress.isEnabled = true
     }
 
-    override func traitCollectionDidChange(_ previous: UITraitCollection?) {
-        super.traitCollectionDidChange(previous)
-        quotedContainer.layer.borderColor = DesignSystem.Color.separator.cgColor
-    }
 }

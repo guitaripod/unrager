@@ -45,6 +45,16 @@ enum TwemojiText {
         Task { await TwemojiCache.shared.prewarm(graphemesIn: pending) }
     }
 
+    /// `text` in `font` and `color` with every emoji whose Twemoji art is cached
+    /// shown as that art, like post bodies, so a name or flag matches X's own
+    /// rendering instead of the system glyphs.
+    @MainActor
+    static func attributed(_ text: String, font: UIFont, color: UIColor) -> NSAttributedString {
+        let result = NSMutableAttributedString(string: text, attributes: [.font: font, .foregroundColor: color])
+        substituteCachedEmoji(in: result, font: font)
+        return result
+    }
+
     /// An attributed string holding a single emoji attachment sized so the
     /// glyph's height matches the surrounding text's cap-to-descender box and
     /// sits on the baseline like a native emoji.

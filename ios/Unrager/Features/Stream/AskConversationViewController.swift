@@ -62,7 +62,6 @@ final class AskConversationViewController: UIViewController {
     private let inputField = UITextField()
     private let sendButton = UIButton(configuration: .prominentGlass())
     private let retryButton = UIButton(configuration: .tinted())
-    private let spinner = UIActivityIndicatorView(style: .medium)
 
     init(context: Context, initialPrompt: String) {
         self.context = context
@@ -97,13 +96,6 @@ final class AskConversationViewController: UIViewController {
             textView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             textView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             textView.bottomAnchor.constraint(equalTo: inputBar.topAnchor),
-        ])
-
-        spinner.hidesWhenStopped = true
-        view.addManaged(spinner)
-        NSLayoutConstraint.activate([
-            spinner.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            spinner.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 24),
         ])
 
         send(prompt: initialPrompt)
@@ -145,8 +137,7 @@ final class AskConversationViewController: UIViewController {
 
         inputBar.addManaged(inputField)
         inputBar.addManaged(sendButton)
-        let separator = UIView()
-        separator.backgroundColor = DesignSystem.Color.separator
+        let separator = HairlineView()
         inputBar.addManaged(separator)
 
         NSLayoutConstraint.activate([
@@ -157,7 +148,6 @@ final class AskConversationViewController: UIViewController {
             separator.topAnchor.constraint(equalTo: inputBar.topAnchor),
             separator.leadingAnchor.constraint(equalTo: inputBar.leadingAnchor),
             separator.trailingAnchor.constraint(equalTo: inputBar.trailingAnchor),
-            separator.heightAnchor.constraint(equalToConstant: 1.0 / max(1, UITraitCollection.current.displayScale)),
 
             inputField.topAnchor.constraint(equalTo: inputBar.topAnchor, constant: DesignSystem.Spacing.s),
             inputField.bottomAnchor.constraint(equalTo: inputBar.bottomAnchor, constant: -DesignSystem.Spacing.s),
@@ -289,7 +279,6 @@ final class AskConversationViewController: UIViewController {
 
     private func setStreaming(_ streaming: Bool) {
         applySendButtonState(streaming: streaming)
-        if streaming, turns.isEmpty { spinner.startAnimating() } else { spinner.stopAnimating() }
     }
 
     /// Coalesces a burst of tokens into one transcript rebuild every ~100 ms:
@@ -310,7 +299,6 @@ final class AskConversationViewController: UIViewController {
     /// kept); the in-flight answer streams at the bottom, followed by any
     /// failure.
     private func render() {
-        if streamingAnswer?.isEmpty == false { spinner.stopAnimating() }
         let transcript = NSMutableAttributedString()
         func separate() { if transcript.length > 0 { transcript.append(NSAttributedString(string: "\n\n")) } }
         for (index, turn) in turns.enumerated() {

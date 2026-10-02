@@ -27,6 +27,9 @@ final class MediaCardView: UIView {
         clipsToBounds = true
         isUserInteractionEnabled = true
         addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped)))
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: MediaCardView, _) in
+            view.layer.borderColor = DesignSystem.Color.separator.cgColor
+        }
 
         cover.translatesAutoresizingMaskIntoConstraints = false
         cover.contentMode = .scaleAspectFill
@@ -140,8 +143,4 @@ final class MediaCardView: UIView {
 
     @objc private func tapped() { onTap?() }
 
-    override func traitCollectionDidChange(_ previous: UITraitCollection?) {
-        super.traitCollectionDidChange(previous)
-        layer.borderColor = DesignSystem.Color.separator.cgColor
-    }
 }

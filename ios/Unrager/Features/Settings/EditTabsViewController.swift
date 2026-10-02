@@ -60,7 +60,7 @@ final class EditTabsViewController: UIViewController {
             [weak self] cell, indexPath, tab in
             var content = cell.defaultContentConfiguration()
             content.text = tab.title
-            content.secondaryText = tab == TabItem.required ? "Always shown — it holds these settings" : tab.subtitle
+            content.secondaryText = tab == TabItem.required ? "Always shown" : tab.subtitle
             content.secondaryTextProperties.color = DesignSystem.Color.secondaryLabel
             content.image = DesignSystem.icon(tab.symbol, pointSize: 18)
             content.imageProperties.tintColor = DesignSystem.Color.accent
@@ -68,7 +68,7 @@ final class EditTabsViewController: UIViewController {
             let isActive = self?.dataSource.sectionIdentifier(for: indexPath.section) == .active
             if isActive {
                 cell.accessories = tab == TabItem.required
-                    ? [.reorder(displayed: .always)]
+                    ? [Self.lockAccessory(), .reorder(displayed: .always)]
                     : [
                         .reorder(displayed: .always),
                         .delete(displayed: .always, actionHandler: { [weak self] in self?.remove(tab) }),
@@ -103,6 +103,18 @@ final class EditTabsViewController: UIViewController {
             self.active = transaction.finalSnapshot.itemIdentifiers(inSection: .active)
             self.persist()
         }
+    }
+
+    /// Stands where the other rows' remove control is, so the row that can't be
+    /// removed lines up with the rest and says why it has no minus.
+    private static func lockAccessory() -> UICellAccessory {
+        let lock = UIImageView(image: DesignSystem.icon("lock.fill", pointSize: 15))
+        lock.tintColor = DesignSystem.Color.tertiaryLabel
+        lock.contentMode = .center
+        lock.frame = CGRect(x: 0, y: 0, width: 28, height: 28)
+        lock.isAccessibilityElement = false
+        return .customView(configuration: .init(
+            customView: lock, placement: .leading(displayed: .always), maintainsFixedSize: true))
     }
 
     private func apply(animated: Bool) {

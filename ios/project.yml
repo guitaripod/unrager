@@ -94,7 +94,28 @@ targets:
         BUNDLE_LOADER: $(TEST_HOST)
         SWIFT_STRICT_CONCURRENCY: complete
 
+  UnragerDemoTour:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UnragerDemoTour]
+    dependencies:
+      - target: Unrager
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.guitaripod.unrager.demotour
+        TEST_TARGET_NAME: Unrager
+        SWIFT_STRICT_CONCURRENCY: minimal
+
 schemes:
+  UnragerDemo:
+    build:
+      targets:
+        Unrager: all
+        UnragerDemoTour: [test]
+    test:
+      config: Debug
+      targets: [UnragerDemoTour]
   Unrager:
     build:
       targets:

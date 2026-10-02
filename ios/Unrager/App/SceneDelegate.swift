@@ -25,6 +25,25 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     #if DEBUG
+    /// The posts the `hidden` route lists: each `<id>=<reason>` argument (an
+    /// underscore stands for a space in the reason) fetches that post and
+    /// labels it, and without arguments the first four Home posts get
+    /// invented reasons.
+    private static func debugHiddenPosts(api: APIClient, routeArguments: [String]) async -> [HiddenPost] {
+        if routeArguments.isEmpty {
+            guard let page = try? await api.home(following: false, originals: false, cursor: nil) else { return [] }
+            let reasons: [String?] = ["war", "outrage bait", nil, "american electoral politics"]
+            return page.tweets.prefix(4).enumerated().map { HiddenPost(tweet: $1, reason: reasons[$0]) }
+        }
+        var posts: [HiddenPost] = []
+        for argument in routeArguments {
+            let pair = argument.split(separator: "=", maxSplits: 1).map(String.init)
+            guard let id = pair.first, let tweet = try? await api.tweet(id: id) else { continue }
+            posts.append(HiddenPost(tweet: tweet, reason: pair.count > 1 ? pair[1].replacingOccurrences(of: "_", with: " ") : nil))
+        }
+        return posts
+    }
+
     /// Deterministic deep-navigation for screenshot QA, driven by the
     /// `UNRAGER_SCREEN` env var. Both `:` and `/` separate the route from its
     /// arguments (`thread:123` ≡ `thread/123`), matching how QA harnesses
@@ -160,12 +179,8 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                 }
             case "hidden":
                 Task {
-                    guard let page = try? await api.home(following: false, originals: false, cursor: nil) else { return }
                     let model = TimelineViewModel(source: .home(following: false, originals: false))
-                    let reasons: [String?] = ["war", "outrage bait", nil, "american electoral politics"]
-                    model.hiddenPosts.send(page.tweets.prefix(4).enumerated().map {
-                        HiddenPost(tweet: $1, reason: reasons[$0])
-                    })
+                    model.hiddenPosts.send(await Self.debugHiddenPosts(api: api, routeArguments: Array(parts.dropFirst())))
                     homeNav()?.pushViewController(HiddenPostsViewController(viewModel: model), animated: false)
                 }
             case "bookmarks":

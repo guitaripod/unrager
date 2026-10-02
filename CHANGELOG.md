@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+## [0.26.0] — 2026-10-02
+
 - **Notifications read in the app stay read.** The Notifications tab used to skip reloading when it had loaded less than two minutes earlier, so a like or reply that lit the badge in between never reached the list; the badge came back as soon as the tab was left. Opening the tab with the badge lit now always reloads, and a tapped in-app toast or banner counts as read, with everything older than it.
 - **The Notifications tab's unread bubble is a calm blue instead of red.** The count on the app icon is drawn by iOS and stays red.
 - **Country flags can come from the X-Posed community cache.** With `[about] community_cache = true` in `config.toml`, `unrager serve` asks the service behind the X-Posed extension for each author's country, device and account age in one batched request before asking X, so the iPhone app's flags appear at once and keep appearing while X rate-limits the about query. Off by default, because every lookup tells that service which handles are on screen; nothing is ever sent back to it. An answer is shown only when the service's account id matches the author's, and entries from it are looked up again after 14 days.
@@ -343,7 +345,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.25.0...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.26.0...HEAD
+[0.26.0]: https://github.com/guitaripod/unrager/releases/tag/0.26.0
 [0.25.0]: https://github.com/guitaripod/unrager/releases/tag/0.25.0
 [0.24.0]: https://github.com/guitaripod/unrager/releases/tag/0.24.0
 [0.23.0]: https://github.com/guitaripod/unrager/releases/tag/0.23.0

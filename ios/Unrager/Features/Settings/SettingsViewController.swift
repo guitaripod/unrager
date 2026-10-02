@@ -75,6 +75,16 @@ final class SettingsViewController: UIViewController {
         applySnapshot()
         NotificationCenter.default.addObserver(
             self, selector: #selector(fontScaleApplied), name: AppSettings.fontScaleDidChange, object: nil)
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (self: Self, _) in
+            self.dataSource.reconfigureAllItems()
+        }
+    }
+
+    /// At the accessibility text sizes a choice's value moves under its label
+    /// and the whole row opens the menu, since a trailing button beside the
+    /// label leaves neither room to read.
+    private var isAccessibilitySize: Bool {
+        traitCollection.preferredContentSizeCategory.isAccessibilityCategory
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -219,8 +229,13 @@ final class SettingsViewController: UIViewController {
             select: @escaping (Option) -> Void
         ) {
             content.text = title
-            content.secondaryText = nil
             let button = settingsMenuButton(current: current, options: options, title: label, select: select)
+            if isAccessibilitySize, let choices = button.menu {
+                content.secondaryText = label(current)
+                cell.accessories = [.popUpMenu(choices)]
+                return
+            }
+            content.secondaryText = nil
             button.accessibilityLabel = title
             cell.accessories = [.customView(configuration: .init(
                 customView: button, placement: .trailing(), maintainsFixedSize: true))]
@@ -282,6 +297,7 @@ final class SettingsViewController: UIViewController {
                  label: \.title) { [weak self] mode in
                 AppSettings.appearance = mode
                 self?.view.window?.overrideUserInterfaceStyle = UIUserInterfaceStyle(rawValue: mode.rawValue) ?? .unspecified
+                self?.reconfigure([.theme])
             }
         case .textSize:
             cell.contentConfiguration = SettingsTextSizeConfiguration(scale: AppSettings.fontScale) { scale in
@@ -631,7 +647,9 @@ extension SettingsViewController: UICollectionViewDelegate {
 
     func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
         switch dataSource.itemIdentifier(for: indexPath) {
-        case .rageFilter?, .postStats?, .markSeen?, .images?, .theme?, .textSize?, .officialCompose?, .version?:
+        case .postStats?, .theme?:
+            return isAccessibilitySize
+        case .rageFilter?, .markSeen?, .images?, .textSize?, .officialCompose?, .version?:
             return false
         default:
             return true

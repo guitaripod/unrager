@@ -43,6 +43,18 @@ private final class StallingURLProtocol: URLProtocol {
         }
     }
 
+    /// Releases every held request once at least one has arrived. The pipeline
+    /// starts its download after registering interest, so a test that has only
+    /// seen the interest can still be ahead of the request.
+    static func completeAllOnceStarted() async {
+        var waited = 0
+        while pendingCount == 0 && waited < 5_000 {
+            try? await Task.sleep(nanoseconds: 1_000_000)
+            waited += 1
+        }
+        completeAll()
+    }
+
     static func reset() {
         lock.lock()
         pending.removeAll()
@@ -85,7 +97,7 @@ struct ImagePipelineTests {
         first.cancel()
         #expect(await waitForInterest(pipeline, url: url, toBe: 1))
 
-        StallingURLProtocol.completeAll()
+        await StallingURLProtocol.completeAllOnceStarted()
         let survivor = await second.value
         #expect(survivor != nil)
         #expect(survivor?.pixelWidth == 1)
@@ -128,7 +140,7 @@ struct ImagePipelineTests {
         await pipeline.cancelPrefetch(url)
         #expect(await waitForInterest(pipeline, url: url, toBe: 1))
 
-        StallingURLProtocol.completeAll()
+        await StallingURLProtocol.completeAllOnceStarted()
         #expect(await visible.value != nil)
     }
 
@@ -179,7 +191,7 @@ struct ImagePipelineTests {
         let second = Task { await pipeline.image(for: url, maxPixel: 64) }
         #expect(await waitForInterest(pipeline, url: url, toBe: 2))
 
-        StallingURLProtocol.completeAll()
+        await StallingURLProtocol.completeAllOnceStarted()
         #expect(await first.value != nil)
         #expect(await second.value != nil)
         #expect(await pipeline.interestCount(for: url) == 0)
@@ -208,12 +220,12 @@ struct ImagePipelineTests {
 
         let thumbnail = Task { await pipeline.image(for: url, maxPixel: 50) }
         #expect(await waitForInterest(pipeline, url: url, toBe: 1))
-        StallingURLProtocol.completeAll()
+        await StallingURLProtocol.completeAllOnceStarted()
         #expect((await thumbnail.value)?.pixelWidth == 50)
 
         let full = Task { await pipeline.image(for: url, maxPixel: 300) }
         #expect(await waitForInterest(pipeline, url: url, toBe: 1))
-        StallingURLProtocol.completeAll()
+        await StallingURLProtocol.completeAllOnceStarted()
         #expect((await full.value)?.pixelWidth == 300)
 
         let again = await pipeline.image(for: url, maxPixel: 120)
@@ -230,7 +242,7 @@ struct ImagePipelineTests {
 
         let first = Task { await pipeline.image(for: url, maxPixel: 64) }
         #expect(await waitForInterest(pipeline, url: url, toBe: 1))
-        StallingURLProtocol.completeAll()
+        await StallingURLProtocol.completeAllOnceStarted()
         #expect(await first.value != nil)
 
         let second = await pipeline.image(for: url, maxPixel: 2_000)

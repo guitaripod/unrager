@@ -301,8 +301,9 @@ public final class APIClient: Sendable {
 
         let request = HTTPRequest(
             method: .post, url: url(path),
-            headers: ["Content-Type": "multipart/form-data; boundary=\(boundary)"], body: body)
-        return try await perform(request)
+            headers: ["Content-Type": "multipart/form-data; boundary=\(boundary)"], body: body,
+            timeout: HTTPRequest.publishTimeout)
+        return try await RequestPlumbing.publishing { try await perform(request) }
     }
 
     private func perform<T: Decodable>(_ request: HTTPRequest) async throws -> T {

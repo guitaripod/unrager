@@ -91,6 +91,17 @@ enum RequestPlumbing {
         }
     }
 
+    /// Runs a post or reply, turning a timeout into `APIError.publishTimedOut`:
+    /// the server has no idempotency key, so the user must check before
+    /// posting the same thing again.
+    static func publishing<T>(_ operation: () async throws -> T) async throws -> T {
+        do {
+            return try await operation()
+        } catch APIError.timeout {
+            throw APIError.publishTimedOut
+        }
+    }
+
     static func perform<T: Decodable>(_ request: HTTPRequest, over transport: HTTPTransport) async throws -> T {
         let response = try await transport.send(request)
         guard response.isSuccess else {

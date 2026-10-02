@@ -45,7 +45,7 @@ public final class MediaUploadAPI: Sendable {
         if !text.isEmpty { form.appendField(name: "text", value: text) }
         for id in mediaIDs { form.appendField(name: "media_ids", value: id) }
         if let quoteTweetID { form.appendField(name: "quote_tweet_id", value: quoteTweetID) }
-        return try await send(form, to: "api/compose")
+        return try await publish(form, to: "api/compose")
     }
 
     /// Posts a reply to `tweetID` with `text` and previously-uploaded media ids.
@@ -53,7 +53,7 @@ public final class MediaUploadAPI: Sendable {
         var form = MultipartForm()
         if !text.isEmpty { form.appendField(name: "text", value: text) }
         for id in mediaIDs { form.appendField(name: "media_ids", value: id) }
-        return try await send(form, to: "api/reply/\(RequestPlumbing.pathSegment(tweetID))")
+        return try await publish(form, to: "api/reply/\(RequestPlumbing.pathSegment(tweetID))")
     }
 
     private func send<T: Decodable>(_ form: MultipartForm, to path: String) async throws -> T {
@@ -61,8 +61,15 @@ public final class MediaUploadAPI: Sendable {
             method: .post,
             url: RequestPlumbing.url(base: baseURL(), path: path),
             headers: ["Content-Type": form.contentType],
-            body: form.finalized())
+            body: form.finalized(),
+            timeout: HTTPRequest.publishTimeout)
         return try await RequestPlumbing.perform(request, over: transport)
+    }
+
+    /// Sends a post or reply, reporting a timeout as one whose outcome is
+    /// unknown: the server may still have posted it.
+    private func publish(_ form: MultipartForm, to path: String) async throws -> ComposeResult {
+        try await RequestPlumbing.publishing { try await send(form, to: path) }
     }
 }
 

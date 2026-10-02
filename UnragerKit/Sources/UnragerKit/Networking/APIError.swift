@@ -37,6 +37,9 @@ public enum APIError: Error, Sendable, Equatable {
     /// A stream stopped before the server's terminal event, so what arrived
     /// is only part of the answer.
     case streamEndedEarly
+    /// A post or reply got no answer in time. The server may still have
+    /// posted it, so trying again could post it twice.
+    case publishTimedOut
 
     /// Maps an HTTP status + decoded server body to a typed error.
     public static func from(status: Int, body: ServerError?) -> APIError {
@@ -78,6 +81,8 @@ extension APIError: LocalizedError {
         case .server(_, let m): return m
         case .decoding: return "The server sent data this app couldn't read."
         case .unexpectedStatus(let s): return "Unexpected response (HTTP \(s))."
+        case .publishTimedOut:
+            return "The server didn't answer in time, so the post may have gone out anyway. Check your profile before posting it again."
         case .streamEndedEarly: return "The connection to the unrager server dropped before the answer finished. Try again."
         }
     }

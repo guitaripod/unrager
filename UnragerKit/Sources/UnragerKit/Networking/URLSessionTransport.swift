@@ -42,7 +42,7 @@ public final class URLSessionTransport: HTTPTransport {
 
     public func send(_ request: HTTPRequest) async throws -> HTTPResponse {
         do {
-            let (data, response) = try await session.data(for: urlRequest(from: request))
+            let (data, response) = try await session(for: request).data(for: urlRequest(from: request))
             guard let http = response as? HTTPURLResponse else {
                 throw APIError.network("Non-HTTP response")
             }
@@ -84,10 +84,19 @@ public final class URLSessionTransport: HTTPTransport {
         }
     }
 
-    private func urlRequest(from request: HTTPRequest) -> URLRequest {
+    /// The session a plain request runs on. One with its own timeout runs on
+    /// the stream session, since the request session's 60 s resource cap is
+    /// session-wide and would cut a slow upload or post short whatever the
+    /// request asks for; the request's own timeout then bounds the wait.
+    func session(for request: HTTPRequest) -> URLSession {
+        request.timeout == nil ? session : streamSession
+    }
+
+    func urlRequest(from request: HTTPRequest) -> URLRequest {
         var urlRequest = URLRequest(url: request.url)
         urlRequest.httpMethod = request.method.rawValue
         urlRequest.httpBody = request.body
+        if let timeout = request.timeout { urlRequest.timeoutInterval = timeout }
         for (key, value) in request.headers {
             urlRequest.setValue(value, forHTTPHeaderField: key)
         }

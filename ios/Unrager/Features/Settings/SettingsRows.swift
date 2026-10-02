@@ -35,6 +35,18 @@ enum SettingsFormat {
         return url.port.map { "\(host):\($0)" } ?? host
     }
 
+    /// The server a typed address means: `http://` is assumed when no scheme is
+    /// given (`100.64.0.1:7777`), and anything that isn't an http or https
+    /// address with a host is nil.
+    static func serverAddress(_ text: String) -> URL? {
+        let typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !typed.isEmpty, !typed.contains(where: \.isWhitespace) else { return nil }
+        let full = typed.contains("://") ? typed : "http://" + typed
+        guard let url = URL(string: full), let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https", let host = url.host, !host.isEmpty else { return nil }
+        return url
+    }
+
     static func bytes(_ count: Int) -> String {
         count <= 0 ? "Empty" : ByteCountFormatter.string(fromByteCount: Int64(count), countStyle: .file)
     }

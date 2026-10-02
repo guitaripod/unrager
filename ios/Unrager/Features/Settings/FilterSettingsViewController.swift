@@ -216,6 +216,7 @@ final class FilterSettingsViewController: UIViewController {
                 _ = try await AppEnvironment.shared.api.patchFilterConfig(
                     FilterPatch(dropTopics: topics, extraGuidance: guidance, strictness: selectedStrictness))
                 Haptics.success()
+                NotificationCenter.default.post(name: AppSettings.filterRulesDidChange, object: nil)
                 navigationController?.popViewController(animated: true)
             } catch {
                 refreshSaveState()

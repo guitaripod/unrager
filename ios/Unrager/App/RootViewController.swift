@@ -19,6 +19,17 @@ final class RootViewController: UITabBarController {
         delegate = self
         rebuildTabs()
         tabBarMinimizeBehavior = .onScrollDown
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(serverChanged), name: AppSettings.serverURLDidChange, object: nil)
+    }
+
+    /// A new server is a new account and a new filter setting: forget what the
+    /// old one said and ask the new one, and drop timelines saved from the old.
+    @objc private func serverChanged() {
+        AppEnvironment.shared.forgetWhoami()
+        TimelineCache.shared.clearAll()
+        SessionSync.restore()
+        NotificationCenterService.shared.serverChanged()
     }
 
     /// Rebuilds the tab bar from `ClientSettings.tabs`, keeping the stack of

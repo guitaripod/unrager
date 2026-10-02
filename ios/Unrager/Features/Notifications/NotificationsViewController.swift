@@ -35,7 +35,7 @@ final class NotificationsViewController: UIViewController {
     private var lastLoaded: Date?
     private static let staleAfter: TimeInterval = 120
     private let footer = PagingFooter()
-    private var fontScaleObserver: NSObjectProtocol?
+    private var displayObservers: [NSObjectProtocol] = []
 
     // MARK: - Filter (All / Mentions)
 
@@ -399,9 +399,10 @@ final class NotificationsViewController: UIViewController {
         dataSource = UICollectionViewDiffableDataSource(collectionView: collectionView) { cv, ip, id in
             cv.dequeueConfiguredReusableCell(using: reg, for: ip, item: id)
         }
-        fontScaleObserver = NotificationCenter.default.addObserver(
-            forName: AppSettings.fontScaleDidChange, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.dataSource.reconfigureAllItems() }
+        displayObservers = [AppSettings.fontScaleDidChange, AppSettings.displayDidChange].map { name in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.dataSource.reconfigureAllItems() }
+            }
         }
         footer.attach(to: collectionView)
         footer.onRetry = { [weak self] in self?.retryFailedLoad() }

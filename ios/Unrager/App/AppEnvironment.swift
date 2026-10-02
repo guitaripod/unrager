@@ -42,6 +42,13 @@ final class AppEnvironment {
         }
     }
 
+    /// Drops the cached identity, for when the server (and so the account
+    /// behind it) changes.
+    func forgetWhoami() {
+        cachedWhoami = nil
+        whoamiTask = nil
+    }
+
     /// Awaits the signed-in identity, fetching once and caching.
     func whoami() async -> Whoami? {
         if let cachedWhoami { return cachedWhoami }

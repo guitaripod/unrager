@@ -87,6 +87,13 @@ final class NotificationCenterService: NSObject {
         }
     }
 
+    /// A new server has a different activity feed: the next poll primes a
+    /// fresh baseline instead of alerting on everything the old one lacked.
+    func serverChanged() {
+        poller.resetDiffBaseline()
+        if appIsActive { poller.pollOnce() }
+    }
+
     @objc private func appResignedActive() {
         appIsActive = false
         poller.pause()

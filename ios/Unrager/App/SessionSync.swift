@@ -44,9 +44,16 @@ enum SessionSync {
         patch(SessionPatch(feedMode: originals ? .originals : .all))
     }
 
-    static func patchFilterEnabled(_ enabled: Bool) {
+    /// Stores the filter switch on the server, throwing when it doesn't take so
+    /// the caller can put the switch back.
+    static func patchFilterEnabled(_ enabled: Bool) async throws {
         restoreTask?.cancel()
-        patch(SessionPatch(filterEnabled: enabled))
+        do {
+            _ = try await api.patchSession(SessionPatch(filterEnabled: enabled))
+        } catch {
+            AppLogger.shared.warn("filter switch patch failed: \(error)", category: .app)
+            throw error
+        }
     }
 
     private static func patch(_ patch: SessionPatch) {

@@ -100,6 +100,9 @@ class FeedViewController: UIViewController, TweetActionHandling {
             guard let parentID = tweet.inReplyToTweetID else { return }
             self?.navigationController?.pushViewController(ThreadViewController(tweetID: parentID), animated: true)
         }
+        if self.canDeleteTweet(tweet) {
+            cell.onDelete = { [weak self] in self?.confirmDelete(tweet) }
+        }
         if self.isOwnTweet(tweet) {
             cell.enableLikers { [weak self] in
                 self?.navigationController?.pushViewController(LikersViewController(tweetID: tweet.restID), animated: true)
@@ -518,6 +521,11 @@ class FeedViewController: UIViewController, TweetActionHandling {
         NotificationCenter.default.publisher(for: AppSettings.fontScaleDidChange)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.reloadForFontScale() }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: OwnPost.didDelete)
+            .compactMap { $0.userInfo?[OwnPost.idKey] as? String }
+            .sink { [weak self] id in self?.viewModel.remove(id: id) }
             .store(in: &cancellables)
     }
 

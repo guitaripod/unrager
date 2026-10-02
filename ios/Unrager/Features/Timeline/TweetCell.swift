@@ -78,6 +78,8 @@ final class TweetCell: UICollectionViewCell {
     /// Fired by a tap on the "reposted" line above a repost: opens the
     /// reposter's profile.
     var onTapReposter: (() -> Void)?
+    /// Set only on the signed-in account's own posts: VoiceOver's "Delete".
+    var onDelete: (() -> Void)?
 
     private let repostRow = UIStackView()
     private let repostLabel = UILabel()
@@ -192,6 +194,7 @@ final class TweetCell: UICollectionViewCell {
         onTapReplyCaption = nil
         replyCaption.capturesPlainTaps = false
         onTapReposter = nil
+        onDelete = nil
         repostText = nil
         repostRow.isHidden = true
     }
@@ -751,6 +754,9 @@ final class TweetCell: UICollectionViewCell {
         }
         if viewsTap.isEnabled {
             actions.append(action(statsShown ? "Hide stats" : "Show stats") { [weak self] in self?.onToggleStats?() })
+        }
+        if onDelete != nil {
+            actions.append(action("Delete") { [weak self] in self?.onDelete?() })
         }
         return actions
     }

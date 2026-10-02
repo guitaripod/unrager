@@ -250,8 +250,10 @@ final class TimelineViewModel {
         Task { [weak self] in
             guard let cached = await TimelineCache.shared.load(key: key), !cached.tweets.isEmpty,
                   let self, self.tweets.value.isEmpty, !self.hasLoadedOnce, self.cacheKey == key else { return }
-            self.tweets.send(cached.tweets)
-            AppLogger.shared.debug("seeded \(cached.tweets.count) cached tweets for \(key)", category: .timeline)
+            let seed = cached.tweets.filter { !Self.wasDeleted($0.restID) }
+            guard !seed.isEmpty else { return }
+            self.tweets.send(seed)
+            AppLogger.shared.debug("seeded \(seed.count) cached tweets for \(key)", category: .timeline)
         }
     }
 
@@ -291,6 +293,29 @@ final class TimelineViewModel {
         guard !tweets.value.contains(where: { $0.restID == post.id }) else { return }
         let updated = [post.tweet] + tweets.value
         tweets.send(updated)
+        persistCache(updated)
+    }
+
+    /// Posts the account deleted this session. X can go on serving a deleted
+    /// post for a while, and other feeds hold it in their saved seeds, so every
+    /// feed keeps these out of its pages, refreshes and seeds.
+    private static var deletedIDs = Set<String>()
+
+    /// Whether `id` was deleted this session.
+    static func wasDeleted(_ id: String) -> Bool { deletedIDs.contains(id) }
+
+    /// Takes a deleted post out of the feed, the hidden list and the saved
+    /// seed at once, and keeps it out of later loads.
+    func remove(id: String) {
+        Self.deletedIDs.insert(id)
+        if hiddenPosts.value.contains(where: { $0.id == id }) {
+            hiddenPosts.send(hiddenPosts.value.filter { $0.id != id })
+        }
+        guard tweets.value.contains(where: { $0.restID == id }) else { return }
+        let updated = tweets.value.filter { $0.restID != id }
+        tweets.send(updated)
+        persistTask?.cancel()
+        persistTask = nil
         persistCache(updated)
     }
 
@@ -584,7 +609,7 @@ final class TimelineViewModel {
             var current = reset ? [] : tweets.value
             var ids = Set(current.map(\.restID))
             var newIDs: [String] = []
-            for tweet in page.tweets where ids.insert(tweet.restID).inserted {
+            for tweet in page.tweets where !Self.wasDeleted(tweet.restID) && ids.insert(tweet.restID).inserted {
                 current.append(tweet)
                 newIDs.append(tweet.restID)
             }
@@ -646,7 +671,7 @@ final class TimelineViewModel {
                 pages += 1
                 workingCursor = page.cursor
 
-                let fresh = page.tweets.filter { ids.insert($0.restID).inserted }
+                let fresh = page.tweets.filter { !Self.wasDeleted($0.restID) && ids.insert($0.restID).inserted }
                 let judged = await streamHidden(fresh.map(\.restID), baseCount: survivors.count)
                 if Task.isCancelled { return }
                 for tweet in fresh {

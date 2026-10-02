@@ -92,6 +92,9 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
         cell.onToggleBookmark = { [weak self, weak cell] in self?.toggleBookmark(tweet, cell: cell) }
         cell.onShare = { [weak self] in self?.shareTweet(tweet) }
         cell.onToggleStats = { [weak self] in self?.toggleStats(id) }
+        if OwnPost.canDelete(tweet, viewerHandle: self.selfHandle ?? AppEnvironment.shared.currentHandle) {
+            cell.onDelete = { [weak self] in self?.confirmDelete(tweet) }
+        }
         if ownTweet {
             cell.enableLikers { [weak self] in self?.push(LikersViewController(tweetID: tweet.restID)) }
         }
@@ -209,6 +212,40 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
                 }
             }
             .store(in: &cancellables)
+        NotificationCenter.default.publisher(for: OwnPost.didDelete)
+            .compactMap { $0.userInfo?[OwnPost.idKey] as? String }
+            .sink { [weak self] id in self?.removeDeleted(id) }
+            .store(in: &cancellables)
+    }
+
+    /// Takes a deleted post out of the conversation; when it was the post the
+    /// thread is about, the thread itself goes.
+    private func removeDeleted(_ id: String) {
+        guard id != focalID, id != tweetID else {
+            leaveDeletedThread()
+            return
+        }
+        guard replyOrder.contains(id) || ancestorOrder.contains(id) else { return }
+        replyOrder.removeAll { $0 == id }
+        ancestorOrder.removeAll { $0 == id }
+        tweetsByID[id] = nil
+        var snapshot = dataSource.snapshot()
+        if snapshot.indexOfItem(id) != nil {
+            snapshot.deleteItems([id])
+            dataSource.apply(snapshot, animatingDifferences: true)
+        }
+        updateFooter()
+    }
+
+    /// Pops the thread when it is on top, or drops it from under whatever was
+    /// pushed over it.
+    private func leaveDeletedThread() {
+        guard let navigation = navigationController else { return }
+        if navigation.topViewController === self {
+            navigation.popViewController(animated: true)
+        } else {
+            navigation.setViewControllers(navigation.viewControllers.filter { $0 !== self }, animated: false)
+        }
     }
 
     /// The list layout, with swipe actions on every row and a status footer
@@ -403,7 +440,8 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
                 ancestorOrder = uniqued(thread.ancestors.map(\.restID)).filter { $0 != focal.restID }
                 let excluded = Set(ancestorOrder + [focal.restID])
                 for reply in thread.replies
-                where !excluded.contains(reply.restID) && !replyOrder.contains(reply.restID) {
+                where !excluded.contains(reply.restID) && !replyOrder.contains(reply.restID)
+                    && !TimelineViewModel.wasDeleted(reply.restID) {
                     tweetsByID[reply.restID] = reply
                     replyOrder.append(reply.restID)
                 }
@@ -543,7 +581,8 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
                 var added = false
                 let excluded = Set(ancestorOrder + [focalID].compactMap { $0 })
                 for reply in page.replies
-                where !excluded.contains(reply.restID) && !replyOrder.contains(reply.restID) {
+                where !excluded.contains(reply.restID) && !replyOrder.contains(reply.restID)
+                    && !TimelineViewModel.wasDeleted(reply.restID) {
                     tweetsByID[reply.restID] = reply
                     replyOrder.append(reply.restID)
                     added = true

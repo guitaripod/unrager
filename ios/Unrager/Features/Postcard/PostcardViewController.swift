@@ -18,6 +18,10 @@ final class PostcardViewController: UIViewController {
     private var imagesLoaded = false
     private var threadEntries: [PostcardView.Entry]?
     private var threadLoading = false
+    /// The last export, kept until anything it draws changes (every change
+    /// rebuilds the preview, which drops it), so Save, Copy and Share after
+    /// one another render once.
+    private var renderedExport: UIImage?
 
     private let scrollView = UIScrollView()
     private let previewContainer = UIView()
@@ -54,6 +58,7 @@ final class PostcardViewController: UIViewController {
         PostcardTheme.appearance = traitCollection.userInterfaceStyle
         registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (controller: PostcardViewController, _) in
             PostcardTheme.appearance = controller.traitCollection.userInterfaceStyle
+            controller.swatches.values.forEach { $0.applyColors() }
             if controller.imagesLoaded { controller.rebuildPreview() }
         }
         configureNavigation()
@@ -318,6 +323,7 @@ final class PostcardViewController: UIViewController {
     }
 
     private func rebuildPreview() {
+        renderedExport = nil
         card?.removeFromSuperview()
         let card = PostcardView(entries: activeEntries, theme: theme, options: options)
         cardNaturalSize = card.fittingSize()
@@ -461,19 +467,34 @@ final class PostcardViewController: UIViewController {
         return card.render(scale: Self.renderScale)
     }
 
-    /// Serializes the export actions: renders once per tap, ignoring re-taps
-    /// while a render (emoji prefetch included) is still in flight.
+    /// Serializes the export actions: reuses the last export while nothing
+    /// changed, otherwise renders once per tap with the spinner up, ignoring
+    /// re-taps while a render (emoji prefetch included) is still in flight.
     private func withRenderedImage(_ handle: @escaping @MainActor (UIImage) -> Void) {
         guard !exporting, imagesLoaded, !threadLoading else { return }
+        if let renderedExport {
+            handle(renderedExport)
+            return
+        }
         exporting = true
         updateExportEnabled()
+        loadingIndicator.startAnimating()
         Task { [weak self] in
             guard let self else { return }
+            await Self.nextFrame()
             let image = await self.renderedImage()
+            self.renderedExport = image
+            self.loadingIndicator.stopAnimating()
             self.exporting = false
             self.updateExportEnabled()
             handle(image)
         }
+    }
+
+    /// Lets one frame draw, so the spinner is on screen before the render
+    /// holds the main thread.
+    private static func nextFrame() async {
+        try? await Task.sleep(for: .milliseconds(20))
     }
 
     private func save() {
@@ -481,7 +502,7 @@ final class PostcardViewController: UIViewController {
             guard let self else { return }
             Task {
                 do {
-                    try await MediaSaver.save(image: image)
+                    try await PostcardPhotoSaver.save(image)
                     Haptics.success()
                     self.showToast("Saved to Photos")
                 } catch {
@@ -510,6 +531,34 @@ final class PostcardViewController: UIViewController {
     }
 }
 
+/// Writes a postcard to the photo library as PNG: creating the asset from a
+/// `UIImage` stores a JPEG, whose artifacts show around the card's text.
+private enum PostcardPhotoSaver {
+    /// The change block must not inherit the caller's main-actor isolation:
+    /// Photos runs it on its own queue, and an isolated closure trips the
+    /// runtime's dispatch queue assertion.
+    static func save(_ image: UIImage) async throws {
+        guard let data = image.pngData() else { throw MediaSaver.Failure.download }
+        try await ensureAuthorized()
+        let changes: @Sendable () -> Void = {
+            PHAssetCreationRequest.forAsset().addResource(with: .photo, data: data, options: nil)
+        }
+        try await PHPhotoLibrary.shared().performChanges(changes)
+    }
+
+    private static func ensureAuthorized() async throws {
+        switch PHPhotoLibrary.authorizationStatus(for: .addOnly) {
+        case .authorized, .limited:
+            return
+        case .notDetermined:
+            let granted = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+            guard granted == .authorized || granted == .limited else { throw MediaSaver.Failure.permissionDenied }
+        default:
+            throw MediaSaver.Failure.permissionDenied
+        }
+    }
+}
+
 /// A tappable circular theme swatch showing the theme's background and accent.
 private final class PostcardSwatch: UIControl {
     static let size: CGFloat = 44
@@ -519,6 +568,7 @@ private final class PostcardSwatch: UIControl {
     private let ring = CALayer()
     private let gradient = CAGradientLayer()
     private let accentDot = UIView()
+    private var showsSelection = false
 
     init(theme: PostcardTheme, selected: Bool) {
         self.theme = theme
@@ -530,7 +580,6 @@ private final class PostcardSwatch: UIControl {
         accessibilityLabel = theme.title
         accessibilityTraits = .button
 
-        gradient.colors = [theme.background.cgColor, (theme.backgroundEnd ?? theme.background).cgColor]
         gradient.startPoint = CGPoint(x: 0.5, y: 0)
         gradient.endPoint = CGPoint(x: 0.5, y: 1)
         gradient.cornerRadius = Self.size / 2
@@ -541,7 +590,6 @@ private final class PostcardSwatch: UIControl {
         layer.addSublayer(ring)
 
         accentDot.translatesAutoresizingMaskIntoConstraints = false
-        accentDot.backgroundColor = theme.accent
         accentDot.layer.cornerRadius = 6
         accentDot.isUserInteractionEnabled = false
         addSubview(accentDot)
@@ -553,6 +601,9 @@ private final class PostcardSwatch: UIControl {
         ])
 
         addTarget(self, action: #selector(tapped), for: .touchUpInside)
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (swatch: PostcardSwatch, _) in
+            swatch.applyColors()
+        }
         setSelected(selected)
     }
 
@@ -566,11 +617,20 @@ private final class PostcardSwatch: UIControl {
     }
 
     func setSelected(_ selected: Bool) {
-        ring.borderColor = selected
-            ? DesignSystem.Color.accent.cgColor
-            : DesignSystem.Color.separator.cgColor
+        showsSelection = selected
         accentDot.isHidden = !selected
         accessibilityTraits = selected ? [.button, .selected] : .button
+        applyColors()
+    }
+
+    /// Layer colors are fixed `CGColor`s, so they are set again whenever the
+    /// appearance changes: the theme's own colors follow
+    /// `PostcardTheme.appearance`, the ring follows this view's traits.
+    func applyColors() {
+        gradient.colors = [theme.background.cgColor, (theme.backgroundEnd ?? theme.background).cgColor]
+        accentDot.backgroundColor = theme.accent
+        let ringColor = showsSelection ? DesignSystem.Color.accent : DesignSystem.Color.separator
+        ring.borderColor = ringColor.resolvedColor(with: traitCollection).cgColor
     }
 
     @objc private func tapped() { onTap?() }

@@ -6,6 +6,12 @@ public final class URLSessionTransport: HTTPTransport {
     let session: URLSession
     let streamSession: URLSession
 
+    /// The transport every client uses unless given another. Each instance
+    /// owns two `URLSession`s that are never invalidated, so one shared
+    /// instance keeps connections pooled and reused instead of leaking a pair
+    /// per screen.
+    public static let shared = URLSessionTransport()
+
     public init(session: URLSession? = nil) {
         if let session {
             self.session = session

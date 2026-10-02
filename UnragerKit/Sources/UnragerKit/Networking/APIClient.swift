@@ -32,7 +32,7 @@ public final class APIClient: Sendable {
     }
 
     public convenience init(baseURL: @escaping @Sendable () -> URL) {
-        self.init(transport: URLSessionTransport(), baseURL: baseURL)
+        self.init(transport: URLSessionTransport.shared, baseURL: baseURL)
     }
 
     // MARK: - Health / Whoami

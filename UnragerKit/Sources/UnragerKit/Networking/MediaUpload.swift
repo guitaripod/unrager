@@ -23,7 +23,7 @@ public final class MediaUploadAPI: Sendable {
     private let transport: HTTPTransport
     private let baseURL: @Sendable () -> URL
 
-    public init(transport: HTTPTransport = URLSessionTransport(),
+    public init(transport: HTTPTransport = URLSessionTransport.shared,
                 baseURL: @escaping @Sendable () -> URL) {
         self.transport = transport
         self.baseURL = baseURL

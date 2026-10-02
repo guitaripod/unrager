@@ -34,6 +34,17 @@ struct FormatTests {
         #expect(text.contains("2026"))
     }
 
+    @Test("Timestamps follow the locale they're formatted in, not the one first used")
+    func followsLocale() {
+        let us = Format.absoluteTime(now, locale: Locale(identifier: "en_US"))
+        let de = Format.absoluteTime(now, locale: Locale(identifier: "de_DE"))
+        #expect(us.contains("AM") || us.contains("PM"))
+        #expect(!de.contains("AM") && !de.contains("PM"))
+        let older = now.addingTimeInterval(-10 * 86_400)
+        #expect(Format.relativeTime(older, now: now, locale: Locale(identifier: "en_US"))
+            != Format.relativeTime(older, now: now, locale: Locale(identifier: "fi_FI")))
+    }
+
     @Test("Counts compact and roll over cleanly")
     func counts() {
         #expect(Format.count(999) == "999")

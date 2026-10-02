@@ -49,6 +49,20 @@ public final class DecodedImage: @unchecked Sendable {
     }
 }
 
+/// Hands a download's task priority to `URLSession`, which otherwise runs a
+/// prefetch's request at the same priority as a visible image's.
+private final class TaskPriorityDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+    private let priority: Float
+
+    init(for taskPriority: TaskPriority) {
+        priority = taskPriority >= .medium ? URLSessionTask.highPriority : URLSessionTask.lowPriority
+    }
+
+    func urlSession(_ session: URLSession, didCreateTask task: URLSessionTask) {
+        task.priority = priority
+    }
+}
+
 /// Bounds the number of concurrent decodes to avoid thread explosion
 /// (the project's `Semaphore(4)` media-download discipline, in Swift).
 actor DecodeGate {
@@ -176,7 +190,7 @@ public actor ImagePipeline {
     public func prefetch(_ url: URL, maxPixel: CGFloat) {
         if let hit = cache.object(forKey: url as NSURL), hit.satisfies(maxPixel) { return }
         guard prefetches[url] == nil else { return }
-        let task = Task { _ = await self.image(for: url, maxPixel: maxPixel) }
+        let task = Task(priority: .utility) { _ = await self.image(for: url, maxPixel: maxPixel) }
         prefetches[url] = task
         Task {
             _ = await task.value
@@ -193,7 +207,11 @@ public actor ImagePipeline {
     }
 
     /// Joins the in-flight load for `url` as one more interested consumer, or
-    /// starts the shared download with an interest of one.
+    /// starts the shared download with an interest of one. The download runs at
+    /// the caller's priority (a visible view's, or a prefetch's `.utility`), and
+    /// only the decode waits for a `DecodeGate` slot, so a stalled request never
+    /// holds one and queued prefetches never delay an on-screen image's
+    /// download.
     private func registerInterest(key: LoadKey) -> Task<DecodedImage?, Never> {
         if let existing = inFlight[key] {
             inFlight[key] = InFlightLoad(task: existing.task, interest: existing.interest + 1)
@@ -202,13 +220,14 @@ public actor ImagePipeline {
         let url = key.url
         let maxPixel = CGFloat(key.maxPixel)
         let task = Task<DecodedImage?, Never> { [session, gate] in
+            let delegate = TaskPriorityDelegate(for: Task.currentPriority)
+            guard let data = try? await session.data(from: url, delegate: delegate).0, !Task.isCancelled else {
+                return nil
+            }
             await gate.acquire()
             defer { Task { await gate.release() } }
             if Task.isCancelled { return nil }
-            guard let data = try? await session.data(from: url).0, !Task.isCancelled else {
-                return nil
-            }
-            return await Task.detached(priority: .utility) {
+            return await Task.detached(priority: Task.currentPriority) {
                 Self.downsample(data: data, maxPixel: maxPixel)
             }.value
         }

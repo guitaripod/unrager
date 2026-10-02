@@ -20,19 +20,23 @@ public struct NotificationSeenMarker: Codable, Sendable, Equatable {
         marker.flatMap(Self.decode)
     }
 
+    /// The same ISO 8601 style the notification timestamps are parsed with,
+    /// at the millisecond precision they carry.
+    private static let fractional = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+    private static let plain = Date.ISO8601FormatStyle(includingFractionalSeconds: false)
+
+    /// The marker string for `date` at the nearest millisecond, so a timestamp
+    /// that went through a `Double` on the way here still names the
+    /// millisecond it came from. The fraction is written by hand: the format
+    /// style truncates, turning a hair under `.001` into `.000`.
     public static func encode(_ date: Date) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.string(from: date)
+        let (seconds, millis) = NotificationPrefs.milliseconds(date).quotientAndRemainder(dividingBy: 1000)
+        let whole = plain.format(Date(timeIntervalSince1970: TimeInterval(seconds)))
+        return whole.dropLast() + String(format: ".%03dZ", Int(millis))
     }
 
     public static func decode(_ marker: String) -> Date? {
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractional.date(from: marker) { return date }
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
-        return plain.date(from: marker)
+        (try? fractional.parse(marker)) ?? (try? plain.parse(marker))
     }
 }
 
@@ -45,7 +49,7 @@ public final class NotificationSeenAPI: Sendable {
     private let transport: HTTPTransport
     private let baseURL: @Sendable () -> URL
 
-    public init(transport: HTTPTransport = URLSessionTransport(),
+    public init(transport: HTTPTransport = URLSessionTransport.shared,
                 baseURL: @escaping @Sendable () -> URL) {
         self.transport = transport
         self.baseURL = baseURL
@@ -63,11 +67,7 @@ public final class NotificationSeenAPI: Sendable {
         let body = try UnragerJSON.encoder.encode(marker)
         let request = HTTPRequest(method: .put, url: endpoint(),
                                   headers: ["Content-Type": "application/json"], body: body)
-        let response = try await transport.send(request)
-        guard response.isSuccess else {
-            let serverError = try? UnragerJSON.decoder.decode(ServerError.self, from: response.body)
-            throw APIError.from(status: response.status, body: serverError)
-        }
+        let response = try await RequestPlumbing.send(request, over: transport)
         return (try? UnragerJSON.decode(NotificationSeenMarker.self, from: response.body)) ?? marker
     }
 
@@ -76,11 +76,6 @@ public final class NotificationSeenAPI: Sendable {
     }
 
     private func perform(_ request: HTTPRequest) async throws -> NotificationSeenMarker {
-        let response = try await transport.send(request)
-        guard response.isSuccess else {
-            let body = try? UnragerJSON.decoder.decode(ServerError.self, from: response.body)
-            throw APIError.from(status: response.status, body: body)
-        }
-        return try UnragerJSON.decode(NotificationSeenMarker.self, from: response.body)
+        try await RequestPlumbing.perform(request, over: transport)
     }
 }

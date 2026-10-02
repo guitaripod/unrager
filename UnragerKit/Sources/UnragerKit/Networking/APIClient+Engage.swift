@@ -11,7 +11,7 @@ public final class EngageAPI: Sendable {
     private let transport: HTTPTransport
     private let baseURL: @Sendable () -> URL
 
-    public init(transport: HTTPTransport = URLSessionTransport(),
+    public init(transport: HTTPTransport = URLSessionTransport.shared,
                 baseURL: @escaping @Sendable () -> URL) {
         self.transport = transport
         self.baseURL = baseURL
@@ -59,12 +59,11 @@ public final class EngageAPI: Sendable {
     }
 }
 
-/// The request plumbing shared by the standalone clients in this kit
-/// (`EngageAPI`, `MediaUploadAPI`): URL building with the `+` → `%2B`
-/// re-encoding the server's form-urlencoded query decoding requires (a
-/// bookmarks cursor can carry a literal `+`), and the success-or-`APIError`
-/// response handling — all mirroring `APIClient`'s private helpers, which new
-/// surface can't reach.
+/// The request plumbing shared by every client in this kit: URL building with
+/// the `+` → `%2B` re-encoding the server's form-urlencoded query decoding
+/// requires (a bookmarks cursor can carry a literal `+`), the one retry a GET
+/// gets after a dropped connection, and the success-or-`APIError` response
+/// handling.
 enum RequestPlumbing {
     static func url(base: URL, path: String, query: [URLQueryItem] = []) -> URL {
         let full = base.appendingPathComponent(path)
@@ -84,19 +83,52 @@ enum RequestPlumbing {
 
     /// Sends a request whose success carries no body (a 204).
     static func performEmpty(_ request: HTTPRequest, over transport: HTTPTransport) async throws {
-        let response = try await transport.send(request)
-        guard response.isSuccess else {
-            let body = try? UnragerJSON.decoder.decode(ServerError.self, from: response.body)
-            throw APIError.from(status: response.status, body: body)
+        _ = try await send(request, over: transport)
+    }
+
+    /// Sends `request` and returns its successful response, or throws the
+    /// typed error for a failed one.
+    static func send(_ request: HTTPRequest, over transport: HTTPTransport) async throws -> HTTPResponse {
+        let response = try await sendRetryingGet(request, over: transport)
+        guard response.isSuccess else { throw apiError(from: response) }
+        return response
+    }
+
+    /// The typed error for a non-2xx response, from its JSON body.
+    static func apiError(from response: HTTPResponse) -> APIError {
+        let body = try? UnragerJSON.decoder.decode(ServerError.self, from: response.body)
+        return APIError.from(status: response.status, body: body, headers: response.headers)
+    }
+
+    /// How long a GET waits before its one retry.
+    static let getRetryDelay: Duration = .milliseconds(300)
+
+    /// Sends `request`, trying a GET once more after `getRetryDelay` when the
+    /// connection dropped or timed out. After the app returns from the
+    /// background the first request often lands on a keep-alive connection
+    /// the server or Tailscale already closed; a GET is safe to repeat, while a
+    /// write never is, since the server may already have acted on it.
+    private static func sendRetryingGet(_ request: HTTPRequest, over transport: HTTPTransport) async throws -> HTTPResponse {
+        do {
+            return try await transport.send(request)
+        } catch let error as APIError where request.method == .get && error.retriesOnce {
+            try await Task.sleep(for: getRetryDelay)
+            return try await transport.send(request)
+        }
+    }
+
+    /// Runs a post or reply, turning a timeout into `APIError.publishTimedOut`:
+    /// the server has no idempotency key, so the user must check before
+    /// posting the same thing again.
+    static func publishing<T>(_ operation: () async throws -> T) async throws -> T {
+        do {
+            return try await operation()
+        } catch APIError.timeout {
+            throw APIError.publishTimedOut
         }
     }
 
     static func perform<T: Decodable>(_ request: HTTPRequest, over transport: HTTPTransport) async throws -> T {
-        let response = try await transport.send(request)
-        guard response.isSuccess else {
-            let body = try? UnragerJSON.decoder.decode(ServerError.self, from: response.body)
-            throw APIError.from(status: response.status, body: body)
-        }
-        return try UnragerJSON.decode(T.self, from: response.body)
+        try UnragerJSON.decode(T.self, from: try await send(request, over: transport).body)
     }
 }

@@ -24,6 +24,9 @@ public struct ServerError: Decodable, Sendable {
 public enum APIError: Error, Sendable, Equatable {
     case invalidRequest(String)
     case network(String)
+    /// The connection dropped mid-request, typically a keep-alive connection
+    /// that went stale while the app was in the background.
+    case connectionLost(String)
     case timeout
     case cancelled
     case unauthorized(String)
@@ -56,9 +59,20 @@ public enum APIError: Error, Sendable, Equatable {
         }
     }
 
+    /// Whether the same request may succeed if the user tries again.
     public var isRetryable: Bool {
         switch self {
-        case .timeout, .network, .rateLimited, .upstream, .server, .streamEndedEarly: return true
+        case .timeout, .network, .connectionLost, .rateLimited, .upstream, .server, .streamEndedEarly: return true
+        default: return false
+        }
+    }
+
+    /// The retryable failures worth one automatic retry of a GET: a dropped
+    /// connection or a timeout, which a fresh connection usually clears. Rate
+    /// limits and server errors won't clear in a few hundred milliseconds.
+    var retriesOnce: Bool {
+        switch self {
+        case .connectionLost, .timeout: return isRetryable
         default: return false
         }
     }
@@ -68,7 +82,7 @@ extension APIError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .invalidRequest(let m): return m
-        case .network(let detail):
+        case .network(let detail), .connectionLost(let detail):
             let cause = detail.isEmpty ? "" : " (\(detail))"
             return "Can't reach the unrager server\(cause). Check the server address in Settings and that `unrager serve` is running."
         case .timeout: return "The request timed out."

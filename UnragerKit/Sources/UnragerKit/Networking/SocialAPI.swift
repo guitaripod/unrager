@@ -78,12 +78,6 @@ public final class SocialAPI: Sendable {
 
     private func perform<T: Decodable>(method: HTTPMethod, path: String,
                                        query: [URLQueryItem] = []) async throws -> T {
-        let request = HTTPRequest(method: method, url: url(path, query: query))
-        let response = try await transport.send(request)
-        guard response.isSuccess else {
-            let body = try? UnragerJSON.decoder.decode(ServerError.self, from: response.body)
-            throw APIError.from(status: response.status, body: body)
-        }
-        return try UnragerJSON.decode(T.self, from: response.body)
+        try await RequestPlumbing.perform(HTTPRequest(method: method, url: url(path, query: query)), over: transport)
     }
 }

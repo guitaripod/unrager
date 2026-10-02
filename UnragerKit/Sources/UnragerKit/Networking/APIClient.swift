@@ -307,14 +307,7 @@ public final class APIClient: Sendable {
     }
 
     private func perform<T: Decodable>(_ request: HTTPRequest) async throws -> T {
-        let response = try await transport.send(request)
-        guard response.isSuccess else { throw apiError(from: response) }
-        return try UnragerJSON.decode(T.self, from: response.body)
-    }
-
-    private func apiError(from response: HTTPResponse) -> APIError {
-        let body = try? UnragerJSON.decoder.decode(ServerError.self, from: response.body)
-        return APIError.from(status: response.status, body: body)
+        try await RequestPlumbing.perform(request, over: transport)
     }
 
     private func sseStream<T: Decodable & Sendable>(

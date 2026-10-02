@@ -132,11 +132,8 @@ public final class URLSessionTransport: HTTPTransport {
         switch error.code {
         case .timedOut: return .timeout
         case .cancelled: return .cancelled
-        case .notConnectedToInternet, .cannotConnectToHost, .networkConnectionLost,
-             .cannotFindHost, .dnsLookupFailed:
-            return .network(error.localizedDescription)
-        default:
-            return .network(error.localizedDescription)
+        case .networkConnectionLost: return .connectionLost(error.localizedDescription)
+        default: return .network(error.localizedDescription)
         }
     }
 }

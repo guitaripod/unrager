@@ -63,11 +63,7 @@ public final class NotificationSeenAPI: Sendable {
         let body = try UnragerJSON.encoder.encode(marker)
         let request = HTTPRequest(method: .put, url: endpoint(),
                                   headers: ["Content-Type": "application/json"], body: body)
-        let response = try await transport.send(request)
-        guard response.isSuccess else {
-            let serverError = try? UnragerJSON.decoder.decode(ServerError.self, from: response.body)
-            throw APIError.from(status: response.status, body: serverError)
-        }
+        let response = try await RequestPlumbing.send(request, over: transport)
         return (try? UnragerJSON.decode(NotificationSeenMarker.self, from: response.body)) ?? marker
     }
 
@@ -76,11 +72,6 @@ public final class NotificationSeenAPI: Sendable {
     }
 
     private func perform(_ request: HTTPRequest) async throws -> NotificationSeenMarker {
-        let response = try await transport.send(request)
-        guard response.isSuccess else {
-            let body = try? UnragerJSON.decoder.decode(ServerError.self, from: response.body)
-            throw APIError.from(status: response.status, body: body)
-        }
-        return try UnragerJSON.decode(NotificationSeenMarker.self, from: response.body)
+        try await RequestPlumbing.perform(request, over: transport)
     }
 }

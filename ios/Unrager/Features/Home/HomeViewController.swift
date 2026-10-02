@@ -11,6 +11,7 @@ final class HomeViewController: FeedViewController {
     private let titleButton = UIButton(type: .system)
     private var filterWasEnabled = AppSettings.filterEnabled
     private var hiddenObserver: AnyCancellable?
+    private var settingsObservers = Set<AnyCancellable>()
 
     /// The Home tab reopens on whatever mode it was last left on
     /// (`ClientSettings.homeFollowing`); Originals is restored too. Local state
@@ -40,6 +41,23 @@ final class HomeViewController: FeedViewController {
         configureComposeButton()
         updateTabBarItem()
         setChronologicalSort(chronological && following)
+        observeSettingsChanges()
+    }
+
+    /// Rules or strictness saved in the filter editor re-judge the filtered
+    /// feed on screen, and a new server address reloads whatever is showing
+    /// from the new server, starting at the top: both were loaded under the
+    /// old setting.
+    private func observeSettingsChanges() {
+        NotificationCenter.default.publisher(for: AppSettings.filterRulesDidChange)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self, AppSettings.filterEnabled, self.viewModel.usesFilterCollect else { return }
+                AppLogger.shared.info("filter rules changed: reloading Home", category: .timeline)
+                self.viewModel.refresh()
+            }
+            .store(in: &settingsObservers)
+        reloadOnServerChange().store(in: &settingsObservers)
     }
 
     /// Coming back from Settings, a changed rage-filter switch (or the server's
@@ -108,13 +126,7 @@ final class HomeViewController: FeedViewController {
     }
 
     private func updateTitle() {
-        let name: String
-        switch viewModel.source {
-        case let .home(following, _): name = following ? "Following" : "For You"
-        case .mentions: name = "Mentions"
-        case .bookmarks: name = "Bookmarks"
-        default: name = "Home"
-        }
+        let name = HomeFeedChoice.title(for: viewModel.source)
         titleButton.menu = sourceMenu()
         titleButton.showsMenuAsPrimaryAction = true
         var config = UIButton.Configuration.plain()
@@ -135,20 +147,22 @@ final class HomeViewController: FeedViewController {
     }
 
     private func sourceMenu() -> UIMenu {
-        UIMenu(children: [
-            UIAction(title: "For You", image: DesignSystem.icon("sparkles")) { [weak self] _ in
-                self?.switchHome(following: false)
-            },
-            UIAction(title: "Following", image: DesignSystem.icon("person.2")) { [weak self] _ in
-                self?.switchHome(following: true)
-            },
-            UIAction(title: "Mentions", image: DesignSystem.icon("at")) { [weak self] _ in
-                self?.viewModel.updateSource(.mentions); self?.afterSwitch()
-            },
-            UIAction(title: "Bookmarks", image: DesignSystem.icon("bookmark")) { [weak self] _ in
-                self?.promptBookmarks()
-            },
-        ])
+        let active = HomeFeedChoice(source: viewModel.source)
+        return UIMenu(children: HomeFeedChoice.allCases.map { choice in
+            UIAction(title: choice.title, image: DesignSystem.icon(choice.symbol),
+                     state: choice == active ? .on : .off) { [weak self] _ in self?.choose(choice) }
+        })
+    }
+
+    private func choose(_ choice: HomeFeedChoice) {
+        switch choice {
+        case .forYou: switchHome(following: false)
+        case .following: switchHome(following: true)
+        case .mentions:
+            viewModel.updateSource(.mentions)
+            afterSwitch()
+        case .bookmarks: promptBookmarks()
+        }
     }
 
     private func promptBookmarks() {
@@ -226,7 +240,7 @@ final class HomeViewController: FeedViewController {
         setChronologicalSort(isHomeSource && chronological && following)
         updateTitle()
         refreshRightBarItems()
-        collectionView.setContentOffset(.zero, animated: false)
+        scrollToTop(animated: false)
     }
 
     private func configureComposeButton() {
@@ -274,10 +288,8 @@ final class HomeViewController: FeedViewController {
                 self?.viewModel.refresh()
             },
             UIAction(title: "Jump to top", image: DesignSystem.icon("arrow.up.to.line")) { [weak self] _ in
-                guard let self else { return }
                 Haptics.selection()
-                self.collectionView.setContentOffset(
-                    CGPoint(x: 0, y: -self.collectionView.adjustedContentInset.top), animated: true)
+                self?.scrollToTop(animated: true)
             },
         ]
         if viewModel.supportsSeenTracking, viewModel.unreadCount > 0 {
@@ -297,5 +309,50 @@ final class HomeViewController: FeedViewController {
             AppSettings.composeViaOfficialApp.toggle()
         }
         return [writing, UIMenu(options: .displayInline, children: feed), UIMenu(options: .displayInline, children: [destination])]
+    }
+}
+
+/// The feeds the Home title menu switches between, and the title each source
+/// shows: a keyword-filtered Bookmarks list names its keyword, so the header
+/// never reads as the full list.
+enum HomeFeedChoice: CaseIterable {
+    case forYou, following, mentions, bookmarks
+
+    static let keywordLimit = 18
+
+    init?(source: TimelineViewModel.Source) {
+        switch source {
+        case let .home(following, _): self = following ? .following : .forYou
+        case .mentions: self = .mentions
+        case .bookmarks: self = .bookmarks
+        default: return nil
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .forYou: "For You"
+        case .following: "Following"
+        case .mentions: "Mentions"
+        case .bookmarks: "Bookmarks"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .forYou: "sparkles"
+        case .following: "person.2"
+        case .mentions: "at"
+        case .bookmarks: "bookmark"
+        }
+    }
+
+    static func title(for source: TimelineViewModel.Source) -> String {
+        guard let choice = HomeFeedChoice(source: source) else { return "Home" }
+        guard case let .bookmarks(query) = source else { return choice.title }
+        let keyword = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !keyword.isEmpty else { return choice.title }
+        let shown = keyword.count > keywordLimit ? String(keyword.prefix(keywordLimit - 1)) + "…" : keyword
+        return "\(choice.title) · \u{201C}\(shown)\u{201D}"
     }
 }

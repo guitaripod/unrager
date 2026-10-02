@@ -6,6 +6,18 @@ public struct FollowResult: Decodable, Sendable {
     public let following: Bool
 }
 
+/// `POST`/`DELETE /api/users/{id}/mute`.
+public struct MuteResult: Decodable, Sendable {
+    public let ok: Bool
+    public let muting: Bool
+}
+
+/// `POST`/`DELETE /api/users/{id}/block`.
+public struct BlockResult: Decodable, Sendable {
+    public let ok: Bool
+    public let blocking: Bool
+}
+
 /// One page of `GET /api/users/{id}/followers` or `/following`.
 public struct UserListPage: Decodable, Sendable {
     public let users: [User]
@@ -55,8 +67,8 @@ public struct ProfileRelationshipView: Decodable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         user = try c.decode(User.self, forKey: .user)
         followedByMe = try c.decodeIfPresent(Relationship.self, forKey: .user)?.followedByMe
-        pinned = try c.decodeIfPresent(Tweet.self, forKey: .pinned)
-        recent = try c.decodeIfPresent([Tweet].self, forKey: .recent) ?? []
+        pinned = try? c.decodeIfPresent(Tweet.self, forKey: .pinned)
+        recent = try c.decodeLossy(Tweet.self, forKey: .recent)
         cursor = try c.decodeIfPresent(String.self, forKey: .cursor)
     }
 }

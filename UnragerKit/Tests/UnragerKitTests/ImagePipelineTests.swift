@@ -211,6 +211,23 @@ struct ImagePipelineTests {
         return data as Data
     }
 
+    @Test("Downloads aren't held to the decode limit, so a stalled one blocks nothing")
+    func downloadsRunBeyondDecodeLimit() async throws {
+        StallingURLProtocol.reset()
+        StallingURLProtocol.responseBody = Self.pngData
+        let pipeline = makePipeline()
+        let urls = (0..<6).map { URL(string: "https://stall\($0).test/image.png")! }
+        let loads = urls.map { url in Task { await pipeline.image(for: url, maxPixel: 64) } }
+        var waited = 0
+        while StallingURLProtocol.pendingCount < urls.count && waited < 5_000 {
+            try await Task.sleep(nanoseconds: 1_000_000)
+            waited += 1
+        }
+        #expect(StallingURLProtocol.pendingCount == urls.count)
+        StallingURLProtocol.completeAll()
+        for load in loads { #expect(await load.value != nil) }
+    }
+
     @Test("A small cached decode is not served to a request that needs more pixels")
     func cacheIsSizeAware() async throws {
         StallingURLProtocol.reset()

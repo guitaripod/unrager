@@ -24,6 +24,11 @@ public final class Tweet: Codable, Sendable, Identifiable, Hashable {
     /// `@mentions` in the text. Absent from older servers.
     public let inReplyToHandle: String?
     public let quotedTweet: Tweet?
+    /// Who reposted this into the feed. When set, this tweet is the original
+    /// post (its author, text and counts) and `retweetedBy` is the account
+    /// that reposted it. Absent for posts that aren't reposts, and from older
+    /// servers.
+    public let retweetedBy: User?
     public let media: [Media]
     public let url: String
     public let urls: [TweetURL]
@@ -48,6 +53,7 @@ public final class Tweet: Codable, Sendable, Identifiable, Hashable {
         case inReplyToTweetID = "in_reply_to_tweet_id"
         case inReplyToHandle = "in_reply_to_handle"
         case quotedTweet = "quoted_tweet"
+        case retweetedBy = "retweeted_by"
         case media
         case url
         case urls
@@ -72,6 +78,7 @@ public final class Tweet: Codable, Sendable, Identifiable, Hashable {
         inReplyToTweetID = try c.decodeIfPresent(String.self, forKey: .inReplyToTweetID)
         inReplyToHandle = try c.decodeIfPresent(String.self, forKey: .inReplyToHandle)
         quotedTweet = try c.decodeIfPresent(Tweet.self, forKey: .quotedTweet)
+        retweetedBy = try? c.decodeIfPresent(User.self, forKey: .retweetedBy)
         media = try c.decodeLossy(Media.self, forKey: .media)
         url = try c.decode(String.self, forKey: .url)
         urls = try c.decodeIfPresent([TweetURL].self, forKey: .urls) ?? []
@@ -96,6 +103,7 @@ public final class Tweet: Codable, Sendable, Identifiable, Hashable {
         try c.encodeIfPresent(inReplyToTweetID, forKey: .inReplyToTweetID)
         try c.encodeIfPresent(inReplyToHandle, forKey: .inReplyToHandle)
         try c.encodeIfPresent(quotedTweet, forKey: .quotedTweet)
+        try c.encodeIfPresent(retweetedBy, forKey: .retweetedBy)
         try c.encode(media, forKey: .media)
         try c.encode(url, forKey: .url)
         try c.encode(urls, forKey: .urls)
@@ -119,6 +127,7 @@ public final class Tweet: Codable, Sendable, Identifiable, Hashable {
         inReplyToTweetID = other.inReplyToTweetID
         inReplyToHandle = other.inReplyToHandle
         quotedTweet = other.quotedTweet
+        retweetedBy = other.retweetedBy
         media = other.media
         url = other.url
         urls = other.urls

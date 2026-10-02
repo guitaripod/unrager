@@ -49,8 +49,20 @@ pub struct ApiClient {
 }
 
 impl ApiClient {
+    /// A client for the CLI: runs the browser authorization when there is no
+    /// usable token.
     pub async fn new() -> Result<Self> {
-        let tokens = oauth::load_or_authorize().await?;
+        Self::with_tokens(oauth::load_or_authorize().await?)
+    }
+
+    /// A client for the server: uses the saved token, refreshing it when it
+    /// expired, and fails with [`Error::PostingNotAuthorized`] instead of
+    /// opening a browser on a machine nobody is looking at.
+    pub async fn non_interactive() -> Result<Self> {
+        Self::with_tokens(oauth::load_or_refresh().await?)
+    }
+
+    fn with_tokens(tokens: oauth::Tokens) -> Result<Self> {
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(120))
@@ -137,13 +149,13 @@ impl ApiClient {
 
 fn classify_post_error(status: u16, body: &str) -> Error {
     if is_credits_depleted(status, body) {
-        return Error::Config(format!(
+        return Error::CreditsDepleted(format!(
             "{status}: credits depleted. \
              Top up at console.x.com > Billing > Credits. Raw: {body}"
         ));
     }
     if status == 401 {
-        return Error::Config(format!(
+        return Error::PostingNotAuthorized(format!(
             "401: access token rejected. \
              Delete ~/.config/unrager/tokens.json and re-authorize. Raw: {body}"
         ));

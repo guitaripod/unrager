@@ -22,6 +22,28 @@ pub struct User {
     /// older servers, and omitted from the wire when unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub banner_url: Option<String>,
+    /// The profile's bio with its t.co links expanded. Populated on profile
+    /// payloads; omitted when empty or unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The free-text location the account gives. Omitted when empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    /// The profile's website, as the full URL rather than its t.co link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub website: Option<String>,
+    /// When the account was created, as an RFC 3339 timestamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub joined_at: Option<String>,
+    /// Whether the account's posts are protected. Omitted when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub protected: bool,
+    /// Whether the signed-in user mutes this account; omitted when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub muting: Option<bool>,
+    /// Whether the signed-in user blocks this account; omitted when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocking: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -56,6 +78,21 @@ pub struct Tweet {
     pub url: String,
     #[serde(default)]
     pub urls: Vec<TweetUrl>,
+    /// Set when this post reached the timeline as someone's repost: the post
+    /// itself is the original (its id, author, text and counts), and this is
+    /// the account that reposted it. Absent on ordinary posts and older
+    /// servers, and omitted from the wire when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retweeted_by: Option<User>,
+}
+
+impl Tweet {
+    /// Whether this post is a repost. Posts stored before reposts were parsed
+    /// as their original only carry X's `RT @handle:` text, so that prefix
+    /// still counts.
+    pub fn is_repost(&self) -> bool {
+        self.retweeted_by.is_some() || self.text.starts_with("RT @")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -18,7 +18,7 @@ final class ActionButton: UIControl {
         iconView.image = DesignSystem.icon(symbol, pointSize: 15)
         iconView.tintColor = DesignSystem.Color.secondaryLabel
         iconView.contentMode = .center
-        titleLabel.font = DesignSystem.Typography.metric()
+        titleLabel.font = DesignSystem.Typography.actionMetric()
         titleLabel.textColor = DesignSystem.Color.secondaryLabel
         titleLabel.lineBreakMode = .byClipping
         addSubview(iconView)
@@ -51,7 +51,7 @@ final class ActionButton: UIControl {
 
     /// Re-resolves the count's font after a text-size change.
     func refreshFont() {
-        titleLabel.font = DesignSystem.Typography.metric()
+        titleLabel.font = DesignSystem.Typography.actionMetric()
         invalidateIntrinsicContentSize()
         setNeedsLayout()
     }

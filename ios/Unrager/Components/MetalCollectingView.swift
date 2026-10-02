@@ -75,6 +75,9 @@ final class MetalCollectingView: UIView {
         titleLabel.textAlignment = .center
         titleLabel.text = "Collecting your feed"
         titleLabel.adjustsFontForContentSizeCategory = true
+        isAccessibilityElement = true
+        accessibilityLabel = "Collecting your feed"
+        accessibilityTraits = .updatesFrequently
 
         caption.font = DesignSystem.Typography.metric()
         caption.textColor = DesignSystem.Color.secondaryLabel
@@ -101,7 +104,8 @@ final class MetalCollectingView: UIView {
         let denom = max(1, target)
         progress = min(1, Float(collected) / Float(denom))
         renderer?.targetProgress = progress
-        caption.text = "collecting tweets… \(collected)/\(denom)"
+        caption.text = "collecting posts… \(collected)/\(denom)"
+        accessibilityValue = "\(min(collected, denom)) of \(denom)"
         if UIAccessibility.isReduceMotionEnabled { metalView?.setNeedsDisplay() }
     }
 
@@ -150,7 +154,10 @@ final class MetalCollectingView: UIView {
 /// `makeLibrary(source:)` so no `.metal` file (and thus no project.yml change)
 /// is needed.
 private final class CollectingRenderer: NSObject, MTKViewDelegate {
-    /// The progress the field eases toward; latched smoothly each frame.
+    /// The progress the field eases toward; latched smoothly each frame. With
+    /// Reduce Motion the view draws only on change (`enableSetNeedsDisplay`),
+    /// so the field jumps straight to it and holds still instead of creeping
+    /// 8% closer per redraw.
     var targetProgress: Float = 0
 
     private let commandQueue: any MTLCommandQueue
@@ -191,8 +198,12 @@ private final class CollectingRenderer: NSObject, MTKViewDelegate {
               let encoder = buffer.makeRenderCommandEncoder(descriptor: descriptor)
         else { return }
 
-        easedProgress += (targetProgress - easedProgress) * 0.08
-        uniforms.time = Float(CFAbsoluteTimeGetCurrent() - startTime)
+        if view.enableSetNeedsDisplay {
+            easedProgress = targetProgress
+        } else {
+            easedProgress += (targetProgress - easedProgress) * 0.08
+            uniforms.time = Float(CFAbsoluteTimeGetCurrent() - startTime)
+        }
         uniforms.progress = easedProgress
         uniforms.resolution = SIMD2<Float>(Float(view.drawableSize.width), Float(view.drawableSize.height))
 

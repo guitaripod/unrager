@@ -156,9 +156,7 @@ pub fn start(
 
         let mut authored: Vec<Tweet> = accumulated
             .into_iter()
-            .filter(|t| {
-                t.author.handle.eq_ignore_ascii_case(&handle) && !t.text.starts_with("RT @")
-            })
+            .filter(|t| t.author.handle.eq_ignore_ascii_case(&handle) && t.retweeted_by.is_none())
             .collect();
 
         authored.sort_by_key(|t| std::cmp::Reverse(t.created_at));
@@ -234,7 +232,7 @@ fn stratified_for_prompt(authored: &[Tweet]) -> Vec<Tweet> {
 fn count_authored(tweets: &[Tweet], handle: &str) -> usize {
     tweets
         .iter()
-        .filter(|t| t.author.handle.eq_ignore_ascii_case(handle) && !t.text.starts_with("RT @"))
+        .filter(|t| t.author.handle.eq_ignore_ascii_case(handle) && t.retweeted_by.is_none())
         .count()
 }
 

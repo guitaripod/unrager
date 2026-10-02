@@ -8,19 +8,31 @@ import UIKit
 enum MediaSaver {
     enum Failure: LocalizedError {
         case permissionDenied
+        /// Photos access is blocked by Screen Time or a device profile, which
+        /// the Settings switch can't change.
+        case restricted
         case download
 
         var errorDescription: String? {
             switch self {
             case .permissionDenied: return "Photos access is required to save. Enable it in Settings."
+            case .restricted: return "Saving to Photos is restricted on this device by Screen Time or a profile."
             case .download: return "Couldn't download the media."
             }
         }
     }
 
+    /// How long a download may sit without receiving data before it fails.
+    private static let idleTimeout: TimeInterval = 60
+
+    /// Attachments being saved right now, so a second tap on Save while the
+    /// first is still downloading doesn't put the same file in Photos twice.
+    @MainActor static var inFlight = Set<URL>()
+
     static func save(from url: URL, isVideo: Bool) async throws {
         try await ensureAuthorized()
-        let (downloaded, response) = try await URLSession.shared.download(from: url)
+        let request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: idleTimeout)
+        let (downloaded, response) = try await URLSession.shared.download(for: request)
         defer { try? FileManager.default.removeItem(at: downloaded) }
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw Failure.download
@@ -53,7 +65,8 @@ enum MediaSaver {
     }
 
     /// The alert for a failed save. A denied Photos permission gets a way to
-    /// the Settings page that fixes it; anything else is the plain error.
+    /// the Settings page that fixes it; anything else, a restriction included,
+    /// is the plain error.
     @MainActor
     static func alert(for error: Error) -> UIAlertController {
         guard case Failure.permissionDenied = error else { return AlertFactory.error(error, title: "Couldn't save") }
@@ -74,6 +87,8 @@ enum MediaSaver {
         case .notDetermined:
             let granted = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
             guard granted == .authorized || granted == .limited else { throw Failure.permissionDenied }
+        case .restricted:
+            throw Failure.restricted
         default:
             throw Failure.permissionDenied
         }

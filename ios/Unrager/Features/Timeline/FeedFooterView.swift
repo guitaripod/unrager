@@ -18,11 +18,20 @@ final class FeedFooterView: UICollectionReusableView {
         label.font = DesignSystem.Typography.metric()
         label.textColor = DesignSystem.Color.tertiaryLabel
         label.textAlignment = .center
+        label.numberOfLines = 0
 
         var config = UIButton.Configuration.plain()
+        config.title = "Retry"
         config.image = DesignSystem.icon("arrow.clockwise", pointSize: 13)
+        config.imagePadding = DesignSystem.Spacing.xs
         config.baseForegroundColor = DesignSystem.Color.accent
+        config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var out = incoming
+            out.font = DesignSystem.Typography.metric()
+            return out
+        }
         button.configuration = config
+        button.setContentCompressionResistancePriority(.required, for: .horizontal)
         button.isHidden = true
         button.addAction(UIAction { [weak self] _ in self?.onRetry?() }, for: .touchUpInside)
 
@@ -38,6 +47,10 @@ final class FeedFooterView: UICollectionReusableView {
         addManaged(stack)
         NSLayoutConstraint.activate([
             stack.centerXAnchor.constraint(equalTo: centerXAnchor),
+            stack.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: DesignSystem.Spacing.l),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -DesignSystem.Spacing.l),
+            button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
+            button.widthAnchor.constraint(greaterThanOrEqualToConstant: 44),
             stack.topAnchor.constraint(equalTo: topAnchor, constant: DesignSystem.Spacing.l),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -DesignSystem.Spacing.l),
         ])
@@ -55,6 +68,7 @@ final class FeedFooterView: UICollectionReusableView {
         isHidden = false
         spinner.stopAnimating()
         label.text = text
+        label.textColor = showsRetry ? DesignSystem.Color.secondaryLabel : DesignSystem.Color.tertiaryLabel
         button.isHidden = !showsRetry
     }
 
@@ -65,6 +79,7 @@ final class FeedFooterView: UICollectionReusableView {
         button.isHidden = true
         spinner.startAnimating()
         label.text = text
+        label.textColor = DesignSystem.Color.tertiaryLabel
     }
 
     func setHidden() {

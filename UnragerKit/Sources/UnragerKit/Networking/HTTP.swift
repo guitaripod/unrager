@@ -13,13 +13,24 @@ public struct HTTPRequest: Sendable {
     public var url: URL
     public var headers: [String: String]
     public var body: Data?
+    /// How long the request may wait for the server, for the few calls the
+    /// server answers only after slow work of its own (a media upload to X, a
+    /// post). `nil` keeps the transport's tight default.
+    public var timeout: TimeInterval?
 
-    public init(method: HTTPMethod = .get, url: URL, headers: [String: String] = [:], body: Data? = nil) {
+    public init(method: HTTPMethod = .get, url: URL, headers: [String: String] = [:], body: Data? = nil,
+                timeout: TimeInterval? = nil) {
         self.method = method
         self.url = url
         self.headers = headers
         self.body = body
+        self.timeout = timeout
     }
+
+    /// How long a publish call (media upload, post, reply) may take: the
+    /// server answers only once X has the upload or the post, and a client that
+    /// gives up first leaves the work done anyway.
+    public static let publishTimeout: TimeInterval = 300
 }
 
 public struct HTTPResponse: Sendable {

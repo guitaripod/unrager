@@ -127,7 +127,14 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                         if case .photo = media.kind { return index } else { return nil }
                     }
                     guard !photoIndices.isEmpty else { return }
-                    root.present(MediaViewerViewController(tweetID: tweet.restID, photoMediaIndices: photoIndices, startIndex: 0), animated: false)
+                    let sample = parts.count > 2 ? "A made-up description for screenshot QA: a wide valley at dusk, "
+                        + "the ridge line in violet, a single lit window far below and thin cloud over the peaks." : nil
+                    let viewer = MediaViewerViewController(
+                        tweetID: tweet.restID, photoMediaIndices: photoIndices,
+                        altTexts: photoIndices.map { tweet.media[$0].altText ?? sample }, startIndex: 0)
+                    root.present(viewer, animated: false) {
+                        if parts.count > 2, parts[2] == "caption" { viewer.debugExpandCaption() }
+                    }
                 }
             case "postcard" where parts.count > 1:
                 let id = parts[1]
@@ -159,6 +166,13 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                     guard let tweet = try? await api.tweet(id: id) else { return }
                     root.present(UINavigationController(
                         rootViewController: ComposeViewController(mode: .quote(of: tweet))), animated: false)
+                }
+            case "reply" where parts.count > 1:
+                let id = parts[1]
+                Task {
+                    guard let tweet = try? await api.tweet(id: id) else { return }
+                    root.present(UINavigationController(
+                        rootViewController: ComposeViewController(mode: .reply(to: tweet))), animated: false)
                 }
             case "brief" where parts.count > 1:
                 let handle = parts[1]

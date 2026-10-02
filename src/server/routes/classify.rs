@@ -36,7 +36,7 @@ pub struct ClassifyResponse {
 /// `POST /api/classify` — batch tweet classification for callers that
 /// already have full tweet text, not just an id (the browser extension: it
 /// walks X's own GraphQL responses and has the text right there, so sending
-/// it directly skips a redundant GraphQL refetch through `llm::fetch_tweet`).
+/// it directly skips a redundant GraphQL refetch through `state::fetch_tweet`).
 /// Reuses the exact same `FilterCache`/rate-limited `ClassifierHandle` the
 /// TUI and background ingest worker share, so a verdict computed here is
 /// visible everywhere else and vice versa. A tweet the backend failed to

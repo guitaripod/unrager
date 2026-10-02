@@ -1393,6 +1393,13 @@ mod tests {
             avatar_url: None,
             followed_by_me: None,
             banner_url: None,
+            description: None,
+            location: None,
+            website: None,
+            joined_at: None,
+            protected: false,
+            muting: None,
+            blocking: None,
         };
         let mut view = LikersView::new("tweet1".into(), "likers".into());
         view.users = vec![mk_user("u0"), mk_user("u1")];
@@ -1447,8 +1454,10 @@ mod tests {
         quote.quoted_tweet = Some(Box::new(make_tweet("99", "original")));
         let rt = make_tweet("3", "RT @someone big news");
         let original = make_tweet("4", "standalone thought");
+        let mut repost = make_tweet("5", "someone's whole post");
+        repost.retweeted_by = Some(make_tweet("6", "").author);
 
-        let mut page = make_page(vec![reply, quote, rt, original]);
+        let mut page = make_page(vec![reply, quote, rt, original, repost]);
         let kind = SourceKind::Home { following: false };
         let mut counted = HashSet::new();
         filter_incoming_page(

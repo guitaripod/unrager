@@ -92,10 +92,10 @@ final class TimelineViewModel {
     /// reconfigure exactly those rows (dim them) without a full reload.
     let seenChanged = PassthroughSubject<[String], Never>()
     /// What the filter hid from the current Home feed (newest batch last), so
-    /// nothing is hidden without a way to see it. Cleared when the feed is
-    /// replaced or switched.
+    /// nothing is hidden without a way to see it. Kept across refreshes and
+    /// cleared when the feed is switched.
     let hiddenPosts = CurrentValueSubject<[HiddenPost], Never>([])
-    private static let hiddenCap = 200
+    static let hiddenCap = 200
 
     private(set) var source: Source
     var awaitingQuery: Bool { isAwaitingQuery }
@@ -119,6 +119,13 @@ final class TimelineViewModel {
     /// Lets the feed show a spinner — not the "Nothing here" illustration —
     /// while a feed (or a feed switch) is still in flight.
     private(set) var hasLoadedOnce = false
+    /// True when the latest load was the next page (the bottom of a list
+    /// already on screen) and it failed: nothing shown is stale, so the feed
+    /// offers "Couldn't load more" at the bottom instead of flagging the posts
+    /// as saved ones. Cleared as soon as another load starts.
+    private(set) var pageLoadFailed = false
+    /// Whether the load in flight replaces the list (a refresh) or adds a page.
+    private var loadingReset = true
 
     /// Server-confirmed already-read ids for the unread affordance + dimming.
     private var readIDs = Set<String>()
@@ -235,12 +242,17 @@ final class TimelineViewModel {
     /// while the real fetch is in flight. Seeds display only: it never touches
     /// `seenIDs`, `cursor`, `hasLoadedOnce`, or `exhausted`, so the pending fetch
     /// still runs and fully replaces these tweets — fresh content can't be
-    /// suppressed by the seed. No-op once any tweets are loaded.
+    /// suppressed by the seed. No-op once any tweets are loaded. The snapshot is
+    /// read off the main thread and dropped if the fetch (or a source change)
+    /// got there first.
     private func seedFromCache() {
         guard tweets.value.isEmpty, let key = cacheKey else { return }
-        guard let cached = TimelineCache.shared.load(key: key), !cached.tweets.isEmpty else { return }
-        tweets.send(cached.tweets)
-        AppLogger.shared.debug("seeded \(cached.tweets.count) cached tweets for \(key)", category: .timeline)
+        Task { [weak self] in
+            guard let cached = await TimelineCache.shared.load(key: key), !cached.tweets.isEmpty,
+                  let self, self.tweets.value.isEmpty, !self.hasLoadedOnce, self.cacheKey == key else { return }
+            self.tweets.send(cached.tweets)
+            AppLogger.shared.debug("seeded \(cached.tweets.count) cached tweets for \(key)", category: .timeline)
+        }
     }
 
     /// The seed's key: the source's own, plus whether the rage filter is on for
@@ -536,6 +548,8 @@ final class TimelineViewModel {
     }
 
     private func load(reset: Bool, generation: Int) async {
+        pageLoadFailed = false
+        loadingReset = reset
         defer {
             if generation == loadGeneration {
                 isLoading.send(false)
@@ -590,9 +604,16 @@ final class TimelineViewModel {
             if case .cancelled = error { return }
             reportLoadError(error)
         } catch {
-            errorMessage.send(error.localizedDescription)
-            hasLoadedOnce = true
+            reportFailure(error.localizedDescription)
         }
+    }
+
+    /// Publishes a failed load, noting whether it was a page past the end of
+    /// a list already shown or a refresh.
+    private func reportFailure(_ message: String) {
+        pageLoadFailed = !loadingReset
+        hasLoadedOnce = true
+        errorMessage.send(message)
     }
 
     /// Filter-on path (collect-then-show, matching the TUI): fetch pages and
@@ -659,8 +680,8 @@ final class TimelineViewModel {
         current.append(contentsOf: survivors)
         tweets.send(current)
         persistCache(current)
-        let allHidden = (reset ? [] : hiddenPosts.value) + newlyHidden
-        hiddenPosts.send(Array(allHidden.suffix(Self.hiddenCap)))
+        hiddenPosts.send(Self.mergedHidden(hiddenPosts.value, adding: newlyHidden,
+                                           shown: Set(survivors.map(\.restID)), cap: Self.hiddenCap))
         reconcileSeen(survivors.map(\.restID))
         AppLogger.shared.info(
             "filter batch +\(survivors.count) survivors over \(pages) page(s) (\(current.count) total)",
@@ -669,12 +690,23 @@ final class TimelineViewModel {
         if let failure { reportLoadFailure(failure) } else { await updateFreshness() }
     }
 
+    /// The hidden-posts list after a batch: what was hidden before stays
+    /// (a refresh is no reason to forget a post the user may want to rescue),
+    /// a post hidden again moves to the newest end instead of listing twice,
+    /// one the batch now shows leaves, and only the newest `cap` are kept.
+    nonisolated static func mergedHidden(_ existing: [HiddenPost], adding newlyHidden: [HiddenPost], shown: Set<String>,
+                             cap: Int) -> [HiddenPost] {
+        let replaced = Set(newlyHidden.map(\.id)).union(shown)
+        var seen = Set<String>()
+        let merged = (existing.filter { !replaced.contains($0.id) } + newlyHidden).filter { seen.insert($0.id).inserted }
+        return Array(merged.suffix(cap))
+    }
+
     private func reportLoadFailure(_ failure: (any Error)?) {
         if let error = failure as? APIError {
             reportLoadError(error)
         } else if let failure {
-            errorMessage.send(failure.localizedDescription)
-            hasLoadedOnce = true
+            reportFailure(failure.localizedDescription)
         }
     }
 
@@ -717,8 +749,7 @@ final class TimelineViewModel {
     }
 
     private func reportLoadError(_ error: APIError) {
-        errorMessage.send(error.localizedDescription)
-        hasLoadedOnce = true
+        reportFailure(error.localizedDescription)
         AppLogger.shared.warn("feed load failed: \(error)", category: .timeline)
     }
 

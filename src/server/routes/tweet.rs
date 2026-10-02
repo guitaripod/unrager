@@ -3,7 +3,6 @@ use crate::gql::endpoints;
 use crate::gql::query_ids::Operation;
 use crate::parse::activity as parse_activity;
 use crate::parse::timeline;
-use crate::parse::tweet as parse_tweet;
 use crate::server::error::ApiError;
 use crate::server::state::AppState;
 use axum::Json;
@@ -16,24 +15,9 @@ pub async fn single(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> std::result::Result<Json<Tweet>, ApiError> {
-    let tweet = fetch_tweet_by_rest_id(&state, &id).await?;
+    let tweet = crate::server::state::fetch_tweet(&state.gql, &id).await?;
     state.remember([&tweet]);
     Ok(Json(tweet))
-}
-
-async fn fetch_tweet_by_rest_id(
-    state: &Arc<AppState>,
-    id: &str,
-) -> std::result::Result<Tweet, ApiError> {
-    let response = state
-        .gql
-        .get(
-            Operation::TweetResultByRestId,
-            &endpoints::tweet_by_rest_id_variables(id),
-            &endpoints::tweet_read_features(),
-        )
-        .await?;
-    Ok(parse_tweet::parse_tweet_result_by_rest_id(&response)?)
 }
 
 /// X's own analytics for one of the signed-in account's posts: impressions,
@@ -53,7 +37,6 @@ pub async fn analytics(
             &endpoints::tweet_activity_features(),
         )
         .await;
-    let _ = std::fs::write("/tmp/unrager-activity.json", format!("{response:?}"));
     match response {
         Ok(response) => parse_activity::parse_post_analytics(&response)
             .map(Json)

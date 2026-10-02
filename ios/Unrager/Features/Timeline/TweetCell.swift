@@ -128,7 +128,7 @@ final class TweetCell: UICollectionViewCell {
     /// Feed-context body cap (v. the unlimited focal/thread rendering).
     static let feedBodyLineLimit = 10
 
-    private static let avatarSize: CGFloat = 36
+    static let avatarSize: CGFloat = 36
     private static let sideMargin = DesignSystem.Spacing.l
     private static let sideInsets = NSDirectionalEdgeInsets(
         top: 0, leading: sideMargin, bottom: 0, trailing: sideMargin)
@@ -157,7 +157,6 @@ final class TweetCell: UICollectionViewCell {
         super.prepareForReuse()
         tweetID = nil
         boundTweet = nil
-        accessibilityCustomActions = nil
         avatar.cancel()
         quotedAvatar.cancel()
         mediaContent.prepareForReuse()
@@ -197,6 +196,10 @@ final class TweetCell: UICollectionViewCell {
     func mediaSourceView(at index: Int) -> UIView? { mediaContent.photoSourceView(at: index) }
     func playVideo() { mediaContent.playVideo() }
     func pauseVideo() { mediaContent.pauseVideo() }
+    func releaseVideo() {
+        mediaContent.releaseVideo()
+        quotedMedia.releaseVideo()
+    }
 
     /// A reply's leading `@mentions` are taken out of its text and summed up in
     /// a caption (see `ReplyContext`): `impliedReplyHandles` holds the accounts
@@ -257,11 +260,11 @@ final class TweetCell: UICollectionViewCell {
         }
         PerfProbe.time("cfg.actions") { configureActions(tweet) }
         configureStats(tweet, content: stats)
-        PerfProbe.time("cfg.a11y") {
-            configureAccessibility(tweet, seen: seen)
-            isAccessibilityElement = true
-            refreshAccessibility(seen: seen)
-        }
+        pendingEmoji = TwemojiText.uncachedEmoji(in: [
+            tweet.author.name, body.string, tweet.quotedTweet?.author.name ?? "", tweet.quotedTweet?.text ?? "",
+        ])
+        boundSeen = seen
+        isAccessibilityElement = true
     }
 
     /// Shows or hides the stats strip under the action bar, and makes the views
@@ -323,7 +326,7 @@ final class TweetCell: UICollectionViewCell {
             for: tweet, seen: seen, font: DesignSystem.Typography.body())
         bodyView.attributedText = body
         contentView.alpha = seen ? 0.85 : 1
-        refreshAccessibility(seen: seen)
+        boundSeen = seen
     }
 
     /// Collapses a note-length body to `limit` lines behind a tappable
@@ -366,13 +369,29 @@ final class TweetCell: UICollectionViewCell {
     /// count divides the measured height by the full per-line advance
     /// (lineHeight + leading, matching `.usesFontLeading`).
     static func bodyExceedsLimit(_ body: NSAttributedString, limit: Int, contentWidth: CGFloat) -> Bool {
-        let bounds = body.boundingRect(
+        let prefix = measuredPrefix(of: body, limit: limit)
+        if linesNeeded(by: prefix, contentWidth: contentWidth) > limit + 2 { return true }
+        guard prefix.length < body.length else { return false }
+        return linesNeeded(by: body, contentWidth: contentWidth) > limit + 2
+    }
+
+    /// The start of `body` long enough to fill `limit` + 3 lines at any width
+    /// a phone shows, so a long Note is measured by its head instead of all of
+    /// it on the main thread; the cut never splits a character.
+    private static func measuredPrefix(of body: NSAttributedString, limit: Int) -> NSAttributedString {
+        let budget = (limit + 3) * 120
+        guard body.length > budget else { return body }
+        let cut = (body.string as NSString).rangeOfComposedCharacterSequence(at: budget).location
+        return body.attributedSubstring(from: NSRange(location: 0, length: cut))
+    }
+
+    private static func linesNeeded(by text: NSAttributedString, contentWidth: CGFloat) -> Int {
+        let bounds = text.boundingRect(
             with: CGSize(width: contentWidth, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
         let font = DesignSystem.Typography.body()
         let lineAdvance = max(1, font.lineHeight + max(0, font.leading))
-        let lines = Int((bounds.height / lineAdvance).rounded())
-        return lines > limit + 2
+        return Int((bounds.height / lineAdvance).rounded())
     }
 
     /// Shows (or clears) the author's country flag directly after the display
@@ -384,7 +403,17 @@ final class TweetCell: UICollectionViewCell {
             TwemojiText.attributed($0, font: DesignSystem.Typography.name(), color: DesignSystem.Color.label)
         }
         flagLabel.isHidden = (flag ?? "").isEmpty
+        if let flag { pendingEmoji.formUnion(TwemojiText.uncachedEmoji(in: [flag])) }
     }
+
+    /// Emoji the row shows as system glyphs because their Twemoji art was not
+    /// in memory when it was built.
+    private var pendingEmoji: Set<String> = []
+
+    /// Whether Twemoji art that arrived since the row was built would change
+    /// it, so a feed re-renders only those rows (a re-render elsewhere would
+    /// rebuild photos for nothing).
+    var awaitsLoadedEmoji: Bool { TwemojiText.anyCached(pendingEmoji) }
 
     /// Indents the card by reply depth so a reply-to-a-reply sits further right
     /// than a reply-to-the-root; level 0 (feed / root / focal) is flush. A thin
@@ -435,8 +464,9 @@ final class TweetCell: UICollectionViewCell {
         }
         quotedWrap.isHidden = false
         quotedAuthorLabel.attributedText = Self.quotedHeader(quoted)
-        quotedBodyLabel.text = quoted.text
-        quotedBodyLabel.isHidden = quoted.text.isEmpty
+        let quotedBody = TweetText.attributed(for: quoted, seen: false, font: DesignSystem.Typography.metric())
+        quotedBodyLabel.attributedText = quotedBody
+        quotedBodyLabel.isHidden = quotedBody.length == 0
         loadAvatar(into: quotedAvatar, url: quoted.author.avatarURL, size: 18, fallbackPoint: 16, enabled: imagesEnabled)
         quotedMedia.onTapPhoto = { [weak self] _ in self?.onTapQuoted?() }
         quotedMedia.onTapCard = { [weak self] _ in self?.onTapQuoted?() }
@@ -498,10 +528,27 @@ final class TweetCell: UICollectionViewCell {
             result.append(NSAttributedString(string: " "))
         }
         result.append(NSAttributedString(string: Format.count(count), attributes: [
-            .font: DesignSystem.Typography.metric(),
+            .font: DesignSystem.Typography.actionMetric(),
             .foregroundColor: tint,
         ]))
         return result
+    }
+
+    /// Whether `kind` is on for the post as the row shows it now, and its count.
+    func engagement(_ kind: Engagement.Kind) -> (on: Bool, count: Int) {
+        switch kind {
+        case .like: return (isLiked, shownLikeCount)
+        case .repost: return (isRetweeted, shownRetweetCount)
+        case .bookmark: return (isBookmarked, shownBookmarkCount)
+        }
+    }
+
+    func applyEngagement(_ kind: Engagement.Kind, on: Bool, count: Int) {
+        switch kind {
+        case .like: applyLike(favorited: on, count: count)
+        case .repost: applyRetweet(retweeted: on, count: count)
+        case .bookmark: applyBookmark(bookmarked: on, count: count)
+        }
     }
 
     /// Reflects an optimistic like toggle without re-running the full config —
@@ -512,8 +559,6 @@ final class TweetCell: UICollectionViewCell {
         shownLikeCount = count
         likeButton.set(title: label(count), image: Self.glyph(favorited ? "heart.fill" : "heart"),
                        tint: favorited ? DesignSystem.Color.like : DesignSystem.Color.secondaryLabel)
-        likeButton.accessibilityLabel = favorited ? "Unlike" : "Like"
-        refreshAccessibility()
     }
 
     /// Reflects an optimistic repost toggle: green tint while reposted (X's
@@ -525,8 +570,6 @@ final class TweetCell: UICollectionViewCell {
         shownRetweetCount = count
         retweetButton.set(title: label(count),
                           tint: retweeted ? DesignSystem.Color.retweet : DesignSystem.Color.secondaryLabel)
-        retweetButton.accessibilityLabel = retweeted ? "Reposted, \(count)" : "Repost, \(count)"
-        refreshAccessibility()
     }
 
     /// Reflects an optimistic bookmark toggle — filled accent glyph while
@@ -536,24 +579,6 @@ final class TweetCell: UICollectionViewCell {
         shownBookmarkCount = count
         bookmarkButton.set(title: label(count), image: Self.glyph(bookmarked ? "bookmark.fill" : "bookmark"),
                            tint: bookmarked ? DesignSystem.Color.accent : DesignSystem.Color.secondaryLabel)
-        bookmarkButton.accessibilityLabel = bookmarked ? "Remove bookmark, \(count)" : "Bookmark, \(count)"
-        refreshAccessibility()
-    }
-
-    private func configureAccessibility(_ tweet: Tweet, seen: Bool) {
-        avatar.isAccessibilityElement = true
-        avatar.accessibilityTraits = .button
-        avatar.accessibilityLabel = "\(tweet.author.name), profile"
-
-        replyButton.accessibilityLabel = "Reply, \(tweet.replyCount)"
-        likeButton.accessibilityLabel = tweet.favorited ? "Unlike, \(tweet.likeCount)" : "Like, \(tweet.likeCount)"
-        shareButton.accessibilityLabel = "Share"
-        viewsLabel.accessibilityLabel = tweet.viewCount.map { "\(Format.count($0)) views" }
-        viewsLabel.isAccessibilityElement = tweet.viewCount != nil
-
-        let verified = tweet.author.verified ? ", verified" : ""
-        let seenSuffix = seen ? ", already seen" : ""
-        bodyView.accessibilityLabel = "\(tweet.author.name)\(verified)\(spokenReply(for: tweet)). \(ReplyContext.body(of: tweet))\(seenSuffix)"
     }
 
     /// ", replying to @a and @b" for a reply, whether or not the row shows the
@@ -576,12 +601,22 @@ final class TweetCell: UICollectionViewCell {
     private var boundSeen = false
 
     /// The row as one VoiceOver element — author, text, media, quote, counts and
-    /// time read as a single utterance — with every action a sighted user has on
-    /// the row offered as a custom action, instead of ten separate stops with
-    /// the author's name read three times.
-    private func refreshAccessibility(seen: Bool? = nil) {
-        guard let tweet = boundTweet else { return }
-        if let seen { boundSeen = seen }
+    /// time read as a single utterance — built when an assistive technology
+    /// asks, from what the row shows at that moment, so binding a row with
+    /// VoiceOver off does none of this work.
+    override var accessibilityLabel: String? {
+        get { boundTweet.map(spokenSummary) }
+        set {}
+    }
+
+    /// Every action a sighted user has on the row, offered as a custom action
+    /// instead of ten separate stops with the author's name read three times.
+    override var accessibilityCustomActions: [UIAccessibilityCustomAction]? {
+        get { boundTweet.map(customActions) }
+        set {}
+    }
+
+    private func spokenSummary(of tweet: Tweet) -> String {
         let verified = tweet.author.verified ? ", verified" : ""
         let replying = spokenReply(for: tweet)
         let when = Self.spokenTime.localizedString(for: tweet.createdAt, relativeTo: Date())
@@ -590,7 +625,7 @@ final class TweetCell: UICollectionViewCell {
         if !body.isEmpty { parts.append(body) }
         if let media = Self.mediaSummary(tweet.media) { parts.append(media) }
         if let quoted = tweet.quotedTweet {
-            parts.append("Quoting \(quoted.author.name): \(quoted.text)")
+            parts.append("Quoting \(quoted.author.name): \(ReplyContext.body(of: quoted))")
         }
         var counts = ["\(tweet.replyCount) replies", "\(shownRetweetCount) reposts", "\(shownLikeCount) likes"]
         if let views = tweet.viewCount, views > 0 { counts.append("\(Format.count(views)) views") }
@@ -601,8 +636,7 @@ final class TweetCell: UICollectionViewCell {
         if isBookmarked { state.append("bookmarked") }
         if boundSeen { state.append("already seen") }
         if !state.isEmpty { parts.append(state.joined(separator: ", ")) }
-        accessibilityLabel = parts.joined(separator: ". ")
-        accessibilityCustomActions = customActions(for: tweet)
+        return parts.joined(separator: ". ")
     }
 
     private static func mediaSummary(_ media: [Media]) -> String? {
@@ -671,7 +705,8 @@ final class TweetCell: UICollectionViewCell {
 
         nameLabel.font = DesignSystem.Typography.name()
         nameLabel.textColor = DesignSystem.Color.label
-        nameLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        nameLabel.lineBreakMode = .byTruncatingTail
+        nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         flagLabel.font = DesignSystem.Typography.name()
         flagLabel.setContentHuggingPriority(.required, for: .horizontal)
@@ -682,6 +717,7 @@ final class TweetCell: UICollectionViewCell {
         verifiedBadge.image = DesignSystem.icon("checkmark.seal.fill", pointSize: 13)
         verifiedBadge.tintColor = DesignSystem.Color.verified
         verifiedBadge.setContentHuggingPriority(.required, for: .horizontal)
+        verifiedBadge.setContentCompressionResistancePriority(.required, for: .horizontal)
         verifiedBadge.isAccessibilityElement = false
 
         replyCaption.isHidden = true
@@ -714,9 +750,10 @@ final class TweetCell: UICollectionViewCell {
 
         buildQuoted()
 
-        viewsLabel.font = DesignSystem.Typography.metric()
+        viewsLabel.font = DesignSystem.Typography.actionMetric()
         viewsLabel.textColor = DesignSystem.Color.secondaryLabel
-        viewsLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        viewsLabel.lineBreakMode = .byTruncatingTail
+        viewsLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         actionBar.axis = .horizontal
         actionBar.distribution = .equalSpacing
@@ -733,7 +770,7 @@ final class TweetCell: UICollectionViewCell {
         likeLongPress.isEnabled = false
         likeButton.addGestureRecognizer(likeLongPress)
         replyButton.addTarget(self, action: #selector(replyTapped), for: .touchUpInside)
-        replyButton.accessibilityHint = "Reply to this tweet"
+        replyButton.accessibilityHint = "Reply to this post"
         bookmarkButton.addTarget(self, action: #selector(bookmarkTapped), for: .touchUpInside)
         shareButton.addTarget(self, action: #selector(shareTapped), for: .touchUpInside)
         configureRetweetMenu()
@@ -842,7 +879,7 @@ final class TweetCell: UICollectionViewCell {
         }
         let button = UIButton(configuration: config)
         button.contentHorizontalAlignment = .leading
-        button.accessibilityHint = "Shows the full tweet text"
+        button.accessibilityHint = "Shows the full post text"
         return button
     }
 
@@ -875,7 +912,8 @@ final class TweetCell: UICollectionViewCell {
     /// action bar routes to the button instead of falling through to the row
     /// (which would push the thread).
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        let targets: [UIView] = [replyButton, retweetButton, likeButton, bookmarkButton, shareButton, viewsLabel]
+        let targets: [UIView] = [replyButton, retweetButton, likeButton, bookmarkButton, shareButton, viewsLabel,
+                                 showMoreButton]
         for button in targets where !button.isHidden && button.window != nil && button.isUserInteractionEnabled {
             let local = button.convert(point, from: self)
             if button.point(inside: local, with: event) { break }

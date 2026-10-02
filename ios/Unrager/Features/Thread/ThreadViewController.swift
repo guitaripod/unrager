@@ -1,5 +1,4 @@
 import UIKit
-import AVKit
 import Combine
 import UnragerKit
 
@@ -37,6 +36,9 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
     private var repliesFailure: String?
     private var failedLoadWasReload = false
     private var replySort: ReplySort = .conversation
+    /// The reply the user just posted from here, to scroll to once the
+    /// reloaded thread shows it.
+    private var postedReplyID: String?
     private let emptyState = EmptyStateView()
     private let loadingIndicator = UIActivityIndicatorView(style: .medium)
 
@@ -104,7 +106,12 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
     private var expandedStats = Set<String>()
 
     private func toggleStats(_ id: String) {
-        if expandedStats.contains(id) { expandedStats.remove(id) } else { expandedStats.insert(id) }
+        if expandedStats.contains(id) {
+            expandedStats.remove(id)
+        } else {
+            expandedStats.insert(id)
+            PostStatsStore.shared.retryIfFailed(id)
+        }
         reconfigure(id, animated: true)
     }
 
@@ -193,7 +200,9 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let self else { return }
-                self.dataSource.reconfigureVisibleItems(of: self.collectionView)
+                self.dataSource.reconfigureVisibleItems(of: self.collectionView) {
+                    ($0 as? TweetCell)?.awaitsLoadedEmoji ?? true
+                }
             }
             .store(in: &cancellables)
     }
@@ -399,12 +408,14 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
                 threadLoaded = true
                 applyThread(ancestors: ancestorOrder, focal: focal.restID, reconfigureExisting: true)
                 updateFooter()
+                DispatchQueue.main.async { [weak self] in self?.revealPostedReply() }
             } catch {
                 guard !didRenderFocal else {
                     AppLogger.shared.warn("thread load failed (focal already shown): \(error)", category: .thread)
                     repliesFailure = "Couldn't load replies"
                     failedLoadWasReload = true
                     updateFooter()
+                    revealPostedReply()
                     return
                 }
                 loadingIndicator.stopAnimating()
@@ -586,7 +597,27 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
 
     private func reply(to tweet: Tweet) {
         let compose = ComposeViewController(mode: .reply(to: tweet))
+        compose.onPosted = { [weak self] posted in
+            guard let self else { return }
+            if posted.likedReplyTarget {
+                self.confirmEngagement(id: tweet.restID) { $0.togglingLike(to: true) }
+            }
+            self.postedReplyID = posted.id
+            self.load()
+        }
         present(UINavigationController(rootViewController: compose), animated: true)
+    }
+
+    /// Scrolls to the reply the user just posted once the reloaded thread
+    /// holds it; when X hasn't surfaced it yet, says it went through instead.
+    private func revealPostedReply() {
+        guard let id = postedReplyID else { return }
+        postedReplyID = nil
+        guard let indexPath = dataSource.indexPath(for: id) else {
+            showToast("Reply posted")
+            return
+        }
+        collectionView.scrollToItem(at: indexPath, at: .centeredVertically, animated: true)
     }
 
     func presentQuote(_ tweet: Tweet) {
@@ -606,11 +637,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
             let url = video.element.videoURL.flatMap(URL.init)
                 ?? AppEnvironment.shared.api.mediaURL(tweetID: tweet.restID, index: video.offset)
             for case let cell as TweetCell in collectionView.visibleCells { cell.pauseVideo() }
-            MediaAudioSession.activatePlayback()
-            let player = AVPlayer(url: url)
-            let controller = AVPlayerViewController()
-            controller.player = player
-            present(controller, animated: true) { player.play() }
+            presentFullScreenVideo(url)
             return
         }
         let photoIndices = tweet.media.enumerated().compactMap { index, media -> Int? in
@@ -625,60 +652,23 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
     }
 
     func toggleLike(_ tweet: Tweet, cell: TweetCell?) {
-        let target = !(cell?.isLiked ?? tweet.favorited)
-        cell?.applyLike(favorited: target, count: max(0, tweet.likeCount + (target ? 1 : -1)))
-        Task {
-            do {
-                _ = target
-                    ? try await AppEnvironment.shared.api.like(tweetID: tweet.restID)
-                    : try await AppEnvironment.shared.api.unlike(tweetID: tweet.restID)
-                confirmLike(id: tweet.restID, favorited: target)
-            } catch {
-                cell?.applyLike(favorited: !target, count: tweet.likeCount)
-                Haptics.error()
-            }
+        Engagement.toggle(.like, tweet: tweet, cell: cell, host: self) { [weak self] on in
+            self?.confirmEngagement(id: tweet.restID) { $0.togglingLike(to: on) }
         }
     }
 
     /// Optimistic repost toggle, same contract as `toggleLike`.
     func toggleRetweet(_ tweet: Tweet, cell: TweetCell?) {
-        let target = !(cell?.isRetweeted ?? tweet.retweeted)
-        cell?.applyRetweet(retweeted: target, count: max(0, tweet.retweetCount + (target ? 1 : -1)))
-        Task {
-            do {
-                _ = target
-                    ? try await EngageService.engage.retweet(tweetID: tweet.restID)
-                    : try await EngageService.engage.unretweet(tweetID: tweet.restID)
-                confirmEngagement(id: tweet.restID) { $0.togglingRetweet(to: target) }
-            } catch {
-                cell?.applyRetweet(retweeted: !target, count: tweet.retweetCount)
-                Haptics.error()
-            }
+        Engagement.toggle(.repost, tweet: tweet, cell: cell, host: self) { [weak self] on in
+            self?.confirmEngagement(id: tweet.restID) { $0.togglingRetweet(to: on) }
         }
     }
 
     /// Optimistic bookmark toggle, same contract as `toggleLike`.
     func toggleBookmark(_ tweet: Tweet, cell: TweetCell?) {
-        let target = !(cell?.isBookmarked ?? tweet.bookmarked)
-        cell?.applyBookmark(bookmarked: target, count: max(0, tweet.bookmarkCount + (target ? 1 : -1)))
-        Task {
-            do {
-                _ = target
-                    ? try await EngageService.engage.bookmark(tweetID: tweet.restID)
-                    : try await EngageService.engage.unbookmark(tweetID: tweet.restID)
-                confirmEngagement(id: tweet.restID) { $0.togglingBookmark(to: target) }
-            } catch {
-                cell?.applyBookmark(bookmarked: !target, count: tweet.bookmarkCount)
-                Haptics.error()
-            }
+        Engagement.toggle(.bookmark, tweet: tweet, cell: cell, host: self) { [weak self] on in
+            self?.confirmEngagement(id: tweet.restID) { $0.togglingBookmark(to: on) }
         }
-    }
-
-    /// Writes a confirmed like/unlike back into the thread's model and
-    /// reconfigures the row so its handlers capture the fresh state — otherwise
-    /// a second tap re-sends "like" and any reuse repaints the stale heart.
-    private func confirmLike(id: String, favorited: Bool) {
-        confirmEngagement(id: id) { $0.togglingLike(to: favorited) }
     }
 
     /// The shared confirmed-engagement write-back: swaps in `transform`'s copy

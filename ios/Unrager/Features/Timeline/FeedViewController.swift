@@ -1,5 +1,4 @@
 import UIKit
-import AVKit
 import Combine
 import UnragerKit
 
@@ -113,7 +112,12 @@ class FeedViewController: UIViewController, TweetActionHandling {
     private var expandedStats = Set<String>()
 
     private func toggleStats(_ id: String) {
-        if expandedStats.contains(id) { expandedStats.remove(id) } else { expandedStats.insert(id) }
+        if expandedStats.contains(id) {
+            expandedStats.remove(id)
+        } else {
+            expandedStats.insert(id)
+            PostStatsStore.shared.retryIfFailed(id)
+        }
         reconfigure(id, animated: true)
     }
 
@@ -239,6 +243,11 @@ class FeedViewController: UIViewController, TweetActionHandling {
 
     private func presentReply(_ tweet: Tweet) {
         let compose = ComposeViewController(mode: .reply(to: tweet))
+        compose.onPosted = { [weak self] posted in
+            guard let self else { return }
+            if posted.likedReplyTarget { self.viewModel.applyLike(id: tweet.restID, favorited: true) }
+            self.showToast("Reply posted")
+        }
         present(UINavigationController(rootViewController: compose), animated: true)
     }
 
@@ -312,11 +321,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
             let url = video.element.videoURL.flatMap(URL.init)
                 ?? AppEnvironment.shared.api.mediaURL(tweetID: tweet.restID, index: video.offset)
             pauseAllVideos()
-            MediaAudioSession.activatePlayback()
-            let player = AVPlayer(url: url)
-            let controller = AVPlayerViewController()
-            controller.player = player
-            present(controller, animated: true) { player.play() }
+            presentFullScreenVideo(url)
             return
         }
         let photoIndices = tweet.media.enumerated().compactMap { index, media -> Int? in
@@ -420,8 +425,9 @@ class FeedViewController: UIViewController, TweetActionHandling {
     }
 
     /// The end-of-list footer: "You're all caught up" once the cursor is
-    /// exhausted, "Scroll to retry" while paging stalled but the cursor lives,
-    /// and hidden while a non-empty list is still loading.
+    /// exhausted, "Couldn't load more" after the next page failed, "Scroll to
+    /// retry" while paging stalled but the cursor lives, and a spinner while
+    /// a non-empty list is still loading.
     private func configureFooter(_ footer: FeedFooterView) {
         let count = dataSource.snapshot().numberOfItems
         guard count > 0 else { footer.setHidden(); return }
@@ -430,7 +436,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
         } else if viewModel.isLoading.value {
             footer.showLoading()
         } else {
-            footer.show(text: "Scroll to retry", showsRetry: true)
+            footer.show(text: viewModel.pageLoadFailed ? "Couldn't load more" : "Scroll to retry", showsRetry: true)
             footer.onRetry = { [weak self] in self?.viewModel.loadMoreIfNeeded(currentIndex: count - 1) }
         }
     }
@@ -455,7 +461,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
             .sink { [weak self] refreshing in
                 guard let self, let rc = self.collectionView.refreshControl else { return }
                 if refreshing {
-                    rc.attributedTitle = self.refreshTitle("Loading new tweets…")
+                    rc.attributedTitle = self.refreshTitle("Loading new posts…")
                 } else {
                     rc.endRefreshing()
                 }
@@ -520,12 +526,16 @@ class FeedViewController: UIViewController, TweetActionHandling {
         dataSource.apply(snapshot, animatingDifferences: false)
     }
 
-    /// Re-renders on-screen rows once Twemoji art lands so a cold-cache emoji
-    /// flips from the native glyph to the flat Twemoji image — never during a
-    /// scroll, so it stays off the hot path.
+    /// Re-renders the on-screen rows whose emoji just got their Twemoji art, so
+    /// a cold-cache emoji flips from the native glyph to the flat image — never
+    /// during a scroll, so it stays off the hot path, and never a row the new
+    /// art doesn't touch, whose photos would reload for nothing.
     private func reconfigureVisibleForEmoji() {
         guard !isScrolling else { return }
-        let visible = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
+        let visible = collectionView.indexPathsForVisibleItems.compactMap { indexPath -> String? in
+            guard let cell = collectionView.cellForItem(at: indexPath) as? TweetCell, cell.awaitsLoadedEmoji else { return nil }
+            return dataSource.itemIdentifier(for: indexPath)
+        }
         guard !visible.isEmpty else { return }
         var snapshot = dataSource.snapshot()
         let present = visible.filter { snapshot.itemIdentifiers.contains($0) }
@@ -606,7 +616,8 @@ class FeedViewController: UIViewController, TweetActionHandling {
 
         let hadItems = dataSource.snapshot().numberOfItems > 0
         let growsBottomOnly = hadItems && changed.isEmpty && isPureAppend(tweets)
-        let anchor = (hadItems && !tweets.isEmpty && !growsBottomOnly && collectionView.contentOffset.y > 1)
+        let scrolledIn = collectionView.contentOffset.y > -collectionView.adjustedContentInset.top + 1
+        let anchor = (hadItems && !tweets.isEmpty && !growsBottomOnly && scrolledIn)
             ? scrollAnchor(in: snapshot) : nil
         let animated = anchor == nil && !growsBottomOnly && !tweets.isEmpty
         PerfProbe.time("snapshot") {
@@ -651,13 +662,13 @@ class FeedViewController: UIViewController, TweetActionHandling {
         return nil
     }
 
+    /// Puts the anchor row back where it was on screen. Offsets are bounded by
+    /// the resting position under the navigation bar (`-adjustedContentInset.top`),
+    /// not 0, which sits a bar's height lower.
     private func restoreScrollAnchor(_ anchor: (id: String, offset: CGFloat)) {
-        guard let indexPath = dataSource.indexPath(for: anchor.id),
-              let attributes = collectionView.layoutAttributesForItem(at: indexPath) else { return }
-        let target = attributes.frame.minY - anchor.offset
-        let maxOffset = max(0, collectionView.contentSize.height - collectionView.bounds.height
-            + collectionView.adjustedContentInset.bottom)
-        collectionView.setContentOffset(CGPoint(x: 0, y: min(max(0, target), maxOffset)), animated: false)
+        guard let indexPath = dataSource.indexPath(for: anchor.id) else { return }
+        collectionView.restore(UICollectionView.ScrollAnchor(indexPath: indexPath, distanceFromTop: anchor.offset),
+                               at: indexPath)
     }
 
     // MARK: - Inline video playback (scroll-aware)
@@ -719,7 +730,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
             hideCollecting()
             emptyState.isHidden = false
             emptyState.show(symbol: "magnifyingglass", title: "Search X",
-                            subtitle: "Find tweets, people, and topics.", showRetry: false)
+                            subtitle: "Find posts, people, and topics.", showRetry: false)
         } else if viewModel.collectingProgress.value != nil, MetalCollectingView.isSupported {
             emptyState.isHidden = true
             loadingIndicator.stopAnimating()
@@ -765,21 +776,27 @@ class FeedViewController: UIViewController, TweetActionHandling {
     }
 
     /// While collect-then-show filtering is gathering a batch, replaces the bare
-    /// spinner caption with "collecting tweets… N/25". Used only on the
+    /// spinner caption with "collecting posts… N/25". Used only on the
     /// fallback (no-Metal) path.
     private func updateCollectingLabel() {
         if let progress = viewModel.collectingProgress.value {
             collectingLabel.isHidden = false
-            collectingLabel.text = "collecting tweets… \(progress)/\(TimelineViewModel.targetSurvivors)"
+            collectingLabel.text = "collecting posts… \(progress)/\(TimelineViewModel.targetSurvivors)"
         } else {
             collectingLabel.isHidden = true
         }
     }
 
+    /// A failed refresh over posts already shown flags them as saved ones; a
+    /// failed next page leaves them alone (nothing on screen is stale) and
+    /// turns the footer into "Couldn't load more" with a retry.
     private func handleError(_ message: String) {
         lastErrorText = message
         if dataSource.snapshot().numberOfItems == 0 {
             updateChrome()
+        } else if viewModel.pageLoadFailed {
+            refreshFooter()
+            UIAccessibility.post(notification: .announcement, argument: "Couldn't load more posts")
         } else {
             UINotificationFeedbackGenerator().notificationOccurred(.error)
             showStaleNotice()
@@ -796,7 +813,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
 
     @objc func pullToRefresh() { viewModel.refresh() }
 
-    /// A dim, caption-sized pull-to-refresh title for the "Loading new tweets…"
+    /// A dim, caption-sized pull-to-refresh title for the "Loading new posts…"
     /// state.
     private func refreshTitle(_ text: String) -> NSAttributedString {
         NSAttributedString(
@@ -888,63 +905,26 @@ class FeedViewController: UIViewController, TweetActionHandling {
         navigationController?.pushViewController(results, animated: true)
     }
 
-    /// Optimistic like: flip the heart and count on the visible cell now, fire
-    /// the request, and on success write the new state back into the view model
-    /// (so a second tap can unlike and reconfigures don't revert the heart);
-    /// only roll the cell back if the network rejects it.
+    /// Optimistic like through `Engagement`: the row flips now, and the
+    /// confirmed state is written back into the view model (so a second tap
+    /// can unlike and reconfigures don't revert the heart).
     func toggleLike(_ tweet: Tweet, cell: TweetCell?) {
-        let target = !(cell?.isLiked ?? tweet.favorited)
-        let optimisticCount = max(0, tweet.likeCount + (target ? 1 : -1))
-        cell?.applyLike(favorited: target, count: optimisticCount)
-        Task {
-            do {
-                _ = target
-                    ? try await AppEnvironment.shared.api.like(tweetID: tweet.restID)
-                    : try await AppEnvironment.shared.api.unlike(tweetID: tweet.restID)
-                viewModel.applyLike(id: tweet.restID, favorited: target)
-            } catch {
-                if cell?.tweetID == tweet.restID { cell?.applyLike(favorited: !target, count: tweet.likeCount) }
-                Haptics.error()
-                AppLogger.shared.warn("like failed: \(error)", category: .timeline)
-            }
+        Engagement.toggle(.like, tweet: tweet, cell: cell, host: self) { [weak self] on in
+            self?.viewModel.applyLike(id: tweet.restID, favorited: on)
         }
     }
 
-    /// Optimistic repost toggle, same contract as `toggleLike`: the arrows go
-    /// green and the count bumps instantly, the confirmed state is written back
-    /// through the view model, and the cell rolls back on a network reject.
+    /// Optimistic repost toggle, same contract as `toggleLike`.
     func toggleRetweet(_ tweet: Tweet, cell: TweetCell?) {
-        let target = !(cell?.isRetweeted ?? tweet.retweeted)
-        cell?.applyRetweet(retweeted: target, count: max(0, tweet.retweetCount + (target ? 1 : -1)))
-        Task {
-            do {
-                _ = target
-                    ? try await EngageService.engage.retweet(tweetID: tweet.restID)
-                    : try await EngageService.engage.unretweet(tweetID: tweet.restID)
-                viewModel.applyRetweet(id: tweet.restID, retweeted: target)
-            } catch {
-                if cell?.tweetID == tweet.restID { cell?.applyRetweet(retweeted: !target, count: tweet.retweetCount) }
-                Haptics.error()
-                AppLogger.shared.warn("retweet failed: \(error)", category: .timeline)
-            }
+        Engagement.toggle(.repost, tweet: tweet, cell: cell, host: self) { [weak self] on in
+            self?.viewModel.applyRetweet(id: tweet.restID, retweeted: on)
         }
     }
 
     /// Optimistic bookmark toggle, same contract as `toggleLike`.
     func toggleBookmark(_ tweet: Tweet, cell: TweetCell?) {
-        let target = !(cell?.isBookmarked ?? tweet.bookmarked)
-        cell?.applyBookmark(bookmarked: target, count: max(0, tweet.bookmarkCount + (target ? 1 : -1)))
-        Task {
-            do {
-                _ = target
-                    ? try await EngageService.engage.bookmark(tweetID: tweet.restID)
-                    : try await EngageService.engage.unbookmark(tweetID: tweet.restID)
-                viewModel.applyBookmark(id: tweet.restID, bookmarked: target)
-            } catch {
-                if cell?.tweetID == tweet.restID { cell?.applyBookmark(bookmarked: !target, count: tweet.bookmarkCount) }
-                Haptics.error()
-                AppLogger.shared.warn("bookmark failed: \(error)", category: .timeline)
-            }
+        Engagement.toggle(.bookmark, tweet: tweet, cell: cell, host: self) { [weak self] on in
+            self?.viewModel.applyBookmark(id: tweet.restID, bookmarked: on)
         }
     }
 
@@ -1002,7 +982,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
         guard count > 0 else { return }
         unreadButtonView.configuration?.title = count > 99 ? "99+" : "\(count)"
         unreadButtonView.accessibilityLabel = "\(count) unread, jump to next unread"
-        unreadButtonView.accessibilityHint = "Scrolls to the next unread tweet. Long-press to mark all read."
+        unreadButtonView.accessibilityHint = "Scrolls to the next unread post. Long-press to mark all read."
     }
 
     /// Shows the "jump to next unread" button only on seen-tracking feeds
@@ -1045,7 +1025,7 @@ extension FeedViewController: UICollectionViewDelegate {
     }
 
     func collectionView(_ collectionView: UICollectionView, didEndDisplaying cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
-        (cell as? TweetCell)?.pauseVideo()
+        (cell as? TweetCell)?.releaseVideo()
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) { onScroll?(scrollView) }
@@ -1074,14 +1054,15 @@ extension FeedViewController: UICollectionViewDelegate {
 extension FeedViewController: UICollectionViewDataSourcePrefetching {
     func collectionView(_ collectionView: UICollectionView, prefetchItemsAt indexPaths: [IndexPath]) {
         guard AppSettings.imagesEnabled else { return }
-        let width = collectionView.bounds.width
+        let scale = max(traitCollection.displayScale, 1)
         for indexPath in indexPaths {
             guard let id = dataSource.itemIdentifier(for: indexPath), let tweet = tweetsByID[id] else { continue }
             if let avatar = tweet.author.avatarURL.flatMap(URL.init) {
-                ImageLoader.prefetch(avatar, pointSize: CGSize(width: 44, height: 44), scale: 3)
+                let side = TweetCell.avatarSize
+                ImageLoader.prefetch(avatar, pointSize: CGSize(width: side, height: side), scale: scale)
             }
-            if let url = Self.previewURL(for: tweet) {
-                ImageLoader.prefetch(url, pointSize: CGSize(width: width, height: width * 9 / 16), scale: 2)
+            for request in mediaRequests(for: tweet) {
+                ImageLoader.prefetch(request.url, pointSize: request.size, scale: scale)
             }
             Task { await TwemojiCache.shared.prewarm(graphemesIn: tweet.text) }
         }
@@ -1090,16 +1071,14 @@ extension FeedViewController: UICollectionViewDataSourcePrefetching {
     func collectionView(_ collectionView: UICollectionView, cancelPrefetchingForItemsAt indexPaths: [IndexPath]) {
         for indexPath in indexPaths {
             guard let id = dataSource.itemIdentifier(for: indexPath), let tweet = tweetsByID[id] else { continue }
-            if let url = Self.previewURL(for: tweet) { ImageLoader.cancelPrefetch(url) }
+            for request in mediaRequests(for: tweet) { ImageLoader.cancelPrefetch(request.url) }
         }
     }
 
-    /// The first attachment that has a fetchable cover image (polls have none).
-    private static func previewURL(for tweet: Tweet) -> URL? {
-        for media in tweet.media {
-            if case .poll = media.kind { continue }
-            if !media.url.isEmpty { return URL(string: media.url) }
-        }
-        return nil
+    /// Every picture the row will load for `tweet` and the size it loads it
+    /// at, so a prefetched decode is the one the row asks for (or joins).
+    private func mediaRequests(for tweet: Tweet) -> [(url: URL, size: CGSize)] {
+        MediaContentView.imageRequests(
+            for: tweet, contentWidth: max(120, collectionView.bounds.width), bleedsEdgeToEdge: true)
     }
 }

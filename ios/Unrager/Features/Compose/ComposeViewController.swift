@@ -17,7 +17,22 @@ final class ComposeViewController: UIViewController {
         case quote(of: Tweet)
     }
 
+    /// What a successful post did, for the screen that opened the composer.
+    struct Posted {
+        /// The new post's id.
+        let id: String
+        /// Whether the reply also liked the post it answers (`autoLikeIfReply`).
+        let likedReplyTarget: Bool
+    }
+
+    /// Runs on the main actor once a post went through and the composer has
+    /// closed, so the presenter can show the reply, fill the heart it liked,
+    /// or confirm the post.
+    var onPosted: ((Posted) -> Void)?
+
     private let mode: Mode
+    private let drafts = ComposeDraftStore.shared
+    private var attachmentBarHeight: NSLayoutConstraint!
     private let textView = UITextView()
     private let placeholder = UILabel()
     private let counter = UILabel()
@@ -31,7 +46,7 @@ final class ComposeViewController: UIViewController {
     private lazy var cancelButton = UIBarButtonItem(
         barButtonSystemItem: .cancel, target: self, action: #selector(cancel))
     private lazy var postButton = UIBarButtonItem(
-        title: "Tweet", style: .prominent, target: self, action: #selector(post))
+        title: "Post", style: .prominent, target: self, action: #selector(post))
     private lazy var photoButton = UIBarButtonItem(
         image: DesignSystem.icon("photo.on.rectangle"),
         primaryAction: UIAction { [weak self] _ in self?.presentPicker() })
@@ -66,7 +81,7 @@ final class ComposeViewController: UIViewController {
         view.backgroundColor = DesignSystem.Color.background
         switch mode {
         case .new:
-            title = "New Tweet"
+            title = "New Post"
             placeholder.text = "What’s happening?"
         case let .reply(tweet):
             title = "Reply to @\(tweet.author.handle)"
@@ -85,6 +100,7 @@ final class ComposeViewController: UIViewController {
         textView.delegate = self
         textView.textColor = DesignSystem.Color.label
         textView.accessibilityLabel = title
+        textView.text = drafts.draft(for: ComposeDraftStore.slot(for: mode)) ?? ""
 
         placeholder.font = DesignSystem.Typography.editor()
         placeholder.adjustsFontForContentSizeCategory = true
@@ -106,32 +122,55 @@ final class ComposeViewController: UIViewController {
         view.addManaged(attachmentBar)
         view.addManaged(counter)
 
-        if case let .quote(tweet) = mode {
-            let preview = QuotePreviewView(tweet: tweet)
-            view.addManaged(preview)
-            NSLayoutConstraint.activate([
-                preview.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: DesignSystem.Spacing.l),
-                preview.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -DesignSystem.Spacing.l),
-                preview.bottomAnchor.constraint(equalTo: attachmentBar.topAnchor, constant: -DesignSystem.Spacing.s),
-                textView.bottomAnchor.constraint(equalTo: preview.topAnchor, constant: -DesignSystem.Spacing.s),
-            ])
-        } else {
-            textView.bottomAnchor.constraint(
-                equalTo: attachmentBar.topAnchor, constant: -DesignSystem.Spacing.s).isActive = true
-        }
-
+        let attachmentBarHeight = attachmentBar.heightAnchor.constraint(equalToConstant: 0)
+        self.attachmentBarHeight = attachmentBarHeight
+        layoutEditor()
         NSLayoutConstraint.activate([
-            textView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: DesignSystem.Spacing.s),
             textView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: DesignSystem.Spacing.l),
             textView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -DesignSystem.Spacing.l),
             placeholder.topAnchor.constraint(equalTo: textView.topAnchor, constant: 8),
             placeholder.leadingAnchor.constraint(equalTo: textView.leadingAnchor, constant: 5),
             attachmentBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: DesignSystem.Spacing.l),
             attachmentBar.bottomAnchor.constraint(equalTo: counter.topAnchor, constant: -DesignSystem.Spacing.s),
-            attachmentBar.heightAnchor.constraint(equalToConstant: 64),
+            attachmentBarHeight,
             counter.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -DesignSystem.Spacing.l),
             counter.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -DesignSystem.Spacing.s),
         ])
+    }
+
+    /// Stacks the editor with the post it is about: a reply's post sits above
+    /// the text, muted, so the user sees what they are answering; a quote's
+    /// preview sits below it, as it will on X. A new post is just the text.
+    private func layoutEditor() {
+        let top = view.safeAreaLayoutGuide.topAnchor
+        let gap = DesignSystem.Spacing.s
+        switch mode {
+        case .new:
+            NSLayoutConstraint.activate([
+                textView.topAnchor.constraint(equalTo: top, constant: gap),
+                textView.bottomAnchor.constraint(equalTo: attachmentBar.topAnchor, constant: -gap),
+            ])
+        case let .reply(tweet):
+            let preview = QuotePreviewView(tweet: tweet, muted: true)
+            view.addManaged(preview)
+            NSLayoutConstraint.activate([
+                preview.topAnchor.constraint(equalTo: top, constant: gap),
+                preview.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: DesignSystem.Spacing.l),
+                preview.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -DesignSystem.Spacing.l),
+                textView.topAnchor.constraint(equalTo: preview.bottomAnchor, constant: gap),
+                textView.bottomAnchor.constraint(equalTo: attachmentBar.topAnchor, constant: -gap),
+            ])
+        case let .quote(tweet):
+            let preview = QuotePreviewView(tweet: tweet, muted: false)
+            view.addManaged(preview)
+            NSLayoutConstraint.activate([
+                textView.topAnchor.constraint(equalTo: top, constant: gap),
+                preview.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: DesignSystem.Spacing.l),
+                preview.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -DesignSystem.Spacing.l),
+                preview.bottomAnchor.constraint(equalTo: attachmentBar.topAnchor, constant: -gap),
+                textView.bottomAnchor.constraint(equalTo: preview.topAnchor, constant: -gap),
+            ])
+        }
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -163,15 +202,22 @@ final class ComposeViewController: UIViewController {
             self?.removeAttachment(id: attachment.id, view: view)
         }
         attachmentBar.addArrangedSubview(thumb)
-        attachmentBar.isHidden = attachments.isEmpty
+        syncAttachmentBar()
         updateControls()
     }
 
     private func removeAttachment(id: UUID, view: UIView) {
         attachments.removeAll { $0.id == id }
         view.removeFromSuperview()
-        attachmentBar.isHidden = attachments.isEmpty
+        syncAttachmentBar()
         updateControls()
+    }
+
+    /// Shows the thumbnail row only while there are attachments, giving its
+    /// height back to the text on a small screen with the keyboard up.
+    private func syncAttachmentBar() {
+        attachmentBar.isHidden = attachments.isEmpty
+        attachmentBarHeight.constant = attachments.isEmpty ? 0 : 64
     }
 
     private func updateControls() {
@@ -200,14 +246,43 @@ final class ComposeViewController: UIViewController {
 
     @objc private func cancel() { requestDismiss() }
 
-    /// Closes the composer, asking first when there is a draft to lose.
+    enum Dismissal: Equatable {
+        /// Leave the composer up.
+        case stay
+        /// Close it; there is nothing to lose.
+        case close
+        /// Ask whether to save, discard or keep editing the draft.
+        case confirm
+    }
+
+    /// What a Cancel tap or a swipe down does.
+    static func dismissal(hasContent: Bool, isPosting: Bool) -> Dismissal {
+        if isPosting { return .stay }
+        return hasContent ? .confirm : .close
+    }
+
+    /// Closes the composer, asking first when there is a draft to lose. Never
+    /// while a post is on its way: the sheet stays so a failure can still
+    /// offer Retry with the draft intact.
     private func requestDismiss() {
-        guard hasContent, !isPosting else {
-            dismiss(animated: true)
-            return
+        switch Self.dismissal(hasContent: hasContent, isPosting: isPosting) {
+        case .stay: return
+        case .close: dismiss(animated: true); return
+        case .confirm: break
         }
-        let sheet = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
+        let slot = ComposeDraftStore.slot(for: mode)
+        let hasText = !textView.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let message = hasText && !attachments.isEmpty ? "Photos aren't kept with a saved draft." : nil
+        let sheet = UIAlertController(title: nil, message: message, preferredStyle: .actionSheet)
+        if hasText {
+            sheet.addAction(UIAlertAction(title: "Save Draft", style: .default) { [weak self] _ in
+                guard let self else { return }
+                self.drafts.save(self.textView.text, for: slot)
+                self.dismiss(animated: true)
+            })
+        }
         sheet.addAction(UIAlertAction(title: "Discard Draft", style: .destructive) { [weak self] _ in
+            self?.drafts.clear(slot)
             self?.dismiss(animated: true)
         })
         sheet.addAction(UIAlertAction(title: "Keep Editing", style: .cancel))
@@ -266,22 +341,44 @@ final class ComposeViewController: UIViewController {
             let mediaIDs = try await uploadPendingAttachments()
             postButton.title = "Posting…"
             let text = textView.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let result: ComposeResult
+            var liked = false
             switch mode {
             case .new:
-                _ = try await EngageService.publish.compose(text: text, mediaIDs: mediaIDs)
+                result = try await EngageService.publish.compose(text: text, mediaIDs: mediaIDs)
             case let .reply(tweet):
-                _ = try await EngageService.publish.reply(to: tweet.restID, text: text, mediaIDs: mediaIDs)
-                autoLikeIfReply()
+                result = try await EngageService.publish.reply(to: tweet.restID, text: text, mediaIDs: mediaIDs)
+                liked = await autoLikeIfReply()
             case let .quote(tweet):
-                _ = try await EngageService.publish.compose(
+                result = try await EngageService.publish.compose(
                     text: text, mediaIDs: mediaIDs, quoteTweetID: tweet.restID)
             }
             Haptics.success()
-            dismiss(animated: true)
+            drafts.clear(ComposeDraftStore.slot(for: mode))
+            finish(Posted(id: result.id, likedReplyTarget: liked))
         } catch {
             Haptics.error()
             AppLogger.shared.warn("compose post failed: \(error)", category: .compose)
             presentPostFailure(error)
+        }
+    }
+
+    /// Closes the composer and then tells the presenter, which confirms the
+    /// post with a brief note unless it shows the result itself.
+    private func finish(_ posted: Posted) {
+        let onPosted = onPosted
+        let presenter = presentingViewController
+        let note: String
+        switch mode {
+        case .new, .quote: note = "Posted"
+        case .reply: note = "Reply posted"
+        }
+        dismiss(animated: true) {
+            if let onPosted {
+                onPosted(posted)
+            } else {
+                presenter?.showToast(note)
+            }
         }
     }
 
@@ -302,7 +399,7 @@ final class ComposeViewController: UIViewController {
             message = text.isEmpty ? tweet.url : "\(text) \(tweet.url)"
         }
         if !text.isEmpty { UIPasteboard.general.string = text }
-        autoLikeIfReply()
+        drafts.clear(ComposeDraftStore.slot(for: mode))
 
         var components = URLComponents(string: "https://x.com/intent/tweet")
         var items = [URLQueryItem(name: "text", value: message)]
@@ -340,7 +437,7 @@ final class ComposeViewController: UIViewController {
         textView.isEditable = !locked
         attachmentBar.isUserInteractionEnabled = !locked
         cancelButton.isEnabled = !locked
-        if !locked { postButton.title = "Tweet" }
+        if !locked { postButton.title = "Post" }
         updateControls()
     }
 
@@ -356,11 +453,35 @@ final class ComposeViewController: UIViewController {
         present(alert, animated: true)
     }
 
-    /// Replying to someone auto-likes their tweet (mirroring the TUI's reply
-    /// etiquette). Best-effort and skipped when it's already liked.
-    private func autoLikeIfReply() {
-        guard case let .reply(tweet) = mode, !tweet.favorited else { return }
-        Task { _ = try? await AppEnvironment.shared.api.like(tweetID: tweet.restID) }
+    /// Replying to someone auto-likes their post (mirroring the TUI's reply
+    /// etiquette), only once the reply is posted. Best-effort and skipped when
+    /// it's already liked; says whether a like went through.
+    private func autoLikeIfReply() async -> Bool {
+        guard case let .reply(tweet) = mode, !tweet.favorited else { return false }
+        do {
+            _ = try await AppEnvironment.shared.api.like(tweetID: tweet.restID)
+            return true
+        } catch {
+            AppLogger.shared.warn("auto-like after reply failed: \(error)", category: .compose)
+            return false
+        }
+    }
+
+    /// ⌘↩ posts from a hardware keyboard, whenever the Post button would.
+    override var keyCommands: [UIKeyCommand]? {
+        let post = UIKeyCommand(title: "Post", action: #selector(postFromKeyboard), input: "\r", modifierFlags: .command)
+        post.wantsPriorityOverSystemBehavior = true
+        return [post]
+    }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(postFromKeyboard) { return postButton.isEnabled }
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    @objc private func postFromKeyboard() {
+        guard postButton.isEnabled else { return }
+        post()
     }
 }
 
@@ -414,7 +535,9 @@ extension ComposeViewController: PHPickerViewControllerDelegate {
 /// The quoted tweet's preview card in the quote composer: author line + a few
 /// lines of text in the same bordered treatment as `TweetCell`'s inline quote.
 private final class QuotePreviewView: UIView {
-    init(tweet: Tweet) {
+    /// `muted` dims the card for the post a reply answers, which is context
+    /// rather than part of what gets posted.
+    init(tweet: Tweet, muted: Bool) {
         super.init(frame: .zero)
         layer.cornerRadius = DesignSystem.Radius.control
         layer.cornerCurve = .continuous
@@ -436,12 +559,14 @@ private final class QuotePreviewView: UIView {
         ]))
         author.attributedText = attributed
 
+        let text = ReplyContext.body(of: tweet)
         let body = UILabel()
         body.font = DesignSystem.Typography.metric()
-        body.textColor = DesignSystem.Color.label
-        body.numberOfLines = 4
-        body.text = tweet.text
-        body.isHidden = tweet.text.isEmpty
+        body.textColor = muted ? DesignSystem.Color.secondaryLabel : DesignSystem.Color.label
+        body.numberOfLines = muted ? 3 : 4
+        body.text = text
+        body.isHidden = text.isEmpty
+        if muted { author.alpha = 0.7 }
 
         let stack = UIStackView(arrangedSubviews: [author, body])
         stack.axis = .vertical
@@ -450,7 +575,7 @@ private final class QuotePreviewView: UIView {
         stack.pinEdges(to: self, insets: UIEdgeInsets(top: 8, left: 10, bottom: 8, right: 10))
 
         isAccessibilityElement = true
-        accessibilityLabel = "Quoting \(tweet.author.name): \(tweet.text)"
+        accessibilityLabel = "\(muted ? "Replying to" : "Quoting") \(tweet.author.name): \(text)"
     }
 
     @available(*, unavailable)

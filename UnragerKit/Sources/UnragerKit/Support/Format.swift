@@ -34,6 +34,10 @@ public enum Format {
     /// Short relative timestamp: "12s", "5m", "3h", "2d", then "Apr 5" /
     /// "Apr 5, 2024" for older dates.
     public static func relativeTime(_ date: Date, now: Date = Date()) -> String {
+        relativeTime(date, now: now, locale: .autoupdatingCurrent)
+    }
+
+    static func relativeTime(_ date: Date, now: Date, locale: Locale) -> String {
         let seconds = now.timeIntervalSince(date)
         if seconds < 60 { return "\(max(0, Int(seconds)))s" }
         if seconds < 3_600 { return "\(Int(seconds / 60))m" }
@@ -41,25 +45,24 @@ public enum Format {
         if seconds < 604_800 { return "\(Int(seconds / 86_400))d" }
 
         let sameYear = Calendar.current.component(.year, from: date) == Calendar.current.component(.year, from: now)
-        return (sameYear ? shortDate : longDate).string(from: date)
+        return date.formatted((sameYear ? shortDate : longDate).locale(locale))
     }
 
     /// Absolute timestamp for detail views in the reader's own conventions
     /// (12- or 24-hour clock, day-month order), e.g. "3:21 PM · Jun 19, 2026".
     public static func absoluteTime(_ date: Date) -> String {
-        "\(clock.string(from: date)) · \(longDate.string(from: date))"
+        absoluteTime(date, locale: .autoupdatingCurrent)
     }
 
-    /// Formatters are costly to build and these run for every row of a list, so
-    /// each is built once. They use the user's locale through localized
-    /// templates rather than a fixed pattern.
-    nonisolated(unsafe) private static let shortDate = makeFormatter(template: "MMMd")
-    nonisolated(unsafe) private static let longDate = makeFormatter(template: "MMMdyyyy")
-    nonisolated(unsafe) private static let clock = makeFormatter(template: "jmm")
-
-    private static func makeFormatter(template: String) -> DateFormatter {
-        let formatter = DateFormatter()
-        formatter.setLocalizedDateFormatFromTemplate(template)
-        return formatter
+    static func absoluteTime(_ date: Date, locale: Locale) -> String {
+        "\(date.formatted(clock.locale(locale))) · \(date.formatted(longDate.locale(locale)))"
     }
+
+    /// Value-type styles on the auto-updating locale and time zone, so a
+    /// change to the language, region, 12/24-hour setting or time zone shows
+    /// up at once rather than after a relaunch; Foundation caches the
+    /// underlying formatters, so formatting a row stays cheap.
+    private static let shortDate = Date.FormatStyle.dateTime.month(.abbreviated).day()
+    private static let longDate = Date.FormatStyle.dateTime.month(.abbreviated).day().year()
+    private static let clock = Date.FormatStyle.dateTime.hour().minute()
 }

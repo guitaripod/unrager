@@ -109,7 +109,83 @@ pub fn parse_user_result(node: &Value) -> Option<User> {
         avatar_url,
         followed_by_me,
         banner_url,
+        description: None,
+        location: None,
+        website: None,
+        joined_at: None,
+        protected: false,
+        muting: None,
+        blocking: None,
     })
+}
+
+/// A user as a profile header shows them: [`parse_user_result`] plus the bio,
+/// location, website, join date, protection and whether the signed-in user
+/// mutes or blocks them. Kept apart so every post's author doesn't carry a
+/// bio through timelines and the Home buffer.
+pub fn parse_profile_result(node: &Value) -> Option<User> {
+    let mut user = parse_user_result(node)?;
+    user.description = node
+        .pointer("/legacy/description")
+        .or_else(|| node.pointer("/profile_bio/description"))
+        .and_then(Value::as_str)
+        .map(|bio| expand_links(bio, node.pointer("/legacy/entities/description/urls")))
+        .and_then(non_empty);
+    user.location = node
+        .pointer("/location/location")
+        .or_else(|| node.pointer("/legacy/location"))
+        .and_then(Value::as_str)
+        .and_then(|s| non_empty(s.trim().to_string()));
+    user.website = node
+        .pointer("/legacy/entities/url/urls/0/expanded_url")
+        .and_then(Value::as_str)
+        .and_then(|s| non_empty(s.to_string()));
+    user.joined_at = node
+        .pointer("/core/created_at")
+        .or_else(|| node.pointer("/legacy/created_at"))
+        .and_then(Value::as_str)
+        .and_then(joined_at_rfc3339);
+    user.protected = node
+        .pointer("/privacy/protected")
+        .or_else(|| node.pointer("/legacy/protected"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let relationship = |key: &str| {
+        node.pointer(&format!("/relationship_perspectives/{key}"))
+            .or_else(|| node.pointer(&format!("/legacy/{key}")))
+            .and_then(Value::as_bool)
+    };
+    user.muting = relationship("muting");
+    user.blocking = relationship("blocking");
+    Some(user)
+}
+
+fn non_empty(s: String) -> Option<String> {
+    (!s.is_empty()).then_some(s)
+}
+
+/// A bio's links arrive as t.co short links, with the real address beside
+/// them in `entities.description.urls`.
+fn expand_links(text: &str, urls: Option<&Value>) -> String {
+    let mut out = crate::parse::tweet::decode_html_entities(text);
+    for u in urls.and_then(Value::as_array).into_iter().flatten() {
+        let short = u.get("url").and_then(Value::as_str).unwrap_or("");
+        let full = u.get("expanded_url").and_then(Value::as_str).unwrap_or("");
+        if !short.is_empty() && !full.is_empty() {
+            out = out.replace(short, full);
+        }
+    }
+    out.trim().to_string()
+}
+
+/// X dates accounts like `Wed Oct 10 20:19:24 +0000 2018`.
+fn joined_at_rfc3339(raw: &str) -> Option<String> {
+    chrono::DateTime::parse_from_str(raw, "%a %b %d %H:%M:%S %z %Y")
+        .ok()
+        .map(|dt| {
+            dt.with_timezone(&chrono::Utc)
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        })
 }
 
 /// X serves a banner at `…/profile_banners/<id>/<stamp>` and resizes it when a
@@ -280,6 +356,98 @@ mod tests {
             "legacy": {}
         });
         assert_eq!(parse_user_result(&bare).unwrap().followed_by_me, None);
+    }
+
+    #[test]
+    fn profile_fields_are_read_from_the_legacy_shape() {
+        let node = json!({
+            "rest_id": "7",
+            "legacy": {
+                "screen_name": "bob",
+                "name": "Bob",
+                "description": "Writes about rust &amp; tea. Blog: https://t.co/abc and https://t.co/def",
+                "location": " Helsinki ",
+                "created_at": "Wed Oct 10 20:19:24 +0000 2018",
+                "protected": true,
+                "muting": false,
+                "blocking": true,
+                "entities": {
+                    "description": { "urls": [
+                        { "url": "https://t.co/abc", "expanded_url": "https://bob.example/blog", "display_url": "bob.example/blog" },
+                        { "url": "https://t.co/def", "expanded_url": "https://bob.example/tea", "display_url": "bob.example/tea" }
+                    ] },
+                    "url": { "urls": [
+                        { "url": "https://t.co/xyz", "expanded_url": "https://bob.example", "display_url": "bob.example" }
+                    ] }
+                }
+            }
+        });
+        let user = parse_profile_result(&node).unwrap();
+        assert_eq!(
+            user.description.as_deref(),
+            Some(
+                "Writes about rust & tea. Blog: https://bob.example/blog and https://bob.example/tea"
+            )
+        );
+        assert_eq!(user.location.as_deref(), Some("Helsinki"));
+        assert_eq!(user.website.as_deref(), Some("https://bob.example"));
+        assert_eq!(user.joined_at.as_deref(), Some("2018-10-10T20:19:24Z"));
+        assert!(user.protected);
+        assert_eq!(user.muting, Some(false));
+        assert_eq!(user.blocking, Some(true));
+    }
+
+    #[test]
+    fn profile_fields_are_read_from_the_current_shape() {
+        let node = json!({
+            "rest_id": "7",
+            "core": { "screen_name": "bob", "name": "Bob", "created_at": "Wed Oct 10 20:19:24 +0000 2018" },
+            "location": { "location": "Turku" },
+            "privacy": { "protected": false },
+            "relationship_perspectives": { "following": true, "muting": true, "blocking": false },
+            "profile_bio": { "description": "hello" },
+            "legacy": {}
+        });
+        let user = parse_profile_result(&node).unwrap();
+        assert_eq!(user.description.as_deref(), Some("hello"));
+        assert_eq!(user.location.as_deref(), Some("Turku"));
+        assert_eq!(user.joined_at.as_deref(), Some("2018-10-10T20:19:24Z"));
+        assert!(!user.protected);
+        assert_eq!((user.muting, user.blocking), (Some(true), Some(false)));
+    }
+
+    #[test]
+    fn missing_profile_fields_stay_off_the_wire() {
+        let node = json!({
+            "rest_id": "7",
+            "core": { "screen_name": "bob", "name": "Bob" },
+            "legacy": { "description": "", "location": "", "created_at": "not a date" }
+        });
+        let user = parse_profile_result(&node).unwrap();
+        let v = serde_json::to_value(&user).unwrap();
+        for key in [
+            "description",
+            "location",
+            "website",
+            "joined_at",
+            "protected",
+            "muting",
+            "blocking",
+        ] {
+            assert!(v.get(key).is_none(), "{key}");
+        }
+    }
+
+    #[test]
+    fn post_authors_carry_no_profile_fields() {
+        let node = json!({
+            "rest_id": "7",
+            "core": { "screen_name": "bob", "name": "Bob" },
+            "legacy": { "description": "a bio", "location": "Turku", "protected": true }
+        });
+        let user = parse_user_result(&node).unwrap();
+        assert_eq!((user.description, user.location), (None, None));
+        assert!(!user.protected);
     }
 
     #[test]

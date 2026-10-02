@@ -1,3 +1,4 @@
+import Combine
 import UIKit
 import UnragerKit
 
@@ -5,6 +6,8 @@ import UnragerKit
 /// the `.mentions` source; seen-tracking and the jump-to-unread button come
 /// from the base class.
 final class MentionsViewController: FeedViewController {
+    private var serverObserver: AnyCancellable?
+
     init() {
         super.init(viewModel: TimelineViewModel(source: .mentions))
     }
@@ -16,10 +19,6 @@ final class MentionsViewController: FeedViewController {
         super.viewDidLoad()
         title = "Mentions"
         navigationItem.largeTitleDisplayMode = .automatic
-    }
-
-    override func viewWillAppear(_ animated: Bool) {
-        super.viewWillAppear(animated)
-        navigationController?.navigationBar.prefersLargeTitles = true
+        serverObserver = reloadOnServerChange()
     }
 }

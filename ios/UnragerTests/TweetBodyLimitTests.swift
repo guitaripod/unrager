@@ -43,6 +43,18 @@ struct TweetBodyLimitTests {
         #expect(TweetCell.mayExceedLimit(Array(repeating: "a", count: 8).joined(separator: "\n"), limit: 10))
     }
 
+    @Test("A long note is judged by its head, and still by the whole when the head alone fits")
+    @MainActor
+    func measuresPrefixFirst() {
+        let wall = String(repeating: "word ", count: 2_000)
+        #expect(TweetCell.bodyExceedsLimit(body(wall), limit: TweetCell.feedBodyLineLimit, contentWidth: 300))
+        let tail = String(repeating: "\n", count: 100)
+        let headFits = String(repeating: "x", count: 2_000) + tail
+        #expect(TweetCell.bodyExceedsLimit(body(headFits), limit: TweetCell.feedBodyLineLimit, contentWidth: 100_000))
+        #expect(!TweetCell.bodyExceedsLimit(body(String(repeating: "x", count: 2_000)),
+                                            limit: TweetCell.feedBodyLineLimit, contentWidth: 100_000))
+    }
+
     @Test("Zero limit means unlimited")
     @MainActor
     func focalUnlimited() {

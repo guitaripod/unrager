@@ -32,7 +32,7 @@ public final class APIClient: Sendable {
     }
 
     public convenience init(baseURL: @escaping @Sendable () -> URL) {
-        self.init(transport: URLSessionTransport(), baseURL: baseURL)
+        self.init(transport: URLSessionTransport.shared, baseURL: baseURL)
     }
 
     // MARK: - Health / Whoami
@@ -105,6 +105,21 @@ public final class APIClient: Sendable {
         return try await get("api/thread/\(pathSegment(id))", query: query, as: ThreadView.self)
     }
 
+    /// One page of the posts quoting `tweetID`, newest first; the same page
+    /// shape a search returns.
+    public func quotes(tweetID: String, cursor: String? = nil) async throws -> TimelinePage {
+        var query: [URLQueryItem] = []
+        append(&query, cursor: cursor, count: nil)
+        return try await get("api/tweets/\(pathSegment(tweetID))/quotes", query: query, as: TimelinePage.self)
+    }
+
+    /// Deletes one of the signed-in account's own posts. Deleting a post that
+    /// is already gone succeeds with `idempotent` set.
+    @discardableResult
+    public func deleteTweet(id: String) async throws -> DeleteTweetResult {
+        try await perform(HTTPRequest(method: .delete, url: url("api/tweets/\(pathSegment(id))")))
+    }
+
     /// X's analytics for one of the signed-in account's own posts, or nil for
     /// anyone else's (X sends nothing, and the server answers 404).
     public func postAnalytics(tweetID: String) async throws -> PostAnalytics? {
@@ -117,9 +132,13 @@ public final class APIClient: Sendable {
 
     // MARK: - Profiles / Likers
 
-    public func profile(handle: String, includeReplies: Bool = false) async throws -> ProfileView {
+    /// The profile and its recent posts. `includeTweets: false` asks for the
+    /// account alone (`?tweets=false`: empty `recent`, no pinned post or
+    /// cursor).
+    public func profile(handle: String, includeReplies: Bool = false, includeTweets: Bool = true) async throws -> ProfileView {
         var query: [URLQueryItem] = []
         if includeReplies { query.append(URLQueryItem(name: "include_replies", value: "true")) }
+        if !includeTweets { query.append(URLQueryItem(name: "tweets", value: "false")) }
         return try await get("api/profile/\(pathSegment(handle))", query: query, as: ProfileView.self)
     }
 
@@ -213,19 +232,19 @@ public final class APIClient: Sendable {
         sseStream("api/sse/ask",
                   query: [URLQueryItem(name: "tweet_id", value: tweetID),
                           URLQueryItem(name: "preset", value: preset.rawValue)],
-                  as: TokenEvent.self, failure: { $0.error })
+                  as: TokenEvent.self, failure: { $0.error }, isTerminal: { $0.done })
     }
 
     public func briefStream(handle: String) -> AsyncThrowingStream<TokenEvent, Error> {
         sseStream("api/sse/brief",
                   query: [URLQueryItem(name: "handle", value: handle)],
-                  as: TokenEvent.self, failure: { $0.error })
+                  as: TokenEvent.self, failure: { $0.error }, isTerminal: { $0.done })
     }
 
     public func translateStream(tweetID: String) -> AsyncThrowingStream<TokenEvent, Error> {
         sseStream("api/sse/translate",
                   query: [URLQueryItem(name: "tweet_id", value: tweetID)],
-                  as: TokenEvent.self, failure: { $0.error })
+                  as: TokenEvent.self, failure: { $0.error }, isTerminal: { $0.done })
     }
 
     // MARK: - Request plumbing
@@ -301,53 +320,22 @@ public final class APIClient: Sendable {
 
         let request = HTTPRequest(
             method: .post, url: url(path),
-            headers: ["Content-Type": "multipart/form-data; boundary=\(boundary)"], body: body)
-        return try await perform(request)
+            headers: ["Content-Type": "multipart/form-data; boundary=\(boundary)"], body: body,
+            timeout: HTTPRequest.publishTimeout)
+        return try await RequestPlumbing.publishing { try await perform(request) }
     }
 
     private func perform<T: Decodable>(_ request: HTTPRequest) async throws -> T {
-        let response = try await transport.send(request)
-        guard response.isSuccess else { throw apiError(from: response) }
-        return try UnragerJSON.decode(T.self, from: response.body)
-    }
-
-    private func apiError(from response: HTTPResponse) -> APIError {
-        let body = try? UnragerJSON.decoder.decode(ServerError.self, from: response.body)
-        return APIError.from(status: response.status, body: body)
+        try await RequestPlumbing.perform(request, over: transport)
     }
 
     private func sseStream<T: Decodable & Sendable>(
         _ path: String, query: [URLQueryItem], as type: T.Type,
-        failure: @escaping @Sendable (T) -> String? = { _ in nil }
+        failure: @escaping @Sendable (T) -> String? = { _ in nil },
+        isTerminal: @escaping @Sendable (T) -> Bool = { _ in false }
     ) -> AsyncThrowingStream<T, Error> {
-        AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    let request = HTTPRequest(method: .get, url: url(path, query: query))
-                    let (status, lines) = try await transport.stream(request)
-                    guard (200..<300).contains(status) else {
-                        var raw = ""
-                        for try await line in lines { raw += line }
-                        let body = try? UnragerJSON.decoder.decode(ServerError.self, from: Data(raw.utf8))
-                        throw APIError.from(status: status, body: body)
-                    }
-                    for try await line in lines {
-                        guard line.hasPrefix("data:") else { continue }
-                        var value = String(line.dropFirst(5))
-                        if value.hasPrefix(" ") { value.removeFirst() }
-                        if value == "[DONE]" { break }
-                        if value.isEmpty { continue }
-                        if let event = try? UnragerJSON.decoder.decode(T.self, from: Data(value.utf8)) {
-                            if let message = failure(event) { throw APIError.upstream(message) }
-                            continuation.yield(event)
-                        }
-                    }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
+        SSEStream.open(transport: transport,
+                       request: { HTTPRequest(method: .get, url: self.url(path, query: query)) },
+                       as: type, failure: failure, isTerminal: isTerminal)
     }
 }

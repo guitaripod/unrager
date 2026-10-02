@@ -20,8 +20,14 @@ final class MediaViewerViewController: UIViewController {
     private let dimView = UIView()
     private var zoomTransition: MediaZoomTransition?
     let startPage: Int
-    private let placeholder: UIImage?
+    private var placeholder: UIImage?
     private let altTexts: [String?]
+    private let altButton = UIButton(configuration: .plain())
+    private let captionPanel = CaptionGradientView()
+    private let captionScroll = UIScrollView()
+    private let captionLabel = UILabel()
+    private var chromeVisible = true
+    private var captionExpanded = false
     private static let maxPixel: CGFloat = 2560
 
     var page: Int { currentPage }
@@ -38,6 +44,7 @@ final class MediaViewerViewController: UIViewController {
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = .overFullScreen
         modalTransitionStyle = .crossDissolve
+        modalPresentationCapturesStatusBarAppearance = true
     }
 
     /// Opt into the App Store–style zoom from feed thumbnails. Retains the
@@ -45,6 +52,7 @@ final class MediaViewerViewController: UIViewController {
     /// grows out of the thumbnail `sourceViewProvider` gives for the tapped
     /// photo and retracts to the one for whichever photo is showing on dismiss.
     func enableZoom(sourceViewProvider: @escaping MediaZoomTransition.SourceProvider) {
+        if let decoded = (sourceViewProvider(startPage) as? UIImageView)?.image { placeholder = decoded }
         let transition = MediaZoomTransition(viewer: self, sourceProvider: sourceViewProvider)
         zoomTransition = transition
         transitioningDelegate = transition
@@ -72,6 +80,7 @@ final class MediaViewerViewController: UIViewController {
     required init?(coder: NSCoder) { fatalError() }
 
     override var prefersStatusBarHidden: Bool { true }
+    override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation { .fade }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -118,6 +127,13 @@ final class MediaViewerViewController: UIViewController {
         }
     }
 
+    /// The photo's own description, or nil when it has none.
+    private func altDescription(at page: Int) -> String? {
+        guard altTexts.indices.contains(page), let alt = altTexts[page]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !alt.isEmpty else { return nil }
+        return alt
+    }
+
     private func altText(at page: Int) -> String {
         let position = "Photo \(page + 1) of \(indices.count)"
         guard altTexts.indices.contains(page), let alt = altTexts[page], !alt.isEmpty else { return position }
@@ -151,9 +167,11 @@ final class MediaViewerViewController: UIViewController {
         pageControl.hidesForSinglePage = true
         pageControl.isUserInteractionEnabled = false
 
+        configureCaption()
         view.addManaged(closeButton)
         view.addManaged(shareButton)
         view.addManaged(pageControl)
+        view.addManaged(altButton)
         NSLayoutConstraint.activate([
             closeButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
             closeButton.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
@@ -165,7 +183,111 @@ final class MediaViewerViewController: UIViewController {
             shareButton.heightAnchor.constraint(equalToConstant: 44),
             pageControl.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             pageControl.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12),
+            altButton.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
+            altButton.centerYAnchor.constraint(equalTo: pageControl.centerYAnchor),
+            altButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
+            altButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 44),
         ])
+        updateCaption()
+    }
+
+    /// The "ALT" capsule at the bottom-leading corner, and the description it
+    /// opens: a scrollable caption over a gradient along the bottom edge.
+    private func configureCaption() {
+        var alt = UIButton.Configuration.filled()
+        alt.attributedTitle = AttributedString("ALT", attributes: AttributeContainer([
+            .font: DesignSystem.Typography.system(13, weight: .heavy)]))
+        alt.baseForegroundColor = .white
+        alt.baseBackgroundColor = UIColor(white: 0.18, alpha: 0.75)
+        alt.cornerStyle = .capsule
+        alt.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10)
+        alt.background.backgroundInsets = NSDirectionalEdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0)
+        altButton.configuration = alt
+        altButton.accessibilityLabel = "Show image description"
+        altButton.addAction(UIAction { [weak self] _ in self?.setCaptionExpanded(true) }, for: .touchUpInside)
+
+        captionLabel.numberOfLines = 0
+        captionLabel.font = DesignSystem.Typography.body()
+        captionLabel.textColor = .white
+        captionScroll.indicatorStyle = .white
+        captionScroll.addManaged(captionLabel)
+        captionPanel.addManaged(captionScroll)
+        captionPanel.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(collapseCaption)))
+        view.addManaged(captionPanel)
+
+        let fitsContent = captionScroll.heightAnchor.constraint(equalTo: captionScroll.contentLayoutGuide.heightAnchor)
+        fitsContent.priority = .defaultLow
+        NSLayoutConstraint.activate([
+            captionPanel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            captionPanel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            captionPanel.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            captionScroll.topAnchor.constraint(equalTo: captionPanel.topAnchor, constant: 56),
+            captionScroll.leadingAnchor.constraint(equalTo: captionPanel.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+            captionScroll.trailingAnchor.constraint(equalTo: captionPanel.safeAreaLayoutGuide.trailingAnchor, constant: -16),
+            captionScroll.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -44),
+            captionScroll.heightAnchor.constraint(lessThanOrEqualTo: view.heightAnchor, multiplier: 0.35),
+            fitsContent,
+            captionLabel.topAnchor.constraint(equalTo: captionScroll.contentLayoutGuide.topAnchor),
+            captionLabel.bottomAnchor.constraint(equalTo: captionScroll.contentLayoutGuide.bottomAnchor),
+            captionLabel.leadingAnchor.constraint(equalTo: captionScroll.frameLayoutGuide.leadingAnchor),
+            captionLabel.trailingAnchor.constraint(equalTo: captionScroll.frameLayoutGuide.trailingAnchor),
+        ])
+    }
+
+    private func setCaptionExpanded(_ expanded: Bool) {
+        captionExpanded = expanded
+        captionScroll.contentOffset = .zero
+        applyChrome(animated: true)
+        UIAccessibility.post(notification: .layoutChanged, argument: expanded ? captionLabel : altButton)
+    }
+
+    #if DEBUG
+    /// Screenshot router entry point: opens the description as a tap on ALT would.
+    func debugExpandCaption() { setCaptionExpanded(true) }
+    #endif
+
+    @objc private func collapseCaption() {
+        setCaptionExpanded(false)
+    }
+
+    /// Shows the current photo's description in the caption, keeping it open
+    /// across pages that have one.
+    private func updateCaption() {
+        captionLabel.text = altDescription(at: currentPage)
+        if captionLabel.text == nil { captionExpanded = false }
+        applyChrome(animated: false)
+    }
+
+    /// A single tap on the photo hides or brings back the controls, so the
+    /// photo can be seen whole. VoiceOver users keep them.
+    private func toggleChrome() {
+        guard !UIAccessibility.isVoiceOverRunning else { return }
+        chromeVisible.toggle()
+        applyChrome(animated: true)
+    }
+
+    private func applyChrome(animated: Bool) {
+        let hasAlt = altDescription(at: currentPage) != nil
+        let states: [(UIView, Bool)] = [
+            (closeButton, chromeVisible),
+            (shareButton, chromeVisible),
+            (pageControl, chromeVisible),
+            (altButton, chromeVisible && hasAlt && !captionExpanded),
+            (captionPanel, chromeVisible && hasAlt && captionExpanded),
+        ]
+        let apply = {
+            for (view, shown) in states {
+                view.alpha = shown ? 1 : 0
+                view.accessibilityElementsHidden = !shown
+            }
+        }
+        for (view, shown) in states where view !== pageControl { view.isUserInteractionEnabled = shown }
+        if animated {
+            UIView.animate(withDuration: 0.2, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction],
+                           animations: apply)
+        } else {
+            apply()
+        }
     }
 
     /// Shares the full-resolution image — never the feed-snapshot placeholder,
@@ -235,6 +357,7 @@ extension MediaViewerViewController: UICollectionViewDataSource, UICollectionVie
         let seed = indexPath.item == startPage ? placeholder : nil
         cell.load(url: photoURL(at: indexPath.item), maxPixel: Self.maxPixel, placeholder: seed,
                   accessibilityText: altText(at: indexPath.item))
+        cell.onSingleTap = { [weak self] in self?.toggleChrome() }
         return cell
     }
 
@@ -250,6 +373,7 @@ extension MediaViewerViewController: UICollectionViewDataSource, UICollectionVie
             currentPage = page
             pageControl.currentPage = page
             prefetchNeighbors(of: page)
+            updateCaption()
             UIAccessibility.post(notification: .pageScrolled, argument: altText(at: page))
         }
     }
@@ -279,6 +403,7 @@ private final class ZoomablePhotoCell: UICollectionViewCell, UIScrollViewDelegat
     private let failureButton = UIButton(configuration: .tinted())
     private var task: Task<Void, Never>?
     private var retry: (() -> Void)?
+    var onSingleTap: (() -> Void)?
 
     var image: UIImage? { imageView.image }
     /// True once the full-size download replaced the feed-snapshot placeholder
@@ -305,6 +430,9 @@ private final class ZoomablePhotoCell: UICollectionViewCell, UIScrollViewDelegat
         let doubleTap = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
         doubleTap.numberOfTapsRequired = 2
         scrollView.addGestureRecognizer(doubleTap)
+        let singleTap = UITapGestureRecognizer(target: self, action: #selector(handleSingleTap))
+        singleTap.require(toFail: doubleTap)
+        scrollView.addGestureRecognizer(singleTap)
 
         spinner.color = .white
         spinner.hidesWhenStopped = true
@@ -388,6 +516,10 @@ private final class ZoomablePhotoCell: UICollectionViewCell, UIScrollViewDelegat
 
     func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
 
+    @objc private func handleSingleTap() {
+        onSingleTap?()
+    }
+
     @objc private func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
         if scrollView.zoomScale > scrollView.minimumZoomScale {
             scrollView.setZoomScale(scrollView.minimumZoomScale, animated: true)
@@ -408,4 +540,22 @@ private final class ZoomablePhotoCell: UICollectionViewCell, UIScrollViewDelegat
         spinner.stopAnimating()
         failureButton.isHidden = true
     }
+}
+
+/// A clear-to-black gradient down to the bottom edge, so the white caption
+/// reads over any photo.
+private final class CaptionGradientView: UIView {
+    override class var layerClass: AnyClass { CAGradientLayer.self }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        guard let gradient = layer as? CAGradientLayer else { return }
+        gradient.colors = [UIColor.black.withAlphaComponent(0).cgColor,
+                           UIColor.black.withAlphaComponent(0.6).cgColor,
+                           UIColor.black.withAlphaComponent(0.85).cgColor]
+        gradient.locations = [0, 0.3, 1]
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
 }

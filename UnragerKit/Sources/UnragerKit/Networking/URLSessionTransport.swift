@@ -6,6 +6,12 @@ public final class URLSessionTransport: HTTPTransport {
     let session: URLSession
     let streamSession: URLSession
 
+    /// The transport every client uses unless given another. Each instance
+    /// owns two `URLSession`s that are never invalidated, so one shared
+    /// instance keeps connections pooled and reused instead of leaking a pair
+    /// per screen.
+    public static let shared = URLSessionTransport()
+
     public init(session: URLSession? = nil) {
         if let session {
             self.session = session
@@ -42,7 +48,7 @@ public final class URLSessionTransport: HTTPTransport {
 
     public func send(_ request: HTTPRequest) async throws -> HTTPResponse {
         do {
-            let (data, response) = try await session.data(for: urlRequest(from: request))
+            let (data, response) = try await session(for: request).data(for: urlRequest(from: request))
             guard let http = response as? HTTPURLResponse else {
                 throw APIError.network("Non-HTTP response")
             }
@@ -51,6 +57,8 @@ public final class URLSessionTransport: HTTPTransport {
             throw error
         } catch let error as URLError {
             throw Self.map(error)
+        } catch where error.isCancellation {
+            throw APIError.cancelled
         } catch {
             throw APIError.network(error.localizedDescription)
         }
@@ -72,14 +80,8 @@ public final class URLSessionTransport: HTTPTransport {
                             continuation.yield(line)
                         }
                         continuation.finish()
-                    } catch is CancellationError {
-                        continuation.finish()
-                    } catch let error as URLError where error.code == .cancelled {
-                        continuation.finish()
-                    } catch let error as URLError {
-                        continuation.finish(throwing: Self.map(error))
                     } catch {
-                        continuation.finish(throwing: error)
+                        continuation.finish(throwing: Self.streamFailure(error))
                     }
                 }
                 continuation.onTermination = { _ in task.cancel() }
@@ -90,10 +92,19 @@ public final class URLSessionTransport: HTTPTransport {
         }
     }
 
-    private func urlRequest(from request: HTTPRequest) -> URLRequest {
+    /// The session a plain request runs on. One with its own timeout runs on
+    /// the stream session, since the request session's 60 s resource cap is
+    /// session-wide and would cut a slow upload or post short whatever the
+    /// request asks for; the request's own timeout then bounds the wait.
+    func session(for request: HTTPRequest) -> URLSession {
+        request.timeout == nil ? session : streamSession
+    }
+
+    func urlRequest(from request: HTTPRequest) -> URLRequest {
         var urlRequest = URLRequest(url: request.url)
         urlRequest.httpMethod = request.method.rawValue
         urlRequest.httpBody = request.body
+        if let timeout = request.timeout { urlRequest.timeoutInterval = timeout }
         for (key, value) in request.headers {
             urlRequest.setValue(value, forHTTPHeaderField: key)
         }
@@ -108,15 +119,23 @@ public final class URLSessionTransport: HTTPTransport {
         return result
     }
 
+    /// What a failed stream read finishes with: nothing when the consumer
+    /// stopped listening (it cancelled the reading task), otherwise the error,
+    /// including a cancellation the consumer didn't ask for, so the stream's
+    /// reader never takes a cut-off answer for a whole one.
+    private static func streamFailure(_ error: Error) -> Error? {
+        if Task.isCancelled { return nil }
+        if let error = error as? URLError { return map(error) }
+        if error is CancellationError { return APIError.cancelled }
+        return error
+    }
+
     private static func map(_ error: URLError) -> APIError {
         switch error.code {
         case .timedOut: return .timeout
         case .cancelled: return .cancelled
-        case .notConnectedToInternet, .cannotConnectToHost, .networkConnectionLost,
-             .cannotFindHost, .dnsLookupFailed:
-            return .network(error.localizedDescription)
-        default:
-            return .network(error.localizedDescription)
+        case .networkConnectionLost: return .connectionLost(error.localizedDescription)
+        default: return .network(error.localizedDescription)
         }
     }
 }

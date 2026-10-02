@@ -182,7 +182,7 @@ final class NotificationsViewController: UIViewController {
 
     private func isUnread(_ notif: XNotification) -> Bool {
         guard let cutoff = unreadCutoff, !locallyRead.contains(notif.id) else { return false }
-        return notif.timestamp > cutoff
+        return NotificationPrefs.isNewer(notif.timestamp, than: cutoff)
     }
 
     /// A rounded media thumbnail for the trailing edge, with a play glyph on

@@ -1,6 +1,7 @@
 use crate::gql::endpoints;
 use crate::gql::query_ids::Operation;
 use crate::server::error::ApiError;
+use crate::server::routes::posts::x_error_code;
 use crate::server::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -110,12 +111,55 @@ fn is_undo_op(op: Operation) -> bool {
 /// on a create op it is a genuine error (the tweet was deleted), so it must
 /// not be swallowed there.
 fn already_engaged(op: Operation, e: &crate::error::Error) -> bool {
-    let msg = e.to_string();
-    if is_undo_op(op) && msg.contains("\"code\":144") {
-        return true;
+    match x_error_code(e) {
+        Some(144) => is_undo_op(op),
+        Some(139 | 327) => true,
+        _ => {
+            let msg = e.to_string();
+            msg.contains("Document already exists") || msg.contains("already bookmarked")
+        }
     }
-    msg.contains("\"code\":139")
-        || msg.contains("\"code\":327")
-        || msg.contains("Document already exists")
-        || msg.contains("already bookmarked")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::Error;
+
+    fn typed(code: i64) -> Error {
+        Error::GraphqlApi {
+            status: None,
+            code: Some(code),
+            message: "nope".into(),
+        }
+    }
+
+    #[test]
+    fn repeating_a_like_or_repost_is_idempotent() {
+        assert!(already_engaged(Operation::FavoriteTweet, &typed(139)));
+        assert!(already_engaged(Operation::CreateRetweet, &typed(327)));
+        let raw = Error::GraphqlStatus {
+            status: 403,
+            body: r#"{"errors":[{"code":139,"message":"already favorited"}]}"#.into(),
+        };
+        assert!(already_engaged(Operation::FavoriteTweet, &raw));
+    }
+
+    #[test]
+    fn undoing_what_is_already_gone_is_idempotent_only_for_undo() {
+        assert!(already_engaged(Operation::UnfavoriteTweet, &typed(144)));
+        assert!(already_engaged(Operation::DeleteRetweet, &typed(144)));
+        assert!(!already_engaged(Operation::FavoriteTweet, &typed(144)));
+    }
+
+    #[test]
+    fn a_repeated_bookmark_is_idempotent() {
+        let dup = Error::GraphqlApi {
+            status: None,
+            code: None,
+            message: "Document already exists".into(),
+        };
+        assert!(already_engaged(Operation::CreateBookmark, &dup));
+        assert!(!already_engaged(Operation::FavoriteTweet, &typed(226)));
+    }
 }

@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+## [0.25.0] — 2026-10-02
+
 - **Settings is rebuilt as a grouped list that starts with whether the server is working.** The top card shows who is signed in and whether the server is reachable; Server shows its address and a live check (version, X session), Reading holds the rage filter with a summary of its rules, post stats, read-dimming and images, Appearance has a theme menu, a text-size slider that previews itself and the tab bar, Writing the X-app switch, and Data shows what the saved timelines take up with a way to clear them, share the app's log or reset every setting except the server address. Notifications moved to a screen of its own, and its quiet-hours window only appears while quiet hours are on.
 - **A touch and hold on the compose button offers more than a new post.** The glass menu starts a post or a post with a photo, refreshes the feed, jumps to the top, marks what's unread as read, and shows which app posts go through, with a switch to change it.
 - **Tap a post's view count to open its stats right under it.** Any post shows quotes and what share of its views became likes, reposts and engagement; on your own posts the strip shows X's own numbers, the ones in its "Post engagements" view: impressions, engagements with their rate, detail expands, profile visits, link clicks and follows, with a small chart of impressions over the first 48 hours. Settings > Reading > Post stats can open them under every post, or turn the tap off. This replaces the old analytics block on your own open post.
@@ -289,7 +291,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.24.0...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.25.0...HEAD
+[0.25.0]: https://github.com/guitaripod/unrager/releases/tag/0.25.0
 [0.24.0]: https://github.com/guitaripod/unrager/releases/tag/0.24.0
 [0.23.0]: https://github.com/guitaripod/unrager/releases/tag/0.23.0
 [0.22.0]: https://github.com/guitaripod/unrager/releases/tag/0.22.0

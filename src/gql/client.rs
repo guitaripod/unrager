@@ -5,6 +5,7 @@ use crate::gql::scraper;
 use crate::gql::transaction::TransactionKeyMaterial;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Mutex, PoisonError, RwLock};
 use std::time::Duration;
@@ -51,26 +52,10 @@ pub struct GqlClient {
     cache_path: PathBuf,
     next_allowed: AsyncMutex<Instant>,
     client_uuid: String,
-    read_rate_limit_until: Mutex<Option<std::time::Instant>>,
-    write_rate_limit_until: Mutex<Option<std::time::Instant>>,
-    /// Dedicated bucket for `AboutAccountQuery`. X enforces this endpoint's
-    /// budget independently, and a 429 here must NOT spill into the shared
-    /// `read_rate_limit_until` — otherwise a flag-fetch failure would
-    /// freeze the main feed and surface a misleading "X cooldown" banner.
-    about_rate_limit_until: Mutex<Option<std::time::Instant>>,
-    /// Dedicated bucket for `NotificationsTimeline`. The iPhone app polls it
-    /// every 15 s, and X budgets it on its own, so a 429 here must not spill
-    /// into the shared read bucket — it would freeze every Home, thread and
-    /// profile read for as long as X says to wait.
-    notifications_rate_limit_until: Mutex<Option<std::time::Instant>>,
-    /// Dedicated bucket for background ingest polls. A 429 triggered by the
-    /// feed-materialization worker lands here and NEVER in the shared
-    /// read/write buckets, so interactive requests (open a thread, like a
-    /// tweet) are never frozen by background work. Interactive calls ignore
-    /// this bucket; background calls respect both this and the interactive
-    /// bucket for their method, so a genuine account-wide limit still pauses
-    /// them.
-    ingest_rate_limit_until: Mutex<Option<std::time::Instant>>,
+    /// When each [`Bucket`] may be called again after a 429. X budgets every
+    /// operation on its own, so a search 429 must never freeze likes or the
+    /// Home feed, and the reverse.
+    cooldowns: Mutex<HashMap<Bucket, std::time::Instant>>,
     transaction_key: Mutex<Option<TransactionKeyMaterial>>,
     /// Set for `unrager demo`: every request fails with [`Error::Offline`]
     /// before anything is sent, so a demo never reaches X or reads the
@@ -78,24 +63,61 @@ pub struct GqlClient {
     offline: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum RateLimitKind {
-    Read,
-    Write,
+/// One rate-limit budget. Each GraphQL operation and each legacy REST path
+/// has its own; background ingest polls share `Ingest`, so a 429 caused by
+/// the feed worker never freezes an interactive request, while a background
+/// call still respects its operation's interactive cooldown.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum Bucket {
+    Op(Operation),
+    Rest(String),
+    Ingest,
+}
+
+impl Bucket {
+    /// Whether this budget belongs to an account action (like, repost,
+    /// bookmark, delete, follow) rather than a read.
+    fn is_write(&self) -> bool {
+        match self {
+            Bucket::Op(op) => is_write_operation(*op),
+            Bucket::Rest(_) => true,
+            Bucket::Ingest => false,
+        }
+    }
+
+    /// Whether this budget counts toward the TUI's "X cooldown on reads"
+    /// banner. About and notification lookups are side channels: their
+    /// cooldowns must not read as the main feed being frozen.
+    fn is_interactive_read(&self) -> bool {
+        match self {
+            Bucket::Op(op) => {
+                !is_write_operation(*op)
+                    && !matches!(
+                        op,
+                        Operation::AboutAccountQuery | Operation::NotificationsTimeline
+                    )
+            }
+            Bucket::Rest(_) | Bucket::Ingest => false,
+        }
+    }
+}
+
+fn is_write_operation(op: Operation) -> bool {
+    matches!(
+        op,
+        Operation::FavoriteTweet
+            | Operation::UnfavoriteTweet
+            | Operation::CreateRetweet
+            | Operation::DeleteRetweet
+            | Operation::DeleteTweet
+            | Operation::CreateBookmark
+            | Operation::DeleteBookmark
+    )
 }
 
 enum Method {
     Get,
     Post,
-}
-
-impl Method {
-    fn kind(&self) -> RateLimitKind {
-        match self {
-            Method::Get => RateLimitKind::Read,
-            Method::Post => RateLimitKind::Write,
-        }
-    }
 }
 
 impl GqlClient {
@@ -117,11 +139,7 @@ impl GqlClient {
             cache_path,
             next_allowed: AsyncMutex::new(Instant::now()),
             client_uuid,
-            read_rate_limit_until: Mutex::new(None),
-            write_rate_limit_until: Mutex::new(None),
-            about_rate_limit_until: Mutex::new(None),
-            notifications_rate_limit_until: Mutex::new(None),
-            ingest_rate_limit_until: Mutex::new(None),
+            cooldowns: Mutex::new(HashMap::new()),
             transaction_key: Mutex::new(None),
             offline: false,
         })
@@ -166,7 +184,7 @@ impl GqlClient {
     /// Form-encoded POST to a legacy `x.com/i/api/1.1` REST endpoint (e.g.
     /// `friendships/create.json`), signed with the same cookie/bearer/csrf
     /// headers as GraphQL calls. `path` must start with `/i/api/1.1/`.
-    /// 429s land in the shared write bucket; a 401/403 triggers the same
+    /// 429s land in that path's own bucket; a 401/403 triggers the same
     /// browser session re-extraction and single retry as GraphQL calls.
     pub async fn post_form_1_1(&self, path: &str, form: &[(&str, &str)]) -> Result<Value> {
         self.ensure_online()?;
@@ -206,7 +224,8 @@ impl GqlClient {
         path: &str,
         form: &[(&str, &str)],
     ) -> Result<Value> {
-        if let Some(remaining) = self.rate_limit_remaining_for(RateLimitKind::Write) {
+        let bucket = Bucket::Rest(path.to_string());
+        if let Some(remaining) = self.cooldown_remaining(&bucket) {
             return Err(Error::RateLimited {
                 remaining_secs: remaining.as_secs().max(1),
             });
@@ -235,7 +254,7 @@ impl GqlClient {
                 .and_then(|v| v.to_str().ok())
                 .and_then(|s| s.parse::<u64>().ok());
             let cooldown = compute_rate_limit_remaining(reset_hdr);
-            self.record_rate_limit(RateLimitKind::Write, cooldown);
+            self.record_cooldown(bucket, cooldown);
             return Err(Error::RateLimited {
                 remaining_secs: cooldown.as_secs().max(1),
             });
@@ -327,19 +346,7 @@ impl GqlClient {
         features: &Value,
         background: bool,
     ) -> Result<Value> {
-        if matches!(op, Operation::AboutAccountQuery) {
-            if let Some(remaining) = self.about_rate_limit_remaining() {
-                return Err(Error::RateLimited {
-                    remaining_secs: remaining.as_secs().max(1),
-                });
-            }
-        } else if matches!(op, Operation::NotificationsTimeline) {
-            if let Some(remaining) = self.notifications_rate_limit_remaining() {
-                return Err(Error::RateLimited {
-                    remaining_secs: remaining.as_secs().max(1),
-                });
-            }
-        } else if let Some(remaining) = self.precheck_cooldown(method.kind(), background) {
+        if let Some(remaining) = self.precheck_cooldown(op, background) {
             return Err(Error::RateLimited {
                 remaining_secs: remaining.as_secs().max(1),
             });
@@ -391,7 +398,7 @@ impl GqlClient {
         };
 
         let res = req.send().await?;
-        self.parse(res, method.kind(), op, background).await
+        self.parse(res, op, background).await
     }
 
     /// The POST body for a persisted GraphQL operation. Feature-less
@@ -796,7 +803,6 @@ impl GqlClient {
     async fn parse(
         &self,
         res: reqwest::Response,
-        kind: RateLimitKind,
         op: Operation,
         background: bool,
     ) -> Result<Value> {
@@ -812,12 +818,11 @@ impl GqlClient {
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.parse::<u64>().ok());
         let is_about = matches!(op, Operation::AboutAccountQuery);
-        let is_notifications = matches!(op, Operation::NotificationsTimeline);
 
         // X's write budgets on this surface are undocumented. Recording what
         // it actually reports is the only way to learn where the ceiling is
         // before a tool walks into it.
-        if kind == RateLimitKind::Write {
+        if is_write_operation(op) {
             tracing::info!(
                 op = op.name(),
                 remaining = remaining_hdr,
@@ -829,15 +834,12 @@ impl GqlClient {
 
         if status.as_u16() == 429 {
             let cooldown = compute_rate_limit_remaining(reset_hdr);
-            if is_about {
-                self.record_about_cooldown(cooldown);
-            } else if is_notifications {
-                self.record_notifications_cooldown(cooldown);
-            } else if background {
-                self.record_ingest_cooldown(cooldown);
+            let bucket = if background {
+                Bucket::Ingest
             } else {
-                self.record_rate_limit(kind, cooldown);
-            }
+                Bucket::Op(op)
+            };
+            self.record_cooldown(bucket, cooldown);
             return Err(Error::RateLimited {
                 remaining_secs: cooldown.as_secs().max(1),
             });
@@ -858,7 +860,7 @@ impl GqlClient {
                 cooldown_secs = cooldown.as_secs(),
                 "AboutAccountQuery budget low, parking until reset"
             );
-            self.record_about_cooldown(cooldown);
+            self.record_cooldown(Bucket::Op(op), cooldown);
         }
 
         let body = res.text().await?;
@@ -915,101 +917,77 @@ fn classify_api_error(status: Option<u16>, body: &str) -> Option<Error> {
 }
 
 impl GqlClient {
-    fn rate_limit_remaining_for(&self, kind: RateLimitKind) -> Option<Duration> {
-        let slot = match kind {
-            RateLimitKind::Read => &self.read_rate_limit_until,
-            RateLimitKind::Write => &self.write_rate_limit_until,
-        };
-        let until = *slot.lock().ok()?;
-        let until = until?;
+    fn cooldown_remaining(&self, bucket: &Bucket) -> Option<Duration> {
+        let until = *self.cooldowns.lock().ok()?.get(bucket)?;
+        until
+            .checked_duration_since(std::time::Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+    }
+
+    /// The longest live cooldown among the buckets `include` selects.
+    fn longest_cooldown(&self, include: impl Fn(&Bucket) -> bool) -> Option<Duration> {
         let now = std::time::Instant::now();
-        if until > now { Some(until - now) } else { None }
+        let guard = self.cooldowns.lock().ok()?;
+        guard
+            .iter()
+            .filter(|(bucket, _)| include(bucket))
+            .filter_map(|(_, until)| until.checked_duration_since(now))
+            .filter(|remaining| !remaining.is_zero())
+            .max()
     }
 
+    fn record_cooldown(&self, bucket: Bucket, remaining: Duration) {
+        let Ok(mut guard) = self.cooldowns.lock() else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        guard.retain(|_, until| *until > now);
+        tracing::info!(
+            bucket = ?bucket,
+            cooldown_secs = remaining.as_secs(),
+            "rate limited; cooling this budget down"
+        );
+        guard.insert(bucket, now + remaining);
+    }
+
+    /// The longest cooldown on any interactive read (Home, threads, search,
+    /// profiles).
     pub fn read_rate_limit_remaining(&self) -> Option<Duration> {
-        self.rate_limit_remaining_for(RateLimitKind::Read)
+        self.longest_cooldown(Bucket::is_interactive_read)
     }
 
+    /// The longest cooldown on any account action (like, repost, bookmark,
+    /// delete, follow).
     pub fn write_rate_limit_remaining(&self) -> Option<Duration> {
-        self.rate_limit_remaining_for(RateLimitKind::Write)
+        self.longest_cooldown(Bucket::is_write)
     }
 
     pub fn rate_limit_remaining(&self) -> Option<Duration> {
-        match (
-            self.read_rate_limit_remaining(),
-            self.write_rate_limit_remaining(),
-        ) {
-            (Some(r), Some(w)) => Some(r.max(w)),
-            (Some(r), None) => Some(r),
-            (None, Some(w)) => Some(w),
-            (None, None) => None,
-        }
-    }
-
-    fn record_rate_limit(&self, kind: RateLimitKind, remaining: Duration) {
-        let slot = match kind {
-            RateLimitKind::Read => &self.read_rate_limit_until,
-            RateLimitKind::Write => &self.write_rate_limit_until,
-        };
-        if let Ok(mut guard) = slot.lock() {
-            *guard = Some(std::time::Instant::now() + remaining);
-        }
-    }
-
-    fn record_about_cooldown(&self, remaining: Duration) {
-        if let Ok(mut guard) = self.about_rate_limit_until.lock() {
-            *guard = Some(std::time::Instant::now() + remaining);
-        }
+        self.longest_cooldown(|bucket| bucket.is_write() || bucket.is_interactive_read())
     }
 
     pub fn about_rate_limit_remaining(&self) -> Option<Duration> {
-        let until = *self.about_rate_limit_until.lock().ok()?;
-        let until = until?;
-        let now = std::time::Instant::now();
-        if until > now { Some(until - now) } else { None }
-    }
-
-    fn record_notifications_cooldown(&self, remaining: Duration) {
-        if let Ok(mut guard) = self.notifications_rate_limit_until.lock() {
-            *guard = Some(std::time::Instant::now() + remaining);
-        }
+        self.cooldown_remaining(&Bucket::Op(Operation::AboutAccountQuery))
     }
 
     pub fn notifications_rate_limit_remaining(&self) -> Option<Duration> {
-        let until = *self.notifications_rate_limit_until.lock().ok()?;
-        let until = until?;
-        let now = std::time::Instant::now();
-        if until > now { Some(until - now) } else { None }
-    }
-
-    fn record_ingest_cooldown(&self, remaining: Duration) {
-        if let Ok(mut guard) = self.ingest_rate_limit_until.lock() {
-            *guard = Some(std::time::Instant::now() + remaining);
-        }
+        self.cooldown_remaining(&Bucket::Op(Operation::NotificationsTimeline))
     }
 
     pub fn ingest_rate_limit_remaining(&self) -> Option<Duration> {
-        let until = *self.ingest_rate_limit_until.lock().ok()?;
-        let until = until?;
-        let now = std::time::Instant::now();
-        if until > now { Some(until - now) } else { None }
+        self.cooldown_remaining(&Bucket::Ingest)
     }
 
     /// Cooldown a call must respect before firing. Interactive calls see only
-    /// their method's bucket; background calls additionally respect the ingest
-    /// bucket, so a background 429 pauses background work without ever touching
-    /// the interactive path.
-    fn precheck_cooldown(&self, kind: RateLimitKind, background: bool) -> Option<Duration> {
-        let interactive = self.rate_limit_remaining_for(kind);
+    /// their operation's bucket; background calls additionally respect the
+    /// ingest bucket, so a background 429 pauses background work without
+    /// ever touching the interactive path.
+    fn precheck_cooldown(&self, op: Operation, background: bool) -> Option<Duration> {
+        let interactive = self.cooldown_remaining(&Bucket::Op(op));
         if !background {
             return interactive;
         }
-        match (interactive, self.ingest_rate_limit_remaining()) {
-            (Some(a), Some(b)) => Some(a.max(b)),
-            (Some(a), None) => Some(a),
-            (None, Some(b)) => Some(b),
-            (None, None) => None,
-        }
+        interactive.max(self.ingest_rate_limit_remaining())
     }
 }
 
@@ -1106,7 +1084,9 @@ fn truncate(s: &str, max_bytes: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Error, GqlClient, Instant, is_auth_failure, needs_query_id_refresh, truncate};
+    use super::{
+        Bucket, Error, GqlClient, Instant, is_auth_failure, needs_query_id_refresh, truncate,
+    };
     use crate::auth::XSession;
     use crate::gql::query_ids::{Operation, QueryIdStore};
 
@@ -1173,7 +1153,10 @@ mod tests {
     #[tokio::test]
     async fn a_notifications_cooldown_blocks_only_notifications() {
         let client = test_client();
-        client.record_notifications_cooldown(std::time::Duration::from_secs(300));
+        client.record_cooldown(
+            Bucket::Op(Operation::NotificationsTimeline),
+            std::time::Duration::from_secs(300),
+        );
         let empty = serde_json::json!({});
 
         let notifications = client
@@ -1186,6 +1169,98 @@ mod tests {
         );
         assert!(client.about_rate_limit_remaining().is_none());
         assert!(client.ingest_rate_limit_remaining().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_search_cooldown_leaves_likes_and_home_open() {
+        let client = test_client();
+        client.record_cooldown(
+            Bucket::Op(Operation::SearchTimeline),
+            std::time::Duration::from_secs(300),
+        );
+        let empty = serde_json::json!({});
+
+        let search = client.post(Operation::SearchTimeline, &empty, &empty).await;
+        assert!(matches!(search, Err(Error::RateLimited { .. })));
+        assert!(
+            client
+                .precheck_cooldown(Operation::FavoriteTweet, false)
+                .is_none()
+        );
+        assert!(
+            client
+                .precheck_cooldown(Operation::HomeTimeline, false)
+                .is_none()
+        );
+        assert!(client.write_rate_limit_remaining().is_none());
+        assert!(client.read_rate_limit_remaining().is_some());
+    }
+
+    #[test]
+    fn a_follow_cooldown_is_its_own_write_budget() {
+        let client = test_client();
+        client.record_cooldown(
+            Bucket::Rest("/i/api/1.1/friendships/create.json".into()),
+            std::time::Duration::from_secs(300),
+        );
+        assert!(client.write_rate_limit_remaining().is_some());
+        assert!(client.read_rate_limit_remaining().is_none());
+        assert!(
+            client
+                .precheck_cooldown(Operation::FavoriteTweet, false)
+                .is_none()
+        );
+        assert!(
+            client
+                .cooldown_remaining(&Bucket::Rest("/i/api/1.1/friendships/destroy.json".into()))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_background_cooldown_pauses_only_background_calls() {
+        let client = test_client();
+        client.record_cooldown(Bucket::Ingest, std::time::Duration::from_secs(300));
+        assert!(
+            client
+                .precheck_cooldown(Operation::HomeTimeline, false)
+                .is_none()
+        );
+        assert!(
+            client
+                .precheck_cooldown(Operation::HomeTimeline, true)
+                .is_some()
+        );
+        assert!(client.rate_limit_remaining().is_none());
+    }
+
+    #[test]
+    fn an_interactive_cooldown_also_pauses_background_calls() {
+        let client = test_client();
+        client.record_cooldown(
+            Bucket::Op(Operation::HomeLatestTimeline),
+            std::time::Duration::from_secs(300),
+        );
+        assert!(
+            client
+                .precheck_cooldown(Operation::HomeLatestTimeline, true)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn a_cooldown_expires() {
+        let client = test_client();
+        client.record_cooldown(
+            Bucket::Op(Operation::FavoriteTweet),
+            std::time::Duration::ZERO,
+        );
+        assert!(
+            client
+                .precheck_cooldown(Operation::FavoriteTweet, false)
+                .is_none()
+        );
+        assert!(client.write_rate_limit_remaining().is_none());
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use chrono::{DateTime, Duration, DurationRound, SecondsFormat, Utc};
 use serde_json::{Value, json};
 
 pub fn viewer_variables() -> Value {
@@ -23,6 +24,43 @@ pub fn tweet_by_rest_id_variables(tweet_id: &str) -> Value {
         "includePromotedContent": false,
         "withVoice": false
     })
+}
+
+/// The metrics X's own "Post engagements" view asks for. The web client also
+/// asks for `UniqueImpressions`, which X answers for Premium accounts only,
+/// and asking for it drops every other total from the answer.
+pub const POST_ANALYTICS_METRICS: [&str; 6] = [
+    "DetailExpands",
+    "Engagements",
+    "Follows",
+    "Impressions",
+    "LinkClicks",
+    "ProfileVisits",
+];
+
+/// Variables for `TweetActivityQuery`: the window runs from the hour the post
+/// went out until `now`, with the first 48 hours also asked for as an hourly
+/// series, exactly as the web client does.
+pub fn tweet_activity_variables(rest_id: &str, posted: DateTime<Utc>, now: DateTime<Utc>) -> Value {
+    let from = posted.duration_trunc(Duration::hours(1)).unwrap_or(posted);
+    let iso = |time: DateTime<Utc>| time.to_rfc3339_opts(SecondsFormat::Millis, true);
+    let mut promoted: Vec<&str> = POST_ANALYTICS_METRICS.to_vec();
+    promoted.push("CostPerFollower");
+    json!({
+        "restId": rest_id,
+        "from_time": iso(from),
+        "to_time": iso(now),
+        "first_48_hours_time": iso(from + Duration::hours(48)),
+        "requested_organic_metrics": POST_ANALYTICS_METRICS,
+        "requested_promoted_metrics": promoted,
+    })
+}
+
+/// The artifact in X's web client lists this one feature switch for
+/// `TweetActivityQuery`; without it X answers a cut-down selection that has
+/// the impressions total but none of the other metrics.
+pub fn tweet_activity_features() -> Value {
+    json!({ "responsive_web_tweet_analytics_m3_enabled": true })
 }
 
 pub fn tweet_detail_variables(focal_tweet_id: &str, cursor: Option<&str>) -> Value {

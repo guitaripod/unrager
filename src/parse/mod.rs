@@ -1,4 +1,5 @@
 pub mod about;
+pub mod activity;
 pub mod notification;
 pub mod timeline;
 pub mod tweet;

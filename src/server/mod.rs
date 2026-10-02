@@ -198,6 +198,10 @@ fn router(state: Arc<AppState>) -> Router {
         )
         .route("/feed/status", get(routes::feed::status))
         .route("/tweet/{id}", get(routes::tweet::single))
+        .route(
+            "/tweets/{tweet_id}/analytics",
+            get(routes::tweet::analytics),
+        )
         .route("/thread/{id}", get(routes::tweet::thread))
         .route("/about/{rest_id}", get(routes::about::about))
         .route("/profile/{handle}", get(routes::profile::profile))

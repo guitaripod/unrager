@@ -297,6 +297,23 @@ pub struct MediaUploadResult {
     pub media_id: String,
 }
 
+/// `GET /api/tweets/{id}/analytics` — the numbers X's "Post engagements" view
+/// shows on the signed-in account's own posts. Only those have any.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct PostAnalytics {
+    pub impressions: u64,
+    pub engagements: u64,
+    pub detail_expands: u64,
+    pub profile_visits: u64,
+    pub link_clicks: u64,
+    pub follows: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_views: Option<u64>,
+    /// Impressions in each hour of the first 48 after the post went out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hourly_impressions: Vec<u64>,
+}
+
 /// `GET`/`PUT /api/notifications/seen` — the newest-seen notification marker,
 /// persisted server-side so badge state syncs across clients.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

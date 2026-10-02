@@ -1,5 +1,7 @@
+use crate::error::Error;
 use crate::gql::endpoints;
 use crate::gql::query_ids::Operation;
+use crate::parse::activity as parse_activity;
 use crate::parse::timeline;
 use crate::parse::tweet as parse_tweet;
 use crate::server::error::ApiError;
@@ -8,7 +10,7 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use serde::Deserialize;
 use std::sync::Arc;
-use unrager_model::{ThreadView, Tweet};
+use unrager_model::{PostAnalytics, ThreadView, Tweet};
 
 pub async fn single(
     State(state): State<Arc<AppState>>,
@@ -32,6 +34,40 @@ async fn fetch_tweet_by_rest_id(
         )
         .await?;
     Ok(parse_tweet::parse_tweet_result_by_rest_id(&response)?)
+}
+
+/// X's own analytics for one of the signed-in account's posts: impressions,
+/// engagements, detail expands, profile visits, link clicks and follows. X
+/// sends nothing for anyone else's post, which answers 404.
+pub async fn analytics(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> std::result::Result<Json<PostAnalytics>, ApiError> {
+    let posted =
+        parse_activity::posted_at(&id).ok_or_else(|| ApiError::bad_request("not a post id"))?;
+    let response = state
+        .gql
+        .get(
+            Operation::TweetActivityQuery,
+            &endpoints::tweet_activity_variables(&id, posted, chrono::Utc::now()),
+            &endpoints::tweet_activity_features(),
+        )
+        .await;
+    let _ = std::fs::write("/tmp/unrager-activity.json", format!("{response:?}"));
+    match response {
+        Ok(response) => parse_activity::parse_post_analytics(&response)
+            .map(Json)
+            .ok_or_else(|| {
+                tracing::info!(
+                    post = %id,
+                    shape = %parse_activity::describe(&response),
+                    "post analytics: X sent no metrics"
+                );
+                ApiError::not_found("no analytics for this post")
+            }),
+        Err(Error::GraphqlApi { .. }) => Err(ApiError::not_found("no analytics for this post")),
+        Err(error) => Err(error.into()),
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]

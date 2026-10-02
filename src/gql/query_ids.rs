@@ -59,6 +59,7 @@ operations! {
     (CreateBookmark, "aoDbu3RHznuiSkQ9aNM67Q"),
     (DeleteBookmark, "Wlmlj2-xzyS1GN3a6cj-mQ"),
     (AboutAccountQuery, "TzOG2twZEfhr9KmClvVVqA"),
+    (TweetActivityQuery, "vnwexpl0q33_Bky-SROVww"),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

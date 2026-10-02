@@ -30,7 +30,8 @@ const ANONYMOUS_SHELL_URLS: &[&str] = &[
 
 /// Fragments of the names of the lazily loaded chunks that define the
 /// operations `main.js` doesn't: the Home timelines, bookmarks,
-/// notifications, likers and the about-account lookup. The shell's chunk map
+/// notifications, likers, the post-analytics query and the about-account
+/// lookup. The shell's chunk map
 /// names every chunk, so these are matched against it instead of hardcoding
 /// hashed file names that change on every deploy.
 const LAZY_CHUNK_HINTS: &[&str] = &[
@@ -38,6 +39,7 @@ const LAZY_CHUNK_HINTS: &[&str] = &[
     "Bookmarks",
     "bundle.Notifications",
     "TweetActivity",
+    "ConversationWithRelay",
     "AboutAccount",
 ];
 const CHUNK_BASE: &str = "https://abs.twimg.com/responsive-web/client-web/";

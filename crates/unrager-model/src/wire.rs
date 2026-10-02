@@ -133,6 +133,11 @@ pub struct TokenEvent {
     pub token: String,
     #[serde(default)]
     pub done: bool,
+    /// Set on the final event when the model failed (unreachable, error reply,
+    /// stream cut). Absent on a normal finish, so an older client that doesn't
+    /// know the field still sees an ordinary end of stream.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -279,6 +284,11 @@ pub struct UserListPage {
     pub users: Vec<User>,
     #[serde(default)]
     pub cursor: Option<String>,
+    /// True when X would only give the verified part of the list (the full
+    /// followers list is gone from its API), so a client can say the list is
+    /// partial rather than present it as everyone.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub verified_only: bool,
 }
 
 /// `POST /api/media/upload`.
@@ -310,6 +320,29 @@ pub struct SessionState {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_token_event_carries_a_failure_only_when_there_is_one() {
+        let ok = serde_json::to_value(TokenEvent {
+            token: "hi".into(),
+            done: false,
+            error: None,
+        })
+        .unwrap();
+        assert_eq!(ok, json!({ "token": "hi", "done": false }));
+
+        let failed = serde_json::to_value(TokenEvent {
+            token: String::new(),
+            done: true,
+            error: Some("model unreachable".into()),
+        })
+        .unwrap();
+        assert_eq!(failed["error"], "model unreachable");
+
+        let old_server: TokenEvent =
+            serde_json::from_value(json!({ "token": "x", "done": true })).unwrap();
+        assert_eq!(old_server.error, None);
+    }
 
     fn sample_profile() -> AboutProfile {
         AboutProfile {
@@ -455,10 +488,19 @@ mod tests {
                 followed_by_me: None,
             }],
             cursor: Some("next".into()),
+            verified_only: true,
         };
         let json = serde_json::to_string(&page).unwrap();
         let back: UserListPage = serde_json::from_str(&json).unwrap();
         assert_eq!(back, page);
+        assert!(
+            !serde_json::to_string(&UserListPage {
+                verified_only: false,
+                ..page.clone()
+            })
+            .unwrap()
+            .contains("verified_only")
+        );
     }
 
     #[test]

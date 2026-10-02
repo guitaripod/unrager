@@ -186,6 +186,10 @@ fn router(state: Arc<AppState>) -> Router {
             get(routes::timeline::user_replies),
         )
         .route("/sources/search", get(routes::timeline::search))
+        .route(
+            "/sources/search/people",
+            get(routes::timeline::search_people),
+        )
         .route("/sources/mentions", get(routes::timeline::mentions))
         .route("/sources/bookmarks", get(routes::timeline::bookmarks))
         .route(

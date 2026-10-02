@@ -10,15 +10,16 @@ pub async fn get_filter(
     State(state): State<Arc<AppState>>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     let cfg = state.filter_config.lock().await;
+    let filter_llm = cfg.llm.for_filter();
     Ok(Json(serde_json::json!({
         "drop_topics": cfg.drop_topics,
         "extra_guidance": cfg.extra_guidance,
         "strictness": cfg.strictness,
         "built_in_rules": built_in_rule_labels(),
         "ollama": {
-            "backend": cfg.llm.backend,
-            "model": cfg.llm.model,
-            "host": cfg.llm.host,
+            "backend": filter_llm.backend,
+            "model": filter_llm.model,
+            "host": filter_llm.host,
         },
     })))
 }

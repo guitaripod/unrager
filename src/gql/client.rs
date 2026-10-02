@@ -58,6 +58,11 @@ pub struct GqlClient {
     /// `read_rate_limit_until` — otherwise a flag-fetch failure would
     /// freeze the main feed and surface a misleading "X cooldown" banner.
     about_rate_limit_until: Mutex<Option<std::time::Instant>>,
+    /// Dedicated bucket for `NotificationsTimeline`. The iPhone app polls it
+    /// every 15 s, and X budgets it on its own, so a 429 here must not spill
+    /// into the shared read bucket — it would freeze every Home, thread and
+    /// profile read for as long as X says to wait.
+    notifications_rate_limit_until: Mutex<Option<std::time::Instant>>,
     /// Dedicated bucket for background ingest polls. A 429 triggered by the
     /// feed-materialization worker lands here and NEVER in the shared
     /// read/write buckets, so interactive requests (open a thread, like a
@@ -115,6 +120,7 @@ impl GqlClient {
             read_rate_limit_until: Mutex::new(None),
             write_rate_limit_until: Mutex::new(None),
             about_rate_limit_until: Mutex::new(None),
+            notifications_rate_limit_until: Mutex::new(None),
             ingest_rate_limit_until: Mutex::new(None),
             transaction_key: Mutex::new(None),
             offline: false,
@@ -323,6 +329,12 @@ impl GqlClient {
     ) -> Result<Value> {
         if matches!(op, Operation::AboutAccountQuery) {
             if let Some(remaining) = self.about_rate_limit_remaining() {
+                return Err(Error::RateLimited {
+                    remaining_secs: remaining.as_secs().max(1),
+                });
+            }
+        } else if matches!(op, Operation::NotificationsTimeline) {
+            if let Some(remaining) = self.notifications_rate_limit_remaining() {
                 return Err(Error::RateLimited {
                     remaining_secs: remaining.as_secs().max(1),
                 });
@@ -800,6 +812,7 @@ impl GqlClient {
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.parse::<u64>().ok());
         let is_about = matches!(op, Operation::AboutAccountQuery);
+        let is_notifications = matches!(op, Operation::NotificationsTimeline);
 
         // X's write budgets on this surface are undocumented. Recording what
         // it actually reports is the only way to learn where the ceiling is
@@ -818,6 +831,8 @@ impl GqlClient {
             let cooldown = compute_rate_limit_remaining(reset_hdr);
             if is_about {
                 self.record_about_cooldown(cooldown);
+            } else if is_notifications {
+                self.record_notifications_cooldown(cooldown);
             } else if background {
                 self.record_ingest_cooldown(cooldown);
             } else {
@@ -949,6 +964,19 @@ impl GqlClient {
 
     pub fn about_rate_limit_remaining(&self) -> Option<Duration> {
         let until = *self.about_rate_limit_until.lock().ok()?;
+        let until = until?;
+        let now = std::time::Instant::now();
+        if until > now { Some(until - now) } else { None }
+    }
+
+    fn record_notifications_cooldown(&self, remaining: Duration) {
+        if let Ok(mut guard) = self.notifications_rate_limit_until.lock() {
+            *guard = Some(std::time::Instant::now() + remaining);
+        }
+    }
+
+    pub fn notifications_rate_limit_remaining(&self) -> Option<Duration> {
+        let until = *self.notifications_rate_limit_until.lock().ok()?;
         let until = until?;
         let now = std::time::Instant::now();
         if until > now { Some(until - now) } else { None }
@@ -1140,6 +1168,24 @@ mod tests {
         tokio::time::timeout(quick, client.warm_transaction_key())
             .await
             .expect("an offline client doesn't scrape x.com for a signing key");
+    }
+
+    #[tokio::test]
+    async fn a_notifications_cooldown_blocks_only_notifications() {
+        let client = test_client();
+        client.record_notifications_cooldown(std::time::Duration::from_secs(300));
+        let empty = serde_json::json!({});
+
+        let notifications = client
+            .get(Operation::NotificationsTimeline, &empty, &empty)
+            .await;
+        assert!(matches!(notifications, Err(Error::RateLimited { .. })));
+        assert!(
+            client.rate_limit_remaining().is_none(),
+            "the shared read bucket stays open for Home, threads and profiles"
+        );
+        assert!(client.about_rate_limit_remaining().is_none());
+        assert!(client.ingest_rate_limit_remaining().is_none());
     }
 
     #[test]

@@ -121,7 +121,13 @@ impl SeenStore {
     }
 }
 
+/// A marker's instant in milliseconds. Clients write either `<timestamp_ms>-<id>`
+/// or an ISO 8601 timestamp (the iPhone app); an ISO string would otherwise be
+/// split at its first dash and compared by year alone.
 fn marker_millis(marker: &str) -> i64 {
+    if let Ok(instant) = chrono::DateTime::parse_from_rfc3339(marker) {
+        return instant.timestamp_millis();
+    }
     marker
         .split_once('-')
         .map(|(ms, _)| ms)
@@ -236,6 +242,23 @@ mod tests {
         assert_eq!(
             store.notifications_marker().as_deref(),
             Some("1800000000000-def")
+        );
+    }
+
+    #[test]
+    fn iso_markers_compare_by_instant_not_year() {
+        let (_tmp, mut store) = fresh_store();
+        store.set_notifications_marker("2026-07-01T10:00:00.500Z");
+        store.set_notifications_marker("2026-06-01T10:00:00Z");
+        assert_eq!(
+            store.notifications_marker().as_deref(),
+            Some("2026-07-01T10:00:00.500Z"),
+            "an older instant in the same year must not replace a newer one"
+        );
+        store.set_notifications_marker("2026-07-01T10:00:01Z");
+        assert_eq!(
+            store.notifications_marker().as_deref(),
+            Some("2026-07-01T10:00:01Z")
         );
     }
 

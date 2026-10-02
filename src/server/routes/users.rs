@@ -76,7 +76,9 @@ pub async fn followers(
             other => return other,
         }
     }
-    user_list(&state, Operation::BlueVerifiedFollowers, &user_id, &q).await
+    let mut page = user_list(&state, Operation::BlueVerifiedFollowers, &user_id, &q).await?;
+    page.0.verified_only = true;
+    Ok(page)
 }
 
 fn is_gone_upstream(e: &ApiError) -> bool {
@@ -117,6 +119,7 @@ async fn user_list(
     Ok(Json(UserListPage {
         users: page.users,
         cursor: page.next_cursor,
+        verified_only: false,
     }))
 }
 

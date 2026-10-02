@@ -410,21 +410,33 @@ pub async fn fetch_images(tweet: &Tweet) -> Vec<String> {
     else {
         return Vec::new();
     };
-    let mut out: Vec<String> = Vec::with_capacity(photo_urls.len());
-    for url in photo_urls {
-        match http.get(&url).send().await {
-            Ok(resp) if resp.status().is_success() => match resp.bytes().await {
-                Ok(bytes) => {
-                    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                    out.push(encoded);
+    let fetches = photo_urls.into_iter().map(|url| {
+        let http = http.clone();
+        async move {
+            match http.get(&url).send().await {
+                Ok(resp) if resp.status().is_success() => match resp.bytes().await {
+                    Ok(bytes) => Some(base64::engine::general_purpose::STANDARD.encode(&bytes)),
+                    Err(e) => {
+                        warn!(url = %url, "ask image body read failed: {e}");
+                        None
+                    }
+                },
+                Ok(resp) => {
+                    warn!(url = %url, status = resp.status().as_u16(), "ask image http error");
+                    None
                 }
-                Err(e) => warn!(url = %url, "ask image body read failed: {e}"),
-            },
-            Ok(resp) => warn!(url = %url, status = resp.status().as_u16(), "ask image http error"),
-            Err(e) => warn!(url = %url, "ask image fetch failed: {e}"),
+                Err(e) => {
+                    warn!(url = %url, "ask image fetch failed: {e}");
+                    None
+                }
+            }
         }
-    }
-    out
+    });
+    futures::future::join_all(fetches)
+        .await
+        .into_iter()
+        .flatten()
+        .collect()
 }
 
 async fn stream_llm(llm: &LlmConfig, tweet_id: &str, messages: Vec<Value>, tx: &EventTx) {

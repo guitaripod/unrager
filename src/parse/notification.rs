@@ -217,9 +217,8 @@ fn build_grouped_entry(entry_id: &str, content: &Value) -> Option<RawNotificatio
         .or_else(|| target.as_ref().map(|t| t.created_at))
         .unwrap_or_else(|| DateTime::from_timestamp(0, 0).expect("unix epoch is valid"));
 
-    let stable_id =
-        composite_grouped_id(&notification_type, &actors, &target_tweet_id, others_count)
-            .unwrap_or_else(|| entry_id.to_string());
+    let stable_id = composite_grouped_id(&notification_type, &actors, &target_tweet_id)
+        .unwrap_or_else(|| entry_id.to_string());
 
     Some(RawNotification {
         id: stable_id,
@@ -237,23 +236,26 @@ fn build_grouped_entry(entry_id: &str, content: &Value) -> Option<RawNotificatio
     })
 }
 
+/// A grouped notification's id. The same group arrives again whenever someone
+/// joins it, with more actors and a higher "and N others", so the id must not
+/// depend on who is in it: a client keeping the group's row by id would show
+/// every growth as a second notification. A group about a tweet is that tweet
+/// plus the kind of activity; one with no tweet (new followers) is named by the
+/// kind and the actors it lists, which is the most that is stable.
 fn composite_grouped_id(
     notification_type: &str,
     actors: &[User],
     target_tweet_id: &Option<String>,
-    others_count: Option<u64>,
 ) -> Option<String> {
-    if actors.is_empty() && target_tweet_id.is_none() {
+    if let Some(target) = target_tweet_id {
+        return Some(format!("g-{notification_type}-{target}"));
+    }
+    if actors.is_empty() {
         return None;
     }
     let mut handles: Vec<&str> = actors.iter().map(|u| u.handle.as_str()).collect();
     handles.sort_unstable();
-    let actors_part = handles.join(",");
-    let target_part = target_tweet_id.as_deref().unwrap_or("-");
-    let others_part = others_count.unwrap_or(0);
-    Some(format!(
-        "g-{notification_type}-{target_part}-{actors_part}-{others_part}"
-    ))
+    Some(format!("g-{notification_type}--{}", handles.join(",")))
 }
 
 fn parse_notification_timestamp(item: &Value) -> Option<DateTime<Utc>> {
@@ -549,6 +551,52 @@ mod tests {
             Some("Alice, Bob and 47 others liked your post")
         );
         assert_eq!(n.others_count, Some(47));
+    }
+
+    fn user(handle: &str) -> User {
+        User {
+            rest_id: handle.to_string(),
+            handle: handle.to_string(),
+            name: handle.to_string(),
+            verified: false,
+            followers: 0,
+            following: 0,
+            avatar_url: None,
+            followed_by_me: None,
+        }
+    }
+
+    #[test]
+    fn a_growing_group_about_a_tweet_keeps_its_id() {
+        let target = Some("42".to_string());
+        let small = composite_grouped_id("Like", &[user("alice")], &target);
+        let grown = composite_grouped_id(
+            "Like",
+            &[user("bob"), user("alice"), user("carol")],
+            &target,
+        );
+        assert_eq!(small, grown, "growth must not mint a new id");
+        assert_ne!(
+            small,
+            composite_grouped_id("Retweet", &[user("alice")], &target),
+            "a different kind of activity is a different notification"
+        );
+        assert_ne!(
+            small,
+            composite_grouped_id("Like", &[user("alice")], &Some("43".to_string())),
+            "a different tweet is a different notification"
+        );
+    }
+
+    #[test]
+    fn a_group_without_a_tweet_is_named_by_its_actors() {
+        let none = None;
+        assert_eq!(
+            composite_grouped_id("Follow", &[user("b"), user("a")], &none),
+            composite_grouped_id("Follow", &[user("a"), user("b")], &none),
+            "actor order doesn't matter"
+        );
+        assert_eq!(composite_grouped_id("Follow", &[], &none), None);
     }
 
     #[test]

@@ -286,9 +286,10 @@ fn stream_body(
     label: &'static str,
 ) -> Sse<impl Stream<Item = std::result::Result<Event, Infallible>>> {
     let (tx, mut rx) = token_channel();
+    let (failure_tx, failure_rx) = tokio::sync::oneshot::channel::<String>();
 
     tokio::spawn(async move {
-        let _ = llm
+        let outcome = llm
             .stream_chat(
                 req,
                 label,
@@ -298,15 +299,20 @@ fn stream_body(
                 |_| {},
             )
             .await;
+        if let Err(message) = outcome {
+            tracing::warn!(label, "llm stream failed: {message}");
+            let _ = failure_tx.send(message);
+        }
     });
 
     let s = stream! {
         while let Some(token) = rx.recv().await {
-            let ev = TokenEvent { token, done: false };
+            let ev = TokenEvent { token, done: false, error: None };
             let data = serde_json::to_string(&ev).unwrap_or_else(|_| "{}".into());
             yield Ok(Event::default().data(data));
         }
-        let ev = TokenEvent { token: String::new(), done: true };
+        let error = failure_rx.await.ok();
+        let ev = TokenEvent { token: String::new(), done: true, error };
         yield Ok(Event::default().data(serde_json::to_string(&ev).unwrap_or_default()));
         yield Ok(Event::default().data("[DONE]"));
     };

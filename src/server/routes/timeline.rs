@@ -236,6 +236,37 @@ pub async fn search(
     ))
 }
 
+/// `GET /api/sources/search/people` — the People tab of X search. Its results
+/// are accounts, not tweets, so they can't ride the tweet page the other
+/// products use: the page of tweets the parser extracts from them is empty.
+pub async fn search_people(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<SearchQuery>,
+) -> std::result::Result<Json<unrager_model::UserListPage>, ApiError> {
+    if q.q.trim().is_empty() {
+        return Err(ApiError::bad_request("empty query"));
+    }
+    let count = q.count.unwrap_or(DEFAULT_COUNT);
+    let response = state
+        .gql
+        .post(
+            Operation::SearchTimeline,
+            &endpoints::search_timeline_variables(&q.q, count, "People", q.cursor.as_deref()),
+            &endpoints::search_timeline_features(),
+        )
+        .await?;
+    let instructions = timeline::extract_instructions(
+        &response,
+        "/data/search_by_raw_query/search_timeline/timeline/instructions",
+    )?;
+    let page = crate::parse::user::parse_user_list_instructions(instructions);
+    Ok(Json(unrager_model::UserListPage {
+        users: page.users,
+        cursor: page.next_cursor,
+        verified_only: false,
+    }))
+}
+
 fn normalize_product(s: &str) -> &'static str {
     match s.to_ascii_lowercase().as_str() {
         "top" => "Top",

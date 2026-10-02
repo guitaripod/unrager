@@ -157,7 +157,7 @@ struct ImagePipelineTests {
         await pipeline.cancelPrefetch(url)
         #expect(await pipeline.interestCount(for: url) == 1)
 
-        StallingURLProtocol.completeAll()
+        await StallingURLProtocol.completeAllOnceStarted()
         #expect(await visible.value != nil)
     }
 
@@ -224,7 +224,7 @@ struct ImagePipelineTests {
             waited += 1
         }
         #expect(StallingURLProtocol.pendingCount == urls.count)
-        StallingURLProtocol.completeAll()
+        await StallingURLProtocol.completeAllOnceStarted()
         for load in loads { #expect(await load.value != nil) }
     }
 

@@ -25,8 +25,9 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
     /// first scroll. False for feed-opened threads (focal already at top).
     private var scrollToFocalOnLoad = false
     /// Holds the focal at the top across async ancestor-image height changes
-    /// after a notification/permalink open, until the user first drags.
-    private var pendingFocalScroll = false
+    /// after a notification/permalink open, until the user first drags or
+    /// posts a reply.
+    private var focalPin = FocalPin()
     private var selfHandle: String?
     private var cursor: String?
     private var exhausted = false
@@ -517,7 +518,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
             guard let self else { return }
             if self.scrollToFocalOnLoad, !ancestors.isEmpty {
                 self.scrollToFocalOnLoad = false
-                self.pendingFocalScroll = true
+                self.focalPin.hold()
                 self.scrollFocalToTop()
             } else if shouldPinFocal, let anchorBefore {
                 self.pinFocal(toScreenY: anchorBefore)
@@ -528,28 +529,52 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        if pendingFocalScroll { scrollFocalToTop() }
+        if focalPin.isHeld { scrollFocalToTop() }
     }
 
     /// Brings the focal tweet to the top of the viewport (used when a thread is
     /// opened by id from a notification, so ancestors sit above it off-screen).
-    /// Re-applied on every layout pass while `pendingFocalScroll` holds, so
-    /// ancestor images loading in and growing can't leave the focal scrolled
-    /// past; the user's first drag releases the pin.
+    /// Re-applied on every layout pass while `focalPin` holds, so ancestor
+    /// images loading in and growing can't leave the focal scrolled past; the
+    /// user's first drag or a posted reply releases the pin.
     private func scrollFocalToTop() {
         guard let focalID, let indexPath = dataSource.indexPath(for: focalID),
               let attributes = collectionView.layoutAttributesForItem(at: indexPath) else { return }
         let topInset = collectionView.adjustedContentInset.top
         let target = max(0, attributes.frame.minY - topInset)
-        let requiredBottom = target + collectionView.bounds.height
-            - collectionView.contentSize.height
-        let extraBottom = max(0, requiredBottom - collectionView.safeAreaInsets.bottom)
-        if abs(collectionView.contentInset.bottom - extraBottom) > 0.5 {
-            collectionView.contentInset.bottom = extraBottom
-        }
+        setBottomInset(focalPin.bottomInset(
+            focalOffset: target, viewportHeight: collectionView.bounds.height,
+            contentHeight: collectionView.contentSize.height, safeAreaBottom: collectionView.safeAreaInsets.bottom))
         if abs(collectionView.contentOffset.y - target) > 0.5 {
             collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: false)
         }
+    }
+
+    private func setBottomInset(_ inset: CGFloat) {
+        guard abs(collectionView.contentInset.bottom - inset) > 0.5 else { return }
+        collectionView.contentInset.bottom = inset
+    }
+
+    /// Lets go of the focal and takes away the room the pin added under the
+    /// last reply, which would otherwise stay on as empty space below the
+    /// conversation. `settling` glides the list back within its rows at once;
+    /// a drag is left to bounce back on its own.
+    private func releaseFocalPin(settling: Bool) {
+        guard focalPin.isHeld else { return }
+        focalPin.release()
+        setBottomInset(0)
+        guard settling else { return }
+        let settled = min(collectionView.contentOffset.y, maxOffset)
+        if settled < collectionView.contentOffset.y - 0.5 {
+            collectionView.setContentOffset(CGPoint(x: 0, y: settled), animated: true)
+        }
+    }
+
+    /// The furthest the list scrolls down: its last row resting on the bottom
+    /// inset, or the top when the rows don't fill the screen.
+    private var maxOffset: CGFloat {
+        max(topOffset, collectionView.contentSize.height - collectionView.bounds.height
+            + collectionView.adjustedContentInset.bottom)
     }
 
     /// The focal cell's top in the collection's content space minus the current
@@ -564,11 +589,14 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
     /// bar — negative by the top inset, so clamping to 0 would shove content up.
     private var topOffset: CGFloat { -collectionView.adjustedContentInset.top }
 
+    /// Keeps the focal at `screenY` across a reload, as far as the rows allow:
+    /// never past the last one, which would leave empty space under it.
     private func pinFocal(toScreenY screenY: CGFloat) {
+        collectionView.layoutIfNeeded()
         guard let focalID, let indexPath = dataSource.indexPath(for: focalID),
               let attributes = collectionView.layoutAttributesForItem(at: indexPath) else { return }
-        let target = attributes.frame.minY - screenY
-        collectionView.setContentOffset(CGPoint(x: 0, y: max(topOffset, target)), animated: false)
+        let target = min(max(topOffset, attributes.frame.minY - screenY), maxOffset)
+        collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: false)
     }
 
     private func loadMore() {
@@ -646,6 +674,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
             if posted.likedReplyTarget {
                 self.confirmEngagement(id: tweet.restID) { $0.togglingLike(to: true) }
             }
+            self.releaseFocalPin(settling: true)
             self.postedReplyID = posted.id
             self.load()
         }
@@ -814,7 +843,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
 
 extension ThreadViewController: UICollectionViewDelegate {
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
-        pendingFocalScroll = false
+        releaseFocalPin(settling: false)
     }
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {

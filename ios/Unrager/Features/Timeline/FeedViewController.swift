@@ -80,11 +80,15 @@ class FeedViewController: UIViewController, TweetActionHandling {
                        bodyLineLimit: self.expandedBodies.contains(id) ? 0 : TweetCell.feedBodyLineLimit,
                        stats: PostStatsPolicy.content(
                            for: tweet, expanded: self.expandedStats.contains(id), isOwn: self.isOwnTweet(tweet),
-                           changed: { [weak self] in self?.reconfigure(id, animated: false) })) }
+                           changed: { [weak self] in self?.reconfigure(id, animated: false) }),
+                       viewerHandle: AppEnvironment.shared.currentHandle) }
         self.applyFlag(to: cell, author: tweet.author)
         cell.onTapAuthor = { [weak self] in self?.handleProfile(tweet.author.handle) }
+        if let reposter = tweet.retweetedBy {
+            cell.onTapReposter = { [weak self] in self?.handleProfile(reposter.handle) }
+        }
         cell.onTapPhoto = { [weak self] index in self?.openMedia(tweet, at: index) }
-        cell.onTapCard = { url in UIApplication.shared.open(url) }
+        cell.onTapCard = { [weak self] url in self?.openLink(url) }
         cell.onReply = { [weak self] in self?.presentReply(tweet) }
         cell.onTapQuoted = { [weak self] in
             if let quoted = tweet.quotedTweet { self?.handleSelect(quoted) }
@@ -92,6 +96,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
         cell.onLike = { [weak self, weak cell] in self?.toggleLike(tweet, cell: cell) }
         cell.onToggleRetweet = { [weak self, weak cell] in self?.toggleRetweet(tweet, cell: cell) }
         cell.onQuote = { [weak self] in self?.presentQuote(tweet) }
+        cell.onViewQuotes = { [weak self] in self?.openQuotes(of: tweet) }
         cell.onToggleBookmark = { [weak self, weak cell] in self?.toggleBookmark(tweet, cell: cell) }
         cell.onShare = { [weak self] in self?.shareTweet(tweet) }
         cell.onTapMention = { [weak self] handle in self?.handleProfile(handle) }
@@ -101,6 +106,9 @@ class FeedViewController: UIViewController, TweetActionHandling {
         cell.onTapReplyCaption = { [weak self] in
             guard let parentID = tweet.inReplyToTweetID else { return }
             self?.navigationController?.pushViewController(ThreadViewController(tweetID: parentID), animated: true)
+        }
+        if self.canDeleteTweet(tweet) {
+            cell.onDelete = { [weak self] in self?.confirmDelete(tweet) }
         }
         if self.isOwnTweet(tweet) {
             cell.enableLikers { [weak self] in
@@ -520,6 +528,11 @@ class FeedViewController: UIViewController, TweetActionHandling {
         NotificationCenter.default.publisher(for: AppSettings.fontScaleDidChange)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.reloadForFontScale() }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: OwnPost.didDelete)
+            .compactMap { $0.userInfo?[OwnPost.idKey] as? String }
+            .sink { [weak self] id in self?.viewModel.remove(id: id) }
             .store(in: &cancellables)
     }
 

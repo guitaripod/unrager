@@ -27,7 +27,7 @@ import demo_world as dw  # noqa: E402
 
 PAGE = 8
 STATE = {"filter_enabled": True, "likes": set(), "bookmarks": set(), "retweets": set(), "overrides": {},
-         "muting": {"hottakeshourly"}, "blocking": set()}
+         "deleted": set(), "muting": {"hottakeshourly"}, "blocking": set()}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -172,7 +172,8 @@ class Handler(BaseHTTPRequestHandler):
                 {"variant": "home_following", "last_ingest_at": int(time.time()) - 140, "last_ingest_count": 40, "age_secs": 140},
             ]})
         if path == "/api/sources/home":
-            return self.send_json(self.page([w.tweet(k) for k in w.home_keys()], q("cursor")))
+            keys = [k for k in w.home_keys() if w.ids[k] not in STATE["deleted"]]
+            return self.send_json(self.page([w.home_tweet(k) for k in keys], q("cursor")))
         if path.startswith("/api/sources/user/"):
             handle = path.split("/")[4]
             if handle in dw.SUSPENDED:
@@ -180,7 +181,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.hides_posts(handle):
                 return self.send_unavailable("protected", "These posts are protected.")
             tail = path.split("/")[5:] and path.split("/")[5]
-            keys = w.user_keys(handle)
+            keys = [k for k in w.user_keys(handle) if w.ids[k] not in STATE["deleted"]]
             if tail == "replies":
                 keys = keys + [p[0] for p in dw.POSTS if p[1] == handle and p[0].startswith(("r", "q"))]
             return self.send_json(self.page([w.tweet(k) for k in keys], q("cursor")))
@@ -217,7 +218,8 @@ class Handler(BaseHTTPRequestHandler):
             user = w.profile_user(handle)
             user["muting"] = handle in STATE["muting"]
             user["blocking"] = handle in STATE["blocking"]
-            keys = [] if q("tweets") == "false" or self.hides_posts(handle) else w.user_keys(handle)
+            hidden = q("tweets") == "false" or self.hides_posts(handle)
+            keys = [] if hidden else [k for k in w.user_keys(handle) if w.ids[k] not in STATE["deleted"]]
             return self.send_json({"user": user, "pinned": None,
                                    "recent": [w.tweet(k) for k in keys[:8]], "cursor": None})
         m = re.fullmatch(r"/api/about/(\d+)", path)
@@ -237,6 +239,12 @@ class Handler(BaseHTTPRequestHandler):
         if m:
             handles = [c[0] for c in dw.CAST if c[0] != dw.ME][:12]
             return self.send_json({"users": [w.profile_user(h) for h in handles], "cursor": None})
+        m = re.fullmatch(r"/api/tweets/(\d+)/quotes", path)
+        if m:
+            key = w.tweet_by_id(m.group(1))
+            if not key:
+                return self.send_error_json(404, "not_found", "no such post")
+            return self.send_json(self.page(w.quotes_of(key), q("cursor")))
         m = re.fullmatch(r"/api/tweets/(\d+)/analytics", path)
         if m:
             key = w.tweet_by_id(m.group(1))
@@ -299,6 +307,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         if self.moderate(urlparse(self.path).path, False):
             return
+        m = re.fullmatch(r"/api/tweets/(\d+)", urlparse(self.path).path)
+        if m:
+            already = m.group(1) in STATE["deleted"]
+            STATE["deleted"].add(m.group(1))
+            return self.send_json({"ok": True, "idempotent": already})
         return self.send_json({"ok": True, "idempotent": False, "following": False})
 
 

@@ -54,6 +54,8 @@ final class TimelineViewModel {
         case search(query: String, product: SourceProduct)
         case mentions
         case bookmarks(query: String)
+        /// The posts quoting one post, newest first.
+        case quotes(tweetID: String)
 
         /// A stable key for the display-only timeline cache, or `nil` for
         /// ephemeral feeds that shouldn't be seeded (e.g. an empty query).
@@ -73,6 +75,8 @@ final class TimelineViewModel {
             case let .bookmarks(query):
                 let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 return q.isEmpty ? "bookmarks-all" : "bookmarks-\(q)"
+            case let .quotes(tweetID):
+                return "quotes-\(tweetID)"
             }
         }
     }
@@ -174,6 +178,8 @@ final class TimelineViewModel {
             return trimmed.isEmpty
                 ? ("bookmark", "No bookmarks", "Posts you bookmark show up here.")
                 : ("bookmark", "No matches", "None of your bookmarks mention \"\(trimmed)\".")
+        case .quotes:
+            return ("quote.bubble", "No quotes yet", "When someone quotes this post, it shows up here.")
         }
     }
 
@@ -204,6 +210,8 @@ final class TimelineViewModel {
         case let .bookmarks(query):
             guard !query.isEmpty else { return }
             SessionSync.patchSource(.bookmarks(query: query))
+        case .quotes:
+            return
         }
     }
 
@@ -250,8 +258,10 @@ final class TimelineViewModel {
         Task { [weak self] in
             guard let cached = await TimelineCache.shared.load(key: key), !cached.tweets.isEmpty,
                   let self, self.tweets.value.isEmpty, !self.hasLoadedOnce, self.cacheKey == key else { return }
-            self.tweets.send(cached.tweets)
-            AppLogger.shared.debug("seeded \(cached.tweets.count) cached tweets for \(key)", category: .timeline)
+            let seed = cached.tweets.filter { !Self.wasDeleted($0.restID) }
+            guard !seed.isEmpty else { return }
+            self.tweets.send(seed)
+            AppLogger.shared.debug("seeded \(seed.count) cached tweets for \(key)", category: .timeline)
         }
     }
 
@@ -291,6 +301,29 @@ final class TimelineViewModel {
         guard !tweets.value.contains(where: { $0.restID == post.id }) else { return }
         let updated = [post.tweet] + tweets.value
         tweets.send(updated)
+        persistCache(updated)
+    }
+
+    /// Posts the account deleted this session. X can go on serving a deleted
+    /// post for a while, and other feeds hold it in their saved seeds, so every
+    /// feed keeps these out of its pages, refreshes and seeds.
+    private static var deletedIDs = Set<String>()
+
+    /// Whether `id` was deleted this session.
+    static func wasDeleted(_ id: String) -> Bool { deletedIDs.contains(id) }
+
+    /// Takes a deleted post out of the feed, the hidden list and the saved
+    /// seed at once, and keeps it out of later loads.
+    func remove(id: String) {
+        Self.deletedIDs.insert(id)
+        if hiddenPosts.value.contains(where: { $0.id == id }) {
+            hiddenPosts.send(hiddenPosts.value.filter { $0.id != id })
+        }
+        guard tweets.value.contains(where: { $0.restID == id }) else { return }
+        let updated = tweets.value.filter { $0.restID != id }
+        tweets.send(updated)
+        persistTask?.cancel()
+        persistTask = nil
         persistCache(updated)
     }
 
@@ -584,7 +617,7 @@ final class TimelineViewModel {
             var current = reset ? [] : tweets.value
             var ids = Set(current.map(\.restID))
             var newIDs: [String] = []
-            for tweet in page.tweets where ids.insert(tweet.restID).inserted {
+            for tweet in page.tweets where !Self.wasDeleted(tweet.restID) && ids.insert(tweet.restID).inserted {
                 current.append(tweet)
                 newIDs.append(tweet.restID)
             }
@@ -646,7 +679,7 @@ final class TimelineViewModel {
                 pages += 1
                 workingCursor = page.cursor
 
-                let fresh = page.tweets.filter { ids.insert($0.restID).inserted }
+                let fresh = page.tweets.filter { !Self.wasDeleted($0.restID) && ids.insert($0.restID).inserted }
                 let judged = await streamHidden(fresh.map(\.restID), baseCount: survivors.count)
                 if Task.isCancelled { return }
                 for tweet in fresh {
@@ -769,6 +802,8 @@ final class TimelineViewModel {
                 return try await EngageService.engage.bookmarksTimeline(cursor: cursor)
             }
             return try await api.bookmarks(query: q, cursor: cursor)
+        case let .quotes(tweetID):
+            return try await api.quotes(tweetID: tweetID, cursor: cursor)
         }
     }
 }

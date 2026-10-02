@@ -16,6 +16,8 @@ enum PostStatsContent: Equatable {
 struct PostStatCell: Equatable {
     let value: String
     let caption: String
+    /// Whether tapping the figure lists the posts quoting this one.
+    var opensQuotes = false
 }
 
 /// The figures a strip lists, as plain data so the choice of what to show and
@@ -33,7 +35,8 @@ enum PostStatsModel {
     /// Quotes (the one count the action bar doesn't show), and what share of
     /// the views turned into each kind of engagement.
     private static func publicCells(for tweet: Tweet) -> [PostStatCell] {
-        var cells = [PostStatCell(value: Format.count(tweet.quoteCount), caption: "Quotes")]
+        var cells = [PostStatCell(value: Format.count(tweet.quoteCount), caption: "Quotes",
+                                  opensQuotes: tweet.quoteCount > 0)]
         guard let views = tweet.viewCount, views > 0 else { return cells }
         let engagements = tweet.likeCount + tweet.retweetCount + tweet.replyCount + tweet.quoteCount
             + tweet.bookmarkCount
@@ -159,6 +162,8 @@ final class PostStatsView: UIStackView {
     private let chart = SparklineView()
     private let chartCaption = UILabel()
     private let chartRow = UIStackView()
+    /// Fired by a tap on the "Quotes" figure when the post has any.
+    var onTapQuotes: (() -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -190,7 +195,7 @@ final class PostStatsView: UIStackView {
     func configure(tweet: Tweet, content: PostStatsContent) {
         let cells = PostStatsModel.cells(for: tweet, content: content)
         figures.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        for cell in cells { figures.addArrangedSubview(Self.makeCell(cell, dimmed: content == .loading)) }
+        for cell in cells { figures.addArrangedSubview(makeCell(cell, dimmed: content == .loading)) }
         figures.addArrangedSubview(UIView())
         if case let .analytics(analytics) = content, analytics.hourlyImpressions.count >= 6 {
             chart.values = analytics.hourlyImpressions
@@ -200,11 +205,12 @@ final class PostStatsView: UIStackView {
         }
     }
 
-    private static func makeCell(_ cell: PostStatCell, dimmed: Bool) -> UIView {
+    private func makeCell(_ cell: PostStatCell, dimmed: Bool) -> UIView {
         let value = UILabel()
         value.text = cell.value
         value.font = DesignSystem.Typography.system(14, weight: .semibold)
-        value.textColor = dimmed ? DesignSystem.Color.tertiaryLabel : DesignSystem.Color.label
+        value.textColor = dimmed ? DesignSystem.Color.tertiaryLabel
+            : cell.opensQuotes ? DesignSystem.Color.accent : DesignSystem.Color.label
         let caption = UILabel()
         caption.text = cell.caption
         caption.font = DesignSystem.Typography.system(11, weight: .regular)
@@ -212,7 +218,16 @@ final class PostStatsView: UIStackView {
         let column = UIStackView(arrangedSubviews: [value, caption])
         column.axis = .vertical
         column.spacing = 0
+        if cell.opensQuotes {
+            column.isUserInteractionEnabled = true
+            column.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(quotesTapped)))
+        }
         return column
+    }
+
+    @objc private func quotesTapped() {
+        Haptics.selection()
+        onTapQuotes?()
     }
 }
 

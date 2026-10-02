@@ -28,7 +28,15 @@ struct PostStatsTests {
     @Test("Without a view count only the quotes are known")
     func noViews() throws {
         let cells = PostStatsModel.cells(for: try tweet(views: nil, quotes: 4), content: .publicCounts)
-        #expect(cells == [PostStatCell(value: "4", caption: "Quotes")])
+        #expect(cells == [PostStatCell(value: "4", caption: "Quotes", opensQuotes: true)])
+    }
+
+    @Test("The quotes figure opens the quotes only when there are some")
+    func quotesFigure() throws {
+        let none = PostStatsModel.cells(for: try tweet(views: 100, quotes: 0), content: .publicCounts)
+        #expect(none.allSatisfy { !$0.opensQuotes })
+        let some = PostStatsModel.cells(for: try tweet(views: 100, quotes: 2), content: .publicCounts)
+        #expect(some.filter(\.opensQuotes).map(\.caption) == ["Quotes"])
     }
 
     @Test("X's analytics lead with impressions and engagements, and add link clicks and follows only when there are some")

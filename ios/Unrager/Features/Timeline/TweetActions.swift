@@ -1,3 +1,4 @@
+import SafariServices
 import UIKit
 import UnragerKit
 
@@ -74,6 +75,13 @@ extension TweetActionHandling {
         topLevel.append(UIMenu(options: .displayInline, children: engagement))
         if let saveMedia = saveMediaMenu(tweet) { topLevel.append(saveMedia) }
         topLevel.append(UIMenu(options: .displayInline, children: [share, screenshot, open, copy, copyEmbed]))
+        if canDeleteTweet(tweet) {
+            let delete = UIAction(title: "Delete", image: DesignSystem.icon("trash"),
+                                  attributes: .destructive) { [weak self] _ in
+                self?.confirmDelete(tweet)
+            }
+            topLevel.append(UIMenu(options: .displayInline, children: [delete]))
+        }
         return UIMenu(children: topLevel)
     }
 
@@ -81,8 +89,88 @@ extension TweetActionHandling {
     /// anyway). Read synchronously from the cached identity — a cold cache right
     /// after launch just hides it for a moment.
     func isOwnTweet(_ tweet: Tweet) -> Bool {
-        guard let own = AppEnvironment.shared.currentHandle else { return false }
-        return tweet.author.handle.caseInsensitiveCompare(own) == .orderedSame
+        OwnPost.isOwn(tweet, viewerHandle: AppEnvironment.shared.currentHandle)
+    }
+
+    /// Opens a link tapped in a post or its card: a post or profile on X opens
+    /// in the app, any other web page in Safari's in-app view (Reader
+    /// included), and anything that isn't a web page in the app that owns it.
+    func openLink(_ url: URL) {
+        switch XLink.classify(url) {
+        case let .post(id):
+            navigationController?.pushViewController(ThreadViewController(tweetID: id), animated: true)
+        case let .profile(handle):
+            navigationController?.pushViewController(ProfileViewController(handle: handle), animated: true)
+        case let .web(target):
+            guard ["http", "https"].contains(target.scheme?.lowercased() ?? "") else {
+                UIApplication.shared.open(target)
+                return
+            }
+            let configuration = SFSafariViewController.Configuration()
+            configuration.entersReaderIfAvailable = false
+            let safari = SFSafariViewController(url: target, configuration: configuration)
+            safari.preferredControlTintColor = DesignSystem.Color.accent
+            present(safari, animated: true)
+        }
+    }
+
+    /// Pushes the list of posts quoting `tweet`.
+    func openQuotes(of tweet: Tweet) {
+        navigationController?.pushViewController(QuotesViewController(tweetID: tweet.restID), animated: true)
+    }
+
+    /// Whether the row offers Delete (see `OwnPost.canDelete`).
+    func canDeleteTweet(_ tweet: Tweet) -> Bool {
+        OwnPost.canDelete(tweet, viewerHandle: AppEnvironment.shared.currentHandle)
+    }
+
+    /// Asks before deleting one of the account's own posts, then deletes it.
+    func confirmDelete(_ tweet: Tweet) {
+        let sheet = UIAlertController(title: "Delete this post?", message: "This can't be undone.",
+                                      preferredStyle: .actionSheet)
+        sheet.addAction(UIAlertAction(title: "Delete", style: .destructive) { [weak self] _ in
+            self?.deletePost(tweet)
+        })
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        if let popover = sheet.popoverPresentationController {
+            let source = tweetCell(for: tweet) ?? view
+            popover.sourceView = source
+            popover.sourceRect = source?.bounds ?? .zero
+        }
+        present(sheet, animated: true)
+    }
+
+    /// Deletes `tweet` on the server. On success every list showing it drops
+    /// it (through `OwnPost.didDelete`) and "Post deleted" shows wherever the
+    /// user lands; on failure the row stays and the error says why.
+    private func deletePost(_ tweet: Tweet) {
+        let navigation = navigationController
+        Task { [weak self] in
+            do {
+                try await AppEnvironment.shared.api.deleteTweet(id: tweet.restID)
+                AppLogger.shared.info("deleted post \(tweet.restID)", category: .timeline)
+                Haptics.success()
+                NotificationCenter.default.post(name: OwnPost.didDelete, object: nil,
+                                                userInfo: [OwnPost.idKey: tweet.restID])
+                Self.showToastAfterTransition("Post deleted", in: navigation, fallback: self)
+            } catch {
+                AppLogger.shared.warn("delete failed for \(tweet.restID): \(error)", category: .timeline)
+                Haptics.error()
+                self?.showToast(error.localizedDescription)
+            }
+        }
+    }
+
+    /// Shows `message` on the screen on top of `navigation` once any push or
+    /// pop under way has finished: deleting a thread's own post leaves it.
+    private static func showToastAfterTransition(_ message: String, in navigation: UINavigationController?,
+                                                 fallback: UIViewController?) {
+        guard let host = navigation?.topViewController ?? fallback else { return }
+        guard let coordinator = navigation?.transitionCoordinator else {
+            host.showToast(message)
+            return
+        }
+        coordinator.animate(alongsideTransition: nil) { [weak host] _ in host?.showToast(message) }
     }
 
     /// Presents the postcard composer for `tweet`, wrapped in its own

@@ -113,7 +113,12 @@ class FeedViewController: UIViewController, TweetActionHandling {
     private var expandedStats = Set<String>()
 
     private func toggleStats(_ id: String) {
-        if expandedStats.contains(id) { expandedStats.remove(id) } else { expandedStats.insert(id) }
+        if expandedStats.contains(id) {
+            expandedStats.remove(id)
+        } else {
+            expandedStats.insert(id)
+            PostStatsStore.shared.retryIfFailed(id)
+        }
         reconfigure(id, animated: true)
     }
 

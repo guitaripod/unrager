@@ -79,42 +79,74 @@ enum PostStatsModel {
 /// something.
 @MainActor
 final class PostStatsStore {
-    static let shared = PostStatsStore()
+    static let shared = PostStatsStore(fetch: fetchFromServer, now: currentDate)
+
+    private static func fetchFromServer(_ id: String) async throws -> PostAnalytics? {
+        try await AppEnvironment.shared.api.postAnalytics(tweetID: id)
+    }
+
+    private nonisolated static func currentDate() -> Date { Date() }
 
     enum Entry: Equatable {
         case loading
         case loaded(PostAnalytics)
         /// X sent none for this post.
         case unavailable
+        /// The request failed (offline, or an error from the server); the strip
+        /// shows the public counts until a retry is due.
+        case failed(Date)
     }
 
     private static let freshFor: TimeInterval = 300
+    /// How long a failed request rests before a redraw may ask again, so a
+    /// failure can't turn every re-render of the row into another request.
+    static let retryAfter: TimeInterval = 60
 
+    private let fetch: @MainActor (String) async throws -> PostAnalytics?
+    private let now: () -> Date
     private var entries: [String: (entry: Entry, at: Date)] = [:]
+
+    init(fetch: @escaping @MainActor (String) async throws -> PostAnalytics?, now: @escaping () -> Date) {
+        self.fetch = fetch
+        self.now = now
+    }
 
     func entry(for id: String) -> Entry? {
         guard let stored = entries[id] else { return nil }
-        if case .loading = stored.entry { return .loading }
-        return Date().timeIntervalSince(stored.at) < Self.freshFor ? stored.entry : nil
+        let age = now().timeIntervalSince(stored.at)
+        switch stored.entry {
+        case .loading: return .loading
+        case .failed: return age < Self.retryAfter ? stored.entry : nil
+        case .loaded, .unavailable: return age < Self.freshFor ? stored.entry : nil
+        }
     }
 
-    /// Fetches the analytics for `id` unless they are fresh or on their way;
-    /// `changed` runs once an answer lands.
+    /// Lets the next draw ask again for a post whose last request failed — the
+    /// user opening its stats is a fresh request, not a redraw.
+    func retryIfFailed(_ id: String) {
+        guard case .failed? = entries[id]?.entry else { return }
+        entries[id] = nil
+    }
+
+    /// Fetches the analytics for `id` unless they are fresh, on their way or
+    /// recently failed; `changed` runs once an answer lands.
     func load(_ id: String, changed: @escaping @MainActor () -> Void) {
         guard entry(for: id) == nil else { return }
-        entries[id] = (.loading, Date())
-        Task { [weak self] in
+        entries[id] = (.loading, now())
+        Task { [weak self, fetch] in
             let result: Entry
             do {
-                result = try await AppEnvironment.shared.api.postAnalytics(tweetID: id).map(Entry.loaded)
-                    ?? .unavailable
+                result = try await fetch(id).map(Entry.loaded) ?? .unavailable
             } catch {
                 AppLogger.shared.warn("post analytics failed for \(id): \(error)", category: .timeline)
-                self?.entries[id] = nil
+                guard let self else { return }
+                let failedAt = self.now()
+                self.entries[id] = (.failed(failedAt), failedAt)
                 changed()
                 return
             }
-            self?.entries[id] = (result, Date())
+            guard let self else { return }
+            self.entries[id] = (result, self.now())
             changed()
         }
     }
@@ -230,12 +262,21 @@ enum PostStatsPolicy {
         case .always: break
         }
         guard isOwn else { return .publicCounts }
-        switch PostStatsStore.shared.entry(for: tweet.restID) {
+        return ownContent(for: tweet, store: .shared, changed: changed)
+    }
+
+    /// An own post's strip from `store`: X's numbers once they are in, the
+    /// public counts when X has none or the request failed, and a request the
+    /// first time (or once a failure's rest is over).
+    static func ownContent(
+        for tweet: Tweet, store: PostStatsStore, changed: @escaping @MainActor () -> Void
+    ) -> PostStatsContent {
+        switch store.entry(for: tweet.restID) {
         case let .loaded(analytics)?: return .analytics(analytics)
-        case .unavailable?: return .publicCounts
+        case .unavailable?, .failed?: return .publicCounts
         case .loading?: return .loading
         case nil:
-            PostStatsStore.shared.load(tweet.restID, changed: changed)
+            store.load(tweet.restID, changed: changed)
             return .loading
         }
     }

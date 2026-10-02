@@ -53,6 +53,53 @@ struct PostStatsTests {
         #expect(PostStatsModel.percent(0.456) == "46%")
     }
 
+    private final class Clock { var now = Date(timeIntervalSince1970: 1_000_000) }
+    private final class Calls { var count = 0 }
+
+    /// The strip an own post gets from `store`, once the request it starts (if
+    /// any) has answered.
+    @MainActor
+    private func settledContent(for post: Tweet, store: PostStatsStore) async -> PostStatsContent {
+        _ = PostStatsPolicy.ownContent(for: post, store: store) {}
+        for _ in 0..<1_000 where store.entry(for: post.restID) == .loading { await Task.yield() }
+        return PostStatsPolicy.ownContent(for: post, store: store) {}
+    }
+
+    @Test("A failed analytics request shows the public counts and rests a minute instead of asking on every redraw")
+    @MainActor
+    func failureBacksOff() async throws {
+        let clock = Clock()
+        let calls = Calls()
+        let store = PostStatsStore(fetch: { _ in
+            calls.count += 1
+            throw URLError(.notConnectedToInternet)
+        }, now: { clock.now })
+        let post = try tweet(views: 10)
+        #expect(await settledContent(for: post, store: store) == .publicCounts)
+        for _ in 0..<5 { #expect(PostStatsPolicy.ownContent(for: post, store: store) {} == .publicCounts) }
+        #expect(calls.count == 1)
+        clock.now += PostStatsStore.retryAfter + 1
+        #expect(await settledContent(for: post, store: store) == .publicCounts)
+        #expect(calls.count == 2)
+    }
+
+    @Test("Opening the stats again retries a failed request at once")
+    @MainActor
+    func reopenRetries() async throws {
+        let calls = Calls()
+        let analytics = PostAnalytics(impressions: 155, engagements: 8, detailExpands: 5, profileVisits: 1)
+        let store = PostStatsStore(fetch: { _ in
+            calls.count += 1
+            if calls.count == 1 { throw URLError(.timedOut) }
+            return analytics
+        }, now: { Date() })
+        let post = try tweet(views: 10)
+        #expect(await settledContent(for: post, store: store) == .publicCounts)
+        store.retryIfFailed(post.restID)
+        #expect(await settledContent(for: post, store: store) == .analytics(analytics))
+        #expect(calls.count == 2)
+    }
+
     @Test("The setting's modes are all there, tap first")
     func modes() {
         #expect(PostStatsMode.allCases.map(\.title) == ["Tap views", "Always", "Off"])

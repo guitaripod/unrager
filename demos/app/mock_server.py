@@ -26,7 +26,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import demo_world as dw  # noqa: E402
 
 PAGE = 8
-STATE = {"filter_enabled": True, "likes": set(), "bookmarks": set(), "retweets": set(), "overrides": {}}
+STATE = {"filter_enabled": True, "likes": set(), "bookmarks": set(), "retweets": set(), "overrides": {},
+         "muting": {"hottakeshourly"}, "blocking": set()}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -53,6 +54,27 @@ class Handler(BaseHTTPRequestHandler):
 
     def send_error_json(self, status, kind, message):
         self.send_json({"error": message, "kind": kind}, status)
+
+    def send_unavailable(self, reason, message):
+        self.send_json({"error": message, "kind": "unavailable", "reason": reason}, 410)
+
+    @staticmethod
+    def hides_posts(handle):
+        """A protected account's posts, which only its approved followers see."""
+        return handle in dw.PROTECTED
+
+    def moderate(self, path, on):
+        """`POST`/`DELETE /api/users/{id}/mute|block`: flips the flag the
+        profile reports, keyed by rest_id or handle as the server accepts."""
+        m = re.fullmatch(r"/api/users/(\w+)/(mute|block)", path)
+        if not m:
+            return False
+        ident, action = m.groups()
+        handle = next((h for h, i in dw.HANDLES.items() if str(1000 + i) == ident), ident.lower())
+        key = "muting" if action == "mute" else "blocking"
+        (STATE[key].add if on else STATE[key].discard)(handle)
+        self.send_json({"ok": True, key: on})
+        return True
 
     def read_body(self) -> bytes:
         length = int(self.headers.get("Content-Length") or 0)
@@ -153,6 +175,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(self.page([w.tweet(k) for k in w.home_keys()], q("cursor")))
         if path.startswith("/api/sources/user/"):
             handle = path.split("/")[4]
+            if handle in dw.SUSPENDED:
+                return self.send_unavailable("suspended", "This account is suspended.")
+            if self.hides_posts(handle):
+                return self.send_unavailable("protected", "These posts are protected.")
             tail = path.split("/")[5:] and path.split("/")[5]
             keys = w.user_keys(handle)
             if tail == "replies":
@@ -184,10 +210,15 @@ class Handler(BaseHTTPRequestHandler):
         m = re.fullmatch(r"/api/profile/(\w+)", path)
         if m:
             handle = m.group(1).lower()
+            if handle in dw.SUSPENDED:
+                return self.send_unavailable("suspended", "This account is suspended.")
             if handle not in {c[0] for c in dw.CAST}:
-                return self.send_error_json(404, "not_found", "no such user")
-            keys = w.user_keys(handle)
-            return self.send_json({"user": w.profile_user(handle), "pinned": None,
+                return self.send_error_json(404, "not_found", f"@{handle} doesn't exist.")
+            user = w.profile_user(handle)
+            user["muting"] = handle in STATE["muting"]
+            user["blocking"] = handle in STATE["blocking"]
+            keys = [] if q("tweets") == "false" or self.hides_posts(handle) else w.user_keys(handle)
+            return self.send_json({"user": user, "pinned": None,
                                    "recent": [w.tweet(k) for k in keys[:8]], "cursor": None})
         m = re.fullmatch(r"/api/about/(\d+)", path)
         if m:
@@ -246,6 +277,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"ok": True})
         if path == "/api/sse/ask":
             return self.tokens(dw.ASK["explain"])
+        if self.moderate(path, True):
+            return
         if re.fullmatch(r"/api/(engage|tweets)/.+", path) or path.startswith("/api/users/"):
             return self.send_json({"ok": True, "idempotent": False, "following": "unfollow" not in path})
         if path in ("/api/compose",) or path.startswith("/api/reply/"):
@@ -264,6 +297,8 @@ class Handler(BaseHTTPRequestHandler):
     do_PUT = do_PATCH
 
     def do_DELETE(self):
+        if self.moderate(urlparse(self.path).path, False):
+            return
         return self.send_json({"ok": True, "idempotent": False, "following": False})
 
 

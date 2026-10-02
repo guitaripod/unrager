@@ -5,7 +5,9 @@ invented; the pictures come from `make_assets.py`. `World(base)` turns it all
 into the JSON the unrager server would send, with media URLs under `base`.
 
 `CAST` rows are (handle, name, verified, followers, following, avatar, banner,
-country as (name, alpha2, flag)). `POSTS` rows are (key, author, minutes ago,
+country as (name, alpha2, flag)); `PROFILES` adds the bio, location, website
+and join date a profile page shows, `PROTECTED` and `SUSPENDED` the accounts
+whose posts are hidden or that are gone. `POSTS` rows are (key, author, minutes ago,
 text, media, counts, options): media is `("photos", [names])`, `("video", name)`,
 `("card", {...})` or `None`, counts are (replies, reposts, likes, quotes, views,
 bookmarks), and options such as `reply_to` and `hidden_from_feed` shape the
@@ -45,9 +47,24 @@ CAST = [
     ("lenapark", "Lena Park", True, 18700, 733, "a14", "b02", ("South Korea", "KR", "🇰🇷")),
     ("ravimenon", "Ravi Menon", False, 5200, 390, "a15", "b03", ("India", "IN", "🇮🇳")),
     ("inesduarte", "Inês Duarte", False, 4100, 620, "a16", "b05", ("Brazil", "BR", "🇧🇷")),
+    ("quietfern", "Fern Halloway", False, 412, 198, "a13", "b05", ("Ireland", "IE", "🇮🇪")),
 ]
 HANDLES = {c[0]: i + 1 for i, c in enumerate(CAST)}
 ME = "noralind"
+
+PROFILES = {
+    "noralind": ("Designer. Small details, long walks, slow mornings.", "Helsinki", None, "2015-03-12T09:00:00Z"),
+    "mirakoski": ("Illustrator and product designer. Drawing the diagrams for @anyavoss's book.\nPortfolio: https://mirakoski.example/work",
+                  "Turku, Finland", "https://www.mirakoski.example/work/", "2011-09-03T12:00:00Z"),
+    "anyavoss": ("Physicist. Everyday puzzles explained in short threads: light, sound, resonance. "
+                 "Writing a book with @mirakoski. Notes and diagrams at https://anyavoss.example/notes #physics",
+                 "Berlin", "https://anyavoss.example/notes", "2009-06-21T08:30:00Z"),
+    "fieldnotes": ("Photographs from the trail, one ridge at a time.", "Somewhere above the tree line",
+                   "https://fieldnotes.example", "2013-02-14T07:00:00Z"),
+    "quietfern": ("Notes for friends. Garden, books, the odd sourdough.", "Galway", None, "2020-04-02T10:00:00Z"),
+}
+PROTECTED = {"quietfern"}
+SUSPENDED = {"spamking"}
 
 MEDIA_DIMS = {
     "land": (1600, 1067), "port": (1200, 1600), "sq": (1080, 1080),
@@ -179,6 +196,16 @@ class World:
         c = next(c for c in CAST if c[0] == handle)
         user = self._user(c, banner=True)
         user["followed_by_me"] = handle in ("mirakoski", "fieldnotes", "anyavoss", "kitwren")
+        details = PROFILES.get(handle)
+        if details:
+            bio, location, website, joined = details
+            user["description"] = bio
+            user["location"] = location
+            if website:
+                user["website"] = website
+            user["joined_at"] = joined
+        if handle in PROTECTED:
+            user["protected"] = True
         return user
 
     def _media(self, spec, tweet_key):

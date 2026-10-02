@@ -213,19 +213,19 @@ public final class APIClient: Sendable {
         sseStream("api/sse/ask",
                   query: [URLQueryItem(name: "tweet_id", value: tweetID),
                           URLQueryItem(name: "preset", value: preset.rawValue)],
-                  as: TokenEvent.self, failure: { $0.error })
+                  as: TokenEvent.self, failure: { $0.error }, isTerminal: { $0.done })
     }
 
     public func briefStream(handle: String) -> AsyncThrowingStream<TokenEvent, Error> {
         sseStream("api/sse/brief",
                   query: [URLQueryItem(name: "handle", value: handle)],
-                  as: TokenEvent.self, failure: { $0.error })
+                  as: TokenEvent.self, failure: { $0.error }, isTerminal: { $0.done })
     }
 
     public func translateStream(tweetID: String) -> AsyncThrowingStream<TokenEvent, Error> {
         sseStream("api/sse/translate",
                   query: [URLQueryItem(name: "tweet_id", value: tweetID)],
-                  as: TokenEvent.self, failure: { $0.error })
+                  as: TokenEvent.self, failure: { $0.error }, isTerminal: { $0.done })
     }
 
     // MARK: - Request plumbing
@@ -318,36 +318,11 @@ public final class APIClient: Sendable {
 
     private func sseStream<T: Decodable & Sendable>(
         _ path: String, query: [URLQueryItem], as type: T.Type,
-        failure: @escaping @Sendable (T) -> String? = { _ in nil }
+        failure: @escaping @Sendable (T) -> String? = { _ in nil },
+        isTerminal: @escaping @Sendable (T) -> Bool = { _ in false }
     ) -> AsyncThrowingStream<T, Error> {
-        AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    let request = HTTPRequest(method: .get, url: url(path, query: query))
-                    let (status, lines) = try await transport.stream(request)
-                    guard (200..<300).contains(status) else {
-                        var raw = ""
-                        for try await line in lines { raw += line }
-                        let body = try? UnragerJSON.decoder.decode(ServerError.self, from: Data(raw.utf8))
-                        throw APIError.from(status: status, body: body)
-                    }
-                    for try await line in lines {
-                        guard line.hasPrefix("data:") else { continue }
-                        var value = String(line.dropFirst(5))
-                        if value.hasPrefix(" ") { value.removeFirst() }
-                        if value == "[DONE]" { break }
-                        if value.isEmpty { continue }
-                        if let event = try? UnragerJSON.decoder.decode(T.self, from: Data(value.utf8)) {
-                            if let message = failure(event) { throw APIError.upstream(message) }
-                            continuation.yield(event)
-                        }
-                    }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
+        SSEStream.open(transport: transport,
+                       request: { HTTPRequest(method: .get, url: self.url(path, query: query)) },
+                       as: type, failure: failure, isTerminal: isTerminal)
     }
 }

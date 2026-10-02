@@ -72,14 +72,8 @@ public final class URLSessionTransport: HTTPTransport {
                             continuation.yield(line)
                         }
                         continuation.finish()
-                    } catch is CancellationError {
-                        continuation.finish()
-                    } catch let error as URLError where error.code == .cancelled {
-                        continuation.finish()
-                    } catch let error as URLError {
-                        continuation.finish(throwing: Self.map(error))
                     } catch {
-                        continuation.finish(throwing: error)
+                        continuation.finish(throwing: Self.streamFailure(error))
                     }
                 }
                 continuation.onTermination = { _ in task.cancel() }
@@ -106,6 +100,17 @@ public final class URLSessionTransport: HTTPTransport {
             if let key = key as? String { result[key] = "\(value)" }
         }
         return result
+    }
+
+    /// What a failed stream read finishes with: nothing when the consumer
+    /// stopped listening (it cancelled the reading task), otherwise the error,
+    /// including a cancellation the consumer didn't ask for, so the stream's
+    /// reader never takes a cut-off answer for a whole one.
+    private static func streamFailure(_ error: Error) -> Error? {
+        if Task.isCancelled { return nil }
+        if let error = error as? URLError { return map(error) }
+        if error is CancellationError { return APIError.cancelled }
+        return error
     }
 
     private static func map(_ error: URLError) -> APIError {

@@ -34,6 +34,9 @@ public enum APIError: Error, Sendable, Equatable {
     case server(status: Int, message: String)
     case decoding(String)
     case unexpectedStatus(Int)
+    /// A stream stopped before the server's terminal event, so what arrived
+    /// is only part of the answer.
+    case streamEndedEarly
 
     /// Maps an HTTP status + decoded server body to a typed error.
     public static func from(status: Int, body: ServerError?) -> APIError {
@@ -52,7 +55,7 @@ public enum APIError: Error, Sendable, Equatable {
 
     public var isRetryable: Bool {
         switch self {
-        case .timeout, .network, .rateLimited, .upstream, .server: return true
+        case .timeout, .network, .rateLimited, .upstream, .server, .streamEndedEarly: return true
         default: return false
         }
     }
@@ -75,6 +78,7 @@ extension APIError: LocalizedError {
         case .server(_, let m): return m
         case .decoding: return "The server sent data this app couldn't read."
         case .unexpectedStatus(let s): return "Unexpected response (HTTP \(s))."
+        case .streamEndedEarly: return "The connection to the unrager server dropped before the answer finished. Try again."
         }
     }
 }

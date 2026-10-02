@@ -52,10 +52,10 @@ pub struct AppState {
     /// session already resolved answer instantly here and vice versa.
     pub about: Mutex<AboutStore>,
     pub about_fetcher: AboutFetcher,
-    /// Set once X rejects the full `Followers` GraphQL op (removed upstream in
-    /// 2025) so `/api/users/{id}/followers` skips straight to the
-    /// `BlueVerifiedFollowers` fallback on subsequent requests.
-    pub followers_op_dead: std::sync::atomic::AtomicBool,
+    /// When X last answered 404 for a first page of the full `Followers`
+    /// GraphQL op (removed upstream in 2025), so `/api/users/{id}/followers`
+    /// goes straight to the `BlueVerifiedFollowers` fallback for a while.
+    pub followers_op_dead_since: std::sync::Mutex<Option<Instant>>,
     /// Tweets recently sent to a client, so a follow-up request about one of
     /// them (its filter verdict, ask, translate) is answered without another
     /// throttled GraphQL round trip to X.
@@ -132,7 +132,7 @@ impl AppState {
             activity: Arc::new(Activity::idle()),
             about: Mutex::new(about_store),
             about_fetcher,
-            followers_op_dead: std::sync::atomic::AtomicBool::new(false),
+            followers_op_dead_since: std::sync::Mutex::new(None),
             recent_tweets: std::sync::Mutex::new(lru::LruCache::new(RECENT_TWEETS)),
             user_ids: std::sync::Mutex::new(lru::LruCache::new(USER_IDS)),
             viewer: std::sync::Mutex::new(None),

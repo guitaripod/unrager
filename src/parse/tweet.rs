@@ -537,7 +537,11 @@ fn lookup_card_display(legacy: &Value, card_tco: &str) -> Option<String> {
 ///   with choice/count pairs, end datetime, and finalization flag.
 ///
 /// Skips cards whose t.co has already been claimed by a prior embed parser
-/// (YouTube or X article) so we don't render the same link twice.
+/// (YouTube or X article) so we don't render the same link twice. X leaves a
+/// card's link out of `entities.urls` for some tweets, so nothing expands its
+/// t.co: the t.co itself then stands in as the card's target (it redirects to
+/// the page) and is taken out of the text like any other card link, instead of
+/// the card being dead and its raw t.co sitting in the post.
 fn parse_card_embed(node: &Value, legacy: &Value) -> (Vec<Media>, Vec<String>) {
     let mut embeds = Vec::new();
     let mut display_urls = Vec::new();
@@ -573,6 +577,12 @@ fn parse_card_embed(node: &Value, legacy: &Value) -> (Vec<Media>, Vec<String>) {
             return (embeds, display_urls);
         }
     }
+    let (target_url, display_url) = match (target_url, display_url) {
+        (None, None) if is_web_url(card_tco) => {
+            (Some(card_tco.to_string()), Some(card_tco.to_string()))
+        }
+        pair => pair,
+    };
     let title = card_binding_string(card_legacy, "title").unwrap_or_default();
     let description = card_binding_string(card_legacy, "description").unwrap_or_default();
     let domain = card_binding_string(card_legacy, "domain")
@@ -715,6 +725,12 @@ fn lookup_card_target(legacy: &Value, card_tco: &str) -> (Option<String>, Option
         }
     }
     (None, None)
+}
+
+/// Whether `url` is an address a browser can open, as opposed to the
+/// `card://123` placeholder X sometimes puts in a card's `url`.
+fn is_web_url(url: &str) -> bool {
+    url.starts_with("https://") || url.starts_with("http://")
 }
 
 fn host_of(display_url: &str) -> &str {
@@ -1751,6 +1767,81 @@ mod tests {
                 assert!(title.is_empty());
             }
             other => panic!("expected Broadcast, got {other:?}"),
+        }
+    }
+
+    fn card_json(card_url: &str) -> Value {
+        json!({
+            "legacy": {
+                "name": "summary_large_image",
+                "url": card_url,
+                "binding_values": [
+                    {"key": "title", "value": {"string_value": "A page", "type": "STRING"}},
+                    {"key": "description", "value": {"string_value": "About it", "type": "STRING"}},
+                    {"key": "domain", "value": {"string_value": "example.com", "type": "STRING"}},
+                    {"key": "thumbnail_image_original", "value": {
+                        "image_value": {"url": "https://pbs.twimg.com/card_img/x/y?name=orig", "width": 800, "height": 419},
+                        "type": "IMAGE"
+                    }}
+                ]
+            }
+        })
+    }
+
+    #[test]
+    fn card_missing_from_the_url_entities_targets_its_tco_and_leaves_the_text() {
+        let mut v = minimal_tweet_json("4101", "For now, I present to you:\n\nhttps://t.co/CARD1");
+        v["legacy"]["entities"] = Value::Null;
+        v["card"] = card_json("https://t.co/CARD1");
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(tweet.text, "For now, I present to you:");
+        match &tweet.media[0].kind {
+            MediaKind::LinkCard {
+                title,
+                domain,
+                target_url,
+                ..
+            } => {
+                assert_eq!(title, "A page");
+                assert_eq!(domain, "example.com");
+                assert_eq!(target_url, "https://t.co/CARD1");
+            }
+            other => panic!("expected LinkCard, got {other:?}"),
+        }
+        assert!(tweet.urls.is_empty());
+    }
+
+    #[test]
+    fn card_with_a_url_entity_targets_the_expanded_address() {
+        let mut v = minimal_tweet_json("4102", "read https://t.co/CARD2 now");
+        v["legacy"]["entities"] = json!({
+            "urls": [{
+                "url": "https://t.co/CARD2",
+                "display_url": "example.com/a",
+                "expanded_url": "https://example.com/a"
+            }]
+        });
+        v["card"] = card_json("https://t.co/CARD2");
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(tweet.text, "read now");
+        match &tweet.media[0].kind {
+            MediaKind::LinkCard { target_url, .. } => {
+                assert_eq!(target_url, "https://example.com/a")
+            }
+            other => panic!("expected LinkCard, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn card_with_a_placeholder_url_has_no_target_and_keeps_the_text() {
+        let mut v = minimal_tweet_json("4103", "look https://t.co/OTHER");
+        v["legacy"]["entities"] = Value::Null;
+        v["card"] = card_json("card://4103");
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(tweet.text, "look https://t.co/OTHER");
+        match &tweet.media[0].kind {
+            MediaKind::LinkCard { target_url, .. } => assert!(target_url.is_empty()),
+            other => panic!("expected LinkCard, got {other:?}"),
         }
     }
 

@@ -632,60 +632,23 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
     }
 
     func toggleLike(_ tweet: Tweet, cell: TweetCell?) {
-        let target = !(cell?.isLiked ?? tweet.favorited)
-        cell?.applyLike(favorited: target, count: max(0, tweet.likeCount + (target ? 1 : -1)))
-        Task {
-            do {
-                _ = target
-                    ? try await AppEnvironment.shared.api.like(tweetID: tweet.restID)
-                    : try await AppEnvironment.shared.api.unlike(tweetID: tweet.restID)
-                confirmLike(id: tweet.restID, favorited: target)
-            } catch {
-                cell?.applyLike(favorited: !target, count: tweet.likeCount)
-                Haptics.error()
-            }
+        Engagement.toggle(.like, tweet: tweet, cell: cell, host: self) { [weak self] on in
+            self?.confirmEngagement(id: tweet.restID) { $0.togglingLike(to: on) }
         }
     }
 
     /// Optimistic repost toggle, same contract as `toggleLike`.
     func toggleRetweet(_ tweet: Tweet, cell: TweetCell?) {
-        let target = !(cell?.isRetweeted ?? tweet.retweeted)
-        cell?.applyRetweet(retweeted: target, count: max(0, tweet.retweetCount + (target ? 1 : -1)))
-        Task {
-            do {
-                _ = target
-                    ? try await EngageService.engage.retweet(tweetID: tweet.restID)
-                    : try await EngageService.engage.unretweet(tweetID: tweet.restID)
-                confirmEngagement(id: tweet.restID) { $0.togglingRetweet(to: target) }
-            } catch {
-                cell?.applyRetweet(retweeted: !target, count: tweet.retweetCount)
-                Haptics.error()
-            }
+        Engagement.toggle(.repost, tweet: tweet, cell: cell, host: self) { [weak self] on in
+            self?.confirmEngagement(id: tweet.restID) { $0.togglingRetweet(to: on) }
         }
     }
 
     /// Optimistic bookmark toggle, same contract as `toggleLike`.
     func toggleBookmark(_ tweet: Tweet, cell: TweetCell?) {
-        let target = !(cell?.isBookmarked ?? tweet.bookmarked)
-        cell?.applyBookmark(bookmarked: target, count: max(0, tweet.bookmarkCount + (target ? 1 : -1)))
-        Task {
-            do {
-                _ = target
-                    ? try await EngageService.engage.bookmark(tweetID: tweet.restID)
-                    : try await EngageService.engage.unbookmark(tweetID: tweet.restID)
-                confirmEngagement(id: tweet.restID) { $0.togglingBookmark(to: target) }
-            } catch {
-                cell?.applyBookmark(bookmarked: !target, count: tweet.bookmarkCount)
-                Haptics.error()
-            }
+        Engagement.toggle(.bookmark, tweet: tweet, cell: cell, host: self) { [weak self] on in
+            self?.confirmEngagement(id: tweet.restID) { $0.togglingBookmark(to: on) }
         }
-    }
-
-    /// Writes a confirmed like/unlike back into the thread's model and
-    /// reconfigures the row so its handlers capture the fresh state — otherwise
-    /// a second tap re-sends "like" and any reuse repaints the stale heart.
-    private func confirmLike(id: String, favorited: Bool) {
-        confirmEngagement(id: id) { $0.togglingLike(to: favorited) }
     }
 
     /// The shared confirmed-engagement write-back: swaps in `transform`'s copy

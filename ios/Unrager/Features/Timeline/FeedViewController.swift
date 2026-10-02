@@ -905,63 +905,26 @@ class FeedViewController: UIViewController, TweetActionHandling {
         navigationController?.pushViewController(results, animated: true)
     }
 
-    /// Optimistic like: flip the heart and count on the visible cell now, fire
-    /// the request, and on success write the new state back into the view model
-    /// (so a second tap can unlike and reconfigures don't revert the heart);
-    /// only roll the cell back if the network rejects it.
+    /// Optimistic like through `Engagement`: the row flips now, and the
+    /// confirmed state is written back into the view model (so a second tap
+    /// can unlike and reconfigures don't revert the heart).
     func toggleLike(_ tweet: Tweet, cell: TweetCell?) {
-        let target = !(cell?.isLiked ?? tweet.favorited)
-        let optimisticCount = max(0, tweet.likeCount + (target ? 1 : -1))
-        cell?.applyLike(favorited: target, count: optimisticCount)
-        Task {
-            do {
-                _ = target
-                    ? try await AppEnvironment.shared.api.like(tweetID: tweet.restID)
-                    : try await AppEnvironment.shared.api.unlike(tweetID: tweet.restID)
-                viewModel.applyLike(id: tweet.restID, favorited: target)
-            } catch {
-                if cell?.tweetID == tweet.restID { cell?.applyLike(favorited: !target, count: tweet.likeCount) }
-                Haptics.error()
-                AppLogger.shared.warn("like failed: \(error)", category: .timeline)
-            }
+        Engagement.toggle(.like, tweet: tweet, cell: cell, host: self) { [weak self] on in
+            self?.viewModel.applyLike(id: tweet.restID, favorited: on)
         }
     }
 
-    /// Optimistic repost toggle, same contract as `toggleLike`: the arrows go
-    /// green and the count bumps instantly, the confirmed state is written back
-    /// through the view model, and the cell rolls back on a network reject.
+    /// Optimistic repost toggle, same contract as `toggleLike`.
     func toggleRetweet(_ tweet: Tweet, cell: TweetCell?) {
-        let target = !(cell?.isRetweeted ?? tweet.retweeted)
-        cell?.applyRetweet(retweeted: target, count: max(0, tweet.retweetCount + (target ? 1 : -1)))
-        Task {
-            do {
-                _ = target
-                    ? try await EngageService.engage.retweet(tweetID: tweet.restID)
-                    : try await EngageService.engage.unretweet(tweetID: tweet.restID)
-                viewModel.applyRetweet(id: tweet.restID, retweeted: target)
-            } catch {
-                if cell?.tweetID == tweet.restID { cell?.applyRetweet(retweeted: !target, count: tweet.retweetCount) }
-                Haptics.error()
-                AppLogger.shared.warn("retweet failed: \(error)", category: .timeline)
-            }
+        Engagement.toggle(.repost, tweet: tweet, cell: cell, host: self) { [weak self] on in
+            self?.viewModel.applyRetweet(id: tweet.restID, retweeted: on)
         }
     }
 
     /// Optimistic bookmark toggle, same contract as `toggleLike`.
     func toggleBookmark(_ tweet: Tweet, cell: TweetCell?) {
-        let target = !(cell?.isBookmarked ?? tweet.bookmarked)
-        cell?.applyBookmark(bookmarked: target, count: max(0, tweet.bookmarkCount + (target ? 1 : -1)))
-        Task {
-            do {
-                _ = target
-                    ? try await EngageService.engage.bookmark(tweetID: tweet.restID)
-                    : try await EngageService.engage.unbookmark(tweetID: tweet.restID)
-                viewModel.applyBookmark(id: tweet.restID, bookmarked: target)
-            } catch {
-                if cell?.tweetID == tweet.restID { cell?.applyBookmark(bookmarked: !target, count: tweet.bookmarkCount) }
-                Haptics.error()
-                AppLogger.shared.warn("bookmark failed: \(error)", category: .timeline)
-            }
+        Engagement.toggle(.bookmark, tweet: tweet, cell: cell, host: self) { [weak self] on in
+            self?.viewModel.applyBookmark(id: tweet.restID, bookmarked: on)
         }
     }
 

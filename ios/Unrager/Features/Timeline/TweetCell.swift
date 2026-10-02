@@ -534,6 +534,23 @@ final class TweetCell: UICollectionViewCell {
         return result
     }
 
+    /// Whether `kind` is on for the post as the row shows it now, and its count.
+    func engagement(_ kind: Engagement.Kind) -> (on: Bool, count: Int) {
+        switch kind {
+        case .like: return (isLiked, shownLikeCount)
+        case .repost: return (isRetweeted, shownRetweetCount)
+        case .bookmark: return (isBookmarked, shownBookmarkCount)
+        }
+    }
+
+    func applyEngagement(_ kind: Engagement.Kind, on: Bool, count: Int) {
+        switch kind {
+        case .like: applyLike(favorited: on, count: count)
+        case .repost: applyRetweet(retweeted: on, count: count)
+        case .bookmark: applyBookmark(bookmarked: on, count: count)
+        }
+    }
+
     /// Reflects an optimistic like toggle without re-running the full config —
     /// the feed calls this the instant the user taps so the heart fills before
     /// the network confirms.

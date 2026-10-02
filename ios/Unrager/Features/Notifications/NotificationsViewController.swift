@@ -27,6 +27,14 @@ final class NotificationsViewController: UIViewController {
     /// marker at each reset load, *before* the load advances it — so the tint
     /// survives the visit and clears on the next one, like X.
     private var unreadCutoff: Date?
+    /// Rows the user opened since the last reset load: they drop their unread
+    /// tint without disturbing the rest.
+    private var locallyRead = Set<String>()
+    /// When the list last finished a reset load, so coming back to the tab only
+    /// reloads a list that has gone stale.
+    private var lastLoaded: Date?
+    private static let staleAfter: TimeInterval = 120
+    private let footer = PagingFooter()
 
     // MARK: - Filter (All / Mentions)
 
@@ -119,6 +127,7 @@ final class NotificationsViewController: UIViewController {
 
         var content = cell.defaultContentConfiguration()
         content.attributedText = Self.title(for: notif, style: style)
+        content.textProperties.numberOfLines = 2
         content.secondaryText = notif.targetTweetSnippet
         content.secondaryTextProperties.color = DesignSystem.Color.secondaryLabel
         content.secondaryTextProperties.numberOfLines = 2
@@ -155,11 +164,19 @@ final class NotificationsViewController: UIViewController {
 
         let copy = Self.bannerCopy(for: notif)
         let unreadPrefix = unread ? "Unread. " : ""
+        cell.isAccessibilityElement = true
+        cell.accessibilityTraits = .button
         cell.accessibilityLabel = "\(unreadPrefix)\(copy.title). \(copy.body)"
+        cell.accessibilityCustomActions = notif.actors.prefix(NotificationAvatarStackView.maxAvatars).map { actor in
+            UIAccessibilityCustomAction(name: "Open \(actor.name)'s profile") { [weak self] _ in
+                self?.navigationController?.pushViewController(ProfileViewController(handle: actor.handle), animated: true)
+                return true
+            }
+        }
     }
 
     private func isUnread(_ notif: XNotification) -> Bool {
-        guard let cutoff = unreadCutoff else { return false }
+        guard let cutoff = unreadCutoff, !locallyRead.contains(notif.id) else { return false }
         return notif.timestamp > cutoff
     }
 
@@ -276,6 +293,16 @@ final class NotificationsViewController: UIViewController {
     /// A colored circular chip with the action glyph — the splash of color the
     /// flat list was missing.
     private static func badge(symbol: String, color: UIColor, diameter: CGFloat = 38, glyphSize: CGFloat = 17) -> UIImage {
+        let key = "\(symbol)|\(color.hash)|\(diameter)|\(glyphSize)|\(UITraitCollection.current.userInterfaceStyle.rawValue)"
+        if let cached = badgeCache.object(forKey: key as NSString) { return cached }
+        let image = renderBadge(symbol: symbol, color: color, diameter: diameter, glyphSize: glyphSize)
+        badgeCache.setObject(image, forKey: key as NSString)
+        return image
+    }
+
+    private static let badgeCache = NSCache<NSString, UIImage>()
+
+    private static func renderBadge(symbol: String, color: UIColor, diameter: CGFloat, glyphSize: CGFloat) -> UIImage {
         let size = CGSize(width: diameter, height: diameter)
         return UIGraphicsImageRenderer(size: size).image { _ in
             color.withAlphaComponent(diameter <= 20 ? 1 : 0.16).setFill()
@@ -291,6 +318,46 @@ final class NotificationsViewController: UIViewController {
         }.withRenderingMode(.alwaysOriginal)
     }
 
+    /// The list layout: a status footer, and a trailing swipe that lists every
+    /// person behind a grouped like, repost or follow.
+    private func makeLayout() -> UICollectionViewCompositionalLayout {
+        UICollectionViewCompositionalLayout { [weak self] _, environment in
+            var config = UICollectionLayoutListConfiguration(appearance: .plain)
+            config.backgroundColor = .clear
+            config.trailingSwipeActionsConfigurationProvider = { [weak self] indexPath in
+                self?.peopleSwipeAction(at: indexPath)
+            }
+            let section = NSCollectionLayoutSection.list(using: config, layoutEnvironment: environment)
+            section.boundarySupplementaryItems = [PagingFooter.boundaryItem()]
+            return section
+        }
+    }
+
+    /// Whether a row stands for more people than its avatars show, or for a
+    /// tweet the row's tap opens instead of the people.
+    private func hasPeopleList(_ notif: XNotification) -> Bool {
+        notif.actors.count > 1 || (notif.othersCount ?? 0) > 0
+    }
+
+    private func peopleSwipeAction(at indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        guard let id = dataSource.itemIdentifier(for: indexPath), let notif = items[id],
+              hasPeopleList(notif) else { return nil }
+        let people = UIContextualAction(style: .normal, title: "People") { [weak self] _, _, done in
+            self?.showPeople(of: notif)
+            done(true)
+        }
+        people.image = DesignSystem.icon("person.2.fill", pointSize: 18)
+        people.backgroundColor = DesignSystem.Color.accent
+        return UISwipeActionsConfiguration(actions: [people])
+    }
+
+    private func showPeople(of notif: XNotification) {
+        let verb = Self.style(for: notif.type).verb
+        let list = NotificationActorsViewController(
+            title: verb.prefix(1).uppercased() + verb.dropFirst(), actors: notif.actors)
+        navigationController?.pushViewController(list, animated: true)
+    }
+
     // MARK: - Lifecycle
 
     override func viewDidLoad() {
@@ -300,9 +367,7 @@ final class NotificationsViewController: UIViewController {
         navigationItem.largeTitleDisplayMode = .never
         navigationItem.rightBarButtonItem = filterButton
 
-        var config = UICollectionLayoutListConfiguration(appearance: .plain)
-        config.backgroundColor = .clear
-        collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: UICollectionViewCompositionalLayout.list(using: config))
+        collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: makeLayout())
         collectionView.backgroundColor = .clear
         collectionView.delegate = self
         view.addManaged(collectionView)
@@ -327,6 +392,9 @@ final class NotificationsViewController: UIViewController {
         dataSource = UICollectionViewDiffableDataSource(collectionView: collectionView) { cv, ip, id in
             cv.dequeueConfiguredReusableCell(using: reg, for: ip, item: id)
         }
+        footer.attach(to: collectionView)
+        footer.onRetry = { [weak self] in self?.retryFailedLoad() }
+        footer.install(on: dataSource)
         if filter == .mentions {
             applyFilter()
         } else {
@@ -344,13 +412,25 @@ final class NotificationsViewController: UIViewController {
         let service = NotificationCenterService.shared
         service.setViewingNotifications(true)
         service.onVisibleFresh = { [weak self] fresh in self?.mergeFresh(fresh) }
-        if filter == .all, !loading { load(reset: true) }
+        service.onResumeWhileVisible = { [weak self] in self?.refreshIfStale(after: 0) }
+        refreshIfStale(after: Self.staleAfter)
+    }
+
+    /// Reloads the list when it has never loaded or is older than `age`
+    /// seconds. Coming back from a thread or another tab within that window
+    /// keeps the loaded pages and the scroll position; the live poller keeps the
+    /// top current meanwhile.
+    private func refreshIfStale(after age: TimeInterval) {
+        guard filter == .all, !loading else { return }
+        if let lastLoaded, Date().timeIntervalSince(lastLoaded) < age { return }
+        load(reset: true)
     }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         let service = NotificationCenterService.shared
         service.onVisibleFresh = nil
+        service.onResumeWhileVisible = nil
         service.setViewingNotifications(false)
     }
 
@@ -358,21 +438,33 @@ final class NotificationsViewController: UIViewController {
     /// newest, and the server marker — then untints the list.
     private func markAllRead() {
         Haptics.success()
+        let unread = order.filter { id in items[id].map(isUnread) ?? false }
         NotificationCenterService.shared.markAllSeen(displayed: order.compactMap { items[$0] })
         unreadCutoff = NotificationPrefs.lastSeenTimestamp
-        reconfigureAllRows()
+        reconfigure(unread)
     }
 
-    private func reconfigureAllRows() {
-        guard var snapshot = dataSource?.snapshot(), !snapshot.itemIdentifiers.isEmpty else { return }
-        snapshot.reconfigureItems(snapshot.itemIdentifiers)
+    /// Re-renders just `ids` — the rows whose tint changed — so no other row
+    /// rebuilds its avatars and thumbnail.
+    private func reconfigure(_ ids: [String]) {
+        guard var snapshot = dataSource?.snapshot() else { return }
+        let present = ids.filter { snapshot.indexOfItem($0) != nil }
+        guard !present.isEmpty else { return }
+        snapshot.reconfigureItems(present)
         dataSource.apply(snapshot, animatingDifferences: false)
     }
 
     /// Live-merges fresh poller items to the top of the list (they render
     /// tinted as unread) and reports them displayed so the seen marker tracks
-    /// what the user can actually see.
+    /// what the user can actually see. A scrolled list keeps the rows being
+    /// read where they are. Under the Mentions filter the list isn't on screen:
+    /// a new mention refreshes the mentions feed instead, and nothing is marked
+    /// seen, so the rest still counts as unread when the user leaves.
     private func mergeFresh(_ fresh: [XNotification]) {
+        guard filter == .all else {
+            if fresh.contains(where: { Self.isMention($0) }) { mentionsController?.viewModel.refresh() }
+            return
+        }
         let incoming = fresh
             .filter { items[$0.id] == nil }
             .sorted { $0.timestamp < $1.timestamp }
@@ -385,11 +477,16 @@ final class NotificationsViewController: UIViewController {
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
         snapshot.appendSections([0])
         snapshot.appendItems(order)
-        dataSource.apply(snapshot, animatingDifferences: true)
+        dataSource.applyKeepingPosition(snapshot, in: collectionView)
         emptyState.isHidden = true
-        if filter == .all, view.window != nil {
+        if view.window != nil {
             NotificationCenterService.shared.notificationsDisplayed(incoming)
         }
+    }
+
+    private static func isMention(_ notif: XNotification) -> Bool {
+        let type = notif.type.lowercased().replacingOccurrences(of: "_", with: "")
+        return type == "mention" || type == "reply" || type == "quote"
     }
 
     /// Re-inserts, at the top, the fresh items the poller live-merged while the
@@ -417,19 +514,24 @@ final class NotificationsViewController: UIViewController {
             mergedDuringResetLoad.removeAll()
         }
         if order.isEmpty { emptyState.isHidden = true; loadingIndicator.startAnimating() }
+        loadFailure = nil
+        updateFooter()
         Task {
             defer {
                 loading = false
                 resetLoadInFlight = false
                 loadingIndicator.stopAnimating()
                 collectionView.refreshControl?.endRefreshing()
+                updateFooter()
             }
             do {
                 let page = try await AppEnvironment.shared.api.notifications(cursor: reset ? nil : cursor)
                 if reset {
                     unreadCutoff = NotificationPrefs.lastSeenTimestamp
+                    locallyRead.removeAll()
                     items.removeAll()
                     order.removeAll()
+                    lastLoaded = Date()
                 }
                 for notif in page.notifications where items[notif.id] == nil {
                     items[notif.id] = notif
@@ -454,10 +556,31 @@ final class NotificationsViewController: UIViewController {
                 if order.isEmpty, filter == .all {
                     emptyState.isHidden = false
                     emptyState.show(symbol: "exclamationmark.triangle", title: "Couldn't load", subtitle: error.localizedDescription, showRetry: true)
+                } else if !order.isEmpty {
+                    loadFailure = reset ? .refresh : .more
                 }
                 AppLogger.shared.warn("notifications load failed: \(error)", category: .timeline)
             }
         }
+    }
+
+    private enum LoadFailure { case refresh, more }
+    private var loadFailure: LoadFailure?
+
+    private func updateFooter() {
+        switch loadFailure {
+        case .refresh?: footer.set(.failed("Couldn't refresh"))
+        case .more?: footer.set(.failed("Couldn't load more"))
+        case nil:
+            footer.set(loading && !order.isEmpty && !resetLoadInFlight ? .loading("Loading more…") : .hidden)
+        }
+    }
+
+    private func retryFailedLoad() {
+        let wasRefresh = loadFailure == .refresh
+        loadFailure = nil
+        updateFooter()
+        load(reset: wasRefresh)
     }
 
 }
@@ -467,23 +590,19 @@ extension NotificationsViewController: UICollectionViewDelegate {
         collectionView.deselectItem(at: indexPath, animated: true)
         guard let id = dataSource.itemIdentifier(for: indexPath), let notif = items[id] else { return }
         NotificationCenterService.shared.markSeen(notif)
-        unreadCutoff = NotificationPrefs.lastSeenTimestamp
-        reconfigureAllRows()
+        if locallyRead.insert(notif.id).inserted { reconfigure([notif.id]) }
         if let tweetID = notif.targetTweetID {
             navigationController?.pushViewController(ThreadViewController(tweetID: tweetID), animated: true)
         } else if notif.actors.count > 1 {
-            let style = Self.style(for: notif.type)
-            let list = NotificationActorsViewController(
-                title: style.verb.prefix(1).uppercased() + style.verb.dropFirst(),
-                actors: notif.actors)
-            navigationController?.pushViewController(list, animated: true)
+            showPeople(of: notif)
         } else if let actor = notif.actors.first {
             navigationController?.pushViewController(ProfileViewController(handle: actor.handle), animated: true)
         }
     }
 
     func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
-        if indexPath.item >= order.count - 4 { load(reset: false) }
+        guard loadFailure == nil, indexPath.item >= order.count - 4 else { return }
+        load(reset: false)
     }
 }
 

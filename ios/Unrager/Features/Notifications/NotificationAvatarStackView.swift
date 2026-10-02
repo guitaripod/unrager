@@ -15,6 +15,7 @@ final class NotificationAvatarStackView: UIView {
     private static let height: CGFloat = 44
 
     private let onTapActor: (NotificationActor) -> Void
+    private var avatarTasks: [Task<Void, Never>] = []
 
     static func size(for actorCount: Int) -> CGSize {
         let shown = max(1, min(actorCount, maxAvatars))
@@ -82,13 +83,18 @@ final class NotificationAvatarStackView: UIView {
             self?.onTapActor(actor)
         }, for: .touchUpInside)
         if AppSettings.imagesEnabled, let url = actor.avatarURL.flatMap(URL.init) {
-            Task { [weak button] in
+            let task = Task { [weak button] in
                 let image = await ImageLoader.image(
                     for: url, pointSize: CGSize(width: diameter, height: diameter), scale: 3)
-                guard let button, let image else { return }
+                guard !Task.isCancelled, let button, let image else { return }
                 button.setImage(image, for: .normal)
             }
+            avatarTasks.append(task)
         }
         return button
+    }
+
+    deinit {
+        avatarTasks.forEach { $0.cancel() }
     }
 }

@@ -26,8 +26,7 @@ final class SearchViewController: FeedViewController {
         searchController.searchBar.delegate = self
         searchController.obscuresBackgroundDuringPresentation = false
         searchController.searchBar.placeholder = "Search X"
-        navigationItem.rightBarButtonItem = UIBarButtonItem(
-            image: DesignSystem.icon("slider.horizontal.3"), menu: productMenu())
+        navigationItem.rightBarButtonItem = productButton()
         configureRecents()
     }
 
@@ -36,13 +35,30 @@ final class SearchViewController: FeedViewController {
         refreshRecents()
     }
 
+    /// The result types a search can show as tweets. People results are a
+    /// different kind of row the server doesn't return, so they aren't offered.
+    private static let products = SourceProduct.allCases.filter { $0 != .people }
+
+    /// A bar button titled with the active result type, so which one is in
+    /// force is always visible, opening the menu that changes it.
+    private func productButton() -> UIBarButtonItem {
+        let item = UIBarButtonItem(title: product.apiValue, menu: productMenu())
+        item.accessibilityLabel = "Results: \(product.apiValue)"
+        return item
+    }
+
     private func productMenu() -> UIMenu {
-        UIMenu(title: "Results", children: SourceProduct.allCases.map { item in
+        UIMenu(title: "Results", options: .singleSelection, children: Self.products.map { item in
             UIAction(title: item.apiValue, state: item == product ? .on : .off) { [weak self] _ in
-                self?.product = item
-                self?.runSearch()
+                self?.selectProduct(item)
             }
         })
+    }
+
+    private func selectProduct(_ item: SourceProduct) {
+        product = item
+        navigationItem.rightBarButtonItem = productButton()
+        runSearch()
     }
 
     private func runSearch() {
@@ -50,7 +66,6 @@ final class SearchViewController: FeedViewController {
         guard !query.isEmpty else { return }
         ClientSettings.addRecentSearch(query)
         viewModel.updateSource(.search(query: query, product: product))
-        navigationItem.rightBarButtonItem?.menu = productMenu()
         refreshRecents()
     }
 
@@ -76,6 +91,13 @@ final class SearchViewController: FeedViewController {
         if visible { recentsTable.reloadData() }
     }
 
+    /// Clears the results and brings the recent searches back, after the query
+    /// is emptied or the search is cancelled.
+    private func showRecents() {
+        viewModel.updateSource(.search(query: "", product: product))
+        refreshRecents()
+    }
+
     private func performRecent(_ query: String) {
         Haptics.selection()
         searchController.searchBar.text = query
@@ -94,6 +116,14 @@ extension SearchViewController: UISearchBarDelegate {
     func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
         runSearch()
         searchBar.resignFirstResponder()
+    }
+
+    func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
+        if searchText.isEmpty { showRecents() }
+    }
+
+    func searchBarCancelButtonClicked(_ searchBar: UISearchBar) {
+        showRecents()
     }
 }
 

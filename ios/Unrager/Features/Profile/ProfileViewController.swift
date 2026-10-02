@@ -17,6 +17,7 @@ final class ProfileViewController: FeedViewController {
     private var isOwnProfile = false
     private var basedIn: (flag: String?, country: String?)?
     private var followRequestInFlight = false
+    private var profileLoadInFlight = false
 
     /// The Replies tab: a sibling feed over `/api/sources/user/{handle}/replies`,
     /// created lazily on first switch. It carries its own copy of the profile
@@ -41,7 +42,15 @@ final class ProfileViewController: FeedViewController {
         title = "@\(handle)"
         for header in headers {
             wire(header)
+            header.setHandle(handle)
         }
+        loadProfile()
+    }
+
+    /// A pull-to-refresh reloads the header (counts, follow state) along with
+    /// the timeline.
+    override func pullToRefresh() {
+        super.pullToRefresh()
         loadProfile()
     }
 
@@ -56,10 +65,15 @@ final class ProfileViewController: FeedViewController {
         header.onTapFollowers = { [weak self] in self?.pushUserList(mode: .followers) }
         header.onTapFollowing = { [weak self] in self?.pushUserList(mode: .following) }
         header.onSegmentChange = { [weak self] index in self?.setShowingReplies(index == 1) }
+        header.onRetry = { [weak self] in self?.loadProfile() }
     }
 
     private func loadProfile() {
+        guard !profileLoadInFlight else { return }
+        profileLoadInFlight = true
+        for header in headers { header.setLoadFailed(false) }
         Task {
+            defer { profileLoadInFlight = false }
             do {
                 async let me = AppEnvironment.shared.whoami()
                 let profile = try await social.profile(handle: handle)
@@ -71,6 +85,10 @@ final class ProfileViewController: FeedViewController {
                 loadFlag(for: profile.user)
             } catch {
                 AppLogger.shared.warn("profile load failed: \(error)", category: .profile)
+                if user == nil {
+                    for header in headers { header.setLoadFailed(true) }
+                    collectionView.collectionViewLayout.invalidateLayout()
+                }
             }
         }
     }
@@ -191,6 +209,8 @@ private final class ProfileHeaderView: UIView {
     var onTapFollowers: (() -> Void)?
     var onTapFollowing: (() -> Void)?
     var onSegmentChange: ((Int) -> Void)?
+    var onRetry: (() -> Void)?
+    private let retryButton = UIButton(configuration: .tinted())
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -252,7 +272,20 @@ private final class ProfileHeaderView: UIView {
         actions.axis = .horizontal
         actions.spacing = DesignSystem.Spacing.s
 
-        let column = UIStackView(arrangedSubviews: [topRow, counts, actions, segment])
+        var retryConfig = UIButton.Configuration.tinted()
+        retryConfig.title = "Couldn't load this profile — Retry"
+        retryConfig.image = DesignSystem.icon("arrow.clockwise", pointSize: 13)
+        retryConfig.imagePadding = 6
+        retryConfig.cornerStyle = .capsule
+        retryButton.configuration = retryConfig
+        retryButton.isHidden = true
+        retryButton.addAction(UIAction { [weak self] _ in self?.onRetry?() }, for: .touchUpInside)
+
+        for button in [followingButton, followersButton, followButton, briefButton] {
+            button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+        }
+
+        let column = UIStackView(arrangedSubviews: [topRow, retryButton, counts, actions, segment])
         column.axis = .vertical
         column.spacing = DesignSystem.Spacing.m
         column.alignment = .fill
@@ -276,6 +309,15 @@ private final class ProfileHeaderView: UIView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    /// Shows the handle straight away, before the profile request lands.
+    func setHandle(_ handle: String) {
+        handleLabel.text = "@\(handle)"
+    }
+
+    func setLoadFailed(_ failed: Bool) {
+        retryButton.isHidden = !failed
+    }
 
     func configure(with user: User) {
         nameLabel.text = user.name

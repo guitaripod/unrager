@@ -60,11 +60,11 @@ final class FeedFooterView: UICollectionReusableView {
 
     /// A spinner + "Loading more…" while the next page is in flight, so reaching
     /// the bottom of the feed clearly shows fresh tweets are on the way.
-    func showLoading() {
+    func showLoading(_ text: String = "Loading more…") {
         isHidden = false
         button.isHidden = true
         spinner.startAnimating()
-        label.text = "Loading more…"
+        label.text = text
     }
 
     func setHidden() {

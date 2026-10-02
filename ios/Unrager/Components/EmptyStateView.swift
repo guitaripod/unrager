@@ -49,5 +49,13 @@ final class EmptyStateView: UIView {
         retryButton.isHidden = !showRetry
     }
 
+    /// Only the Retry button takes touches; everything else falls through to the
+    /// screen underneath, so pull-to-refresh and any header above an empty feed
+    /// keep working while this overlay is up.
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        guard !isHidden, !retryButton.isHidden else { return false }
+        return retryButton.point(inside: convert(point, to: retryButton), with: event)
+    }
+
     @objc private func retryTapped() { onRetry?() }
 }

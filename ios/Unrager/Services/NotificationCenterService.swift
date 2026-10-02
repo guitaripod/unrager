@@ -77,11 +77,18 @@ final class NotificationCenterService: NSObject {
     private func start() { poller.start() }
 
     @objc private func appBecameActive() {
+        appIsActive = true
         poller.resetDiffBaseline()
         poller.start()
+        if notificationsVisible {
+            root?.setNotificationsBadge(nil)
+            mirrorIconBadge(0)
+            onResumeWhileVisible?()
+        }
     }
 
     @objc private func appResignedActive() {
+        appIsActive = false
         poller.pause()
     }
 
@@ -95,7 +102,17 @@ final class NotificationCenterService: NSObject {
     /// pinned to zero the whole time it's up — the list itself is the unread
     /// surface — but the seen marker only advances for items the list actually
     /// rendered (`notificationsDisplayed`), never silently from a poll.
-    private var isViewingNotifications = false
+    private var notificationsVisible = false
+    private var appIsActive = true
+
+    /// The list counts as being viewed only while the app is in the foreground
+    /// as well: a backgrounded app with the tab open must keep its badges and
+    /// seen marker tracking arrivals, since the list isn't showing them.
+    private var isViewingNotifications: Bool { notificationsVisible && appIsActive }
+
+    /// Called when the app returns to the foreground with the Notifications
+    /// list still on screen, so the list can refresh what it missed.
+    var onResumeWhileVisible: (() -> Void)?
 
     /// The Notifications list's hook for fresh activity arriving while it is
     /// front-most: the poller's new items are handed to the list to render
@@ -103,6 +120,11 @@ final class NotificationCenterService: NSObject {
     var onVisibleFresh: (([XNotification]) -> Void)?
 
     private func setUnreadCount(_ count: Int) {
+        guard root?.hasNotificationsTab != false else {
+            unreadCount = 0
+            mirrorIconBadge(0)
+            return
+        }
         if isViewingNotifications {
             unreadCount = 0
             root?.setNotificationsBadge(nil)
@@ -169,8 +191,8 @@ final class NotificationCenterService: NSObject {
     /// visible the badge stays 0 and fresh activity flows through
     /// `onVisibleFresh`; the marker advances only via `notificationsDisplayed`.
     func setViewingNotifications(_ viewing: Bool) {
-        isViewingNotifications = viewing
-        if viewing {
+        notificationsVisible = viewing
+        if isViewingNotifications {
             root?.setNotificationsBadge(nil)
             mirrorIconBadge(0)
         }
@@ -327,6 +349,7 @@ final class NotificationCenterService: NSObject {
     /// Schedules a single best-effort refresh ~15 minutes out (the system decides
     /// the real cadence). Re-armed each time the app backgrounds.
     func scheduleBackgroundRefresh() {
+        guard NotificationPrefs.bannersEnabled else { return }
         let request = BGAppRefreshTaskRequest(identifier: Self.backgroundTaskID)
         request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
         do {

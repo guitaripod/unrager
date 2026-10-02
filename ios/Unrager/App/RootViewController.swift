@@ -69,6 +69,10 @@ final class RootViewController: UITabBarController {
         selectedTabs.firstIndex(of: .notifications)
     }
 
+    /// Whether the user's tab bar carries Notifications. Without it the unread
+    /// count has no list to clear it, so it isn't tracked on the app icon.
+    var hasNotificationsTab: Bool { notificationsTabIndex != nil }
+
     /// Sets the live unread badge on the Notifications tab item (nil clears it).
     /// No-op when the Notifications tab isn't in the user's bar — the count is
     /// still tracked, just nowhere to show it.
@@ -103,22 +107,26 @@ final class RootViewController: UITabBarController {
 
     private func handleToastTap(_ notifications: [XNotification]) {
         guard notifications.count == 1, let notif = notifications.first else {
-            if let index = notificationsTabIndex { selectedIndex = index }
+            showNotificationsTab()
             return
         }
         if let tweetID = notif.targetTweetID {
             openInNotificationsStack(ThreadViewController(tweetID: tweetID))
         } else if let handle = notif.actors.first?.handle {
             openInNotificationsStack(ProfileViewController(handle: handle))
-        } else if let index = notificationsTabIndex {
-            selectedIndex = index
+        } else {
+            showNotificationsTab()
         }
     }
 
     /// Switches to the Notifications tab at its root (or Home as a fallback) —
     /// where a tapped summary banner lands.
     func showNotificationsTab() {
-        let index = notificationsTabIndex ?? 0
+        guard let index = notificationsTabIndex else {
+            (selectedViewController as? UINavigationController)?
+                .pushViewController(NotificationsViewController(), animated: true)
+            return
+        }
         selectedIndex = index
         (viewControllers?[index] as? UINavigationController)?.popToRootViewController(animated: false)
     }

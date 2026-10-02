@@ -1,9 +1,10 @@
 import Photos
 import UIKit
 
-/// Downloads a media attachment from the server proxy and writes it to the
-/// user's photo library, requesting add-only authorization first. Throws a
-/// descriptive error if permission is denied or the write fails.
+/// Downloads a media attachment from the server proxy straight to a temporary
+/// file (never holding a whole video in memory) and writes it to the user's
+/// photo library, requesting add-only authorization first. Throws a descriptive
+/// error if permission is denied or the write fails.
 enum MediaSaver {
     enum Failure: LocalizedError {
         case permissionDenied
@@ -19,15 +20,36 @@ enum MediaSaver {
 
     static func save(from url: URL, isVideo: Bool) async throws {
         try await ensureAuthorized()
-        let (data, response) = try await URLSession.shared.data(from: url)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), !data.isEmpty else {
+        let (downloaded, response) = try await URLSession.shared.download(from: url)
+        defer { try? FileManager.default.removeItem(at: downloaded) }
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw Failure.download
         }
-        if isVideo {
-            try await saveVideo(data, suggestedExtension: Self.fileExtension(response) ?? "mp4")
-        } else {
-            try await savePhoto(data)
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension(fileExtension(response, isVideo: isVideo))
+        try FileManager.default.moveItem(at: downloaded, to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        guard let size = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > 0 else {
+            throw Failure.download
         }
+        try await PHPhotoLibrary.shared().performChanges {
+            PHAssetCreationRequest.forAsset().addResource(with: isVideo ? .video : .photo, fileURL: file, options: nil)
+        }
+    }
+
+    /// The alert for a failed save. A denied Photos permission gets a way to
+    /// the Settings page that fixes it; anything else is the plain error.
+    @MainActor
+    static func alert(for error: Error) -> UIAlertController {
+        guard case Failure.permissionDenied = error else { return AlertFactory.error(error, title: "Couldn't save") }
+        let alert = UIAlertController(title: "Photos access needed", message: error.localizedDescription,
+                                      preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Open Settings", style: .default) { _ in
+            if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+        })
+        return alert
     }
 
     private static func ensureAuthorized() async throws {
@@ -43,28 +65,16 @@ enum MediaSaver {
         }
     }
 
-    private static func savePhoto(_ data: Data) async throws {
-        try await PHPhotoLibrary.shared().performChanges {
-            PHAssetCreationRequest.forAsset().addResource(with: .photo, data: data, options: nil)
-        }
-    }
-
-    private static func saveVideo(_ data: Data, suggestedExtension: String) async throws {
-        let temp = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension(suggestedExtension)
-        try data.write(to: temp)
-        defer { try? FileManager.default.removeItem(at: temp) }
-        try await PHPhotoLibrary.shared().performChanges {
-            PHAssetCreationRequest.forAsset().addResource(with: .video, fileURL: temp, options: nil)
-        }
-    }
-
-    private static func fileExtension(_ response: URLResponse) -> String? {
+    private static func fileExtension(_ response: URLResponse, isVideo: Bool) -> String {
         switch response.mimeType {
         case "video/mp4": return "mp4"
         case "video/quicktime": return "mov"
-        default: return nil
+        case "image/png": return "png"
+        case "image/gif": return "gif"
+        case "image/webp": return "webp"
+        case "image/heic": return "heic"
+        case "image/jpeg": return "jpg"
+        default: return isVideo ? "mp4" : "jpg"
         }
     }
 }

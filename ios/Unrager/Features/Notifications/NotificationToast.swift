@@ -75,7 +75,11 @@ final class NotificationToast: UIView {
         isAccessibilityElement = true
         accessibilityTraits = .button
         accessibilityLabel = [title, subtitle].compactMap { $0 }.joined(separator: ", ")
-        accessibilityHint = "Opens the notification. Swipe up with two fingers to dismiss."
+        accessibilityHint = "Opens the notification."
+        accessibilityCustomActions = [UIAccessibilityCustomAction(name: "Dismiss") { [weak self] _ in
+            self?.dismiss()
+            return true
+        }]
     }
 
     /// Drops the toast in from above the safe area, springs it to rest, and arms
@@ -99,6 +103,9 @@ final class NotificationToast: UIView {
             self.transform = .identity
         }
         Haptics.selection()
+        if UIAccessibility.isVoiceOverRunning {
+            UIAccessibility.post(notification: .announcement, argument: accessibilityLabel)
+        }
         scheduleDismiss()
     }
 
@@ -106,7 +113,8 @@ final class NotificationToast: UIView {
         dismissWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.dismiss() }
         dismissWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0, execute: work)
+        let visibleFor: TimeInterval = UIAccessibility.isVoiceOverRunning ? 10 : 4
+        DispatchQueue.main.asyncAfter(deadline: .now() + visibleFor, execute: work)
     }
 
     func dismiss() {

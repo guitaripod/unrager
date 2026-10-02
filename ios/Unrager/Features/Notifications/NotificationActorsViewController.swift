@@ -8,7 +8,7 @@ final class NotificationActorsViewController: UIViewController {
     private let actors: [NotificationActor]
     private var collectionView: UICollectionView!
     private var dataSource: UICollectionViewDiffableDataSource<Int, String>!
-    private var actorsByID: [String: NotificationActor] = [:]
+    private var rowsByID: [String: UserRow] = [:]
 
     init(title: String, actors: [NotificationActor]) {
         self.actors = actors
@@ -19,31 +19,10 @@ final class NotificationActorsViewController: UIViewController {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    private lazy var registration = UICollectionView.CellRegistration<UICollectionViewListCell, String> {
+    private lazy var registration = UICollectionView.CellRegistration<UserRowCell, String> {
         [weak self] cell, _, id in
-        guard let actor = self?.actorsByID[id] else { return }
-        var content = UIListContentConfiguration.subtitleCell()
-        content.text = actor.name
-        content.secondaryText = "@\(actor.handle)"
-        content.secondaryTextProperties.color = DesignSystem.Color.secondaryLabel
-        content.image = DesignSystem.icon("person.crop.circle.fill", pointSize: 36)
-        content.imageProperties.tintColor = DesignSystem.Color.tertiaryLabel
-        content.imageProperties.maximumSize = CGSize(width: 40, height: 40)
-        content.imageProperties.cornerRadius = 20
-        cell.contentConfiguration = content
-        cell.accessibilityLabel = "\(actor.name), @\(actor.handle)\(actor.verified ? ", verified" : "")"
-
-        if actor.verified {
-            let badge = UIImageView(image: DesignSystem.icon("checkmark.seal.fill", pointSize: 16))
-            badge.tintColor = DesignSystem.Color.verified
-            cell.accessories = [.customView(configuration: .init(customView: badge, placement: .trailing()))]
-        } else {
-            cell.accessories = [.disclosureIndicator()]
-        }
-
-        if AppSettings.imagesEnabled, let url = actor.avatarURL.flatMap(URL.init) {
-            self?.loadAvatar(url, into: cell, id: id)
-        }
+        guard let row = self?.rowsByID[id] else { return }
+        cell.configure(with: row)
     }
 
     override func viewDidLoad() {
@@ -65,8 +44,8 @@ final class NotificationActorsViewController: UIViewController {
         }
 
         var order: [String] = []
-        for actor in actors where actorsByID[actor.restID] == nil {
-            actorsByID[actor.restID] = actor
+        for actor in actors where rowsByID[actor.restID] == nil {
+            rowsByID[actor.restID] = UserRow(actor)
             order.append(actor.restID)
         }
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
@@ -74,23 +53,12 @@ final class NotificationActorsViewController: UIViewController {
         snapshot.appendItems(order)
         dataSource.apply(snapshot, animatingDifferences: false)
     }
-
-    private func loadAvatar(_ url: URL, into cell: UICollectionViewListCell, id: String) {
-        Task { [weak self, weak cell] in
-            let image = await ImageLoader.image(for: url, pointSize: CGSize(width: 40, height: 40), scale: 3)
-            guard let self, let cell, let image,
-                  var content = cell.contentConfiguration as? UIListContentConfiguration,
-                  self.actorsByID[id] != nil else { return }
-            content.image = image
-            cell.contentConfiguration = content
-        }
-    }
 }
 
 extension NotificationActorsViewController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         collectionView.deselectItem(at: indexPath, animated: true)
-        guard let id = dataSource.itemIdentifier(for: indexPath), let actor = actorsByID[id] else { return }
-        navigationController?.pushViewController(ProfileViewController(handle: actor.handle), animated: true)
+        guard let id = dataSource.itemIdentifier(for: indexPath), let row = rowsByID[id] else { return }
+        navigationController?.pushViewController(ProfileViewController(handle: row.handle), animated: true)
     }
 }

@@ -12,7 +12,7 @@ import UnragerKit
 /// instantly — the screen never blanks. Ancestors stream in above and replies
 /// below with an animated diff, and the focal tweet's on-screen position is
 /// pinned when ancestors prepend so the view never jumps.
-final class ThreadViewController: UIViewController {
+final class ThreadViewController: UIViewController, TweetActionHandling {
     private let tweetID: String
     private var collectionView: UICollectionView!
     private var dataSource: UICollectionViewDiffableDataSource<Section, String>!
@@ -33,11 +33,16 @@ final class ThreadViewController: UIViewController {
     private var exhausted = false
     private var loadingMore = false
     private var didRenderFocal = false
+    private var threadLoaded = false
+    private var repliesFailure: String?
+    private var failedLoadWasReload = false
     private var replySort: ReplySort = .conversation
     private let emptyState = EmptyStateView()
     private let loadingIndicator = UIActivityIndicatorView(style: .medium)
 
-    private enum Section { case ancestors, focal, replies }
+    private enum Section: Int { case ancestors, focal, replies }
+
+    private let footer = PagingFooter()
 
     /// Reply orderings offered by the sort control — the TUI's `s` cycle
     /// (newest / most liked / most replies / most reposts / most views) plus
@@ -73,13 +78,13 @@ final class ThreadViewController: UIViewController {
         cell.onLike = { [weak self, weak cell] in self?.toggleLike(tweet, cell: cell) }
         cell.onReply = { [weak self] in self?.reply(to: tweet) }
         cell.onToggleRetweet = { [weak self, weak cell] in self?.toggleRetweet(tweet, cell: cell) }
-        cell.onQuote = { [weak self] in self?.quote(tweet) }
+        cell.onQuote = { [weak self] in self?.presentQuote(tweet) }
         cell.onToggleBookmark = { [weak self, weak cell] in self?.toggleBookmark(tweet, cell: cell) }
-        cell.onShare = { [weak self] in self?.share(tweet) }
+        cell.onShare = { [weak self] in self?.shareTweet(tweet) }
         if ownTweet {
             cell.enableLikers { [weak self] in self?.push(LikersViewController(tweetID: tweet.restID)) }
         }
-        cell.onTapPhoto = { [weak self] _ in self?.openMedia(tweet) }
+        cell.onTapPhoto = { [weak self] index in self?.openMedia(tweet, at: index) }
         cell.onTapCard = { url in UIApplication.shared.open(url) }
         cell.onTapQuoted = { [weak self] in
             if let q = tweet.quotedTweet { self?.push(ThreadViewController(tweet: q)) }
@@ -115,10 +120,7 @@ final class ThreadViewController: UIViewController {
         title = "Thread"
         view.backgroundColor = DesignSystem.Color.background
 
-        var config = UICollectionLayoutListConfiguration(appearance: .plain)
-        config.separatorConfiguration.bottomSeparatorInsets = .init(top: 0, leading: 72, bottom: 0, trailing: 0)
-        config.backgroundColor = .clear
-        collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: UICollectionViewCompositionalLayout.list(using: config))
+        collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: makeLayout())
         collectionView.backgroundColor = .clear
         collectionView.delegate = self
         view.addManaged(collectionView)
@@ -150,9 +152,80 @@ final class ThreadViewController: UIViewController {
         dataSource = UICollectionViewDiffableDataSource(collectionView: collectionView) { cv, ip, id in
             cv.dequeueConfiguredReusableCell(using: reg, for: ip, item: id)
         }
+        footer.attach(to: collectionView)
+        footer.onRetry = { [weak self] in self?.retryReplies() }
+        footer.install(on: dataSource)
         renderFocalIfAvailable()
         resolveSelfHandle()
         load()
+    }
+
+    /// The list layout, with swipe actions on every row and a status footer
+    /// under the replies section only.
+    private func makeLayout() -> UICollectionViewCompositionalLayout {
+        UICollectionViewCompositionalLayout { [weak self] sectionIndex, environment in
+            var config = UICollectionLayoutListConfiguration(appearance: .plain)
+            config.separatorConfiguration.bottomSeparatorInsets = .init(top: 0, leading: 72, bottom: 0, trailing: 0)
+            config.backgroundColor = .clear
+            config.leadingSwipeActionsConfigurationProvider = { [weak self] indexPath in
+                self?.leadingSwipeActions(at: indexPath)
+            }
+            config.trailingSwipeActionsConfigurationProvider = { [weak self] indexPath in
+                self?.trailingSwipeActions(at: indexPath)
+            }
+            let section = NSCollectionLayoutSection.list(using: config, layoutEnvironment: environment)
+            if sectionIndex == Section.replies.rawValue {
+                section.boundarySupplementaryItems = [PagingFooter.boundaryItem()]
+            }
+            return section
+        }
+    }
+
+    private func leadingSwipeActions(at indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        guard let id = dataSource.itemIdentifier(for: indexPath), let tweet = tweetsByID[id] else { return nil }
+        let like = UIContextualAction(style: .normal, title: tweet.favorited ? "Unlike" : "Like") { [weak self] _, _, done in
+            self?.toggleLike(tweet, cell: self?.collectionView.cellForItem(at: indexPath) as? TweetCell)
+            done(true)
+        }
+        like.image = DesignSystem.icon(tweet.favorited ? "heart.slash.fill" : "heart.fill", pointSize: 18)
+        like.backgroundColor = DesignSystem.Color.like
+        let config = UISwipeActionsConfiguration(actions: [like])
+        config.performsFirstActionWithFullSwipe = true
+        return config
+    }
+
+    private func trailingSwipeActions(at indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        guard let id = dataSource.itemIdentifier(for: indexPath), let tweet = tweetsByID[id] else { return nil }
+        let reply = UIContextualAction(style: .normal, title: "Reply") { [weak self] _, _, done in
+            self?.reply(to: tweet)
+            done(true)
+        }
+        reply.image = DesignSystem.icon("arrowshape.turn.up.left.fill", pointSize: 18)
+        reply.backgroundColor = DesignSystem.Color.accent
+        return UISwipeActionsConfiguration(actions: [reply])
+    }
+
+    /// The replies footer: "Loading replies…" until the thread first lands or
+    /// while a later page is in flight, a retry when a load failed, and "No
+    /// replies yet" once a finished thread has none.
+    private func updateFooter() {
+        if let failure = repliesFailure {
+            footer.set(.failed(failure))
+        } else if !threadLoaded {
+            footer.set(.loading("Loading replies…"))
+        } else if loadingMore {
+            footer.set(.loading("Loading more…"))
+        } else if replyOrder.isEmpty {
+            footer.set(.note("No replies yet"))
+        } else {
+            footer.set(.hidden)
+        }
+    }
+
+    private func retryReplies() {
+        repliesFailure = nil
+        updateFooter()
+        if failedLoadWasReload { load() } else { loadMore() }
     }
 
     /// The reply sort control: an `arrow.up.arrow.down` menu mirroring the
@@ -237,6 +310,10 @@ final class ThreadViewController: UIViewController {
     @objc private func pullToRefresh() { load() }
 
     private func load() {
+        emptyState.isHidden = true
+        repliesFailure = nil
+        if !didRenderFocal { loadingIndicator.startAnimating() }
+        updateFooter()
         Task {
             defer { collectionView.refreshControl?.endRefreshing() }
             do {
@@ -263,10 +340,15 @@ final class ThreadViewController: UIViewController {
                 }
                 cursor = thread.cursor
                 exhausted = thread.cursor == nil
-                applyThread(ancestors: ancestorOrder, focal: focal.restID)
+                threadLoaded = true
+                applyThread(ancestors: ancestorOrder, focal: focal.restID, reconfigureExisting: true)
+                updateFooter()
             } catch {
                 guard !didRenderFocal else {
                     AppLogger.shared.warn("thread load failed (focal already shown): \(error)", category: .thread)
+                    repliesFailure = "Couldn't load replies"
+                    failedLoadWasReload = true
+                    updateFooter()
                     return
                 }
                 loadingIndicator.stopAnimating()
@@ -309,13 +391,17 @@ final class ThreadViewController: UIViewController {
     /// Applies the full thread. When ancestors are prepended above an
     /// already-visible focal tweet, the content offset is corrected after layout
     /// so the focal tweet stays put — no scroll jump.
-    private func applyThread(ancestors: [String], focal: String) {
+    private func applyThread(ancestors: [String], focal: String, reconfigureExisting: Bool = false) {
         let anchorBefore = focalCellFrameMinusOffset()
+        let alreadyShown = Set(dataSource.snapshot().itemIdentifiers)
         var snapshot = NSDiffableDataSourceSnapshot<Section, String>()
         snapshot.appendSections([.ancestors, .focal, .replies])
         snapshot.appendItems(ancestors, toSection: .ancestors)
         snapshot.appendItems([focal], toSection: .focal)
         snapshot.appendItems(displayedReplies(), toSection: .replies)
+        if reconfigureExisting {
+            snapshot.reconfigureItems(snapshot.itemIdentifiers.filter(alreadyShown.contains))
+        }
         let shouldPinFocal = didRenderFocal && !ancestors.isEmpty
         dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
             guard let self else { return }
@@ -364,18 +450,23 @@ final class ThreadViewController: UIViewController {
         return attributes.frame.minY - collectionView.contentOffset.y
     }
 
+    /// The content offset that puts the first row flush under the navigation
+    /// bar — negative by the top inset, so clamping to 0 would shove content up.
+    private var topOffset: CGFloat { -collectionView.adjustedContentInset.top }
+
     private func pinFocal(toScreenY screenY: CGFloat) {
         guard let focalID, let indexPath = dataSource.indexPath(for: focalID),
               let attributes = collectionView.layoutAttributesForItem(at: indexPath) else { return }
         let target = attributes.frame.minY - screenY
-        collectionView.setContentOffset(CGPoint(x: 0, y: max(0, target)), animated: false)
+        collectionView.setContentOffset(CGPoint(x: 0, y: max(topOffset, target)), animated: false)
     }
 
     private func loadMore() {
-        guard !loadingMore, !exhausted, let cursor else { return }
+        guard !loadingMore, !exhausted, repliesFailure == nil, threadLoaded, let cursor else { return }
         loadingMore = true
+        updateFooter()
         Task {
-            defer { loadingMore = false }
+            defer { loadingMore = false; updateFooter() }
             do {
                 let page = try await AppEnvironment.shared.api.thread(id: tweetID, cursor: cursor)
                 var added = false
@@ -397,6 +488,8 @@ final class ThreadViewController: UIViewController {
                 if let anchor { restoreAnchor(anchor) }
             } catch {
                 AppLogger.shared.warn("thread loadMore failed: \(error)", category: .thread)
+                repliesFailure = "Couldn't load more replies"
+                failedLoadWasReload = false
             }
         }
     }
@@ -424,9 +517,9 @@ final class ThreadViewController: UIViewController {
         collectionView.layoutIfNeeded()
         guard let indexPath = dataSource.indexPath(for: anchor.id),
               let attributes = collectionView.layoutAttributesForItem(at: indexPath) else { return }
-        let maxOffset = max(0, collectionView.contentSize.height
+        let maxOffset = max(topOffset, collectionView.contentSize.height
             - collectionView.bounds.height + collectionView.adjustedContentInset.bottom)
-        let target = min(max(0, attributes.frame.minY - anchor.screenY), maxOffset)
+        let target = min(max(topOffset, attributes.frame.minY - anchor.screenY), maxOffset)
         collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: false)
     }
 
@@ -440,21 +533,19 @@ final class ThreadViewController: UIViewController {
         present(UINavigationController(rootViewController: compose), animated: true)
     }
 
-    private func quote(_ tweet: Tweet) {
+    func presentQuote(_ tweet: Tweet) {
         let compose = ComposeViewController(mode: .quote(of: tweet))
         present(UINavigationController(rootViewController: compose), animated: true)
     }
 
-    private func share(_ tweet: Tweet) {
-        let items: [Any] = [URL(string: tweet.url) ?? FeedViewController.fixupxURL(tweet)]
-        let activity = UIActivityViewController(activityItems: items, applicationActivities: nil)
-        activity.popoverPresentationController?.sourceView = view
-        present(activity, animated: true)
+    func tweetCell(for tweet: Tweet) -> TweetCell? {
+        guard let indexPath = dataSource.indexPath(for: tweet.restID) else { return nil }
+        return collectionView.cellForItem(at: indexPath) as? TweetCell
     }
 
     /// Opens tapped media full-screen — a zoomable gallery for photos, the native
     /// player for video/GIF — rather than re-navigating into the thread.
-    private func openMedia(_ tweet: Tweet) {
+    private func openMedia(_ tweet: Tweet, at tappedIndex: Int) {
         if let video = tweet.media.enumerated().first(where: { $0.element.isVideo }) {
             let url = video.element.videoURL.flatMap(URL.init)
                 ?? AppEnvironment.shared.api.mediaURL(tweetID: tweet.restID, index: video.offset)
@@ -472,11 +563,12 @@ final class ThreadViewController: UIViewController {
             if tweet.restID != focalID { push(ThreadViewController(tweet: tweet)) }
             return
         }
-        present(MediaViewerViewController(tweetID: tweet.restID, photoMediaIndices: photoIndices, startIndex: 0), animated: true)
+        let start = min(max(0, tappedIndex), photoIndices.count - 1)
+        present(MediaViewerViewController(tweetID: tweet.restID, photoMediaIndices: photoIndices, startIndex: start), animated: true)
     }
 
-    private func toggleLike(_ tweet: Tweet, cell: TweetCell?) {
-        let target = !tweet.favorited
+    func toggleLike(_ tweet: Tweet, cell: TweetCell?) {
+        let target = !(cell?.isLiked ?? tweet.favorited)
         cell?.applyLike(favorited: target, count: max(0, tweet.likeCount + (target ? 1 : -1)))
         Task {
             do {
@@ -485,15 +577,15 @@ final class ThreadViewController: UIViewController {
                     : try await AppEnvironment.shared.api.unlike(tweetID: tweet.restID)
                 confirmLike(id: tweet.restID, favorited: target)
             } catch {
-                cell?.applyLike(favorited: tweet.favorited, count: tweet.likeCount)
+                cell?.applyLike(favorited: !target, count: tweet.likeCount)
                 Haptics.error()
             }
         }
     }
 
     /// Optimistic repost toggle, same contract as `toggleLike`.
-    private func toggleRetweet(_ tweet: Tweet, cell: TweetCell?) {
-        let target = !tweet.retweeted
+    func toggleRetweet(_ tweet: Tweet, cell: TweetCell?) {
+        let target = !(cell?.isRetweeted ?? tweet.retweeted)
         cell?.applyRetweet(retweeted: target, count: max(0, tweet.retweetCount + (target ? 1 : -1)))
         Task {
             do {
@@ -502,15 +594,15 @@ final class ThreadViewController: UIViewController {
                     : try await EngageService.engage.unretweet(tweetID: tweet.restID)
                 confirmEngagement(id: tweet.restID) { $0.togglingRetweet(to: target) }
             } catch {
-                cell?.applyRetweet(retweeted: tweet.retweeted, count: tweet.retweetCount)
+                cell?.applyRetweet(retweeted: !target, count: tweet.retweetCount)
                 Haptics.error()
             }
         }
     }
 
     /// Optimistic bookmark toggle, same contract as `toggleLike`.
-    private func toggleBookmark(_ tweet: Tweet, cell: TweetCell?) {
-        let target = !tweet.bookmarked
+    func toggleBookmark(_ tweet: Tweet, cell: TweetCell?) {
+        let target = !(cell?.isBookmarked ?? tweet.bookmarked)
         cell?.applyBookmark(bookmarked: target, count: max(0, tweet.bookmarkCount + (target ? 1 : -1)))
         Task {
             do {
@@ -519,7 +611,7 @@ final class ThreadViewController: UIViewController {
                     : try await EngageService.engage.unbookmark(tweetID: tweet.restID)
                 confirmEngagement(id: tweet.restID) { $0.togglingBookmark(to: target) }
             } catch {
-                cell?.applyBookmark(bookmarked: tweet.bookmarked, count: tweet.bookmarkCount)
+                cell?.applyBookmark(bookmarked: !target, count: tweet.bookmarkCount)
                 Haptics.error()
             }
         }
@@ -649,22 +741,8 @@ extension ThreadViewController: UICollectionViewDelegate {
 
     func collectionView(_ collectionView: UICollectionView, contextMenuConfigurationForItemAt indexPath: IndexPath, point: CGPoint) -> UIContextMenuConfiguration? {
         guard let id = dataSource.itemIdentifier(for: indexPath), let tweet = tweetsByID[id] else { return nil }
-        return UIContextMenuConfiguration(identifier: id as NSString, previewProvider: nil) { _ in
-            UIMenu(children: [
-                self.askMenu(for: tweet),
-                UIAction(title: "Liked by", image: DesignSystem.icon("heart.text.square")) { [weak self] _ in
-                    self?.push(LikersViewController(tweetID: tweet.restID))
-                },
-                UIAction(title: "Postcard…", image: DesignSystem.icon("photo.badge.plus")) { [weak self] _ in
-                    self?.present(UINavigationController(rootViewController: PostcardViewController(tweet: tweet)), animated: true)
-                },
-                UIAction(title: "Copy embed link", image: DesignSystem.icon("link.badge.plus")) { _ in
-                    UIPasteboard.general.string = FeedViewController.fixupxURL(tweet)
-                },
-                UIAction(title: "Open in X", image: DesignSystem.icon("safari")) { _ in
-                    if let url = URL(string: tweet.url) { UIApplication.shared.open(url) }
-                },
-            ])
+        return UIContextMenuConfiguration(identifier: id as NSString, previewProvider: nil) { [weak self] _ in
+            self?.tweetContextMenu(tweet)
         }
     }
 }

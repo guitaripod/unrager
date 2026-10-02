@@ -7,7 +7,7 @@ import UnragerKit
 /// `Tweet.ID`, prefetching, pull-to-refresh and infinite scroll. Home, Search,
 /// profile timelines, bookmarks and mentions all reuse it by swapping the
 /// view model's `Source`.
-class FeedViewController: UIViewController {
+class FeedViewController: UIViewController, TweetActionHandling {
     let viewModel: TimelineViewModel
     private(set) var collectionView: UICollectionView!
     private var dataSource: UICollectionViewDiffableDataSource<Int, String>!
@@ -153,85 +153,16 @@ class FeedViewController: UIViewController {
         }
     }
 
-    func tweetContextMenu(_ tweet: Tweet) -> UIMenu {
+    func askMenu(for tweet: Tweet) -> UIMenu {
         let api = AppEnvironment.shared.api
-        let ask = UIMenu(title: "Ask", image: DesignSystem.icon("sparkles"), children: AskPreset.allCases.map { preset in
+        return UIMenu(title: "Ask", image: DesignSystem.icon("sparkles"), children: AskPreset.allCases.map { preset in
             UIAction(title: preset.title) { [weak self] _ in
                 self?.presentStream(title: preset.title) { api.askStream(tweetID: tweet.restID, preset: preset) }
             }
         })
-        let translate = UIAction(title: "Translate", image: DesignSystem.icon("character.bubble")) { [weak self] _ in
-            self?.presentStream(title: "Translation") { api.translateStream(tweetID: tweet.restID) }
-        }
-        let brief = UIAction(title: "Brief author", image: DesignSystem.icon("person.text.rectangle")) { [weak self] _ in
-            self?.presentStream(title: "Brief · @\(tweet.author.handle)") {
-                api.briefStream(handle: tweet.author.handle)
-            }
-        }
-        let like = UIAction(title: tweet.favorited ? "Unlike" : "Like",
-                            image: DesignSystem.icon(tweet.favorited ? "heart.slash" : "heart")) { [weak self] _ in
-            self?.toggleLike(tweet, cell: self?.cell(for: tweet))
-        }
-        let repost = UIAction(title: tweet.retweeted ? "Undo repost" : "Repost",
-                              image: DesignSystem.icon("arrow.2.squarepath"),
-                              attributes: tweet.retweeted ? [.destructive] : []) { [weak self] _ in
-            self?.toggleRetweet(tweet, cell: self?.cell(for: tweet))
-        }
-        let quote = UIAction(title: "Quote", image: DesignSystem.icon("quote.bubble")) { [weak self] _ in
-            self?.presentQuote(tweet)
-        }
-        let bookmark = UIAction(title: tweet.bookmarked ? "Remove bookmark" : "Bookmark",
-                                image: DesignSystem.icon(tweet.bookmarked ? "bookmark.slash" : "bookmark")) { [weak self] _ in
-            self?.toggleBookmark(tweet, cell: self?.cell(for: tweet))
-        }
-        let likers = UIAction(title: "Liked by", image: DesignSystem.icon("heart.text.square")) { [weak self] _ in
-            self?.navigationController?.pushViewController(LikersViewController(tweetID: tweet.restID), animated: true)
-        }
-        let share = UIAction(title: "Share…", image: DesignSystem.icon("square.and.arrow.up")) { [weak self] _ in
-            self?.shareTweet(tweet)
-        }
-        let screenshot = UIAction(title: "Postcard…", image: DesignSystem.icon("photo.badge.plus")) { [weak self] _ in
-            self?.presentPostcard(tweet)
-        }
-        let saveMedia = saveMediaMenu(tweet)
-        let open = UIAction(title: "Open in X", image: DesignSystem.icon("safari")) { _ in
-            if let url = URL(string: tweet.url) { UIApplication.shared.open(url) }
-        }
-        let copy = UIAction(title: "Copy link", image: DesignSystem.icon("link")) { _ in
-            UIPasteboard.general.string = tweet.url
-        }
-        let copyEmbed = UIAction(title: "Copy embed link", image: DesignSystem.icon("link.badge.plus")) { _ in
-            UIPasteboard.general.string = Self.fixupxURL(tweet)
-        }
-        var topLevel: [UIMenuElement] = [ask, brief, translate]
-        var engagement: [UIMenuElement] = [like, repost, quote, bookmark]
-        if isOwnTweet(tweet) { engagement.append(likers) }
-        topLevel.append(UIMenu(options: .displayInline, children: engagement))
-        if let saveMedia { topLevel.append(saveMedia) }
-        topLevel.append(UIMenu(options: .displayInline, children: [share, screenshot, open, copy, copyEmbed]))
-        return UIMenu(children: topLevel)
     }
 
-    /// "Liked by" only makes sense on your own tweets (X hides others' likers
-    /// anyway). Read synchronously from the cached identity — a cold cache right
-    /// after launch just hides it for a moment.
-    private func isOwnTweet(_ tweet: Tweet) -> Bool {
-        guard let own = AppEnvironment.shared.currentHandle else { return false }
-        return tweet.author.handle.caseInsensitiveCompare(own) == .orderedSame
-    }
-
-    /// Presents the postcard composer for `tweet`, wrapped in its own
-    /// navigation controller so it carries Cancel / Share bar buttons.
-    func presentPostcard(_ tweet: Tweet) {
-        let postcard = PostcardViewController(tweet: tweet)
-        present(UINavigationController(rootViewController: postcard), animated: true)
-    }
-
-    /// The fixupx embed-friendly URL (`https://fixupx.com/<handle>/status/<id>`)
-    /// — pastes into chats with a working preview where x.com's doesn't.
-    static func fixupxURL(_ tweet: Tweet) -> String {
-        "https://fixupx.com/\(tweet.author.handle)/status/\(tweet.restID)"
-    }
+    func tweetCell(for tweet: Tweet) -> TweetCell? { cell(for: tweet) }
 
     private func cell(for tweet: Tweet) -> TweetCell? {
         guard let index = dataSource.indexPath(for: tweet.restID) else { return nil }
@@ -264,99 +195,9 @@ class FeedViewController: UIViewController {
         }
     }
 
-    /// One Save action for a lone attachment, or a "Save media" submenu with
-    /// "Save all (N)" plus a per-item list when a tweet carries several. Each
-    /// item's `index` is its RAW `tweet.media` offset (the proxy addresses media
-    /// by that flat index, across photos and videos alike).
-    private func saveMediaMenu(_ tweet: Tweet) -> UIMenuElement? {
-        let saveable = tweet.media.enumerated().filter { _, media in
-            switch media.kind {
-            case .photo, .video, .animatedGif: return true
-            default: return false
-            }
-        }
-        guard !saveable.isEmpty else { return nil }
-        if saveable.count == 1 {
-            let (index, media) = saveable[0]
-            return saveItemAction(tweetID: tweet.restID, index: index, isVideo: media.isVideo,
-                                  title: media.isVideo ? "Save video" : "Save image")
-        }
-        let items = saveable.map { (index: $0.offset, isVideo: $0.element.isVideo) }
-        let saveAll = UIAction(title: "Save all (\(items.count))",
-                               image: DesignSystem.icon("square.and.arrow.down.on.square")) { [weak self] _ in
-            self?.saveAllMedia(tweetID: tweet.restID, items: items)
-        }
-        let perItem = saveable.enumerated().map { position, entry in
-            saveItemAction(tweetID: tweet.restID, index: entry.offset, isVideo: entry.element.isVideo,
-                           title: "\(entry.element.isVideo ? "Video" : "Image") \(position + 1)")
-        }
-        return UIMenu(title: "Save media", image: DesignSystem.icon("square.and.arrow.down"),
-                      children: [saveAll, UIMenu(options: .displayInline, children: perItem)])
-    }
-
-    private func saveItemAction(tweetID: String, index: Int, isVideo: Bool, title: String) -> UIAction {
-        UIAction(title: title, image: DesignSystem.icon(isVideo ? "arrow.down.circle" : "square.and.arrow.down")) { [weak self] _ in
-            self?.saveMedia(tweetID: tweetID, index: index, isVideo: isVideo)
-        }
-    }
-
-    private func shareTweet(_ tweet: Tweet) {
-        let items: [Any] = [URL(string: tweet.url) ?? Self.fixupxURL(tweet)]
-        let activity = UIActivityViewController(activityItems: items, applicationActivities: nil)
-        activity.popoverPresentationController?.sourceView = cell(for: tweet) ?? view
-        present(activity, animated: true)
-    }
-
-    private func saveMedia(tweetID: String, index: Int, isVideo: Bool) {
-        let url = AppEnvironment.shared.api.mediaURL(tweetID: tweetID, index: index)
-        Task {
-            do {
-                try await MediaSaver.save(from: url, isVideo: isVideo)
-                Haptics.success()
-                self.toast("Saved to Photos")
-            } catch {
-                AppLogger.shared.warn("save media failed: \(error)", category: .media)
-                self.present(AlertFactory.error(error, title: "Couldn't save"), animated: true)
-            }
-        }
-    }
-
-    /// Saves every saveable attachment sequentially — one Photos auth prompt,
-    /// no parallel proxy hammering — then reports how many landed.
-    private func saveAllMedia(tweetID: String, items: [(index: Int, isVideo: Bool)]) {
-        let api = AppEnvironment.shared.api
-        Task {
-            var saved = 0
-            for item in items {
-                do {
-                    try await MediaSaver.save(from: api.mediaURL(tweetID: tweetID, index: item.index), isVideo: item.isVideo)
-                    saved += 1
-                } catch {
-                    AppLogger.shared.warn("save-all item \(item.index) failed: \(error)", category: .media)
-                }
-            }
-            if saved == items.count {
-                Haptics.success()
-                self.toast("Saved \(saved) to Photos")
-            } else if saved > 0 {
-                Haptics.success()
-                self.toast("Saved \(saved) of \(items.count)")
-            } else {
-                Haptics.error()
-                self.toast("Couldn't save")
-            }
-        }
-    }
-
     private func presentReply(_ tweet: Tweet) {
         let compose = ComposeViewController(mode: .reply(to: tweet))
         present(UINavigationController(rootViewController: compose), animated: true)
-    }
-
-    private func toast(_ message: String) {
-        let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
-        present(alert, animated: true)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { alert.dismiss(animated: true) }
     }
 
     private func configureCollectionView() {
@@ -722,9 +563,11 @@ class FeedViewController: UIViewController {
         // animation, and restore its on-screen position so inserts/removals
         // above it don't shove the content.
         let hadItems = dataSource.snapshot().numberOfItems > 0
-        let anchor = (hadItems && !tweets.isEmpty && collectionView.contentOffset.y > 1)
+        let growsBottomOnly = hadItems && changed.isEmpty && isPureAppend(tweets)
+        let anchor = (hadItems && !tweets.isEmpty && !growsBottomOnly && collectionView.contentOffset.y > 1)
             ? scrollAnchor(in: snapshot) : nil
-        dataSource.apply(snapshot, animatingDifferences: anchor == nil && !tweets.isEmpty) { [weak self] in
+        let animated = anchor == nil && !growsBottomOnly && !tweets.isEmpty
+        dataSource.apply(snapshot, animatingDifferences: animated) { [weak self] in
             if let anchor { self?.restoreScrollAnchor(anchor) }
         }
         updateChrome()
@@ -871,7 +714,7 @@ class FeedViewController: UIViewController {
         }
     }
 
-    @objc private func pullToRefresh() { viewModel.refresh() }
+    @objc func pullToRefresh() { viewModel.refresh() }
 
     /// A dim, caption-sized pull-to-refresh title for the "Loading new tweets…"
     /// state.
@@ -960,7 +803,7 @@ class FeedViewController: UIViewController {
     /// the request, and on success write the new state back into the view model
     /// (so a second tap can unlike and reconfigures don't revert the heart);
     /// only roll the cell back if the network rejects it.
-    private func toggleLike(_ tweet: Tweet, cell: TweetCell?) {
+    func toggleLike(_ tweet: Tweet, cell: TweetCell?) {
         let target = !(cell?.isLiked ?? tweet.favorited)
         let optimisticCount = max(0, tweet.likeCount + (target ? 1 : -1))
         cell?.applyLike(favorited: target, count: optimisticCount)
@@ -981,7 +824,7 @@ class FeedViewController: UIViewController {
     /// Optimistic repost toggle, same contract as `toggleLike`: the arrows go
     /// green and the count bumps instantly, the confirmed state is written back
     /// through the view model, and the cell rolls back on a network reject.
-    private func toggleRetweet(_ tweet: Tweet, cell: TweetCell?) {
+    func toggleRetweet(_ tweet: Tweet, cell: TweetCell?) {
         let target = !(cell?.isRetweeted ?? tweet.retweeted)
         cell?.applyRetweet(retweeted: target, count: max(0, tweet.retweetCount + (target ? 1 : -1)))
         Task {
@@ -999,7 +842,7 @@ class FeedViewController: UIViewController {
     }
 
     /// Optimistic bookmark toggle, same contract as `toggleLike`.
-    private func toggleBookmark(_ tweet: Tweet, cell: TweetCell?) {
+    func toggleBookmark(_ tweet: Tweet, cell: TweetCell?) {
         let target = !(cell?.isBookmarked ?? tweet.bookmarked)
         cell?.applyBookmark(bookmarked: target, count: max(0, tweet.bookmarkCount + (target ? 1 : -1)))
         Task {
@@ -1018,7 +861,7 @@ class FeedViewController: UIViewController {
 
     /// Opens the compose screen prefilled with a quote preview of `tweet`;
     /// posting sends `quote_tweet_id`.
-    private func presentQuote(_ tweet: Tweet) {
+    func presentQuote(_ tweet: Tweet) {
         let compose = ComposeViewController(mode: .quote(of: tweet))
         present(UINavigationController(rootViewController: compose), animated: true)
     }

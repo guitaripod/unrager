@@ -6,6 +6,7 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **Photos, clips and link covers are never cropped in the iPhone app.** A phone portrait (3:4) used to lose a few percent at its edges, and a link cover, a very wide or very tall image, or one the server mis-measured was cut to fit. Every picture is now drawn whole: a lone one gets a frame of its own shape from 3:4 up to a 3:1 panorama, and anything beyond that sits over a frosted copy of itself instead of black bars (also in galleries of two to four, in quoted posts and in link and YouTube cards). Photos with a description wear an ALT badge, pictures dissolve in as they load, rounded media gets a hairline edge on dark pages, and nothing moves while images arrive.
 ## [0.27.0] — 2026-10-02
 
 - **`unrager setup --apps` ends by printing the address to type into the iPhone app.** With Tailscale running it prints this computer's `http://100.x.y.z:7777` (and its MagicDNS name); without it, says what to enter; and when the server listens only on this computer, warns that a phone can't reach it and gives the `--bind 0.0.0.0:7777` to use.

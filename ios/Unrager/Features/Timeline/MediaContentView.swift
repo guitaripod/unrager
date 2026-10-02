@@ -86,13 +86,13 @@ final class MediaContentView: UIView {
         case .broadcast(let broadcastID, let title, let broadcaster, let isLive):
             showCard(.init(domain: broadcaster, title: title, detail: isLive ? nil : "Broadcast",
                            coverURL: imagesEnabled ? URL(string: rich.url) : nil,
-                           isLive: isLive, isPlayable: !isLive),
+                           isLive: isLive, isPlayable: !isLive, coverRatio: MediaShape.videoCover),
                      target: URL(string: "https://x.com/i/broadcasts/\(broadcastID)"),
                      contentWidth: contentWidth, imagesEnabled: imagesEnabled)
         case .youTube(let videoID):
             showCard(.init(domain: "YouTube", title: tweet.text.isEmpty ? "Watch on YouTube" : tweet.text,
                            detail: nil, coverURL: imagesEnabled ? URL(string: rich.url) : nil,
-                           isLive: false, isPlayable: true),
+                           isLive: false, isPlayable: true, coverRatio: MediaShape.videoCover),
                      target: URL(string: "https://www.youtube.com/watch?v=\(videoID)"),
                      contentWidth: contentWidth, imagesEnabled: imagesEnabled)
         case .video, .animatedGif:
@@ -116,7 +116,12 @@ final class MediaContentView: UIView {
         case .linkCard, .article, .broadcast, .youTube:
             let width = contentWidth - 2 * DesignSystem.Spacing.l
             guard let url = URL(string: rich.url) else { return [] }
-            return [(url, MediaCardView.coverSize(contentWidth: width))]
+            let ratio: CGFloat
+            switch rich.kind {
+            case .broadcast, .youTube: ratio = MediaShape.videoCover
+            default: ratio = MediaShape.largeCover
+            }
+            return [(url, MediaCardView.coverSize(contentWidth: width, ratio: ratio))]
         case .video, .animatedGif:
             guard let url = URL(string: rich.url) else { return [] }
             return [(url, posterSize(for: rich, width: pictureWidth))]
@@ -131,7 +136,7 @@ final class MediaContentView: UIView {
 
     /// The frame an inline clip is drawn in, from its own shape.
     private static func playerFrame(for media: Media) -> MediaShape.Frame {
-        MediaShape.frame(source: media.aspectRatio, tallest: MediaShape.tallestVideo, fallback: 16.0 / 9.0)
+        MediaShape.frame(source: media.aspectRatio, fallback: 16.0 / 9.0)
     }
 
     private static func posterSize(for media: Media, width: CGFloat) -> CGSize {

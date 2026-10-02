@@ -9,7 +9,13 @@ final class AsyncImageView: UIImageView {
 
     var placeholderColor: UIColor = DesignSystem.Color.surface
 
-    /// Called with the image each time one lands, from the cache or the network.
+    /// Whether a picture that arrives from the network dissolves in instead of
+    /// popping. One that was already in memory always appears at once, so
+    /// scrolling back never flickers.
+    var fadesIn = false
+
+    /// Called with the image each time one lands, from the cache or the network,
+    /// just before it is shown, so it can set how the picture is fitted.
     var onLoad: ((UIImage) -> Void)?
 
     override init(frame: CGRect) {
@@ -54,10 +60,24 @@ final class AsyncImageView: UIImageView {
             let loaded = await ImageLoader.image(for: url, pointSize: size, scale: scale)
             guard let self, !Task.isCancelled, self.currentURL == url else { return }
             self.task = nil
+            if let loaded { self.onLoad?(loaded) }
+            self.show(loaded)
+        }
+    }
+
+    /// Puts `loaded` on screen, dissolving it in when `fadesIn` is on and the
+    /// user hasn't asked for less motion.
+    private func show(_ loaded: UIImage?) {
+        let apply = {
             self.image = loaded
             self.backgroundColor = loaded == nil ? self.placeholderColor : .clear
-            if let loaded { self.onLoad?(loaded) }
         }
+        guard fadesIn, loaded != nil, window != nil, !UIAccessibility.isReduceMotionEnabled else {
+            apply()
+            return
+        }
+        UIView.transition(with: self, duration: 0.18, options: [.transitionCrossDissolve, .allowUserInteraction],
+                          animations: apply)
     }
 
     func cancel() {

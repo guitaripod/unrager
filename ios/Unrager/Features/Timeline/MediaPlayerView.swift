@@ -5,10 +5,10 @@ import UnragerKit
 /// Inline, autoplaying video surface backed by a streamed `AVPlayer`. Streams
 /// from the server media proxy (which forwards real `video/mp4` bytes), shows
 /// the poster image until the first frame is ready, loops forever, and stays
-/// muted. The box takes the clip's own shape up to `MediaShape`'s limit, so
-/// the picture fills it with no bars. A clip taller than the box is shown whole
-/// (`.resizeAspect`) over a blurred copy of its poster rather than over black,
-/// unless it only needs a slight crop to fill. Reuse-safe: `tearDown()`
+/// muted. The box takes the clip's own shape up to `MediaShape`'s limits, so
+/// the picture fills it with no bars. A clip beyond them (or of unknown shape)
+/// is shown whole (`.resizeAspect`) over a blurred copy of its poster rather
+/// than over black, never cropped. Reuse-safe: `tearDown()`
 /// releases the player and its observers so a recycled cell never plays the
 /// previous tweet's clip.
 final class MediaPlayerView: UIView {
@@ -20,8 +20,7 @@ final class MediaPlayerView: UIView {
 
     private let host = PlayerHostView()
     private var playerLayer: AVPlayerLayer { host.playerLayer }
-    private let ambient = UIImageView()
-    private var ambientTask: Task<Void, Never>?
+    private let ambient = AmbientBackdropView(frame: .zero)
     private let poster = AsyncImageView(frame: .zero)
     private let playBadge = UIImageView()
     private let gifBadge = UILabel()
@@ -33,6 +32,7 @@ final class MediaPlayerView: UIView {
     private var displayObservation: NSKeyValueObservation?
     private nonisolated(unsafe) var loopObserver: (any NSObjectProtocol)?
     private var aspectConstraint: NSLayoutConstraint?
+    private var frameRatio: CGFloat = 16.0 / 9.0
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -41,9 +41,6 @@ final class MediaPlayerView: UIView {
         backgroundColor = .black
         setAspectRatio(16.0 / 9.0)
 
-        ambient.contentMode = .scaleAspectFill
-        ambient.clipsToBounds = true
-        ambient.isHidden = true
         ambient.translatesAutoresizingMaskIntoConstraints = false
         addManaged(ambient)
         ambient.pinEdges(to: self)
@@ -147,7 +144,8 @@ final class MediaPlayerView: UIView {
         }
         tearDown()
         applyShape(aspectRatio: aspectRatio, fills: fills)
-        poster.onLoad = fills ? nil : { [weak self] image in self?.softenBackdrop(from: image, key: posterURL) }
+        poster.fadesIn = true
+        poster.onLoad = { [weak self] image in self?.fit(to: image, key: posterURL?.absoluteString) }
         pendingVideoURL = videoURL
         self.isGIF = isGIF
         gifBadge.isHidden = !isGIF
@@ -162,10 +160,25 @@ final class MediaPlayerView: UIView {
     }
 
     private func applyShape(aspectRatio: CGFloat, fills: Bool) {
+        frameRatio = aspectRatio
         setAspectRatio(aspectRatio)
+        setFilling(fills)
+    }
+
+    /// Fills the box with the clip when it is the box's shape, and otherwise
+    /// shows it whole over the soft backdrop.
+    private func setFilling(_ fills: Bool) {
         playerLayer.videoGravity = fills ? .resizeAspectFill : .resizeAspect
         poster.contentMode = fills ? .scaleAspectFill : .scaleAspectFit
-        ambient.isHidden = fills
+        if fills { ambient.clear() }
+    }
+
+    /// Settles fill or whole from the poster itself once it lands, since its
+    /// shape is the clip's, whatever the server said before.
+    private func fit(to image: UIImage, key: String?) {
+        let fills = MediaShape.matches(image.size, in: CGSize(width: frameRatio, height: 1))
+        setFilling(fills)
+        if !fills { ambient.show(from: image, key: key ?? "poster-\(image.hash)") }
     }
 
     /// Lazily creates the player on first call (off the scroll path), loops
@@ -221,15 +234,6 @@ final class MediaPlayerView: UIView {
         playBadge.isHidden = false
     }
 
-    private func softenBackdrop(from image: UIImage, key: URL?) {
-        ambientTask?.cancel()
-        ambientTask = Task { [weak self] in
-            let soft = await SoftImage.blurred(image, key: key?.absoluteString ?? "poster-\(image.hash)")
-            guard !Task.isCancelled else { return }
-            self?.ambient.image = soft
-        }
-    }
-
     /// Drops the player, its buffered item and observers while keeping the
     /// poster and the clip's address, so an off-screen row holds no decoder
     /// and starts again from its poster when it next comes to rest on screen.
@@ -249,7 +253,7 @@ final class MediaPlayerView: UIView {
     }
 
     func tearDown() {
-        ambientTask?.cancel()
+        ambient.clear()
         releasePlayer()
         pendingVideoURL = nil
         poster.cancel()

@@ -2,14 +2,19 @@ import UIKit
 import UnragerKit
 
 /// A bordered, tap-through preview card for the non-image media kinds —
-/// link cards, articles, broadcasts and YouTube. Shows an optional cover image,
-/// a title, a context line (domain / broadcaster / preview text), and one of
-/// two overlays: a "● LIVE" pill for a live broadcast, a play glyph for
-/// YouTube. Tapping invokes `onTap` (the cell routes it to a browser open).
+/// link cards, articles, broadcasts and YouTube. Shows an optional cover image
+/// (drawn whole: a frame of the cover's usual shape, with a frosted copy of the
+/// picture filling what a differently shaped cover leaves), a title, a context
+/// line (domain / broadcaster / preview text), and one of two overlays: a
+/// "● LIVE" pill for a live broadcast, a play glyph for YouTube. Tapping invokes `onTap` (the cell routes it to a browser open).
 final class MediaCardView: UIView {
     var onTap: (() -> Void)?
 
+    private let coverBox = UIView()
+    private let backdrop = AmbientBackdropView(frame: .zero)
     private let cover = AsyncImageView(frame: .zero)
+    private var coverRatio = MediaShape.largeCover
+    private var coverKey: String?
     private let livePill = UILabel()
     private let playBadge = UIImageView()
     private let domainLabel = UILabel()
@@ -31,8 +36,16 @@ final class MediaCardView: UIView {
             view.layer.borderColor = DesignSystem.Color.separator.cgColor
         }
 
+        coverBox.clipsToBounds = true
+        backdrop.translatesAutoresizingMaskIntoConstraints = false
+        coverBox.addSubview(backdrop)
+        backdrop.pinEdges(to: coverBox)
         cover.translatesAutoresizingMaskIntoConstraints = false
         cover.contentMode = .scaleAspectFill
+        cover.fadesIn = true
+        cover.onLoad = { [weak self] image in self?.fit(to: image) }
+        coverBox.addSubview(cover)
+        cover.pinEdges(to: coverBox)
         letConstraintDriveCoverHeight()
 
         livePill.text = "● LIVE"
@@ -67,35 +80,37 @@ final class MediaCardView: UIView {
         textColumn.addArrangedSubview(titleLabel)
         textColumn.addArrangedSubview(detailLabel)
 
-        let column = UIStackView(arrangedSubviews: [cover, textColumn])
+        let column = UIStackView(arrangedSubviews: [coverBox, textColumn])
         column.axis = .vertical
         column.spacing = 0
         addManaged(column)
         column.pinEdges(to: self)
-        cover.addManaged(playBadge)
-        cover.addManaged(livePill)
+        coverBox.addManaged(playBadge)
+        coverBox.addManaged(livePill)
 
-        let height = cover.heightAnchor.constraint(equalToConstant: 160)
+        let height = coverBox.heightAnchor.constraint(equalToConstant: 160)
         height.priority = .defaultHigh
         height.isActive = true
         coverHeight = height
         NSLayoutConstraint.activate([
-            playBadge.centerXAnchor.constraint(equalTo: cover.centerXAnchor),
-            playBadge.centerYAnchor.constraint(equalTo: cover.centerYAnchor),
-            livePill.topAnchor.constraint(equalTo: cover.topAnchor, constant: 8),
-            livePill.leadingAnchor.constraint(equalTo: cover.leadingAnchor, constant: 8),
+            playBadge.centerXAnchor.constraint(equalTo: coverBox.centerXAnchor),
+            playBadge.centerYAnchor.constraint(equalTo: coverBox.centerYAnchor),
+            livePill.topAnchor.constraint(equalTo: coverBox.topAnchor, constant: 8),
+            livePill.leadingAnchor.constraint(equalTo: coverBox.leadingAnchor, constant: 8),
             livePill.widthAnchor.constraint(equalToConstant: 52),
             livePill.heightAnchor.constraint(equalToConstant: 20),
         ])
     }
 
-    /// The cover's height comes from its constraint (contentWidth * 0.52), not
-    /// from the loaded image. With default priorities the image view's intrinsic
-    /// height ties with that constraint and wins after an async or prefetched
-    /// load, over-reserving space and leaving a gap above the labels.
+    /// The cover's height comes from its constraint (the width over its ratio),
+    /// not from the loaded image. With default priorities the image view's
+    /// intrinsic height ties with that constraint and wins after an async or
+    /// prefetched load, over-reserving space and leaving a gap above the labels.
     private func letConstraintDriveCoverHeight() {
         cover.setContentHuggingPriority(.defaultLow, for: .vertical)
         cover.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        coverBox.setContentHuggingPriority(.defaultLow, for: .vertical)
+        coverBox.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
     }
 
     @available(*, unavailable)
@@ -108,11 +123,14 @@ final class MediaCardView: UIView {
         let coverURL: URL?
         let isLive: Bool
         let isPlayable: Bool
+        /// The shape cards of this kind usually have; a cover of another
+        /// shape is shown whole inside it.
+        var coverRatio: CGFloat = MediaShape.largeCover
     }
 
     /// The cover's size in a card `contentWidth` wide.
-    static func coverSize(contentWidth: CGFloat) -> CGSize {
-        CGSize(width: contentWidth, height: (contentWidth * 0.52).rounded())
+    static func coverSize(contentWidth: CGFloat, ratio: CGFloat = MediaShape.largeCover) -> CGSize {
+        CGSize(width: contentWidth, height: (contentWidth / ratio).rounded())
     }
 
     func configure(_ model: Model, contentWidth: CGFloat, imagesEnabled: Bool) {
@@ -125,14 +143,17 @@ final class MediaCardView: UIView {
         livePill.isHidden = !model.isLive
         playBadge.isHidden = !model.isPlayable
 
+        coverRatio = model.coverRatio
         if imagesEnabled, let url = model.coverURL {
-            cover.isHidden = false
-            let size = Self.coverSize(contentWidth: contentWidth)
+            coverBox.isHidden = false
+            let size = Self.coverSize(contentWidth: contentWidth, ratio: model.coverRatio)
             coverHeight?.constant = size.height
+            coverKey = url.absoluteString
             cover.load(url: url, targetSize: size)
         } else {
-            cover.isHidden = true
+            coverBox.isHidden = true
             cover.cancel()
+            backdrop.clear()
         }
 
         isAccessibilityElement = true
@@ -143,7 +164,20 @@ final class MediaCardView: UIView {
 
     func prepareForReuse() {
         cover.cancel()
+        backdrop.clear()
         onTap = nil
+    }
+
+    /// Fills the cover's frame with the picture when it is that shape, and
+    /// otherwise shows it whole over a frosted copy of itself.
+    private func fit(to image: UIImage) {
+        let fills = MediaShape.matches(image.size, in: CGSize(width: coverRatio, height: 1))
+        cover.contentMode = fills ? .scaleAspectFill : .scaleAspectFit
+        if fills {
+            backdrop.clear()
+        } else if let url = coverKey {
+            backdrop.show(from: image, key: url)
+        }
     }
 
     @objc private func tapped() { onTap?() }

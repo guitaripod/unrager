@@ -77,6 +77,8 @@ The iPhone app talks to a full `unrager serve` (not `--filter-only`: `unrager se
 
 Build/run: `cd ios && xcodegen generate && xcodebuild -scheme Unrager -destination 'generic/platform=iOS Simulator' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build`, then `xcrun simctl install booted …`. Screenshot QA via `xcrun simctl io <udid> screenshot` driving the `UNRAGER_SCREEN` router. **Not App Store apps** (uses the user's X session) — sideload: `ios/scripts/provision.py` mints an ad-hoc profile (Midgar dist cert + device UDID via the ASC API), `ios/scripts/install-device.sh` builds + ad-hoc-signs + installs via `devicectl`. The iPhone Air's UDID is `00008150-00096C392208401C`; the Mac's Tailscale addr is `100.127.250.64` / `macbook.taila1a09.ts.net`.
 
+Screenshots and screen recordings of the app (QA shots, README and landing-page images, release videos) are framed with the `frames` CLI, the default tool for device bezels: use the `frames-cli` skill (`frames --json info <file>` first, `frames <file>` for images, `frames video <file>` for recordings), never hand-built bezels or ImageMagick compositing.
+
 When changing the server's `/api/*` contract, update the matching `UnragerKit` model/`APIClient` and the decoding tests in `UnragerKit/Tests/`.
 
 ## Browser extension
@@ -226,6 +228,8 @@ Integration tests for App state transitions use `tui/test_util.rs` which provide
 ## Demos
 
 The public landing page is https://midgarcorp.cc/unrager/, built from the midgarcorp site repo (`~/Dev/web/midgarcorp`, `src/pages/unrager.astro` and `src/components/landing/Unrager*.astro`; it deploys on push to that repo's master). `site/` here deploys unrager.com, which serves `install.sh`, the download badge and counts (`/api/*`) and an older copy of the landing page; product changes a visitor would notice belong on the midgarcorp page.
+
+Device-framed images of the iPhone app go through `frames` (see the iPhone app section); the README images below are the exception because they are rendered from the landing page's mocks.
 
 README images (`assets/extension.png`, `popup.png`, `terminal.png`) are rendered from the landing page's mocks, with mocked posts rather than real accounts: `python3 site/og/assets.py` (Playwright). `site/og/render.py` renders the Open Graph card from `site/og/template.html`; the deploy workflow reruns it.
 

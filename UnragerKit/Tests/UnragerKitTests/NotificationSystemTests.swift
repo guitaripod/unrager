@@ -327,6 +327,29 @@ struct NotificationPollerTests {
     }
 
     @MainActor
+    @Test("Reading a notification by id and time, as a tapped banner does, clears it from the unread count")
+    func markSeenByIDAndTime() async {
+        await withCleanMarker {
+            let transport = StubTransport(notificationBodies: [
+                page([("n1", "2026-07-01T10:00:00Z")]),
+                page([("n2", "2026-07-01T11:00:00Z"), ("n1", "2026-07-01T10:00:00Z")]),
+            ])
+            let api = APIClient(transport: transport, baseURL: { URL(string: "http://test:7777")! })
+            let poller = NotificationPoller(api: api)
+            var unreadCounts: [Int] = []
+            poller.onUnreadCount = { unreadCounts.append($0) }
+
+            #expect(await poller.poll())
+            #expect(await poller.poll())
+            #expect(unreadCounts == [0, 1])
+
+            poller.markSeen(timestamp: Date(timeIntervalSince1970: 1_782_903_600), id: "n2")
+            #expect(unreadCounts == [0, 1, 0])
+            #expect(NotificationPrefs.lastSeenID == "n2")
+        }
+    }
+
+    @MainActor
     @Test("An item the seen marker already covers is not reported as new")
     func alreadyReadItemsAreNotNews() async {
         await withCleanMarker {

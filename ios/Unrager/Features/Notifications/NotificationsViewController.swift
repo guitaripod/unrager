@@ -424,10 +424,11 @@ final class NotificationsViewController: UIViewController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         let service = NotificationCenterService.shared
+        let unseenActivity = service.hasUnreadActivity
         service.setViewingNotifications(true)
         service.onVisibleFresh = { [weak self] fresh in self?.mergeFresh(fresh) }
         service.onResumeWhileVisible = { [weak self] in self?.refreshIfStale(after: 0) }
-        refreshIfStale(after: Self.staleAfter)
+        refreshIfStale(after: unseenActivity ? 0 : Self.staleAfter)
         startClock()
     }
 
@@ -449,7 +450,9 @@ final class NotificationsViewController: UIViewController {
     /// Reloads the list when it has never loaded or is older than `age`
     /// seconds. Coming back from a thread or another tab within that window
     /// keeps the loaded pages and the scroll position; the live poller keeps the
-    /// top current meanwhile.
+    /// top current meanwhile. Activity that lit the badge while the list was
+    /// away is not in it, so `viewDidAppear` passes 0 then: the list has to
+    /// show those rows for the seen marker to move past them.
     private func refreshIfStale(after age: TimeInterval) {
         guard filter == .all, !loading else { return }
         if let lastLoaded, Date().timeIntervalSince(lastLoaded) < age { return }

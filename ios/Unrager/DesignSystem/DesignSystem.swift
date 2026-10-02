@@ -40,6 +40,10 @@ enum DesignSystem {
         static var quote: UIColor { UIColor(red: 0.471, green: 0.353, blue: 0.961, alpha: 1) }
         static var verified: UIColor { accent }
         static var live: UIColor { .systemRed }
+        /// The unread count on the Notifications tab: a calm blue that holds
+        /// white digits at 4.5:1 in light and dark mode, where the system's
+        /// default is an alarm red.
+        static var badge: UIColor { UIColor(red: 0.05, green: 0.47, blue: 0.80, alpha: 1) }
         /// In-body hashtag tint — matches the accent so `#tag` reads as a link.
         static var hashtag: UIColor { accent }
     }

@@ -157,8 +157,13 @@ public final class NotificationPoller {
     /// the "tapping a row reads it" action — then pushes the marker and
     /// reports the recomputed unread count from the last fetched page.
     public func markSeen(_ notification: XNotification) {
-        guard NotificationPrefs.markSeen(timestamp: notification.timestamp, id: notification.id)
-        else { return }
+        markSeen(timestamp: notification.timestamp, id: notification.id)
+    }
+
+    /// `markSeen(_:)` for a notification known only by its id and time, such as
+    /// the one a tapped banner carried.
+    public func markSeen(timestamp: Date, id: String) {
+        guard NotificationPrefs.markSeen(timestamp: timestamp, id: id) else { return }
         pushSeenMarker()
         onUnreadCount?(NotificationPrefs.unreadCount(in: lastPage))
     }

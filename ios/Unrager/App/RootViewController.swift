@@ -100,6 +100,7 @@ final class RootViewController: UITabBarController {
         guard let index = notificationsTabIndex,
               let item = (viewControllers?[index] as? UINavigationController)?.tabBarItem
                 ?? viewControllers?[index].tabBarItem else { return }
+        item.badgeColor = DesignSystem.Color.badge
         item.badgeValue = value
         tabBarMinimizeBehavior = value == nil ? .onScrollDown : .never
     }
@@ -127,6 +128,7 @@ final class RootViewController: UITabBarController {
             showNotificationsTab()
             return
         }
+        NotificationCenterService.shared.markSeen(notif)
         if let tweetID = notif.targetTweetID {
             openInNotificationsStack(ThreadViewController(tweetID: tweetID))
         } else if let handle = notif.actors.first?.handle {

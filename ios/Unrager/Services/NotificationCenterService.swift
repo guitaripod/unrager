@@ -159,6 +159,7 @@ final class NotificationCenterService: NSObject {
         if NotificationPrefs.markSeen(in: notifications) {
             poller.pushSeenMarker()
         }
+        unreadCount = NotificationPrefs.unreadCount(in: poller.lastPage)
         clearDeliveredState()
     }
 
@@ -178,6 +179,11 @@ final class NotificationCenterService: NSObject {
     func markSeen(_ notification: XNotification) {
         poller.markSeen(notification)
     }
+
+    /// Whether the badge is lit: activity arrived that the list hasn't shown.
+    /// The list reads it as it comes forward, before the badge is pinned to
+    /// zero, to know it must reload instead of trusting a recent load.
+    var hasUnreadActivity: Bool { unreadCount > 0 }
 
     private func clearDeliveredState() {
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
@@ -297,8 +303,11 @@ final class NotificationCenterService: NSObject {
         }
     }
 
-    private func userInfo(for notif: XNotification) -> [String: String] {
-        var info: [String: String] = ["kind": "single"]
+    private func userInfo(for notif: XNotification) -> [String: Any] {
+        var info: [String: Any] = [
+            "kind": "single", "notificationID": notif.id,
+            "timestamp": notif.timestamp.timeIntervalSince1970,
+        ]
         if let tweetID = notif.targetTweetID {
             info["tweetID"] = tweetID
         } else if let handle = notif.actors.first?.handle {
@@ -350,13 +359,14 @@ final class NotificationCenterService: NSObject {
     private struct BannerRoute {
         let tweetID: String?
         let handle: String?
+        let read: (id: String, timestamp: Date)?
     }
 
     /// Routes a tapped banner: a thread or profile when the banner carried one,
     /// else (summary banners, actor-less types) the Notifications tab. Buffered
     /// until `attach(to:)` when the tap arrives during cold launch.
-    private func handleTap(tweetID: String?, handle: String?) {
-        let target = BannerRoute(tweetID: tweetID, handle: handle)
+    private func handleTap(tweetID: String?, handle: String?, read: (id: String, timestamp: Date)?) {
+        let target = BannerRoute(tweetID: tweetID, handle: handle, read: read)
         guard root != nil else {
             pendingTap = target
             return
@@ -366,6 +376,7 @@ final class NotificationCenterService: NSObject {
 
     private func route(_ target: BannerRoute) {
         guard let root else { return }
+        if let read = target.read { poller.markSeen(timestamp: read.timestamp, id: read.id) }
         if let tweetID = target.tweetID {
             root.openInNotificationsStack(ThreadViewController(tweetID: tweetID))
         } else if let handle = target.handle {
@@ -441,6 +452,9 @@ extension NotificationCenterService: UNUserNotificationCenterDelegate {
         let userInfo = response.notification.request.content.userInfo
         let tweetID = userInfo["tweetID"] as? String
         let handle = userInfo["handle"] as? String
-        await MainActor.run { self.handleTap(tweetID: tweetID, handle: handle) }
+        let read = (userInfo["notificationID"] as? String).flatMap { id in
+            (userInfo["timestamp"] as? Double).map { (id: id, timestamp: Date(timeIntervalSince1970: $0)) }
+        }
+        await MainActor.run { self.handleTap(tweetID: tweetID, handle: handle, read: read) }
     }
 }

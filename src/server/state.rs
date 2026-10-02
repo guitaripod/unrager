@@ -203,7 +203,8 @@ impl AppState {
         Ok(tweet)
     }
 
-    /// An account by handle, fresh from X, remembering its id for
+    /// An account by handle with its profile fields, fresh from X,
+    /// remembering its id for
     /// [`user_id`](Self::user_id).
     pub async fn user(&self, handle: &str) -> Result<User> {
         let response = self
@@ -334,7 +335,7 @@ fn user_from_response(response: &Value, handle: &str) -> Result<User> {
             reason: unavailable_reason(&said, "unavailable").into(),
         });
     }
-    parse_user::parse_user_result(node)
+    parse_user::parse_profile_result(node)
         .ok_or_else(|| Error::GraphqlShape(format!("@{handle} missing required user fields")))
 }
 

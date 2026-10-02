@@ -1986,6 +1986,13 @@ mod tests {
                 avatar_url: None,
                 followed_by_me: None,
                 banner_url: None,
+                description: None,
+                location: None,
+                website: None,
+                joined_at: None,
+                protected: false,
+                muting: None,
+                blocking: None,
             },
             created_at: Utc::now(),
             text: text.into(),
@@ -2005,6 +2012,7 @@ mod tests {
             media: Vec::<Media>::new(),
             url: "https://x.com/alice/status/1".into(),
             urls: Vec::new(),
+            retweeted_by: None,
         }
     }
 

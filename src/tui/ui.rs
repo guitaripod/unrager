@@ -2504,6 +2504,16 @@ const GLYPH_LINK: &str = "🔗";
 const GLYPH_POLL: &str = "▥";
 const GLYPH_BROADCAST: &str = "◉";
 
+/// The line under a repost's header naming who reposted it, indented like
+/// the body so it reads as part of the post.
+fn repost_line(reposter: &crate::model::User, avatars_on: bool, style: Style) -> Line<'static> {
+    let indent = if avatars_on { "" } else { "  " };
+    Line::from(Span::styled(
+        format!("{indent}↻ reposted by @{}", reposter.handle),
+        style,
+    ))
+}
+
 pub(super) fn tweet_lines(
     t: &Tweet,
     ctx: &RenderContext,
@@ -2617,6 +2627,13 @@ pub(super) fn tweet_lines(
     }
 
     let mut lines: Vec<Line<'static>> = vec![Line::from(header)];
+    if let Some(reposter) = &t.retweeted_by {
+        lines.push(repost_line(
+            reposter,
+            avatars_on,
+            Style::default().fg(theme_guard.text_muted),
+        ));
+    }
 
     let body_base_style = if seen {
         Style::default().fg(theme_guard.text_dim)

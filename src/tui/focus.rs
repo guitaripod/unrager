@@ -449,6 +449,7 @@ pub async fn fetch_thread_recursive(
         next_cursor: None,
         top_cursor: None,
         profile_user: None,
+        pinned: None,
     })
 }
 

@@ -23,13 +23,11 @@ final class RootViewController: UITabBarController {
             self, selector: #selector(serverChanged), name: AppSettings.serverURLDidChange, object: nil)
     }
 
-    /// A new server is a new account and a new filter setting: forget what the
-    /// old one said and ask the new one, and drop timelines saved from the old.
+    /// A new server has its own filter setting: ask it, and drop timelines
+    /// saved from the old one.
     @objc private func serverChanged() {
-        AppEnvironment.shared.forgetWhoami()
         TimelineCache.shared.clearAll()
         SessionSync.restore()
-        NotificationCenterService.shared.serverChanged()
     }
 
     /// Rebuilds the tab bar from `ClientSettings.tabs`, keeping the stack of

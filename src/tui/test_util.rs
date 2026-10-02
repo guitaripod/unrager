@@ -165,5 +165,6 @@ pub fn make_page(tweets: Vec<Tweet>) -> TimelinePage {
         next_cursor: None,
         top_cursor: None,
         profile_user: None,
+        pinned: None,
     }
 }

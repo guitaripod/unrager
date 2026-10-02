@@ -65,6 +65,10 @@ impl AboutView {
 pub struct TimelinePage {
     pub tweets: Vec<Tweet>,
     pub cursor: Option<String>,
+    /// A profile's pinned post, on the first page of a user timeline only;
+    /// it is never also in `tweets`. Omitted everywhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned: Option<Tweet>,
 }
 
 /// Freshness of one materialized Home variant, reported by `GET /api/feed/status`
@@ -644,6 +648,14 @@ mod tests {
         assert_eq!(v["protected"], json!(true));
         assert_eq!(v["muting"], json!(false));
         assert_eq!(v["blocking"], json!(true));
+    }
+
+    #[test]
+    fn timeline_page_carries_pinned_only_when_there_is_one() {
+        let page: TimelinePage = serde_json::from_str(r#"{"tweets":[],"cursor":null}"#).unwrap();
+        assert!(page.pinned.is_none());
+        let v = serde_json::to_value(&page).unwrap();
+        assert!(v.get("pinned").is_none());
     }
 
     #[test]

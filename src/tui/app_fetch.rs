@@ -144,6 +144,7 @@ impl App {
             next_cursor: page.next_cursor,
             top_cursor: None,
             profile_user: None,
+            pinned: None,
         };
         tracing::info!(
             ?kind,

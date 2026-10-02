@@ -230,5 +230,6 @@ pub fn page() -> TimelinePage {
         next_cursor: None,
         top_cursor: None,
         profile_user: None,
+        pinned: None,
     }
 }

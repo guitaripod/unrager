@@ -29,6 +29,9 @@ pub struct TimelinePage {
     pub next_cursor: Option<String>,
     pub top_cursor: Option<String>,
     pub profile_user: Option<crate::model::User>,
+    /// The profile's pinned post (X's `TimelinePinEntry`), kept out of
+    /// `tweets` so it never reads as the newest post.
+    pub pinned: Option<Tweet>,
 }
 
 pub fn walk(instructions: &[Value]) -> TimelinePage {
@@ -52,9 +55,16 @@ pub fn walk(instructions: &[Value]) -> TimelinePage {
                     }
                 }
             }
-            "TimelineReplaceEntry" | "TimelinePinEntry" => {
+            "TimelineReplaceEntry" => {
                 if let Some(entry) = instr.get("entry") {
                     collect_from_entry(entry, &mut page);
+                }
+            }
+            "TimelinePinEntry" => {
+                if let Some(ic) = instr.pointer("/entry/content/itemContent") {
+                    let mut pinned = Vec::new();
+                    collect_tweet_from_item_content(ic, &mut pinned);
+                    page.pinned = pinned.into_iter().next();
                 }
             }
             _ => {}
@@ -318,14 +328,30 @@ mod tests {
     }
 
     #[test]
-    fn walk_pin_entry() {
-        let instructions = vec![json!({
-            "type": "TimelinePinEntry",
-            "entry": tweet_entry("tweet-1", "4001", "pinned")
-        })];
+    fn walk_pin_entry_is_kept_apart_from_the_posts() {
+        let instructions = vec![
+            json!({
+                "type": "TimelinePinEntry",
+                "entry": tweet_entry("tweet-4001", "4001", "pinned")
+            }),
+            json!({
+                "type": "TimelineAddEntries",
+                "entries": [tweet_entry("tweet-5001", "5001", "newest")]
+            }),
+        ];
         let page = walk(&instructions);
+        assert_eq!(page.pinned.as_ref().unwrap().text, "pinned");
         assert_eq!(page.tweets.len(), 1);
-        assert_eq!(page.tweets[0].text, "pinned");
+        assert_eq!(page.tweets[0].rest_id, "5001");
+    }
+
+    #[test]
+    fn walk_without_a_pin_entry_has_no_pinned_post() {
+        let instructions = vec![json!({
+            "type": "TimelineAddEntries",
+            "entries": [tweet_entry("tweet-1", "1001", "first")]
+        })];
+        assert!(walk(&instructions).pinned.is_none());
     }
 
     #[test]

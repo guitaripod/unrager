@@ -220,6 +220,7 @@ If the model isn't answering, X keeps working as usual: unrager fails open. A ne
 - Post text goes from the extension to unrager on your computer, and from unrager to your model. There's no account, no telemetry, and no server of ours in the loop.
 - The background server `unrager setup` installs runs in filter-only mode: it never reads your X login and never talks to X.
 - The server answers only the extension and the iPhone app. Requests from web pages are refused, so a site you visit can't use it through your browser.
+- The one optional exception is `[about] community_cache` (off by default; see [Country flags](#configuration)): with it on, `unrager serve` sends the handles of the authors on screen to the X-Posed community cache to look up their country.
 
 ## Also in the box
 
@@ -352,7 +353,20 @@ Press `n` or `:notifs` to open notifications as a detail pane without losing you
 
 ### The iPhone app
 
-The extension can't reach X's own iPhone app, so there's a native one: [`ios/`](ios/) (UIKit, iOS 26), a thin client over the API `unrager serve` exposes, with every feed, thread and profile and the same filter, ask, brief and translate. It uses your X session, so it isn't a store app; you build and sideload it yourself.
+<p align="center">
+  <img src="assets/iphone.png" alt="The unrager iPhone app, three screens with made-up posts: the For You feed with country flags and a repost, the list of hidden posts each labelled with the rule that hid it and a Show button, and an Ask answer from your own model" width="760">
+</p>
+
+The extension can't reach X's own iPhone app, so there's a native one: [`ios/`](ios/) (UIKit, iOS 26), a thin client over the API `unrager serve` exposes. It's the same idea on a phone: Home opens instantly from the server's buffer, the rage filter judges what you'd otherwise scroll past, and your own model answers when you ask. It uses your X session, so it isn't a store app; you build and sideload it yourself.
+
+- **Feeds and threads.** For you, Following, Mentions, Bookmarks and search, with photos, inline video, alt text and quoted posts. A repost shows the original with "Kit Wren reposted", a profile's pinned post comes first, links to x.com open in the app, and every author carries a country flag. Rows are one VoiceOver stop with actions and follow Dynamic Type up to the largest sizes.
+- **The filter, with receipts.** Posts the rage filter hides are listed with the rule that caught each one and a **Show** button, and the rules and strictness are editable in the app. Your own overrule outranks the model everywhere.
+- **Your model, on tap.** Ask, Brief and Translate stream from the model on your server and can be stopped, retried and read as they arrive. A post or a whole thread exports as a postcard image.
+- **Profiles.** Bio, location, website and join date, follower counts, who quoted a post, and Mute and Block. Suspended, protected and deleted accounts say so instead of failing.
+- **Notifications.** A calm unread badge, in-app toasts and optional banners (there is no push server, so banners come from the foreground poller and iOS background refresh), grouped likes and follows, and a read marker that follows you across devices.
+- **Writing.** Post, reply and quote with drafts kept, delete your own posts, like, repost and bookmark.
+
+Country flags are what X's "About this account" says, asked one author at a time. If X rate-limits that lookup, or you'd rather not wait on it, see [Country flags](#configuration).
 
 It needs the full server rather than the extension's filter-only one, reachable from your phone:
 
@@ -566,6 +580,8 @@ cargo fmt --all
 cargo clippy --all-targets -- -D warnings
 cargo test
 ```
+
+The iPhone app's Swift package has its own tests: `cd UnragerKit && swift test` (the app's own run with `xcodebuild test` in `ios/`, on macOS).
 
 The extension is plain JavaScript in [`browser/extension/`](browser/extension/); `unrager setup` embeds that folder into the binary, so load it unpacked from there while working on it.
 

@@ -22,7 +22,7 @@ final class ProfileViewController: FeedViewController {
     /// The Replies tab: a sibling feed over `/api/sources/user/{handle}/replies`,
     /// created lazily on first switch. It carries its own copy of the profile
     /// header so the header stays visible (and scrolls naturally) on both tabs.
-    private var repliesController: FeedViewController?
+    private var repliesController: ProfileRepliesFeedViewController?
     private let repliesHeader = ProfileHeaderView()
     private var showingReplies = false
 
@@ -56,6 +56,30 @@ final class ProfileViewController: FeedViewController {
         }
         installBanner()
         loadProfile()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(textSizeChanged), name: AppSettings.fontScaleDidChange, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(displayChanged), name: AppSettings.displayDidChange, object: nil)
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (self: Self, _) in
+            self.textSizeChanged()
+        }
+    }
+
+    /// A new text size (the app's or the system's) redraws the header and the
+    /// navigation title at it and re-measures both tabs' headers.
+    @objc private func textSizeChanged() {
+        for header in headers { header.applyFonts() }
+        titleLabel.font = DesignSystem.Typography.name()
+        titleLabel.sizeToFit()
+        applyHeaderState()
+        updateBanner(for: activeScrollView)
+    }
+
+    /// Images switched on or off in Settings: the banner and avatar follow.
+    @objc private func displayChanged() {
+        banner.configure(url: AppSettings.imagesEnabled ? user?.bannerURL.flatMap(URL.init) : nil,
+                         handle: handle, imagesEnabled: AppSettings.imagesEnabled)
+        applyHeaderState()
     }
 
     override func viewDidLayoutSubviews() {
@@ -157,6 +181,10 @@ final class ProfileViewController: FeedViewController {
         titleLabel.sizeToFit()
         titleLabel.alpha = 0
         navigationItem.titleView = titleLabel
+        if navigationHost !== self {
+            navigationHost.navigationItem.titleView = titleLabel
+            navigationHost.setContentScrollView(collectionView, for: .top)
+        }
         banner.onBrightnessChange = { [weak self] in self?.setNeedsStatusBarAppearanceUpdate() }
         let follow: (UIScrollView) -> Void = { [weak self] scrollView in self?.updateBanner(for: scrollView) }
         onScroll = follow
@@ -220,14 +248,40 @@ final class ProfileViewController: FeedViewController {
 
     private func setShowingReplies(_ replies: Bool) {
         guard replies != showingReplies else { return }
+        let outgoing = activeScrollView
         showingReplies = replies
         Haptics.selection()
         if replies { embedRepliesIfNeeded() }
+        alignIncomingTab(with: outgoing)
         repliesController?.view.isHidden = !replies
         collectionView.isHidden = replies
         applyHeaderState()
-        setContentScrollView(activeScrollView, for: .top)
+        navigationHost.setContentScrollView(activeScrollView, for: .top)
         updateBanner(for: activeScrollView)
+    }
+
+    /// Starts the tab being switched to where the segment control stays put:
+    /// at the same scroll while the header is still partly in view, and no
+    /// further than the header's end once it has scrolled away, so the
+    /// control doesn't jump and the new tab opens at its top.
+    private func alignIncomingTab(with outgoing: UIScrollView) {
+        let incoming = activeScrollView
+        guard incoming !== outgoing else { return }
+        incoming.layoutIfNeeded()
+        let header = headers.max { $0.bounds.height < $1.bounds.height } ?? profileHeader
+        let headerHeight = header.bounds.height
+        let inset = incoming.adjustedContentInset.top
+        let headerEnd = headerHeight - inset - header.segmentHeight
+        let target = min(outgoing.contentOffset.y, max(-inset, headerEnd))
+        incoming.setContentOffset(CGPoint(x: 0, y: target), animated: false)
+    }
+
+    /// The controller the navigation stack actually shows: this one, or the
+    /// container (the Profile tab) that embeds it. Its navigation item and
+    /// scroll edge are the ones on screen.
+    private var navigationHost: UIViewController {
+        guard let parent, !(parent is UINavigationController) else { return self }
+        return parent
     }
 
     #if DEBUG
@@ -255,8 +309,9 @@ final class ProfileViewController: FeedViewController {
     /// tweets-and-replies source, with its own header copy riding on top.
     private func embedRepliesIfNeeded() {
         guard repliesController == nil else { return }
-        let controller = FeedViewController(
+        let controller = ProfileRepliesFeedViewController(
             viewModel: TimelineViewModel(source: .user(handle: "\(handle)/replies")))
+        controller.onPullToRefresh = { [weak self] in self?.loadProfile() }
         controller.headerView = repliesHeader
         addChild(controller)
         view.addManaged(controller.view)
@@ -265,6 +320,19 @@ final class ProfileViewController: FeedViewController {
         controller.view.backgroundColor = .clear
         controller.onScroll = { [weak self] scrollView in self?.updateBanner(for: scrollView) }
         repliesController = controller
+    }
+}
+
+/// The Replies tab's feed: pulling it down refreshes the profile header too,
+/// with a spinner that reads on the banner, like the Posts tab.
+private final class ProfileRepliesFeedViewController: FeedViewController {
+    var onPullToRefresh: (() -> Void)?
+
+    override var refreshTextColor: UIColor { .white }
+
+    override func pullToRefresh() {
+        super.pullToRefresh()
+        onPullToRefresh?()
     }
 }
 
@@ -287,6 +355,7 @@ private final class ProfileHeaderView: UIView {
     private let briefButton = UIButton(configuration: .tinted())
     private let segment = UISegmentedControl(items: ["Posts", "Replies"])
     private let separator = HairlineView()
+    private let counts = UIStackView()
 
     var onBrief: (() -> Void)?
     var onFollowToggle: (() -> Void)?
@@ -309,12 +378,9 @@ private final class ProfileHeaderView: UIView {
             view.avatar.layer.borderColor = DesignSystem.Color.background.cgColor
         }
 
-        nameLabel.font = DesignSystem.Typography.title()
         nameLabel.textColor = DesignSystem.Color.label
         nameLabel.numberOfLines = 1
-        handleLabel.font = DesignSystem.Typography.handle()
         handleLabel.textColor = DesignSystem.Color.secondaryLabel
-        basedInLabel.font = DesignSystem.Typography.metric()
         basedInLabel.textColor = DesignSystem.Color.secondaryLabel
         basedInLabel.isHidden = true
 
@@ -350,8 +416,7 @@ private final class ProfileHeaderView: UIView {
         text.axis = .vertical
         text.spacing = 2
 
-        let counts = UIStackView(arrangedSubviews: [followingButton, followersButton, UIView()])
-        counts.axis = .horizontal
+        [followingButton, followersButton, UIView()].forEach(counts.addArrangedSubview)
         counts.spacing = DesignSystem.Spacing.l
 
         let actions = UIStackView(arrangedSubviews: [UIView(), followButton, briefButton])
@@ -384,6 +449,7 @@ private final class ProfileHeaderView: UIView {
         addManaged(avatar)
         NotificationCenter.default.addObserver(
             self, selector: #selector(emojiLoaded), name: TwemojiCache.imagesDidLoad, object: nil)
+        applyFonts()
         NSLayoutConstraint.activate([
             panel.topAnchor.constraint(equalTo: topAnchor, constant: Self.bannerHeight),
             panel.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -405,6 +471,19 @@ private final class ProfileHeaderView: UIView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    /// Re-resolves every font from the current text size; the caller then
+    /// redraws the user's details (`configure`, `setBasedIn`) and re-measures.
+    func applyFonts() {
+        nameLabel.font = DesignSystem.Typography.title()
+        handleLabel.font = DesignSystem.Typography.handle()
+        basedInLabel.font = DesignSystem.Typography.metric()
+        let stacked = traitCollection.preferredContentSizeCategory.isAccessibilityCategory
+        counts.axis = stacked ? .vertical : .horizontal
+        counts.alignment = stacked ? .leading : .fill
+        counts.spacing = stacked ? 0 : DesignSystem.Spacing.l
+        if let basedIn { setBasedIn(flag: basedIn.flag, country: basedIn.country) }
+    }
 
     /// Where the name ends, measured from the top of the header: the scroll
     /// distance at which it slides under the navigation bar.
@@ -437,9 +516,8 @@ private final class ProfileHeaderView: UIView {
         handleLabel.text = "@\(user.handle)"
         setCount(followingButton, count: user.following, label: "following")
         setCount(followersButton, count: user.followers, label: "followers")
-        if AppSettings.imagesEnabled, let url = user.avatarURL.flatMap(URL.init) {
-            avatar.load(url: url, targetSize: CGSize(width: Self.avatarSize, height: Self.avatarSize))
-        }
+        let url = AppSettings.imagesEnabled ? user.avatarURL.flatMap(URL.init) : nil
+        avatar.load(url: url, targetSize: CGSize(width: Self.avatarSize, height: Self.avatarSize))
     }
 
     /// The name in Twemoji art, followed by the verified seal for a verified
@@ -490,6 +568,12 @@ private final class ProfileHeaderView: UIView {
         config.baseForegroundColor = following ? DesignSystem.Color.label : .white
         followButton.configuration = config
         followButton.accessibilityLabel = following ? "Following, tap to unfollow" : "Follow"
+    }
+
+    /// The height of the Posts/Replies control and the margin under it: the
+    /// part of the header that stays visible when switching tabs.
+    var segmentHeight: CGFloat {
+        segment.bounds.height + 12
     }
 
     func setSegment(_ index: Int) {

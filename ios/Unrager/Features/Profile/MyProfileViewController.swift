@@ -4,11 +4,15 @@ import UnragerKit
 /// The signed-in user's profile as a tab root. The handle isn't known until a
 /// `whoami` round-trip resolves, so this shows a spinner, then embeds a
 /// `ProfileViewController` for the resolved handle as a child. Retries on
-/// failure via an empty-state button.
+/// failure via an empty-state button. The embedded profile drives this
+/// screen's status bar, title and scroll edge, since this is the screen the
+/// navigation stack shows.
 final class MyProfileViewController: UIViewController {
     private let loadingIndicator = UIActivityIndicatorView(style: .large)
     private let emptyState = EmptyStateView()
     private var profile: ProfileViewController?
+
+    override var childForStatusBarStyle: UIViewController? { profile }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -54,6 +58,7 @@ final class MyProfileViewController: UIViewController {
         child.view.pinEdges(to: view)
         child.didMove(toParent: self)
         profile = child
+        setNeedsStatusBarAppearanceUpdate()
         navigationItem.rightBarButtonItem = UIBarButtonItem(
             image: DesignSystem.icon("safari"),
             primaryAction: UIAction { _ in

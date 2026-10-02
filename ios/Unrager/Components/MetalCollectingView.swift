@@ -101,7 +101,7 @@ final class MetalCollectingView: UIView {
         let denom = max(1, target)
         progress = min(1, Float(collected) / Float(denom))
         renderer?.targetProgress = progress
-        caption.text = "collecting tweets… \(collected)/\(denom)"
+        caption.text = "collecting posts… \(collected)/\(denom)"
         if UIAccessibility.isReduceMotionEnabled { metalView?.setNeedsDisplay() }
     }
 

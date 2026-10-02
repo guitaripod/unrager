@@ -154,6 +154,13 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                     root.present(UINavigationController(
                         rootViewController: ComposeViewController(mode: .quote(of: tweet))), animated: false)
                 }
+            case "reply" where parts.count > 1:
+                let id = parts[1]
+                Task {
+                    guard let tweet = try? await api.tweet(id: id) else { return }
+                    root.present(UINavigationController(
+                        rootViewController: ComposeViewController(mode: .reply(to: tweet))), animated: false)
+                }
             case "brief" where parts.count > 1:
                 let handle = parts[1]
                 root.presentStream(title: "Brief · @\(handle)") { api.briefStream(handle: handle) }

@@ -37,6 +37,9 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
     private var repliesFailure: String?
     private var failedLoadWasReload = false
     private var replySort: ReplySort = .conversation
+    /// The reply the user just posted from here, to scroll to once the
+    /// reloaded thread shows it.
+    private var postedReplyID: String?
     private let emptyState = EmptyStateView()
     private let loadingIndicator = UIActivityIndicatorView(style: .medium)
 
@@ -406,12 +409,14 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
                 threadLoaded = true
                 applyThread(ancestors: ancestorOrder, focal: focal.restID, reconfigureExisting: true)
                 updateFooter()
+                DispatchQueue.main.async { [weak self] in self?.revealPostedReply() }
             } catch {
                 guard !didRenderFocal else {
                     AppLogger.shared.warn("thread load failed (focal already shown): \(error)", category: .thread)
                     repliesFailure = "Couldn't load replies"
                     failedLoadWasReload = true
                     updateFooter()
+                    revealPostedReply()
                     return
                 }
                 loadingIndicator.stopAnimating()
@@ -593,7 +598,27 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
 
     private func reply(to tweet: Tweet) {
         let compose = ComposeViewController(mode: .reply(to: tweet))
+        compose.onPosted = { [weak self] posted in
+            guard let self else { return }
+            if posted.likedReplyTarget {
+                self.confirmEngagement(id: tweet.restID) { $0.togglingLike(to: true) }
+            }
+            self.postedReplyID = posted.id
+            self.load()
+        }
         present(UINavigationController(rootViewController: compose), animated: true)
+    }
+
+    /// Scrolls to the reply the user just posted once the reloaded thread
+    /// holds it; when X hasn't surfaced it yet, says it went through instead.
+    private func revealPostedReply() {
+        guard let id = postedReplyID else { return }
+        postedReplyID = nil
+        guard let indexPath = dataSource.indexPath(for: id) else {
+            showToast("Reply posted")
+            return
+        }
+        collectionView.scrollToItem(at: indexPath, at: .centeredVertically, animated: true)
     }
 
     func presentQuote(_ tweet: Tweet) {

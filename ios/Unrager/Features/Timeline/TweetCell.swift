@@ -770,7 +770,7 @@ final class TweetCell: UICollectionViewCell {
         likeLongPress.isEnabled = false
         likeButton.addGestureRecognizer(likeLongPress)
         replyButton.addTarget(self, action: #selector(replyTapped), for: .touchUpInside)
-        replyButton.accessibilityHint = "Reply to this tweet"
+        replyButton.accessibilityHint = "Reply to this post"
         bookmarkButton.addTarget(self, action: #selector(bookmarkTapped), for: .touchUpInside)
         shareButton.addTarget(self, action: #selector(shareTapped), for: .touchUpInside)
         configureRetweetMenu()
@@ -879,7 +879,7 @@ final class TweetCell: UICollectionViewCell {
         }
         let button = UIButton(configuration: config)
         button.contentHorizontalAlignment = .leading
-        button.accessibilityHint = "Shows the full tweet text"
+        button.accessibilityHint = "Shows the full post text"
         return button
     }
 

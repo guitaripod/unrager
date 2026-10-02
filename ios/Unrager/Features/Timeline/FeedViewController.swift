@@ -244,6 +244,11 @@ class FeedViewController: UIViewController, TweetActionHandling {
 
     private func presentReply(_ tweet: Tweet) {
         let compose = ComposeViewController(mode: .reply(to: tweet))
+        compose.onPosted = { [weak self] posted in
+            guard let self else { return }
+            if posted.likedReplyTarget { self.viewModel.applyLike(id: tweet.restID, favorited: true) }
+            self.showToast("Reply posted")
+        }
         present(UINavigationController(rootViewController: compose), animated: true)
     }
 
@@ -461,7 +466,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
             .sink { [weak self] refreshing in
                 guard let self, let rc = self.collectionView.refreshControl else { return }
                 if refreshing {
-                    rc.attributedTitle = self.refreshTitle("Loading new tweets…")
+                    rc.attributedTitle = self.refreshTitle("Loading new posts…")
                 } else {
                     rc.endRefreshing()
                 }
@@ -730,7 +735,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
             hideCollecting()
             emptyState.isHidden = false
             emptyState.show(symbol: "magnifyingglass", title: "Search X",
-                            subtitle: "Find tweets, people, and topics.", showRetry: false)
+                            subtitle: "Find posts, people, and topics.", showRetry: false)
         } else if viewModel.collectingProgress.value != nil, MetalCollectingView.isSupported {
             emptyState.isHidden = true
             loadingIndicator.stopAnimating()
@@ -776,12 +781,12 @@ class FeedViewController: UIViewController, TweetActionHandling {
     }
 
     /// While collect-then-show filtering is gathering a batch, replaces the bare
-    /// spinner caption with "collecting tweets… N/25". Used only on the
+    /// spinner caption with "collecting posts… N/25". Used only on the
     /// fallback (no-Metal) path.
     private func updateCollectingLabel() {
         if let progress = viewModel.collectingProgress.value {
             collectingLabel.isHidden = false
-            collectingLabel.text = "collecting tweets… \(progress)/\(TimelineViewModel.targetSurvivors)"
+            collectingLabel.text = "collecting posts… \(progress)/\(TimelineViewModel.targetSurvivors)"
         } else {
             collectingLabel.isHidden = true
         }
@@ -813,7 +818,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
 
     @objc func pullToRefresh() { viewModel.refresh() }
 
-    /// A dim, caption-sized pull-to-refresh title for the "Loading new tweets…"
+    /// A dim, caption-sized pull-to-refresh title for the "Loading new posts…"
     /// state.
     private func refreshTitle(_ text: String) -> NSAttributedString {
         NSAttributedString(
@@ -982,7 +987,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
         guard count > 0 else { return }
         unreadButtonView.configuration?.title = count > 99 ? "99+" : "\(count)"
         unreadButtonView.accessibilityLabel = "\(count) unread, jump to next unread"
-        unreadButtonView.accessibilityHint = "Scrolls to the next unread tweet. Long-press to mark all read."
+        unreadButtonView.accessibilityHint = "Scrolls to the next unread post. Long-press to mark all read."
     }
 
     /// Shows the "jump to next unread" button only on seen-tracking feeds

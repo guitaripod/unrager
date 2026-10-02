@@ -27,6 +27,7 @@ import demo_world as dw  # noqa: E402
 
 PAGE = 8
 LATENCY = {"api": 0.0, "assets": 0.0}
+MANY = False
 STATE = {"injected": [], "seen": dw.ago(minutes=100), "filter_enabled": True, "likes": set(), "bookmarks": set(), "retweets": set(), "overrides": {},
          "deleted": set(), "muting": {"hottakeshourly"}, "blocking": set(), "replies": []}
 
@@ -225,7 +226,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"ok": True, "injected": self.inject_notification(q("type", "Reply"), q("handle", "tomasbuilds"),
                                                                                      q("text", ""), q("others"), q("tweet", "o1"))})
         if path == "/api/sources/notifications":
-            return self.send_json({"notifications": STATE["injected"] + w.notifications(), "cursor": None})
+            everything = STATE["injected"] + w.notifications() + (w.many_notifications() if MANY else [])
+            start = int(q("cursor") or 0)
+            page = everything[start:start + 20] if MANY else everything
+            more = MANY and start + 20 < len(everything)
+            return self.send_json({"notifications": page, "cursor": str(start + 20) if more else None})
         if path == "/api/notifications/seen":
             return self.send_json({"marker": STATE["seen"]})
         m = re.fullmatch(r"/api/tweet/(\d+)", path)
@@ -418,11 +423,15 @@ def main():
     parser.add_argument("--assets", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets"))
     parser.add_argument("--lab", action="store_true",
                         help="serve the media lab (python3 make_lab.py first): a feed of test charts in every aspect ratio")
+    parser.add_argument("--many-notifications", action="store_true",
+                        help="serve a long, paged notifications history, to scroll into its next pages")
     parser.add_argument("--latency", type=float, default=0.0,
                         help="seconds every timeline, profile and whoami request waits, to see the loading states")
     parser.add_argument("--asset-latency", type=float, default=0.0,
                         help="seconds every picture waits")
     args = parser.parse_args()
+    global MANY
+    MANY = args.many_notifications
     LATENCY["api"] = args.latency
     LATENCY["assets"] = args.asset_latency
     if args.lab:

@@ -66,6 +66,14 @@ final class PagingFooter {
         }
     }
 
+    private var resizePending = false
+
+    /// Redraws the visible footer for the new state and lets the list measure
+    /// it again. The re-measure is a batch update with no changes, once per
+    /// turn of the run loop: it asks only what is on screen to size itself
+    /// again. Invalidating the whole layout instead throws away the measured
+    /// height of every row, and rows that were on screen while a page loaded
+    /// were left at the estimate, squashed.
     private func refresh() {
         guard let collectionView else { return }
         for indexPath in collectionView.indexPathsForVisibleSupplementaryElements(ofKind: Self.kind) {
@@ -73,6 +81,13 @@ final class PagingFooter {
                 configure(footer)
             }
         }
-        collectionView.collectionViewLayout.invalidateLayout()
+        guard !resizePending else { return }
+        resizePending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            resizePending = false
+            guard let list = self.collectionView, list.window != nil else { return }
+            list.performBatchUpdates(nil)
+        }
     }
 }

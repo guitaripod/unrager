@@ -123,8 +123,11 @@ final class NotificationsViewController: UIViewController {
             return
         }
         showHiddenFreshNowVisible()
-        applySnapshot(animated: true)
         scrollToTop(animated: false)
+        UIView.transition(with: collectionView, duration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.2,
+                          options: [.transitionCrossDissolve, .allowUserInteraction]) {
+            self.applySnapshot(animated: false)
+        }
         if lastLoaded == nil, !loading { load(reset: true) }
         loadMoreIfSparse()
     }
@@ -687,7 +690,7 @@ final class NotificationsViewController: UIViewController {
                 if reset { reinsertLiveMerged() }
                 cursor = page.cursor
                 if page.cursor == nil || page.notifications.isEmpty { exhausted = true }
-                applySnapshot(animated: !reset || dataSource.snapshot().numberOfItems > 0)
+                applySnapshot(animated: reset && dataSource.snapshot().numberOfItems > 0)
                 if reset, view.window != nil {
                     reportDisplayed(page.notifications)
                 }
@@ -833,6 +836,26 @@ extension NotificationsViewController {
     }
 
     func debugShowMentions() { debugSelect(NotificationCategory.mentions.rawValue) }
+
+    /// Screenshot-QA hook: drags to the bottom of the list a few times, a
+    /// second apart, so later pages load while it is scrolled.
+    func debugScrollToEnd(times: Int, then raw: String? = nil) {
+        loadViewIfNeeded()
+        if let raw, let category = NotificationCategory(rawValue: raw) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3 + Double(times) * 1.2) { [weak self] in
+                self?.setCategory(category)
+            }
+        }
+        for step in 0..<times {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3 + Double(step) * 1.2) { [weak self] in
+                guard let self else { return }
+                let bottom = max(-self.collectionView.adjustedContentInset.top,
+                                 self.collectionView.contentSize.height - self.collectionView.bounds.height
+                                 + self.collectionView.adjustedContentInset.bottom)
+                self.collectionView.setContentOffset(CGPoint(x: 0, y: bottom), animated: false)
+            }
+        }
+    }
 
     func debugScroll(by points: CGFloat) {
         loadViewIfNeeded()

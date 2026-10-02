@@ -409,6 +409,29 @@ class World:
         walk(self.ids[key])
         return {"focal": focal, "ancestors": ancestors, "replies": replies, "cursor": None}
 
+    def many_notifications(self) -> list[dict]:
+        """A long run of older activity, all kinds, for scrolling into its later pages."""
+        handles = [c[0] for c in CAST if c[0] != ME]
+        kinds = ["Like", "Like", "Retweet", "Like", "Follow", "Reply", "Like", "Mention"]
+        texts = ["More like Coinbased.", "Robert knows ball", "Short one.",
+                 "I am excited about my token limits resetting. In the pre-LLM age, I used to feel like this after I had been on vacation from work for over 3 weeks. I couldn't WAIT to get back at it.",
+                 "Nice thread", "Seconded.", "Why does this keep happening? Every single time, the same thing, and nobody learns."]
+        out = []
+        for index in range(90):
+            handle = handles[index % len(handles)]
+            kind = kinds[index % len(kinds)]
+            user = self.users[handle]
+            actor = {"handle": user["handle"], "name": user["name"], "rest_id": user["rest_id"],
+                     "verified": user["verified"], "avatar_url": user["avatar_url"]}
+            item = {"id": f"old{index}", "type": kind, "actors": [actor], "target_media": [],
+                    "timestamp": ago(hours=8 + index * 3)}
+            if kind != "Follow":
+                item["target_tweet_id"] = self.ids["o1"]
+                item["target_tweet_snippet"] = texts[index % len(texts)]
+                item["target_tweet_like_count"] = (index * 7) % 40
+            out.append(item)
+        return out
+
     def notifications(self) -> list[dict]:
         def actor(handle):
             u = self.users[handle]

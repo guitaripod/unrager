@@ -31,16 +31,13 @@ class FeedViewController: UIViewController, TweetActionHandling {
         return made
     }
     private var lastErrorText: String?
-    /// A subtle "updated Nm ago" pill floated over the top of Home feeds,
-    /// surfacing the materialized buffer's freshness. It sits in a reserved
-    /// strip above the first tweet (so it never overlaps a row at rest) and is
-    /// non-interactive, so taps and scrolls pass straight through to the feed.
-    /// Hidden on non-Home feeds and while the buffer is cold.
-    private let freshnessPill = UIView()
+    /// A glass "updated Nm ago" pill in the middle of Home's navigation bar,
+    /// surfacing the materialized buffer's freshness. It drifts in and out
+    /// without taking any space, so nothing on screen ever moves, and it is
+    /// non-interactive: taps pass straight through. Hidden on non-Home feeds
+    /// and while the buffer is cold.
+    private let freshnessPill = UIVisualEffectView(effect: UIGlassEffect())
     private let freshnessLabel = UILabel()
-    /// The pill's top pin. Its constant is offset against `additionalSafeAreaInsets`
-    /// so the pill stays in the reserved top strip rather than riding the inset down.
-    private var freshnessTopConstraint: NSLayoutConstraint!
     /// Re-derives the "updated Nm ago" pill while the feed is on screen, so it
     /// climbs live instead of freezing at the value from the last load.
     private var freshnessTimer: Timer?
@@ -256,29 +253,29 @@ class FeedViewController: UIViewController, TweetActionHandling {
 
     }
 
-    /// Builds the freshness pill: a dim caption on a subtle capsule, pinned
-    /// top-centre over the feed and non-interactive. `applyFreshness` reserves a
-    /// matching top strip (`additionalSafeAreaInsets`) when it's shown, so the
-    /// first tweet clears it at rest and the pill never overlaps a row.
+    /// How far above the feed's top edge the navigation bar's controls are
+    /// centred: the pill sits between them, over nothing.
+    private static let navBarCentreInset: CGFloat = 31
+
+    /// Builds the freshness pill: a dim caption on a glass capsule, centred in
+    /// the navigation bar between its two controls and non-interactive.
     private func configureFreshness() {
         freshnessLabel.font = DesignSystem.Typography.caption()
         freshnessLabel.textColor = DesignSystem.Color.secondaryLabel
         freshnessLabel.textAlignment = .center
-        freshnessPill.backgroundColor = DesignSystem.Color.elevatedBackground
         freshnessPill.clipsToBounds = true
         freshnessPill.isUserInteractionEnabled = false
         freshnessPill.isHidden = true
-        freshnessPill.addManaged(freshnessLabel)
+        freshnessPill.alpha = 0
+        freshnessPill.contentView.addManaged(freshnessLabel)
         view.addManaged(freshnessPill)
-        freshnessTopConstraint = freshnessPill.topAnchor.constraint(
-            equalTo: view.safeAreaLayoutGuide.topAnchor, constant: DesignSystem.Spacing.xs)
         NSLayoutConstraint.activate([
             freshnessPill.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            freshnessTopConstraint,
-            freshnessLabel.topAnchor.constraint(equalTo: freshnessPill.topAnchor, constant: DesignSystem.Spacing.xxs),
-            freshnessLabel.bottomAnchor.constraint(equalTo: freshnessPill.bottomAnchor, constant: -DesignSystem.Spacing.xxs),
-            freshnessLabel.leadingAnchor.constraint(equalTo: freshnessPill.leadingAnchor, constant: DesignSystem.Spacing.m),
-            freshnessLabel.trailingAnchor.constraint(equalTo: freshnessPill.trailingAnchor, constant: -DesignSystem.Spacing.m),
+            freshnessPill.centerYAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: -Self.navBarCentreInset),
+            freshnessLabel.topAnchor.constraint(equalTo: freshnessPill.contentView.topAnchor, constant: DesignSystem.Spacing.xs),
+            freshnessLabel.bottomAnchor.constraint(equalTo: freshnessPill.contentView.bottomAnchor, constant: -DesignSystem.Spacing.xs),
+            freshnessLabel.leadingAnchor.constraint(equalTo: freshnessPill.contentView.leadingAnchor, constant: DesignSystem.Spacing.m),
+            freshnessLabel.trailingAnchor.constraint(equalTo: freshnessPill.contentView.trailingAnchor, constant: -DesignSystem.Spacing.m),
         ])
     }
 
@@ -760,15 +757,8 @@ class FeedViewController: UIViewController, TweetActionHandling {
     /// Says so when a refresh failed over posts already on screen, which would
     /// otherwise pass for live ones: the saved posts stay, with a note on top.
     private func showStaleNotice() {
-        freshnessHideWork?.cancel()
         freshnessDismissed = false
-        freshnessLabel.text = "Couldn't refresh · showing saved posts"
-        freshnessPill.isHidden = false
-        freshnessPill.alpha = 1
-        view.layoutIfNeeded()
-        freshnessPill.layer.cornerRadius = freshnessPill.bounds.height / 2
-        setFreshnessInset(freshnessPill.frame.height + DesignSystem.Spacing.s * 2)
-        scheduleFreshnessHide()
+        presentFreshness("Offline · saved posts")
         UIAccessibility.post(notification: .announcement, argument: freshnessLabel.text)
     }
 
@@ -787,55 +777,60 @@ class FeedViewController: UIViewController, TweetActionHandling {
     /// that pulls down over a picture picks one that reads on it.
     var refreshTextColor: UIColor { DesignSystem.Color.secondaryLabel }
 
-    /// Shows or hides the freshness pill and reserves a matching top strip so
-    /// the first tweet clears it. The pill floats over the feed and never
-    /// mutates a row.
+    /// Shows or hides the freshness pill. It floats over the feed and never
+    /// mutates a row or moves the list.
     private func applyFreshness(_ text: String?) {
         guard let text, !text.isEmpty else {
             freshnessHideWork?.cancel()
             freshnessDismissed = false
+            freshnessPill.layer.removeAllAnimations()
             freshnessPill.isHidden = true
-            freshnessPill.alpha = 1
-            setFreshnessInset(0)
+            freshnessPill.alpha = 0
             return
         }
         freshnessLabel.text = text
         guard !freshnessDismissed else { return }
+        presentFreshness(text)
+    }
+
+    /// Lets the pill drift down into place with a soft spring, holds it for a
+    /// few seconds, then fades it away.
+    private func presentFreshness(_ text: String) {
+        freshnessHideWork?.cancel()
+        freshnessLabel.text = text
+        let wasShowing = !freshnessPill.isHidden && freshnessPill.alpha > 0.5
         freshnessPill.isHidden = false
-        freshnessPill.alpha = 1
         view.layoutIfNeeded()
         freshnessPill.layer.cornerRadius = freshnessPill.bounds.height / 2
-        setFreshnessInset(freshnessPill.frame.height + DesignSystem.Spacing.s * 2)
+        if !wasShowing {
+            freshnessPill.alpha = 0
+            freshnessPill.transform = CGAffineTransform(translationX: 0, y: -10).scaledBy(x: 0.94, y: 0.94)
+            UIView.animate(withDuration: 0.55, delay: 0, usingSpringWithDamping: 0.82,
+                           initialSpringVelocity: 0.4, options: [.allowUserInteraction]) {
+                self.freshnessPill.alpha = 1
+                self.freshnessPill.transform = .identity
+            }
+        }
         scheduleFreshnessHide()
     }
 
-    /// Fades the freshness pill out ~4s after it shows and reclaims its strip,
-    /// so it reads as a brief "here's how fresh this is" glance.
+    /// Fades the freshness pill out ~3s after it shows, so it reads as a brief
+    /// "here's how fresh this is" glance.
     private func scheduleFreshnessHide() {
         freshnessHideWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            UIView.animate(withDuration: 0.3) {
+            UIView.animate(withDuration: 0.35, delay: 0, options: [.curveEaseIn]) {
                 self.freshnessPill.alpha = 0
+                self.freshnessPill.transform = CGAffineTransform(translationX: 0, y: -6)
             } completion: { _ in
                 self.freshnessDismissed = true
                 self.freshnessPill.isHidden = true
-                self.freshnessPill.alpha = 1
-                self.setFreshnessInset(0)
+                self.freshnessPill.transform = .identity
             }
         }
         freshnessHideWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: work)
-    }
-
-    /// Reserves a `top`-point strip for the freshness pill via
-    /// `additionalSafeAreaInsets` — which `UIRefreshControl` never clobbers,
-    /// unlike `contentInset` — and counter-shifts the pill's pin so it sits in
-    /// that strip instead of riding the inset down onto the first row.
-    private func setFreshnessInset(_ top: CGFloat) {
-        additionalSafeAreaInsets.top = top
-        freshnessTopConstraint.constant = DesignSystem.Spacing.xs - top
-        view.layoutIfNeeded()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
     }
 
     private func handleSelect(_ tweet: Tweet) {

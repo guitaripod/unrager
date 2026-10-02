@@ -165,7 +165,7 @@ If you write a commit and find no `[Unreleased]` bullet matches it, that is the 
 
 ## Feed modes
 
-`V` toggles between All and Originals on Home feeds. Originals mode filters out replies (`in_reply_to_tweet_id.is_some()`), quote tweets (`quoted_tweet.is_some()`), and retweets (`text.starts_with("RT @")`). Filtering happens in `handle_timeline_loaded` at load time — toggling reloads the source. Persisted in session as `feed_mode`.
+`V` toggles between All and Originals on Home feeds. Originals mode filters out replies (`in_reply_to_tweet_id.is_some()`), quote tweets (`quoted_tweet.is_some()`), and reposts (`Tweet::is_repost`: `retweeted_by` is set, since a repost is parsed as its original, or the `RT @` text of posts stored before that). Filtering happens in `handle_timeline_loaded` at load time — toggling reloads the source. Persisted in session as `feed_mode`.
 
 ## Translation
 

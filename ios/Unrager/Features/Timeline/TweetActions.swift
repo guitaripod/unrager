@@ -91,6 +91,11 @@ extension TweetActionHandling {
         OwnPost.isOwn(tweet, viewerHandle: AppEnvironment.shared.currentHandle)
     }
 
+    /// Pushes the list of posts quoting `tweet`.
+    func openQuotes(of tweet: Tweet) {
+        navigationController?.pushViewController(QuotesViewController(tweetID: tweet.restID), animated: true)
+    }
+
     /// Whether the row offers Delete (see `OwnPost.canDelete`).
     func canDeleteTweet(_ tweet: Tweet) -> Bool {
         OwnPost.canDelete(tweet, viewerHandle: AppEnvironment.shared.currentHandle)

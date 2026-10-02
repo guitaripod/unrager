@@ -90,6 +90,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
         cell.onLike = { [weak self, weak cell] in self?.toggleLike(tweet, cell: cell) }
         cell.onToggleRetweet = { [weak self, weak cell] in self?.toggleRetweet(tweet, cell: cell) }
         cell.onQuote = { [weak self] in self?.presentQuote(tweet) }
+        cell.onViewQuotes = { [weak self] in self?.openQuotes(of: tweet) }
         cell.onToggleBookmark = { [weak self, weak cell] in self?.toggleBookmark(tweet, cell: cell) }
         cell.onShare = { [weak self] in self?.shareTweet(tweet) }
         cell.onTapMention = { [weak self] handle in self?.handleProfile(handle) }

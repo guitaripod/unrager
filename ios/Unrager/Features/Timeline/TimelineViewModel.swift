@@ -54,6 +54,8 @@ final class TimelineViewModel {
         case search(query: String, product: SourceProduct)
         case mentions
         case bookmarks(query: String)
+        /// The posts quoting one post, newest first.
+        case quotes(tweetID: String)
 
         /// A stable key for the display-only timeline cache, or `nil` for
         /// ephemeral feeds that shouldn't be seeded (e.g. an empty query).
@@ -73,6 +75,8 @@ final class TimelineViewModel {
             case let .bookmarks(query):
                 let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 return q.isEmpty ? "bookmarks-all" : "bookmarks-\(q)"
+            case let .quotes(tweetID):
+                return "quotes-\(tweetID)"
             }
         }
     }
@@ -174,6 +178,8 @@ final class TimelineViewModel {
             return trimmed.isEmpty
                 ? ("bookmark", "No bookmarks", "Posts you bookmark show up here.")
                 : ("bookmark", "No matches", "None of your bookmarks mention \"\(trimmed)\".")
+        case .quotes:
+            return ("quote.bubble", "No quotes yet", "When someone quotes this post, it shows up here.")
         }
     }
 
@@ -204,6 +210,8 @@ final class TimelineViewModel {
         case let .bookmarks(query):
             guard !query.isEmpty else { return }
             SessionSync.patchSource(.bookmarks(query: query))
+        case .quotes:
+            return
         }
     }
 
@@ -794,6 +802,8 @@ final class TimelineViewModel {
                 return try await EngageService.engage.bookmarksTimeline(cursor: cursor)
             }
             return try await api.bookmarks(query: q, cursor: cursor)
+        case let .quotes(tweetID):
+            return try await api.quotes(tweetID: tweetID, cursor: cursor)
         }
     }
 }

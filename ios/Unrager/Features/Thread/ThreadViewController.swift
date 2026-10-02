@@ -89,6 +89,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
         cell.onReply = { [weak self] in self?.reply(to: tweet) }
         cell.onToggleRetweet = { [weak self, weak cell] in self?.toggleRetweet(tweet, cell: cell) }
         cell.onQuote = { [weak self] in self?.presentQuote(tweet) }
+        cell.onViewQuotes = { [weak self] in self?.openQuotes(of: tweet) }
         cell.onToggleBookmark = { [weak self, weak cell] in self?.toggleBookmark(tweet, cell: cell) }
         cell.onShare = { [weak self] in self?.shareTweet(tweet) }
         cell.onToggleStats = { [weak self] in self?.toggleStats(id) }

@@ -105,6 +105,17 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                 }
             case "thread" where parts.count > 1:
                 homeNav()?.pushViewController(ThreadViewController(tweetID: parts[1]), animated: false)
+            case "delete" where parts.count > 1:
+                let id = parts[1]
+                Task {
+                    guard let tweet = try? await api.tweet(id: id) else { return }
+                    let thread = ThreadViewController(tweet: tweet)
+                    homeNav()?.pushViewController(thread, animated: false)
+                    try? await Task.sleep(for: .seconds(1))
+                    thread.confirmDelete(tweet)
+                }
+            case "quotes" where parts.count > 1:
+                homeNav()?.pushViewController(QuotesViewController(tweetID: parts[1]), animated: false)
             case "likers" where parts.count > 1:
                 homeNav()?.pushViewController(LikersViewController(tweetID: parts[1]), animated: false)
             case "me":

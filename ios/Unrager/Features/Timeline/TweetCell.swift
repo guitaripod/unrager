@@ -80,6 +80,9 @@ final class TweetCell: UICollectionViewCell {
     var onTapReposter: (() -> Void)?
     /// Set only on the signed-in account's own posts: VoiceOver's "Delete".
     var onDelete: (() -> Void)?
+    /// Opens the list of posts quoting this one, offered from the repost menu
+    /// and the stats strip's "Quotes" figure when the post has any.
+    var onViewQuotes: (() -> Void)?
 
     private let repostRow = UIStackView()
     private let repostLabel = UILabel()
@@ -195,6 +198,7 @@ final class TweetCell: UICollectionViewCell {
         replyCaption.capturesPlainTaps = false
         onTapReposter = nil
         onDelete = nil
+        onViewQuotes = nil
         repostText = nil
         repostRow.isHidden = true
     }
@@ -746,6 +750,9 @@ final class TweetCell: UICollectionViewCell {
         if tweet.media.contains(where: { $0.isVideo }) {
             actions.append(action("Play video") { [weak self] in self?.onTapPhoto?(0) })
         }
+        if onViewQuotes != nil, tweet.quoteCount > 0 {
+            actions.append(action("View quotes") { [weak self] in self?.onViewQuotes?() })
+        }
         if tweet.quotedTweet != nil {
             actions.append(action("Open quoted post") { [weak self] in self?.onTapQuoted?() })
         }
@@ -872,6 +879,7 @@ final class TweetCell: UICollectionViewCell {
         viewsTap.addTarget(self, action: #selector(viewsTapped))
         viewsLabel.addGestureRecognizer(viewsTap)
         statsView.isHidden = true
+        statsView.onTapQuotes = { [weak self] in self?.onViewQuotes?() }
 
         let column = UIStackView(arrangedSubviews: [repostRow, header, replyCaption, bodyView, showMoreButton, mediaContent, quotedWrap, actionBar, statsView])
         column.axis = .vertical
@@ -986,7 +994,14 @@ final class TweetCell: UICollectionViewCell {
                 Haptics.tap()
                 self?.onQuote?()
             }
-            return UIMenu(children: [toggle, quote])
+            var items = [toggle, quote]
+            if self.onViewQuotes != nil, let quotes = self.boundTweet?.quoteCount, quotes > 0 {
+                items.append(UIAction(title: "View quotes", image: DesignSystem.icon("text.quote")) { [weak self] _ in
+                    Haptics.tap()
+                    self?.onViewQuotes?()
+                })
+            }
+            return UIMenu(children: items)
         }
     }
 

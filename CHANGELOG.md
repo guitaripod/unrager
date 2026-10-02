@@ -6,6 +6,7 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **`unrager setup --apps` ends by printing the address to type into the iPhone app.** With Tailscale running it prints this computer's `http://100.x.y.z:7777` (and its MagicDNS name); without it, says what to enter; and when the server listens only on this computer, warns that a phone can't reach it and gives the `--bind 0.0.0.0:7777` to use.
 ## [0.26.0] — 2026-10-02
 
 - **Notifications read in the app stay read.** The Notifications tab used to skip reloading when it had loaded less than two minutes earlier, so a like or reply that lit the badge in between never reached the list; the badge came back as soon as the tab was left. Opening the tab with the badge lit now always reloads, and a tapped in-app toast or banner counts as read, with everything older than it.

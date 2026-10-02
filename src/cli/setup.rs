@@ -324,7 +324,109 @@ async fn install_service(
             report.errors += 1;
         }
     }
+    if choices.apps {
+        let hint = iphone_hint(bind, &tailscale_address());
+        if hint.warning {
+            report.warnings += 1;
+        }
+        for line in hint.lines {
+            println!("{line}");
+        }
+    }
     managed
+}
+
+/// This computer's address on the user's tailnet, by IP and by MagicDNS name.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct TailnetAddress {
+    ip: Option<String>,
+    name: Option<String>,
+}
+
+struct IphoneHint {
+    lines: Vec<String>,
+    warning: bool,
+}
+
+/// What the setup summary tells the user to type into the iPhone app's
+/// Settings → Server: the address to use, or why none will work yet.
+fn iphone_hint(bind: SocketAddr, tailnet: &TailnetAddress) -> IphoneHint {
+    let port = bind.port();
+    if bind.ip().is_loopback() {
+        return IphoneHint {
+            lines: vec![format!(
+                "! iphone      the server listens only on this computer, so a phone can't reach it → run `unrager setup --apps --bind 0.0.0.0:{port}`"
+            )],
+            warning: true,
+        };
+    }
+    let lines = match (&tailnet.ip, &tailnet.name) {
+        (Some(ip), name) => {
+            let mut lines = vec![format!(
+                "✓ iphone      in the app, open Settings → Server and enter http://{ip}:{port}"
+            )];
+            if let Some(name) = name {
+                lines.push(format!(
+                    "              (or http://{name}:{port} if MagicDNS is on for your phone)"
+                ));
+            }
+            lines
+        }
+        (None, _) => vec![format!(
+            "· iphone      in the app, open Settings → Server and enter this computer's address with :{port}; Tailscale (tailscale.com) gives every device one that works away from home too"
+        )],
+    };
+    IphoneHint {
+        lines,
+        warning: false,
+    }
+}
+
+/// Asks the local Tailscale for this computer's address. Empty when Tailscale
+/// isn't installed or isn't running.
+fn tailscale_address() -> TailnetAddress {
+    let run = |args: &[&str]| {
+        TAILSCALE_COMMANDS.iter().find_map(|program| {
+            let out = std::process::Command::new(program)
+                .args(args)
+                .output()
+                .ok()?;
+            out.status
+                .success()
+                .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+        })
+    };
+    TailnetAddress {
+        ip: run(&["ip", "-4"]).and_then(|out| first_ipv4(&out)),
+        name: run(&["status", "--json"]).and_then(|out| magic_dns_name(&out)),
+    }
+}
+
+/// The CLI is on `$PATH` on Linux and with Homebrew; the macOS app keeps its
+/// own copy inside the bundle.
+const TAILSCALE_COMMANDS: &[&str] = &[
+    "tailscale",
+    "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+];
+
+/// The first IPv4 address in `tailscale ip -4` output.
+fn first_ipv4(output: &str) -> Option<String> {
+    output
+        .lines()
+        .map(str::trim)
+        .find(|line| line.parse::<std::net::Ipv4Addr>().is_ok())
+        .map(str::to_string)
+}
+
+/// This node's MagicDNS name from `tailscale status --json`, without the
+/// trailing dot. None when MagicDNS isn't on (the field is then empty).
+fn magic_dns_name(status: &str) -> Option<String> {
+    let json: serde_json::Value = serde_json::from_str(status).ok()?;
+    let name = json
+        .pointer("/Self/DNSName")?
+        .as_str()?
+        .trim_end_matches('.');
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 /// Polls `/api/health` until the server answers as this binary's version (a
@@ -729,6 +831,55 @@ mod service {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn iphone_hint_names_the_tailscale_address() {
+        let bind: SocketAddr = "0.0.0.0:7777".parse().unwrap();
+        let hint = iphone_hint(
+            bind,
+            &TailnetAddress {
+                ip: Some("100.64.0.9".into()),
+                name: Some("desk.tail1234.ts.net".into()),
+            },
+        );
+        assert!(!hint.warning);
+        assert!(hint.lines[0].contains("http://100.64.0.9:7777"));
+        assert!(hint.lines[1].contains("http://desk.tail1234.ts.net:7777"));
+    }
+
+    #[test]
+    fn iphone_hint_without_tailscale_says_what_to_enter() {
+        let bind: SocketAddr = "0.0.0.0:7777".parse().unwrap();
+        let hint = iphone_hint(bind, &TailnetAddress::default());
+        assert!(!hint.warning);
+        assert_eq!(hint.lines.len(), 1);
+        assert!(hint.lines[0].contains("Settings → Server"));
+        assert!(hint.lines[0].contains(":7777"));
+    }
+
+    #[test]
+    fn iphone_hint_warns_when_only_this_computer_can_connect() {
+        let bind: SocketAddr = "127.0.0.1:7777".parse().unwrap();
+        let hint = iphone_hint(bind, &TailnetAddress::default());
+        assert!(hint.warning);
+        assert!(hint.lines[0].contains("--bind 0.0.0.0:7777"));
+    }
+
+    #[test]
+    fn tailscale_output_is_read_for_address_and_name() {
+        assert_eq!(
+            first_ipv4("100.101.102.103\nfd7a:115c:a1e0::1\n").as_deref(),
+            Some("100.101.102.103")
+        );
+        assert_eq!(first_ipv4("fd7a::1\n"), None);
+        assert_eq!(first_ipv4(""), None);
+        assert_eq!(
+            magic_dns_name(r#"{"Self":{"DNSName":"desk.tail1234.ts.net."}}"#).as_deref(),
+            Some("desk.tail1234.ts.net")
+        );
+        assert_eq!(magic_dns_name(r#"{"Self":{"DNSName":""}}"#), None);
+        assert_eq!(magic_dns_name("not json"), None);
+    }
 
     #[test]
     fn repo_manifest_version_matches_the_crate() {

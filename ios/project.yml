@@ -51,7 +51,7 @@ targets:
       path: Unrager/Info.plist
       properties:
         CFBundleDisplayName: Unrager
-        CFBundleShortVersionString: "1.0.0"
+        CFBundleShortVersionString: $(MARKETING_VERSION)
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false

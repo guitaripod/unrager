@@ -56,6 +56,16 @@ struct EngagementTests {
         #expect(model.unreadCount == 0)
     }
 
+    @Test("A refresh keeps the posts hidden before it, moves one hidden again to the end and drops one now shown")
+    func hiddenPostsSurviveRefresh() throws {
+        let earlier = try ["1", "2", "3"].map { HiddenPost(tweet: try tweet(id: $0), reason: "rule") }
+        let refreshed = try ["2", "4"].map { HiddenPost(tweet: try tweet(id: $0), reason: "rule") }
+        let merged = TimelineViewModel.mergedHidden(earlier, adding: refreshed, shown: ["3"], cap: 200)
+        #expect(merged.map(\.id) == ["1", "2", "4"])
+        let capped = TimelineViewModel.mergedHidden(earlier, adding: refreshed, shown: [], cap: 2)
+        #expect(capped.map(\.id) == ["2", "4"])
+    }
+
     @Test("Bookmarks with no query is the full timeline, not an awaiting-query state")
     @MainActor
     func bookmarksNeverAwaitQuery() {

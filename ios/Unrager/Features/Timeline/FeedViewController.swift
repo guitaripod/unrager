@@ -425,8 +425,9 @@ class FeedViewController: UIViewController, TweetActionHandling {
     }
 
     /// The end-of-list footer: "You're all caught up" once the cursor is
-    /// exhausted, "Scroll to retry" while paging stalled but the cursor lives,
-    /// and hidden while a non-empty list is still loading.
+    /// exhausted, "Couldn't load more" after the next page failed, "Scroll to
+    /// retry" while paging stalled but the cursor lives, and a spinner while
+    /// a non-empty list is still loading.
     private func configureFooter(_ footer: FeedFooterView) {
         let count = dataSource.snapshot().numberOfItems
         guard count > 0 else { footer.setHidden(); return }
@@ -435,7 +436,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
         } else if viewModel.isLoading.value {
             footer.showLoading()
         } else {
-            footer.show(text: "Scroll to retry", showsRetry: true)
+            footer.show(text: viewModel.pageLoadFailed ? "Couldn't load more" : "Scroll to retry", showsRetry: true)
             footer.onRetry = { [weak self] in self?.viewModel.loadMoreIfNeeded(currentIndex: count - 1) }
         }
     }
@@ -615,7 +616,8 @@ class FeedViewController: UIViewController, TweetActionHandling {
 
         let hadItems = dataSource.snapshot().numberOfItems > 0
         let growsBottomOnly = hadItems && changed.isEmpty && isPureAppend(tweets)
-        let anchor = (hadItems && !tweets.isEmpty && !growsBottomOnly && collectionView.contentOffset.y > 1)
+        let scrolledIn = collectionView.contentOffset.y > -collectionView.adjustedContentInset.top + 1
+        let anchor = (hadItems && !tweets.isEmpty && !growsBottomOnly && scrolledIn)
             ? scrollAnchor(in: snapshot) : nil
         let animated = anchor == nil && !growsBottomOnly && !tweets.isEmpty
         PerfProbe.time("snapshot") {
@@ -660,13 +662,13 @@ class FeedViewController: UIViewController, TweetActionHandling {
         return nil
     }
 
+    /// Puts the anchor row back where it was on screen. Offsets are bounded by
+    /// the resting position under the navigation bar (`-adjustedContentInset.top`),
+    /// not 0, which sits a bar's height lower.
     private func restoreScrollAnchor(_ anchor: (id: String, offset: CGFloat)) {
-        guard let indexPath = dataSource.indexPath(for: anchor.id),
-              let attributes = collectionView.layoutAttributesForItem(at: indexPath) else { return }
-        let target = attributes.frame.minY - anchor.offset
-        let maxOffset = max(0, collectionView.contentSize.height - collectionView.bounds.height
-            + collectionView.adjustedContentInset.bottom)
-        collectionView.setContentOffset(CGPoint(x: 0, y: min(max(0, target), maxOffset)), animated: false)
+        guard let indexPath = dataSource.indexPath(for: anchor.id) else { return }
+        collectionView.restore(UICollectionView.ScrollAnchor(indexPath: indexPath, distanceFromTop: anchor.offset),
+                               at: indexPath)
     }
 
     // MARK: - Inline video playback (scroll-aware)
@@ -785,10 +787,16 @@ class FeedViewController: UIViewController, TweetActionHandling {
         }
     }
 
+    /// A failed refresh over posts already shown flags them as saved ones; a
+    /// failed next page leaves them alone (nothing on screen is stale) and
+    /// turns the footer into "Couldn't load more" with a retry.
     private func handleError(_ message: String) {
         lastErrorText = message
         if dataSource.snapshot().numberOfItems == 0 {
             updateChrome()
+        } else if viewModel.pageLoadFailed {
+            refreshFooter()
+            UIAccessibility.post(notification: .announcement, argument: "Couldn't load more posts")
         } else {
             UINotificationFeedbackGenerator().notificationOccurred(.error)
             showStaleNotice()

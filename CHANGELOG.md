@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+## [0.29.0] — 2026-10-02
+
 - **A link card no longer comes out stretched, with a black gap between its picture and its text, in the iPhone app.** A row that had just shown a photo, a clip or a poll kept that surface's height wanted while it was hidden, and the card that took its place was pulled out to it; the previous surface is now taken out of the row instead of hidden. Loading more rows under a list no longer squashes the ones on screen either.
 - **The iPhone app opens faster and fills in more smoothly.** Home, profiles, threads and notifications show placeholder posts in their real shapes, with a soft light passing over them, instead of a spinner, and the first posts of a list glide in one after another. Pictures are kept on the phone at the size they were shown (one small copy per picture, under a 192 MB cap that drops the least recently used first, and what hasn't been seen for three weeks), so after the first time a picture comes back from a few kilobytes of disk instead of a download and a full-size decode; Settings shows what they take and clears them under "Saved pictures", and a memory warning drops the pictures held in memory. A profile you have seen opens already drawn (name, bio, counts, banner) while the fresh one loads, and the Profile tab no longer waits for X to say who you are before showing your own profile.
 - **Profiles have a Media tab, and your own has a Recent posts card.** The new Media tab lays out every picture and clip from the account's own posts in rows that run edge to edge, each picture at its own shape with nothing cropped (an extreme panorama or a very tall screenshot is shown whole over a frosted copy of itself), clips marked with a play button; tapping opens the viewer, long-press offers the post, its link and Open in X, and older posts are fetched until the screen is full. On your own profile a card under the counts adds up your last posts: views, likes, reposts and replies, and the top post, which opens when tapped. The numbers come from the posts already on screen, with no extra request.
@@ -360,7 +362,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.28.0...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.29.0...HEAD
+[0.29.0]: https://github.com/guitaripod/unrager/releases/tag/0.29.0
 [0.28.0]: https://github.com/guitaripod/unrager/releases/tag/0.28.0
 [0.27.0]: https://github.com/guitaripod/unrager/releases/tag/0.27.0
 [0.26.0]: https://github.com/guitaripod/unrager/releases/tag/0.26.0

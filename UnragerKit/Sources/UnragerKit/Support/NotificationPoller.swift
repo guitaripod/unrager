@@ -173,7 +173,7 @@ public final class NotificationPoller {
     /// held.
     private func isUnread(_ notification: XNotification) -> Bool {
         guard let marker = NotificationPrefs.lastSeenTimestamp else { return true }
-        return notification.timestamp > marker
+        return NotificationPrefs.isNewer(notification.timestamp, than: marker)
     }
 
     /// Fresh-install semantics: with no local (or adoptable server) marker, the

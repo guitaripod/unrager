@@ -20,19 +20,23 @@ public struct NotificationSeenMarker: Codable, Sendable, Equatable {
         marker.flatMap(Self.decode)
     }
 
+    /// The same ISO 8601 style the notification timestamps are parsed with,
+    /// at the millisecond precision they carry.
+    private static let fractional = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+    private static let plain = Date.ISO8601FormatStyle(includingFractionalSeconds: false)
+
+    /// The marker string for `date` at the nearest millisecond, so a timestamp
+    /// that went through a `Double` on the way here still names the
+    /// millisecond it came from. The fraction is written by hand: the format
+    /// style truncates, turning a hair under `.001` into `.000`.
     public static func encode(_ date: Date) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.string(from: date)
+        let (seconds, millis) = NotificationPrefs.milliseconds(date).quotientAndRemainder(dividingBy: 1000)
+        let whole = plain.format(Date(timeIntervalSince1970: TimeInterval(seconds)))
+        return whole.dropLast() + String(format: ".%03dZ", Int(millis))
     }
 
     public static func decode(_ marker: String) -> Date? {
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractional.date(from: marker) { return date }
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
-        return plain.date(from: marker)
+        (try? fractional.parse(marker)) ?? (try? plain.parse(marker))
     }
 }
 

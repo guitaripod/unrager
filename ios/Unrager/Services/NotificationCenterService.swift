@@ -381,7 +381,7 @@ final class NotificationCenterService: NSObject {
     private func bannerNewSinceSeenMarker() {
         guard let marker = NotificationPrefs.lastSeenTimestamp else { return }
         let unseen = poller.lastPage.filter {
-            $0.timestamp > marker && NotificationPrefs.shouldBanner(rawType: $0.type)
+            NotificationPrefs.isNewer($0.timestamp, than: marker) && NotificationPrefs.shouldBanner(rawType: $0.type)
         }
         postBannersIfAuthorized(unseen)
     }

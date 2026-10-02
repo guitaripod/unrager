@@ -56,8 +56,9 @@ struct NotificationSeenMarkerTests {
     func roundTrip() {
         let date = Date(timeIntervalSince1970: 1_782_549_081.371)
         let marker = NotificationSeenMarker(timestamp: date)
-        let decoded = try? #require(marker.timestamp)
-        #expect(abs((decoded?.timeIntervalSince1970 ?? 0) - date.timeIntervalSince1970) < 0.01)
+        #expect(marker.marker?.hasSuffix(".371Z") == true)
+        let decoded = marker.timestamp
+        #expect(abs((decoded?.timeIntervalSince1970 ?? 0) - date.timeIntervalSince1970) < 0.001)
     }
 
     @Test("Parses non-fractional ISO 8601 from other clients")
@@ -179,6 +180,44 @@ struct NotificationPrefsTests {
             #expect(NotificationPrefs.markSeen(timestamp: newer, id: "n2"))
             #expect(!NotificationPrefs.markSeen(timestamp: older, id: "n1"))
             #expect(NotificationPrefs.lastSeenTimestamp == newer)
+        }
+    }
+
+    @Test("A notification marked seen stays read, here and on another device through the wire marker",
+          arguments: ["00.371", "00.000", "00.001", "17.999", "59.507", "33.123", "08.250"])
+    func millisecondMarkerRoundTrip(seconds: String) throws {
+        try withCleanPrefs {
+            let json = #"{"id":"n1","type":"reply","actors":[],"timestamp":"2026-10-02T10:00:\#(seconds)Z"}"#
+            let notification = try UnragerJSON.decode(XNotification.self, from: Data(json.utf8))
+            NotificationPrefs.markSeen(upTo: notification)
+            #expect(NotificationPrefs.unreadCount(in: [notification]) == 0)
+
+            let wire = NotificationSeenMarker(timestamp: try #require(NotificationPrefs.lastSeenTimestamp))
+            let remote = try UnragerJSON.decoder.decode(
+                NotificationSeenMarker.self, from: try UnragerJSON.encoder.encode(wire))
+            #expect(remote.marker == "2026-10-02T10:00:\(seconds)Z")
+            UserDefaults.standard.removeObject(forKey: "unrager.notifications.lastSeenTimestamp")
+            #expect(NotificationPrefs.markSeen(timestamp: try #require(remote.timestamp)))
+            #expect(NotificationPrefs.unreadCount(in: [notification]) == 0)
+            #expect(!NotificationPrefs.markSeen(upTo: notification))
+        }
+    }
+
+    @Test("Every millisecond survives the local store and the wire marker")
+    func everyMillisecond() throws {
+        try withCleanPrefs {
+            for ms in 0..<1000 {
+                let raw = String(format: "2026-10-02T10:00:17.%03dZ", ms)
+                let json = #"{"id":"n\#(ms)","type":"reply","actors":[],"timestamp":"\#(raw)"}"#
+                let notification = try UnragerJSON.decode(XNotification.self, from: Data(json.utf8))
+                UserDefaults.standard.removeObject(forKey: "unrager.notifications.lastSeenTimestamp")
+                NotificationPrefs.markSeen(upTo: notification)
+                let local = try #require(NotificationPrefs.lastSeenTimestamp)
+                #expect(!NotificationPrefs.isNewer(notification.timestamp, than: local), "local \(raw)")
+                let wire = try #require(NotificationSeenMarker(timestamp: local).timestamp)
+                #expect(!NotificationPrefs.isNewer(notification.timestamp, than: wire), "wire \(raw)")
+                #expect(NotificationPrefs.unreadCount(in: [notification]) == 0)
+            }
         }
     }
 

@@ -209,7 +209,7 @@ public enum NotificationPrefs {
     /// adoption point for a server-side marker read from another device.
     @discardableResult
     public static func markSeen(timestamp: Date, id: String? = nil) -> Bool {
-        if let current = lastSeenTimestamp, timestamp <= current { return false }
+        if let current = lastSeenTimestamp, !isNewer(timestamp, than: current) { return false }
         lastSeenID = id
         lastSeenTimestamp = timestamp
         return true
@@ -239,6 +239,20 @@ public enum NotificationPrefs {
     /// the first view establishes the baseline rather than flooding the badge.
     public static func unreadCount(in notifications: [XNotification]) -> Int {
         guard let marker = lastSeenTimestamp else { return 0 }
-        return notifications.filter { $0.timestamp > marker }.count
+        return notifications.filter { isNewer($0.timestamp, than: marker) }.count
+    }
+
+    /// Whether `timestamp` is a later millisecond than `marker`. Timestamps
+    /// carry milliseconds, and the marker goes through a `Double` in
+    /// UserDefaults and a string on the wire; either step can move it by a
+    /// fraction of a nanosecond, which a plain `>` would read as one more
+    /// unread notification.
+    public static func isNewer(_ timestamp: Date, than marker: Date) -> Bool {
+        milliseconds(timestamp) > milliseconds(marker)
+    }
+
+    /// `date` as whole milliseconds since 1970, to the nearest one.
+    static func milliseconds(_ date: Date) -> Int64 {
+        Int64((date.timeIntervalSince1970 * 1000).rounded())
     }
 }

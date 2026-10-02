@@ -1,6 +1,8 @@
 use crate::error::Error;
 use axum::Json;
+use axum::extract::Request;
 use axum::http::{HeaderValue, StatusCode, header};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
@@ -115,6 +117,63 @@ impl From<Error> for ApiError {
     }
 }
 
+/// Rewrites every error answer that isn't already JSON (axum's own
+/// rejections: a missing `q`, a malformed JSON body, a non-numeric path
+/// segment, an oversized upload, an unknown route) into the same
+/// `{"error", "kind"}` shape the handlers answer with, so a client can
+/// decode every failure the same way.
+pub async fn json_errors(request: Request, next: Next) -> Response {
+    let response = next.run(request).await;
+    let status = response.status();
+    if !(status.is_client_error() || status.is_server_error()) || is_json(&response) {
+        return response;
+    }
+    let (parts, body) = response.into_parts();
+    let body = axum::body::to_bytes(body, PLAIN_ERROR_LIMIT)
+        .await
+        .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_string())
+        .unwrap_or_default();
+    let mut json = plain_error(status, body).into_response();
+    for (name, value) in &parts.headers {
+        if name != header::CONTENT_TYPE && name != header::CONTENT_LENGTH {
+            json.headers_mut().append(name.clone(), value.clone());
+        }
+    }
+    json
+}
+
+const PLAIN_ERROR_LIMIT: usize = 64 * 1024;
+
+fn is_json(response: &Response) -> bool {
+    response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.starts_with("application/json"))
+}
+
+/// The JSON error for a plain-text one. A body axum couldn't read as the
+/// handler's type (422) or sent without its content type (415) is a bad
+/// request like any other, so both answer 400.
+fn plain_error(status: StatusCode, message: String) -> ApiError {
+    let message = if message.is_empty() {
+        status
+            .canonical_reason()
+            .unwrap_or("request failed")
+            .to_string()
+    } else {
+        message
+    };
+    match status {
+        StatusCode::NOT_FOUND => ApiError::not_found(message),
+        StatusCode::UNPROCESSABLE_ENTITY | StatusCode::UNSUPPORTED_MEDIA_TYPE => {
+            ApiError::bad_request(message)
+        }
+        s if s.is_client_error() => ApiError::new(s, "bad_request", message),
+        s => ApiError::new(s, "internal", message),
+    }
+}
+
 impl From<std::io::Error> for ApiError {
     fn from(e: std::io::Error) -> Self {
         ApiError::internal(e.to_string())
@@ -140,6 +199,80 @@ mod tests {
             .await
             .unwrap();
         (status, headers, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Search {
+        #[allow(dead_code)]
+        q: String,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Body {
+        #[allow(dead_code)]
+        text: String,
+    }
+
+    async fn call(method: &str, uri: &str, json_body: Option<&str>) -> (StatusCode, Value) {
+        use axum::routing::{get, post};
+        use tower::Service;
+        let mut app = axum::Router::new()
+            .route(
+                "/search",
+                get(|_: axum::extract::Query<Search>| async { "ok" }),
+            )
+            .route("/post", post(|_: Json<Body>| async { "ok" }))
+            .route(
+                "/media/{id}/{index}",
+                get(|_: axum::extract::Path<(String, usize)>| async { "ok" }),
+            )
+            .route("/fails", get(|| async { ApiError::not_found("gone") }))
+            .layer(axum::middleware::from_fn(json_errors));
+        let mut request = axum::http::Request::builder().method(method).uri(uri);
+        if json_body.is_some() {
+            request = request.header(header::CONTENT_TYPE, "application/json");
+        }
+        let body = json_body
+            .map(|b| axum::body::Body::from(b.to_string()))
+            .unwrap_or_else(axum::body::Body::empty);
+        let response = app.call(request.body(body).unwrap()).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
+    #[tokio::test]
+    async fn rejected_requests_answer_json() {
+        for (method, uri, body) in [
+            ("GET", "/search", None),
+            ("GET", "/media/1/first", None),
+            ("POST", "/post", Some("{not json")),
+            ("POST", "/post", Some(r#"{"other": 1}"#)),
+            ("POST", "/post", None),
+        ] {
+            let (status, json) = call(method, uri, body).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{method} {uri} {body:?}");
+            assert_eq!(json["kind"], "bad_request", "{method} {uri} {body:?}");
+            assert!(json["error"].as_str().is_some_and(|m| !m.is_empty()));
+        }
+    }
+
+    #[tokio::test]
+    async fn unknown_routes_and_handler_errors_answer_json() {
+        let (status, json) = call("GET", "/nowhere", None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(json["kind"], "not_found");
+        let (status, json) = call("GET", "/fails", None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(json, json!({"error": "gone", "kind": "not_found"}));
+        let (status, json) = call("DELETE", "/search?q=x", None).await;
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(json["kind"], "bad_request");
     }
 
     #[tokio::test]

@@ -257,6 +257,7 @@ fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .nest("/api", api)
         .fallback(fallback)
+        .layer(middleware::from_fn(error::json_errors))
         .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
         .layer(CompressionLayer::new())
         .layer(middleware::from_fn(reject_web_origins))

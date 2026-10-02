@@ -244,7 +244,7 @@ struct DecodingTests {
           "reply_count": 12, "retweet_count": 34, "like_count": 567, "quote_count": 8,
           "view_count": 102345, "bookmark_count": 5,
           "favorited": true, "retweeted": false, "bookmarked": true,
-          "lang": "en", "in_reply_to_tweet_id": "9988",
+          "lang": "en", "in_reply_to_tweet_id": "9988", "in_reply_to_handle": "alice",
           "quoted_tweet": {
             "rest_id":"123","author":{"rest_id":"1","handle":"a","name":"A","verified":false,
               "followers":0,"following":0,"avatar_url":null},
@@ -275,6 +275,8 @@ struct DecodingTests {
         #expect(reDecoded.bookmarked == original.bookmarked)
         #expect(reDecoded.lang == original.lang)
         #expect(reDecoded.inReplyToTweetID == original.inReplyToTweetID)
+        #expect(original.inReplyToHandle == "alice")
+        #expect(reDecoded.inReplyToHandle == "alice")
         #expect(reDecoded.quotedTweet?.restID == original.quotedTweet?.restID)
         #expect(reDecoded.quotedTweet?.createdAt == original.quotedTweet?.createdAt)
         #expect(reDecoded.media.count == 2)

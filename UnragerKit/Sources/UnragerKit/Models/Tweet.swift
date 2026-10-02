@@ -20,6 +20,9 @@ public final class Tweet: Codable, Sendable, Identifiable, Hashable {
     public let bookmarked: Bool
     public let lang: String?
     public let inReplyToTweetID: String?
+    /// Who this is a reply to, so a client can name them without the leading
+    /// `@mentions` in the text. Absent from older servers.
+    public let inReplyToHandle: String?
     public let quotedTweet: Tweet?
     public let media: [Media]
     public let url: String
@@ -43,6 +46,7 @@ public final class Tweet: Codable, Sendable, Identifiable, Hashable {
         case bookmarked
         case lang
         case inReplyToTweetID = "in_reply_to_tweet_id"
+        case inReplyToHandle = "in_reply_to_handle"
         case quotedTweet = "quoted_tweet"
         case media
         case url
@@ -66,6 +70,7 @@ public final class Tweet: Codable, Sendable, Identifiable, Hashable {
         bookmarked = try c.decodeIfPresent(Bool.self, forKey: .bookmarked) ?? false
         lang = try c.decodeIfPresent(String.self, forKey: .lang)
         inReplyToTweetID = try c.decodeIfPresent(String.self, forKey: .inReplyToTweetID)
+        inReplyToHandle = try c.decodeIfPresent(String.self, forKey: .inReplyToHandle)
         quotedTweet = try c.decodeIfPresent(Tweet.self, forKey: .quotedTweet)
         media = try c.decodeLossy(Media.self, forKey: .media)
         url = try c.decode(String.self, forKey: .url)
@@ -89,6 +94,7 @@ public final class Tweet: Codable, Sendable, Identifiable, Hashable {
         try c.encode(bookmarked, forKey: .bookmarked)
         try c.encodeIfPresent(lang, forKey: .lang)
         try c.encodeIfPresent(inReplyToTweetID, forKey: .inReplyToTweetID)
+        try c.encodeIfPresent(inReplyToHandle, forKey: .inReplyToHandle)
         try c.encodeIfPresent(quotedTweet, forKey: .quotedTweet)
         try c.encode(media, forKey: .media)
         try c.encode(url, forKey: .url)
@@ -111,6 +117,7 @@ public final class Tweet: Codable, Sendable, Identifiable, Hashable {
         bookmarked = other.bookmarked
         lang = other.lang
         inReplyToTweetID = other.inReplyToTweetID
+        inReplyToHandle = other.inReplyToHandle
         quotedTweet = other.quotedTweet
         media = other.media
         url = other.url

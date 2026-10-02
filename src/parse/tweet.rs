@@ -94,6 +94,12 @@ fn parse_tweet_node(node: &Value) -> Result<Tweet> {
         .and_then(Value::as_str)
         .map(str::to_string);
 
+    let in_reply_to_handle = legacy
+        .get("in_reply_to_screen_name")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
     let quoted_tweet = node
         .pointer("/quoted_status_result/result")
         .and_then(|q| parse_tweet_result(q).ok())
@@ -139,6 +145,7 @@ fn parse_tweet_node(node: &Value) -> Result<Tweet> {
         bookmarked,
         lang,
         in_reply_to_tweet_id,
+        in_reply_to_handle,
         quoted_tweet,
         media,
         url,
@@ -1241,6 +1248,10 @@ mod tests {
         v["legacy"]["in_reply_to_status_id_str"] = json!("777");
         let tweet = parse_tweet_result(&v).unwrap();
         assert_eq!(tweet.in_reply_to_tweet_id.as_deref(), Some("777"));
+        assert_eq!(tweet.in_reply_to_handle, None);
+        v["legacy"]["in_reply_to_screen_name"] = json!("alice");
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(tweet.in_reply_to_handle.as_deref(), Some("alice"));
     }
 
     #[test]

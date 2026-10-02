@@ -45,6 +45,12 @@ pub struct Tweet {
     pub bookmarked: bool,
     pub lang: Option<String>,
     pub in_reply_to_tweet_id: Option<String>,
+    /// The handle of the account this is a reply to (X's
+    /// `in_reply_to_screen_name`), so a client can say who a reply is
+    /// addressed to without the leading `@mentions` in its text. Absent on
+    /// older servers, and omitted from the wire when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_reply_to_handle: Option<String>,
     pub quoted_tweet: Option<Box<Tweet>>,
     pub media: Vec<Media>,
     pub url: String,

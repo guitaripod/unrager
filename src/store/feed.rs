@@ -588,6 +588,7 @@ mod tests {
             bookmarked: false,
             lang: None,
             in_reply_to_tweet_id: None,
+            in_reply_to_handle: None,
             quoted_tweet: None,
             media: Vec::new(),
             url: format!("https://x.com/alice/status/{rest_id}"),

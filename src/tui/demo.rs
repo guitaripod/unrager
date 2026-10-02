@@ -57,6 +57,7 @@ fn tweet(
         bookmarked: false,
         lang: Some("en".into()),
         in_reply_to_tweet_id: None,
+        in_reply_to_handle: None,
         quoted_tweet: None,
         media: Vec::new(),
         url: format!("https://x.com/{}/status/demo_{id}", author.handle),

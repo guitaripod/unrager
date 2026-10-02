@@ -143,6 +143,7 @@ pub fn make_tweet(id: &str, text: &str) -> Tweet {
         bookmarked: false,
         lang: None,
         in_reply_to_tweet_id: None,
+        in_reply_to_handle: None,
         quoted_tweet: None,
         media: vec![],
         url: format!("https://x.com/test/status/{id}"),

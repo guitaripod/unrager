@@ -421,6 +421,7 @@ mod tests {
             media,
             url: "https://x.com/u/status/1".into(),
             urls: vec![],
+            retweeted_by: None,
         }
     }
 

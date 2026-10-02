@@ -148,6 +148,7 @@ pub fn make_tweet(id: &str, text: &str) -> Tweet {
         media: vec![],
         url: format!("https://x.com/test/status/{id}"),
         urls: vec![],
+        retweeted_by: None,
     }
 }
 

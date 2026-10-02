@@ -2005,6 +2005,7 @@ mod tests {
             media: Vec::<Media>::new(),
             url: "https://x.com/alice/status/1".into(),
             urls: Vec::new(),
+            retweeted_by: None,
         }
     }
 

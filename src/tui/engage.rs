@@ -116,6 +116,7 @@ mod tests {
             media: vec![],
             url: "https://x.com/alice/status/1".into(),
             urls: vec![],
+            retweeted_by: None,
         }
     }
 

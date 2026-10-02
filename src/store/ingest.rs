@@ -376,6 +376,7 @@ mod tests {
             media: Vec::new(),
             url: format!("https://x.com/a/status/{rest_id}"),
             urls: Vec::new(),
+            retweeted_by: None,
         }
     }
 

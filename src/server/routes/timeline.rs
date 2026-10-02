@@ -111,11 +111,7 @@ fn apply_mode(tweets: Vec<Tweet>, mode: Option<&str>) -> Vec<Tweet> {
 
 fn filter_originals(v: Vec<Tweet>) -> Vec<Tweet> {
     v.into_iter()
-        .filter(|t| {
-            t.in_reply_to_tweet_id.is_none()
-                && t.quoted_tweet.is_none()
-                && !t.text.starts_with("RT @")
-        })
+        .filter(|t| t.in_reply_to_tweet_id.is_none() && t.quoted_tweet.is_none() && !t.is_repost())
         .collect()
 }
 

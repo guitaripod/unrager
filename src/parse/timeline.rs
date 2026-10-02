@@ -60,7 +60,16 @@ pub fn walk(instructions: &[Value]) -> TimelinePage {
             _ => {}
         }
     }
+    drop_repeats(&mut page.tweets);
     page
+}
+
+/// One page can carry the same post twice once reposts are read as their
+/// original: two followed accounts reposting it, or someone reposting a post
+/// that is also on the page. The first one stays.
+fn drop_repeats(tweets: &mut Vec<Tweet>) {
+    let mut seen = std::collections::HashSet::new();
+    tweets.retain(|t| seen.insert(t.rest_id.clone()));
 }
 
 fn collect_from_entry(entry: &Value, page: &mut TimelinePage) {
@@ -265,6 +274,36 @@ mod tests {
         let page = walk(&instructions);
         assert_eq!(page.tweets.len(), 1);
         assert_eq!(page.tweets[0].rest_id, "2001");
+    }
+
+    fn repost_entry(entry_id: &str, wrapper_id: &str, reposter: &str, original: Value) -> Value {
+        let mut wrapper = tweet_node(wrapper_id, "RT @u: …");
+        wrapper["core"]["user_results"]["result"]["rest_id"] = json!(wrapper_id);
+        wrapper["core"]["user_results"]["result"]["legacy"]["screen_name"] = json!(reposter);
+        wrapper["legacy"]["retweeted_status_result"] = json!({ "result": original });
+        let mut entry = tweet_entry(entry_id, wrapper_id, "");
+        entry["content"]["itemContent"]["tweet_results"]["result"] = wrapper;
+        entry
+    }
+
+    #[test]
+    fn walk_keeps_the_first_of_a_post_reposted_twice() {
+        let instructions = vec![json!({
+            "type": "TimelineAddEntries",
+            "entries": [
+                repost_entry("tweet-a", "7001", "alice", tweet_node("1001", "original")),
+                tweet_entry("tweet-b", "1002", "other"),
+                repost_entry("tweet-c", "7002", "bob", tweet_node("1001", "original")),
+                tweet_entry("tweet-d", "1001", "original")
+            ]
+        })];
+        let page = walk(&instructions);
+        let ids: Vec<&str> = page.tweets.iter().map(|t| t.rest_id.as_str()).collect();
+        assert_eq!(ids, ["1001", "1002"]);
+        assert_eq!(
+            page.tweets[0].retweeted_by.as_ref().unwrap().handle,
+            "alice"
+        );
     }
 
     #[test]

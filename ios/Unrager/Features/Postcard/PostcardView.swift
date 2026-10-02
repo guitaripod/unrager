@@ -260,7 +260,7 @@ final class PostcardView: UIView {
     // MARK: - Body
 
     private func makeBody(tweet: Tweet) -> UIView? {
-        let text = TweetText.displayText(for: tweet, stripLeadingMentions: true)
+        let text = TweetText.displayText(for: tweet)
         return makeTextLabel(text, size: 22, lineSpacing: 4)
     }
 
@@ -372,7 +372,7 @@ final class PostcardView: UIView {
         author.numberOfLines = 1
         column.addArrangedSubview(author)
 
-        let text = TweetText.displayText(for: tweet, stripLeadingMentions: true)
+        let text = TweetText.displayText(for: tweet)
         if let body = makeTextLabel(text, size: 17, lineSpacing: 3) {
             column.setCustomSpacing(8, after: author)
             column.addArrangedSubview(body)

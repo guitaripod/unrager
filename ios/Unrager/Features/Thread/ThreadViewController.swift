@@ -72,7 +72,8 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
         let indent = self.indentLevel(for: id)
         cell.configure(with: tweet, imagesEnabled: AppSettings.imagesEnabled,
                        contentWidth: max(120, width - CGFloat(min(indent, 3)) * ThreadRailView.step),
-                       inReplyContext: true, focal: isFocal, ownTweet: ownTweet, indentLevel: indent)
+                       impliedReplyHandles: self.impliedReplyHandles(for: id),
+                       focal: isFocal, ownTweet: ownTweet, indentLevel: indent)
         self.applyFlag(to: cell, author: tweet.author)
         cell.onTapAuthor = { [weak self] in self?.push(ProfileViewController(handle: tweet.author.handle)) }
         cell.onLike = { [weak self, weak cell] in self?.toggleLike(tweet, cell: cell) }
@@ -268,7 +269,25 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
         sortButton.menu = sortMenu()
         Haptics.selection()
         guard let focalID else { return }
-        applyThread(ancestors: ancestorOrder, focal: focalID)
+        applyThread(ancestors: ancestorOrder, focal: focalID, reconfigureExisting: true)
+    }
+
+    /// The account whose post this row already sits under, so its reply caption
+    /// names only anyone else it tags: its parent when that is shown above it
+    /// (an ancestor, the focal post or a reply nested over it), the focal post
+    /// for a reply to the focal in a flat sort. Nil when the parent isn't on
+    /// screen, and the caption names everyone.
+    private func impliedReplyHandles(for id: String) -> Set<String>? {
+        guard let tweet = tweetsByID[id], let parentID = tweet.inReplyToTweetID,
+              let parent = tweetsByID[parentID] else { return nil }
+        let parentIsAbove: Bool
+        if replySort == .conversation || !replyOrder.contains(id) {
+            parentIsAbove = parentID == focalID || ancestorOrder.contains(parentID)
+                || replyOrder.contains(parentID)
+        } else {
+            parentIsAbove = parentID == focalID
+        }
+        return parentIsAbove ? [parent.author.handle.lowercased()] : nil
     }
 
     /// The reply ids in display order: the server's conversation order, or a

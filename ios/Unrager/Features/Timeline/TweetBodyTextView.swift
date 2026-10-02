@@ -10,6 +10,15 @@ final class TweetBodyTextView: UITextView, UITextViewDelegate {
     var onTapMention: ((String) -> Void)?
     var onTapHashtag: ((String) -> Void)?
     var onTapURL: ((URL) -> Void)?
+    var onTapPlain: (() -> Void)?
+
+    /// Whether a tap on plain text (not a link) is this view's own, reported to
+    /// `onTapPlain`, instead of falling through to the cell.
+    var capturesPlainTaps = false {
+        didSet { plainTap.isEnabled = capturesPlainTaps }
+    }
+
+    private lazy var plainTap = UITapGestureRecognizer(target: self, action: #selector(plainTapped(_:)))
 
     init() {
         super.init(frame: .zero, textContainer: nil)
@@ -24,6 +33,8 @@ final class TweetBodyTextView: UITextView, UITextViewDelegate {
         linkTextAttributes = [:]
         dataDetectorTypes = []
         isAccessibilityElement = true
+        plainTap.isEnabled = false
+        addGestureRecognizer(plainTap)
     }
 
     @available(*, unavailable)
@@ -32,6 +43,10 @@ final class TweetBodyTextView: UITextView, UITextViewDelegate {
     /// Only a link glyph swallows the touch; taps on plain text fall through to
     /// the cell's `didSelectItemAt` so the body still opens the thread.
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        capturesPlainTaps ? super.point(inside: point, with: event) : isLink(at: point)
+    }
+
+    private func isLink(at point: CGPoint) -> Bool {
         guard let position = closestPosition(to: point),
               let range = tokenizer.rangeEnclosingPosition(position, with: .character, inDirection: .layout(.left)) else {
             return false
@@ -39,6 +54,11 @@ final class TweetBodyTextView: UITextView, UITextViewDelegate {
         let index = offset(from: beginningOfDocument, to: range.start)
         guard index >= 0, index < attributedText.length else { return false }
         return attributedText.attribute(.link, at: index, effectiveRange: nil) != nil
+    }
+
+    @objc private func plainTapped(_ gesture: UITapGestureRecognizer) {
+        guard !isLink(at: gesture.location(in: self)) else { return }
+        onTapPlain?()
     }
 
     func textView(_ textView: UITextView, primaryActionFor textItem: UITextItem,

@@ -92,6 +92,10 @@ class FeedViewController: UIViewController, TweetActionHandling {
         cell.onTapMention = { [weak self] handle in self?.handleProfile(handle) }
         cell.onTapHashtag = { [weak self] query in self?.openHashtag(query) }
         cell.onShowMore = { [weak self] in self?.expandBody(id) }
+        cell.onTapReplyCaption = { [weak self] in
+            guard let parentID = tweet.inReplyToTweetID else { return }
+            self?.navigationController?.pushViewController(ThreadViewController(tweetID: parentID), animated: true)
+        }
         if self.isOwnTweet(tweet) {
             cell.enableLikers { [weak self] in
                 self?.navigationController?.pushViewController(LikersViewController(tweetID: tweet.restID), animated: true)

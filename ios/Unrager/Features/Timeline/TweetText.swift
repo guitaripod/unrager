@@ -30,20 +30,15 @@ enum TweetText {
         }
     }
 
-    /// The tweet's display body, with leading `@mentions` stripped when shown as
-    /// a reply (the TUI's `strip_leading_mentions`), mirroring X's clean reply
-    /// rendering.
-    static func displayText(for tweet: Tweet, stripLeadingMentions: Bool) -> String {
-        guard stripLeadingMentions, tweet.inReplyToTweetID != nil else { return tweet.text }
-        return strippingLeadingMentions(tweet.text)
+    /// The tweet's display body: for a reply, without the leading `@mentions`
+    /// X adds, which a caption sums up instead (see `ReplyContext`).
+    static func displayText(for tweet: Tweet) -> String {
+        ReplyContext.body(of: tweet)
     }
 
     @MainActor
-    static func attributed(
-        for tweet: Tweet, stripLeadingMentions: Bool, seen: Bool, font: UIFont
-    ) -> NSAttributedString {
-        attributed(for: displayText(for: tweet, stripLeadingMentions: stripLeadingMentions),
-                   urls: tweet.urls, seen: seen, font: font)
+    static func attributed(for tweet: Tweet, seen: Bool, font: UIFont) -> NSAttributedString {
+        attributed(for: displayText(for: tweet), urls: tweet.urls, seen: seen, font: font)
     }
 
     /// Colours and links the `@mentions`, `#hashtags` and URLs in `text`. Only
@@ -161,16 +156,5 @@ enum TweetText {
         case let .url(url):
             return url
         }
-    }
-
-    static func strippingLeadingMentions(_ text: String) -> String {
-        var slice = Substring(text).drop { $0 == " " || $0 == "\n" || $0 == "\t" }
-        while slice.first == "@" {
-            let afterAt = slice.dropFirst()
-            let handle = afterAt.prefix { $0.isLetter || $0.isNumber || $0 == "_" }
-            if handle.isEmpty { break }
-            slice = afterAt.dropFirst(handle.count).drop { $0 == " " || $0 == "\n" || $0 == "\t" }
-        }
-        return String(slice)
     }
 }

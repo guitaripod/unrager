@@ -71,12 +71,14 @@ final class TweetCell: UICollectionViewCell {
     /// Fired by the "Show more" affordance under a truncated feed body; the
     /// feed re-renders this row with the full text.
     var onShowMore: (() -> Void)?
+    /// Fired by a tap on the "Replying to" caption: opens the post being answered.
+    var onTapReplyCaption: (() -> Void)?
 
     private let avatar = AsyncImageView(frame: .zero)
     private let nameLabel = UILabel()
     private let flagLabel = UILabel()
     private let verifiedBadge = UIImageView()
-    private let replyMarker = UIImageView()
+    private let replyCaption = TweetBodyTextView()
     private let handleTimeLabel = UILabel()
     private let bodyView = TweetBodyTextView()
     private let mediaContent = MediaContentView(compact: false)
@@ -116,7 +118,6 @@ final class TweetCell: UICollectionViewCell {
     /// after a slow failure) can tell whether the cell has since been reused.
     private(set) var tweetID: String?
     private var boundTweet: Tweet?
-    private var boundInReplyContext = false
     private var shownLikeCount = 0
     private var shownRetweetCount = 0
     private var shownBookmarkCount = 0
@@ -165,6 +166,8 @@ final class TweetCell: UICollectionViewCell {
         onTapMention = nil
         onTapHashtag = nil
         onShowMore = nil
+        onTapReplyCaption = nil
+        replyCaption.capturesPlainTaps = false
     }
 
     /// Inline-video playback control, driven by the feed so only the most-visible
@@ -179,33 +182,33 @@ final class TweetCell: UICollectionViewCell {
     func playVideo() { mediaContent.playVideo() }
     func pauseVideo() { mediaContent.pauseVideo() }
 
-    /// `inReplyContext` strips the leading `@handle` prefix from replies (only
-    /// meaningful in the thread's replies section) and suppresses the standalone
-    /// is-a-reply marker, mirroring the TUI. `focal` switches the timestamp to an
+    /// A reply's leading `@mentions` are taken out of its text and summed up in
+    /// a caption (see `ReplyContext`): `impliedReplyHandles` holds the accounts
+    /// whose posts the layout already shows it under, so it names only others,
+    /// and is nil for a reply that stands alone, which names them all.
+    /// `focal` switches the timestamp to an
     /// absolute one and, when `ownTweet`, appends the post-analytics block — the
     /// same emphasis the TUI gives the open tweet. `bodyLineLimit` caps a
     /// note-length feed body behind a "Show more" affordance (0 = unlimited,
     /// the focal/thread rendering).
     func configure(
         with tweet: Tweet, imagesEnabled: Bool, contentWidth: CGFloat,
-        seen: Bool = false, inReplyContext: Bool = false,
+        seen: Bool = false, impliedReplyHandles: Set<String>? = nil,
         focal: Bool = false, ownTweet: Bool = false, indentLevel: Int = 0,
         bodyLineLimit: Int = 0
     ) {
         tweetID = tweet.restID
         boundTweet = tweet
-        boundInReplyContext = inReplyContext
         applyFonts()
         setIndent(indentLevel)
         nameLabel.attributedText = TwemojiText.attributed(
             tweet.author.name, font: DesignSystem.Typography.name(), color: DesignSystem.Color.label)
         setFlag(nil)
         verifiedBadge.isHidden = !tweet.author.verified
-        replyMarker.isHidden = !(tweet.inReplyToTweetID != nil && !inReplyContext)
+        configureReplyCaption(for: tweet, implied: impliedReplyHandles)
         handleTimeLabel.attributedText = Self.handleTime(tweet, absolute: focal)
         let body = TweetText.attributed(
-            for: tweet, stripLeadingMentions: inReplyContext, seen: seen,
-            font: DesignSystem.Typography.body())
+            for: tweet, seen: seen, font: DesignSystem.Typography.body())
         applyBodyLimit(body, limit: bodyLineLimit, contentWidth: contentWidth - 2 * Self.sideMargin)
         bodyView.attributedText = body
         bodyView.isHidden = body.length == 0
@@ -232,6 +235,35 @@ final class TweetCell: UICollectionViewCell {
         refreshAccessibility(seen: seen)
     }
 
+    /// Shows the small "Replying to @a" line above a reply's text, or hides it
+    /// when the layout already says whom the reply is to.
+    private func configureReplyCaption(for tweet: Tweet, implied: Set<String>?) {
+        guard let caption = ReplyContext.caption(for: tweet, implied: implied) else {
+            replyCaption.isHidden = true
+            replyCaption.capturesPlainTaps = false
+            return
+        }
+        replyCaption.attributedText = Self.captionText(for: caption)
+        replyCaption.capturesPlainTaps = implied == nil && tweet.inReplyToTweetID != nil
+        replyCaption.isHidden = false
+    }
+
+    /// The caption in the muted caption style, led by a small turn arrow, with
+    /// each named account tinted and tappable like any other mention.
+    private static func captionText(for caption: ReplyContext.Caption) -> NSAttributedString {
+        let font = DesignSystem.Typography.caption()
+        let result = NSMutableAttributedString()
+        if let arrow = UIImage(systemName: "arrow.turn.up.left",
+                               withConfiguration: UIImage.SymbolConfiguration(font: font, scale: .small))?
+            .withTintColor(DesignSystem.Color.secondaryLabel, renderingMode: .alwaysOriginal) {
+            result.append(NSAttributedString(attachment: NSTextAttachment(image: arrow)))
+            result.append(NSAttributedString(string: " ", attributes: [.font: font]))
+        }
+        result.append(TweetText.attributed(
+            for: ReplyContext.sentence(for: caption), urls: [], seen: true, font: font))
+        return result
+    }
+
     /// Re-resolves the fonts that were set once at build time, so a change of
     /// the app's text size reaches the name, flag and quote on rows that were
     /// already built rather than waiting for a relaunch.
@@ -245,8 +277,7 @@ final class TweetCell: UICollectionViewCell {
     func setSeen(_ seen: Bool) {
         guard let tweet = boundTweet else { return }
         let body = TweetText.attributed(
-            for: tweet, stripLeadingMentions: boundInReplyContext, seen: seen,
-            font: DesignSystem.Typography.body())
+            for: tweet, seen: seen, font: DesignSystem.Typography.body())
         bodyView.attributedText = body
         contentView.alpha = seen ? 0.85 : 1
         refreshAccessibility(seen: seen)
@@ -455,8 +486,16 @@ final class TweetCell: UICollectionViewCell {
 
         let verified = tweet.author.verified ? ", verified" : ""
         let seenSuffix = seen ? ", already seen" : ""
-        let reply = (tweet.inReplyToTweetID != nil) ? ", replying" : ""
-        bodyView.accessibilityLabel = "\(tweet.author.name)\(verified)\(reply). \(tweet.text)\(seenSuffix)"
+        bodyView.accessibilityLabel = "\(tweet.author.name)\(verified)\(spokenReply(for: tweet)). \(ReplyContext.body(of: tweet))\(seenSuffix)"
+    }
+
+    /// ", replying to @a and @b" for a reply, whether or not the row shows the
+    /// caption: VoiceOver has no thread layout to read it from.
+    private func spokenReply(for tweet: Tweet) -> String {
+        guard let caption = ReplyContext.caption(for: tweet, implied: nil) else { return "" }
+        guard !caption.handles.isEmpty else { return ", replying" }
+        let sentence = ReplyContext.sentence(for: caption)
+        return ", " + sentence.prefix(1).lowercased() + sentence.dropFirst()
     }
 
     private func label(_ count: Int) -> String { count > 0 ? Format.count(count) : "" }
@@ -477,10 +516,11 @@ final class TweetCell: UICollectionViewCell {
         guard let tweet = boundTweet else { return }
         if let seen { boundSeen = seen }
         let verified = tweet.author.verified ? ", verified" : ""
-        let replying = tweet.inReplyToTweetID != nil ? ", replying" : ""
+        let replying = spokenReply(for: tweet)
         let when = Self.spokenTime.localizedString(for: tweet.createdAt, relativeTo: Date())
         var parts = ["\(tweet.author.name)\(verified), @\(tweet.author.handle)\(replying), \(when)"]
-        if !tweet.text.isEmpty { parts.append(tweet.text) }
+        let body = ReplyContext.body(of: tweet)
+        if !body.isEmpty { parts.append(body) }
         if let media = Self.mediaSummary(tweet.media) { parts.append(media) }
         if let quoted = tweet.quotedTweet {
             parts.append("Quoting \(quoted.author.name): \(quoted.text)")
@@ -574,17 +614,16 @@ final class TweetCell: UICollectionViewCell {
         verifiedBadge.setContentHuggingPriority(.required, for: .horizontal)
         verifiedBadge.isAccessibilityElement = false
 
-        replyMarker.image = DesignSystem.icon("arrowshape.turn.up.left.fill", pointSize: 11)
-        replyMarker.tintColor = DesignSystem.Color.secondaryLabel
-        replyMarker.setContentHuggingPriority(.required, for: .horizontal)
-        replyMarker.isAccessibilityElement = false
-        replyMarker.isHidden = true
+        replyCaption.isHidden = true
+        replyCaption.textContainerInset = UIEdgeInsets(top: 0, left: Self.sideMargin, bottom: 0, right: Self.sideMargin)
+        replyCaption.onTapPlain = { [weak self] in self?.onTapReplyCaption?() }
+        replyCaption.onTapMention = { [weak self] in self?.onTapMention?($0) }
 
         handleTimeLabel.font = DesignSystem.Typography.handle()
         handleTimeLabel.textColor = DesignSystem.Color.secondaryLabel
         handleTimeLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let nameRow = UIStackView(arrangedSubviews: [replyMarker, nameLabel, flagLabel, verifiedBadge, UIView()])
+        let nameRow = UIStackView(arrangedSubviews: [nameLabel, flagLabel, verifiedBadge, UIView()])
         nameRow.axis = .horizontal
         nameRow.spacing = 4
         nameRow.alignment = .center
@@ -644,9 +683,10 @@ final class TweetCell: UICollectionViewCell {
         quotedWrap.isHidden = true
         analyticsWrap.isHidden = true
 
-        let column = UIStackView(arrangedSubviews: [header, bodyView, showMoreButton, mediaContent, quotedWrap, actionBar, analyticsWrap])
+        let column = UIStackView(arrangedSubviews: [header, replyCaption, bodyView, showMoreButton, mediaContent, quotedWrap, actionBar, analyticsWrap])
         column.axis = .vertical
         column.spacing = DesignSystem.Spacing.s
+        column.setCustomSpacing(DesignSystem.Spacing.xs, after: replyCaption)
         column.setCustomSpacing(DesignSystem.Spacing.xs, after: bodyView)
 
         contentView.addManaged(column)

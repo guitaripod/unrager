@@ -56,6 +56,6 @@ struct TweetTextTests {
 
     @Test("Leading mentions are stripped from a reply")
     func stripsLeadingMentions() {
-        #expect(TweetText.strippingLeadingMentions("@a @b hello @c") == "hello @c")
+        #expect(ReplyContext.strippingLeadingMentions("@a @b hello @c") == "hello @c")
     }
 }

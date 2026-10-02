@@ -75,7 +75,15 @@ final class TweetCell: UICollectionViewCell {
     var onToggleStats: (() -> Void)?
     /// Fired by a tap on the "Replying to" caption: opens the post being answered.
     var onTapReplyCaption: (() -> Void)?
+    /// Fired by a tap on the "reposted" line above a repost: opens the
+    /// reposter's profile.
+    var onTapReposter: (() -> Void)?
 
+    private let repostRow = UIStackView()
+    private let repostLabel = UILabel()
+    /// The repost line the row shows ("Kit Wren reposted"), nil for a post
+    /// that isn't a repost; VoiceOver reads it first.
+    private var repostText: String?
     private let avatar = AsyncImageView(frame: .zero)
     private let nameLabel = UILabel()
     private let flagLabel = UILabel()
@@ -183,6 +191,9 @@ final class TweetCell: UICollectionViewCell {
         statsShown = false
         onTapReplyCaption = nil
         replyCaption.capturesPlainTaps = false
+        onTapReposter = nil
+        repostText = nil
+        repostRow.isHidden = true
     }
 
     /// Inline-video playback control, driven by the feed so only the most-visible
@@ -209,12 +220,14 @@ final class TweetCell: UICollectionViewCell {
     /// TUI gives the open tweet. `stats` opens the strip of figures under the
     /// action bar (nil keeps it closed). `bodyLineLimit` caps a
     /// note-length feed body behind a "Show more" affordance (0 = unlimited,
-    /// the focal/thread rendering).
+    /// the focal/thread rendering). `viewerHandle` is the signed-in account, so
+    /// its own repost reads "You reposted".
     func configure(
         with tweet: Tweet, imagesEnabled: Bool, contentWidth: CGFloat,
         seen: Bool = false, impliedReplyHandles: Set<String>? = nil,
         focal: Bool = false, indentLevel: Int = 0,
-        bodyLineLimit: Int = 0, stats: PostStatsContent? = nil
+        bodyLineLimit: Int = 0, stats: PostStatsContent? = nil,
+        viewerHandle: String? = nil
     ) {
         tweetID = tweet.restID
         boundTweet = tweet
@@ -227,6 +240,7 @@ final class TweetCell: UICollectionViewCell {
         }
         setFlag(nil)
         verifiedBadge.isHidden = !tweet.author.verified
+        configureRepost(for: tweet, viewerHandle: viewerHandle)
         configureReplyCaption(for: tweet, implied: impliedReplyHandles)
         handleTimeLabel.attributedText = Self.handleTime(tweet, absolute: focal)
         let body = PerfProbe.time("cfg.text") {
@@ -278,6 +292,48 @@ final class TweetCell: UICollectionViewCell {
         }
         viewsTap.isEnabled = AppSettings.postStatsMode == .onTap && (tweet.viewCount ?? 0) > 0
         viewsLabel.isUserInteractionEnabled = viewsTap.isEnabled
+    }
+
+    /// Shows the "reposted" line above the author of a repost, or takes it out
+    /// of the column (no gap) for any other post.
+    private func configureRepost(for tweet: Tweet, viewerHandle: String?) {
+        repostText = RepostLine.text(for: tweet, viewerHandle: viewerHandle)
+        guard let repostText else {
+            repostRow.isHidden = true
+            return
+        }
+        let line = Self.repostLineText(repostText)
+        repostLabel.attributedText = line.text
+        repostRow.directionalLayoutMargins.leading = max(
+            Self.sideMargin, Self.sideMargin + Self.avatarSize + DesignSystem.Spacing.m - line.leadWidth)
+        repostRow.isHidden = false
+    }
+
+    /// The repost line's font: a small caption that follows Dynamic Type but,
+    /// like the action bar's counts, stops at 20 pt.
+    static func repostFont() -> UIFont {
+        UIFontMetrics(forTextStyle: .footnote).scaledFont(
+            for: DesignSystem.Typography.system(13, weight: .semibold), maximumPointSize: 20)
+    }
+
+    /// The repost symbol and `text` in the muted caption colour, and how wide
+    /// the symbol and its gap are, so the words line up with the author's name
+    /// while the symbol hangs to their left.
+    private static func repostLineText(_ text: String) -> (text: NSAttributedString, leadWidth: CGFloat) {
+        let font = repostFont()
+        let color = DesignSystem.Color.secondaryLabel
+        let result = NSMutableAttributedString()
+        var leadWidth: CGFloat = 0
+        if let glyph = UIImage(systemName: "arrow.2.squarepath",
+                               withConfiguration: UIImage.SymbolConfiguration(font: font, scale: .small))?
+            .withTintColor(color, renderingMode: .alwaysOriginal) {
+            result.append(NSAttributedString(attachment: NSTextAttachment(image: glyph)))
+            let gap = NSAttributedString(string: "  ", attributes: [.font: font])
+            result.append(gap)
+            leadWidth = ceil(glyph.size.width + gap.size().width)
+        }
+        result.append(NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: color]))
+        return (result, leadWidth)
     }
 
     /// Shows the small "Replying to @a" line above a reply's text, or hides it
@@ -620,7 +676,8 @@ final class TweetCell: UICollectionViewCell {
         let verified = tweet.author.verified ? ", verified" : ""
         let replying = spokenReply(for: tweet)
         let when = Self.spokenTime.localizedString(for: tweet.createdAt, relativeTo: Date())
-        var parts = ["\(tweet.author.name)\(verified), @\(tweet.author.handle)\(replying), \(when)"]
+        var parts = repostText.map { [$0] } ?? []
+        parts.append("\(tweet.author.name)\(verified), @\(tweet.author.handle)\(replying), \(when)")
         let body = ReplyContext.body(of: tweet)
         if !body.isEmpty { parts.append(body) }
         if let media = Self.mediaSummary(tweet.media) { parts.append(media) }
@@ -674,6 +731,9 @@ final class TweetCell: UICollectionViewCell {
             action("Share") { [weak self] in self?.onShare?() },
             action("Open \(tweet.author.name)'s profile") { [weak self] in self?.onTapAuthor?() },
         ]
+        if let reposter = tweet.retweetedBy {
+            actions.append(action("Open \(reposter.name)'s profile") { [weak self] in self?.onTapReposter?() })
+        }
         let photoCount = tweet.media.filter { if case .photo = $0.kind { return true } else { return false } }.count
         for index in 0..<min(photoCount, 4) {
             actions.append(action(photoCount == 1 ? "View photo" : "View photo \(index + 1)") { [weak self] in
@@ -697,7 +757,23 @@ final class TweetCell: UICollectionViewCell {
 
     // MARK: - Hierarchy
 
+    /// The "reposted" line: muted, one line, tappable on its words only.
+    private func buildRepostRow() {
+        repostLabel.numberOfLines = 1
+        repostLabel.lineBreakMode = .byTruncatingTail
+        repostLabel.isUserInteractionEnabled = true
+        repostLabel.isAccessibilityElement = false
+        repostLabel.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(reposterTapped)))
+        repostRow.addArrangedSubview(repostLabel)
+        repostRow.addArrangedSubview(UIView())
+        repostRow.axis = .horizontal
+        repostRow.isLayoutMarginsRelativeArrangement = true
+        repostRow.directionalLayoutMargins = Self.sideInsets
+        repostRow.isHidden = true
+    }
+
     private func buildHierarchy() {
+        buildRepostRow()
         avatar.translatesAutoresizingMaskIntoConstraints = false
         avatar.setRounded(Self.avatarSize / 2)
         avatar.isUserInteractionEnabled = true
@@ -791,9 +867,10 @@ final class TweetCell: UICollectionViewCell {
         viewsLabel.addGestureRecognizer(viewsTap)
         statsView.isHidden = true
 
-        let column = UIStackView(arrangedSubviews: [header, replyCaption, bodyView, showMoreButton, mediaContent, quotedWrap, actionBar, statsView])
+        let column = UIStackView(arrangedSubviews: [repostRow, header, replyCaption, bodyView, showMoreButton, mediaContent, quotedWrap, actionBar, statsView])
         column.axis = .vertical
         column.spacing = DesignSystem.Spacing.s
+        column.setCustomSpacing(DesignSystem.Spacing.xs, after: repostRow)
         column.setCustomSpacing(DesignSystem.Spacing.xs, after: replyCaption)
         column.setCustomSpacing(DesignSystem.Spacing.xs, after: bodyView)
         column.setCustomSpacing(DesignSystem.Spacing.xs, after: actionBar)
@@ -930,6 +1007,10 @@ final class TweetCell: UICollectionViewCell {
     }
 
     @objc private func authorTapped() { onTapAuthor?() }
+    @objc private func reposterTapped() {
+        Haptics.selection()
+        onTapReposter?()
+    }
     @objc private func quotedTapped() { onTapQuoted?() }
     @objc private func showMoreTapped() {
         Haptics.tap()

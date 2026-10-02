@@ -74,9 +74,13 @@ class FeedViewController: UIViewController, TweetActionHandling {
                        bodyLineLimit: self.expandedBodies.contains(id) ? 0 : TweetCell.feedBodyLineLimit,
                        stats: PostStatsPolicy.content(
                            for: tweet, expanded: self.expandedStats.contains(id), isOwn: self.isOwnTweet(tweet),
-                           changed: { [weak self] in self?.reconfigure(id, animated: false) })) }
+                           changed: { [weak self] in self?.reconfigure(id, animated: false) }),
+                       viewerHandle: AppEnvironment.shared.currentHandle) }
         self.applyFlag(to: cell, author: tweet.author)
         cell.onTapAuthor = { [weak self] in self?.handleProfile(tweet.author.handle) }
+        if let reposter = tweet.retweetedBy {
+            cell.onTapReposter = { [weak self] in self?.handleProfile(reposter.handle) }
+        }
         cell.onTapPhoto = { [weak self] index in self?.openMedia(tweet, at: index) }
         cell.onTapCard = { url in UIApplication.shared.open(url) }
         cell.onReply = { [weak self] in self?.presentReply(tweet) }

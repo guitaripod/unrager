@@ -78,9 +78,13 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
                        focal: isFocal, indentLevel: indent,
                        stats: PostStatsPolicy.content(
                            for: tweet, expanded: self.expandedStats.contains(id), isOwn: ownTweet,
-                           changed: { [weak self] in self?.reconfigure(id, animated: false) }))
+                           changed: { [weak self] in self?.reconfigure(id, animated: false) }),
+                       viewerHandle: self.selfHandle ?? AppEnvironment.shared.currentHandle)
         self.applyFlag(to: cell, author: tweet.author)
         cell.onTapAuthor = { [weak self] in self?.push(ProfileViewController(handle: tweet.author.handle)) }
+        if let reposter = tweet.retweetedBy {
+            cell.onTapReposter = { [weak self] in self?.push(ProfileViewController(handle: reposter.handle)) }
+        }
         cell.onLike = { [weak self, weak cell] in self?.toggleLike(tweet, cell: cell) }
         cell.onReply = { [weak self] in self?.reply(to: tweet) }
         cell.onToggleRetweet = { [weak self, weak cell] in self?.toggleRetweet(tweet, cell: cell) }

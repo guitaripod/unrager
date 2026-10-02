@@ -10,6 +10,7 @@ import UnragerKit
 final class MediaCardView: UIView {
     var onTap: (() -> Void)?
 
+    private let tapGesture = UITapGestureRecognizer()
     private let coverBox = UIView()
     private let backdrop = AmbientBackdropView(frame: .zero)
     private let cover = AsyncImageView(frame: .zero)
@@ -31,7 +32,8 @@ final class MediaCardView: UIView {
         layer.borderColor = DesignSystem.Color.separator.cgColor
         clipsToBounds = true
         isUserInteractionEnabled = true
-        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped)))
+        tapGesture.addTarget(self, action: #selector(tapped))
+        addGestureRecognizer(tapGesture)
         registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: MediaCardView, _) in
             view.layer.borderColor = DesignSystem.Color.separator.cgColor
         }
@@ -133,6 +135,14 @@ final class MediaCardView: UIView {
         CGSize(width: contentWidth, height: (contentWidth / ratio).rounded())
     }
 
+    /// Whether the card opens something when tapped. Without a destination it
+    /// takes no taps, so a tap on it reaches the post under it instead of
+    /// going nowhere.
+    func setOpensLink(_ opens: Bool) {
+        tapGesture.isEnabled = opens
+        accessibilityTraits = opens ? .link : .staticText
+    }
+
     func configure(_ model: Model, contentWidth: CGFloat, imagesEnabled: Bool) {
         domainLabel.text = model.domain?.uppercased()
         domainLabel.isHidden = (model.domain ?? "").isEmpty
@@ -157,7 +167,6 @@ final class MediaCardView: UIView {
         }
 
         isAccessibilityElement = true
-        accessibilityTraits = .link
         let prefix = model.isLive ? "Live broadcast. " : (model.isPlayable ? "Video. " : "Link. ")
         accessibilityLabel = prefix + model.title + (model.detail.map { ". \($0)" } ?? "")
     }

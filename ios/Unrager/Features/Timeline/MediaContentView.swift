@@ -77,7 +77,8 @@ final class MediaContentView: UIView {
             showCard(.init(domain: domain, title: title, detail: description,
                            coverURL: imagesEnabled ? URL(string: rich.url) : nil,
                            isLive: false, isPlayable: false),
-                     target: URL(string: target), contentWidth: contentWidth, imagesEnabled: imagesEnabled)
+                     target: URL(string: target).flatMap { $0.host == nil ? nil : $0 },
+                     contentWidth: contentWidth, imagesEnabled: imagesEnabled)
         case .article(_, let title, let preview):
             showCard(.init(domain: "x.com", title: title, detail: preview,
                            coverURL: imagesEnabled ? URL(string: rich.url) : nil,
@@ -90,7 +91,7 @@ final class MediaContentView: UIView {
                      target: URL(string: "https://x.com/i/broadcasts/\(broadcastID)"),
                      contentWidth: contentWidth, imagesEnabled: imagesEnabled)
         case .youTube(let videoID):
-            showCard(.init(domain: "YouTube", title: tweet.text.isEmpty ? "Watch on YouTube" : tweet.text,
+            showCard(.init(domain: "YouTube", title: "Watch on YouTube",
                            detail: nil, coverURL: imagesEnabled ? URL(string: rich.url) : nil,
                            isLive: false, isPlayable: true, coverRatio: MediaShape.videoCover),
                      target: URL(string: "https://www.youtube.com/watch?v=\(videoID)"),
@@ -227,6 +228,7 @@ final class MediaContentView: UIView {
         view.onTap = { [weak self] in if let target { self?.onTapCard?(target) } }
         let inset = sideInset(isPicture: false)
         view.configure(model, contentWidth: contentWidth - 2 * inset, imagesEnabled: imagesEnabled)
+        view.setOpensLink(target != nil)
         swap(to: view, inset: inset)
     }
 

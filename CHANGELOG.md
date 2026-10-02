@@ -6,6 +6,7 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **Website cards open their page, and no longer leave a raw `t.co` link in the post.** For some posts X leaves a card's link out of the post's link list, so the card had no address to open (a tap did nothing) and its short link stayed visible in the text. The short link now opens the page and is taken out of the text like any other card link; a card with no address at all passes the tap to the post, and a YouTube card says "Watch on YouTube" instead of repeating the post's own text. Posts already saved in the Home buffer keep the old card until they age out.
 - **Photos, clips and link covers are never cropped in the iPhone app.** A phone portrait (3:4) used to lose a few percent at its edges, and a link cover, a very wide or very tall image, or one the server mis-measured was cut to fit. Every picture is now drawn whole: a lone one gets a frame of its own shape from 3:4 up to a 3:1 panorama, and anything beyond that sits over a frosted copy of itself instead of black bars (also in galleries of two to four, in quoted posts and in link and YouTube cards). Photos with a description wear an ALT badge, pictures dissolve in as they load, rounded media gets a hairline edge on dark pages, and nothing moves while images arrive.
 ## [0.27.0] — 2026-10-02
 

@@ -1393,6 +1393,13 @@ mod tests {
             avatar_url: None,
             followed_by_me: None,
             banner_url: None,
+            description: None,
+            location: None,
+            website: None,
+            joined_at: None,
+            protected: false,
+            muting: None,
+            blocking: None,
         };
         let mut view = LikersView::new("tweet1".into(), "likers".into());
         view.users = vec![mk_user("u0"), mk_user("u1")];

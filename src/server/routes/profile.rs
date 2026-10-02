@@ -38,7 +38,7 @@ pub async fn profile(
         .pointer("/data/user/result")
         .or_else(|| user_response.pointer("/data/user_v2/result"))
         .ok_or_else(|| ApiError::bad_request("user not found"))?;
-    let user = parse_user::parse_user_result(user_node)
+    let user = parse_user::parse_profile_result(user_node)
         .ok_or_else(|| ApiError::bad_request("user response shape unexpected"))?;
 
     let op = if q.include_replies {

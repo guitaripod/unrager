@@ -504,6 +504,13 @@ mod tests {
                 avatar_url: None,
                 followed_by_me: None,
                 banner_url: None,
+                description: None,
+                location: None,
+                website: None,
+                joined_at: None,
+                protected: false,
+                muting: None,
+                blocking: None,
             }],
             cursor: Some("next".into()),
             verified_only: true,
@@ -609,6 +616,34 @@ mod tests {
         .unwrap();
         let v = serde_json::to_value(&with).unwrap();
         assert_eq!(v["banner_url"], json!("https://pbs.twimg.com/b/1500x500"));
+    }
+
+    #[test]
+    fn user_profile_fields_decode_when_absent_and_roundtrip_when_present() {
+        let bare: crate::User = serde_json::from_str(
+            r#"{"rest_id":"1","handle":"a","name":"A","verified":false,
+                "followers":0,"following":0}"#,
+        )
+        .unwrap();
+        assert_eq!(bare.description, None);
+        assert!(!bare.protected);
+        assert_eq!((bare.muting, bare.blocking), (None, None));
+
+        let full: crate::User = serde_json::from_str(
+            r#"{"rest_id":"1","handle":"a","name":"A","verified":false,
+                "followers":0,"following":0,"description":"bio","location":"Turku",
+                "website":"https://a.example","joined_at":"2018-10-10T20:19:24Z",
+                "protected":true,"muting":false,"blocking":true}"#,
+        )
+        .unwrap();
+        let v = serde_json::to_value(&full).unwrap();
+        assert_eq!(v["description"], json!("bio"));
+        assert_eq!(v["location"], json!("Turku"));
+        assert_eq!(v["website"], json!("https://a.example"));
+        assert_eq!(v["joined_at"], json!("2018-10-10T20:19:24Z"));
+        assert_eq!(v["protected"], json!(true));
+        assert_eq!(v["muting"], json!(false));
+        assert_eq!(v["blocking"], json!(true));
     }
 
     #[test]

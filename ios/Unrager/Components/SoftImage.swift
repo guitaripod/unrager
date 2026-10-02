@@ -8,6 +8,11 @@ import UIKit
 enum SoftImage {
     private static let width: CGFloat = 96
     private nonisolated(unsafe) static let cache = NSCache<NSString, UIImage>()
+    /// One Core Image context for every blur: building one is costly, and it
+    /// is safe to share across threads.
+    private nonisolated(unsafe) static let context = CIContext(options: [.cacheIntermediates: false])
+    /// Blur radius in pixels of the `width`-pixel copy.
+    private static let sigma: Double = 2.5
 
     /// The blurred copy, remembered under `key` so a recycled cell reuses it.
     static func blurred(_ image: UIImage, key: String) async -> UIImage? {
@@ -25,12 +30,13 @@ enum SoftImage {
     private nonisolated static func render(_ image: UIImage) -> (blurred: UIImage?, topBrightness: CGFloat) {
         guard let source = image.cgImage else { return (nil, 1) }
         let height = max(1, (width * CGFloat(source.height) / CGFloat(source.width)).rounded())
-        let small = UIGraphicsImageRenderer(size: CGSize(width: width, height: height)).image { _ in
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let small = UIGraphicsImageRenderer(size: CGSize(width: width, height: height), format: format).image { _ in
             image.draw(in: CGRect(x: 0, y: 0, width: width, height: height))
         }
         guard let input = small.cgImage.map(CIImage.init(cgImage:)) else { return (nil, 1) }
-        let context = CIContext()
-        let blurred = input.clampedToExtent().applyingGaussianBlur(sigma: 5).cropped(to: input.extent)
+        let blurred = input.clampedToExtent().applyingGaussianBlur(sigma: sigma).cropped(to: input.extent)
         let output = context.createCGImage(blurred, from: blurred.extent).map { UIImage(cgImage: $0) }
         return (output, topBrightness(of: input, context: context))
     }

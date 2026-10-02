@@ -235,6 +235,13 @@ final class HomeViewController: FeedViewController {
         let button = UIButton(configuration: config)
         button.setConcentricCorners(minimum: 28)
         button.addAction(UIAction { [weak self] _ in self?.presentCompose() }, for: .touchUpInside)
+        button.menu = UIMenu(children: [
+            UIDeferredMenuElement.uncached { [weak self] completion in
+                completion(self?.composeMenuElements() ?? [])
+            },
+        ])
+        button.accessibilityLabel = "Compose"
+        button.accessibilityHint = "Starts a new post. Touch and hold for more."
         view.addManaged(button)
         NSLayoutConstraint.activate([
             button.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -DesignSystem.Spacing.l),
@@ -244,8 +251,51 @@ final class HomeViewController: FeedViewController {
         ])
     }
 
-    private func presentCompose() {
-        let compose = ComposeViewController(mode: .new)
+    private func presentCompose(opensPhotoPicker: Bool = false) {
+        let compose = ComposeViewController(mode: .new, opensPhotoPicker: opensPhotoPicker)
         present(UINavigationController(rootViewController: compose), animated: true)
+    }
+
+    /// What a touch and hold on the compose button offers, built each time it
+    /// opens so it reflects the feed as it is then: writing, the feed's own
+    /// shortcuts, and which app a post goes through.
+    private func composeMenuElements() -> [UIMenuElement] {
+        let writing = UIMenu(options: .displayInline, children: [
+            UIAction(title: "New post", image: DesignSystem.icon("square.and.pencil")) { [weak self] _ in
+                self?.presentCompose()
+            },
+            UIAction(title: "Post with a photo", image: DesignSystem.icon("photo.badge.plus")) { [weak self] _ in
+                self?.presentCompose(opensPhotoPicker: true)
+            },
+        ])
+        var feed: [UIMenuElement] = [
+            UIAction(title: "Refresh", image: DesignSystem.icon("arrow.clockwise")) { [weak self] _ in
+                Haptics.selection()
+                self?.viewModel.refresh()
+            },
+            UIAction(title: "Jump to top", image: DesignSystem.icon("arrow.up.to.line")) { [weak self] _ in
+                guard let self else { return }
+                Haptics.selection()
+                self.collectionView.setContentOffset(
+                    CGPoint(x: 0, y: -self.collectionView.adjustedContentInset.top), animated: true)
+            },
+        ]
+        if viewModel.supportsSeenTracking, viewModel.unreadCount > 0 {
+            feed.append(UIAction(
+                title: "Mark \(viewModel.unreadCount) as read", image: DesignSystem.icon("checkmark.circle")
+            ) { [weak self] _ in
+                Haptics.success()
+                self?.viewModel.markAllRead()
+            })
+        }
+        let viaX = AppSettings.composeViaOfficialApp
+        let destination = UIAction(
+            title: "Post with the X app", image: DesignSystem.icon("arrow.up.forward.app"),
+            state: viaX ? .on : .off
+        ) { _ in
+            Haptics.selection()
+            AppSettings.composeViaOfficialApp.toggle()
+        }
+        return [writing, UIMenu(options: .displayInline, children: feed), UIMenu(options: .displayInline, children: [destination])]
     }
 }

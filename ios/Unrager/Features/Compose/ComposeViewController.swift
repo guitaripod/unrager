@@ -49,8 +49,12 @@ final class ComposeViewController: UIViewController {
 
     private static let maxAttachments = 4
 
-    init(mode: Mode) {
+    /// Whether the photo picker opens as soon as the screen is up.
+    private var opensPhotoPicker: Bool
+
+    init(mode: Mode, opensPhotoPicker: Bool = false) {
         self.mode = mode
+        self.opensPhotoPicker = opensPhotoPicker
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -133,7 +137,12 @@ final class ComposeViewController: UIViewController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         navigationController?.presentationController?.delegate = self
-        textView.becomeFirstResponder()
+        if opensPhotoPicker {
+            opensPhotoPicker = false
+            presentPicker()
+        } else {
+            textView.becomeFirstResponder()
+        }
     }
 
     // MARK: - Attachments

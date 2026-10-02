@@ -379,6 +379,7 @@ mod tests {
             is_blue_verified: false,
             verified: false,
             verified_since: None,
+            community: false,
         }
     }
 

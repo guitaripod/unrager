@@ -10,6 +10,7 @@ use crate::gql::endpoints;
 use crate::gql::query_ids::Operation;
 use crate::model::AboutProfile;
 use crate::parse::about;
+use crate::store::community::CommunityCache;
 use rusqlite::{Connection, params};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -29,6 +30,10 @@ const NEGATIVE_TTL_DAYS: i64 = 30;
 /// `2`: clears entries written before the rate-limit-failures-as-None
 /// fix shipped, since those would otherwise hide flags for 30 days.
 const SCHEMA_VERSION: i64 = 2;
+
+/// Entries filled from the community cache are partial and may be stale, so
+/// they are looked up again after this many days.
+const COMMUNITY_TTL_DAYS: i64 = 14;
 
 /// The canonical `about.db` location inside the cache dir, shared by the TUI
 /// and the server so both processes hit the same cache.
@@ -89,19 +94,38 @@ impl AboutStore {
             tracing::info!(pruned, "about.db: pruned stale negative entries");
         }
 
-        let mut stmt = conn.prepare("SELECT rest_id, payload FROM about")?;
+        let community_cutoff = chrono::Utc::now().timestamp() - COMMUNITY_TTL_DAYS * 86400;
+        let mut stmt = conn.prepare("SELECT rest_id, fetched_at, payload FROM about")?;
         let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
         })?;
         let mut cache: HashMap<String, Option<AboutProfile>> = HashMap::new();
+        let mut expired: Vec<String> = Vec::new();
         for r in rows {
-            let (rest_id, payload) = r?;
-            let parsed = payload
+            let (rest_id, fetched_at, payload) = r?;
+            let parsed: Option<AboutProfile> = payload
                 .as_deref()
                 .and_then(|s| serde_json::from_str(s).ok());
+            if parsed.as_ref().is_some_and(|p| p.community) && fetched_at < community_cutoff {
+                expired.push(rest_id);
+                continue;
+            }
             cache.insert(rest_id, parsed);
         }
         drop(stmt);
+        for rest_id in &expired {
+            conn.execute("DELETE FROM about WHERE rest_id = ?1", params![rest_id])?;
+        }
+        if !expired.is_empty() {
+            tracing::info!(
+                expired = expired.len(),
+                "about.db: dropped stale community entries"
+            );
+        }
         tracing::debug!(entries = cache.len(), "about.db: loaded");
         Ok(Self { conn, cache })
     }
@@ -147,6 +171,7 @@ pub type FetchOutcome = std::result::Result<Option<AboutProfile>, AboutUnavailab
 pub struct AboutFetcher {
     client: Arc<GqlClient>,
     sem: Arc<Semaphore>,
+    community: Option<Arc<CommunityCache>>,
 }
 
 impl AboutFetcher {
@@ -154,7 +179,14 @@ impl AboutFetcher {
         Self {
             client,
             sem: Arc::new(Semaphore::new(1)),
+            community: None,
         }
+    }
+
+    /// Asks the community cache before X in `resolve`.
+    pub fn with_community(mut self, community: Option<Arc<CommunityCache>>) -> Self {
+        self.community = community;
+        self
     }
 
     /// One single-flighted `AboutAccountQuery` round-trip. The semaphore
@@ -169,7 +201,9 @@ impl AboutFetcher {
     }
 
     /// Cache-through resolution for inline callers (the server route):
-    /// answer from `store` when the user is already known, otherwise
+    /// answer from `store` when the user is already known, then from the
+    /// community cache when one is configured (ahead of the rate-limit check,
+    /// so flags keep coming while X refuses the query), otherwise
     /// single-flight an upstream fetch and cache only `Ok` outcomes —
     /// `Err` means rate-limited/transient, which must stay retryable.
     /// The store is re-checked after the permit is acquired so concurrent
@@ -182,6 +216,12 @@ impl AboutFetcher {
     ) -> FetchOutcome {
         if let Some(entry) = store.lock().await.get(rest_id) {
             return Ok(entry.clone());
+        }
+        if let Some(community) = &self.community
+            && let Some(profile) = community.lookup(rest_id, screen_name).await
+        {
+            store.lock().await.put(rest_id, Some(profile.clone()));
+            return Ok(Some(profile));
         }
         if self.client.about_rate_limit_remaining().is_some() {
             return Err(AboutUnavailable);
@@ -256,6 +296,7 @@ mod tests {
             is_blue_verified: false,
             verified: false,
             verified_since: None,
+            community: false,
         }
     }
 
@@ -321,6 +362,63 @@ mod tests {
         s.put("400", Some(sample_profile("400", Some("Canada"))));
         let got = s.get("400").unwrap().as_ref().unwrap();
         assert_eq!(got.account_based_in.as_deref(), Some("Canada"));
+    }
+
+    #[test]
+    fn community_entries_expire_but_x_entries_stay() {
+        let tmp = NamedTempFile::new().unwrap();
+        {
+            let mut s = AboutStore::open(tmp.path()).unwrap();
+            let mut community = sample_profile("500", Some("Japan"));
+            community.community = true;
+            s.put("500", Some(community));
+            s.put("501", Some(sample_profile("501", Some("Japan"))));
+        }
+        let old = chrono::Utc::now().timestamp() - (COMMUNITY_TTL_DAYS + 1) * 86400;
+        Connection::open(tmp.path())
+            .unwrap()
+            .execute("UPDATE about SET fetched_at = ?1", params![old])
+            .unwrap();
+        let s = AboutStore::open(tmp.path()).unwrap();
+        assert!(!s.has("500"));
+        assert!(s.has("501"));
+    }
+
+    #[test]
+    fn fresh_community_entries_are_kept() {
+        let tmp = NamedTempFile::new().unwrap();
+        {
+            let mut s = AboutStore::open(tmp.path()).unwrap();
+            let mut community = sample_profile("600", Some("Japan"));
+            community.community = true;
+            s.put("600", Some(community));
+        }
+        let s = AboutStore::open(tmp.path()).unwrap();
+        assert!(s.get("600").unwrap().as_ref().unwrap().community);
+    }
+
+    #[tokio::test]
+    async fn resolve_answers_from_the_community_cache_and_stores_it() {
+        use crate::store::community::test_support::serve;
+        let tmp = TempDir::new().unwrap();
+        let (community, service) = serve(serde_json::json!({
+            "results": { "someone": {
+                "l": "Japan", "d": "Japan App Store", "a": true,
+                "t": chrono::Utc::now().timestamp() - 60, "id": "700",
+            } },
+        }))
+        .await;
+        let fetcher = dummy_fetcher(&tmp).with_community(Some(community));
+        let store = Mutex::new(AboutStore::open(&tmp.path().join("about.db")).unwrap());
+
+        let resolved = fetcher.resolve(&store, "700", "someone").await.unwrap();
+        let profile = resolved.unwrap();
+        assert_eq!(profile.account_based_in.as_deref(), Some("Japan"));
+        assert!(profile.community);
+        assert!(store.lock().await.has("700"));
+
+        fetcher.resolve(&store, "700", "someone").await.unwrap();
+        assert_eq!(service.requests.lock().unwrap().len(), 1);
     }
 
     #[test]

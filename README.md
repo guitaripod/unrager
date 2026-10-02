@@ -460,6 +460,18 @@ recent_poll_secs = 1200 # cadence while filling the buffer in the background
 </details>
 
 <details>
+<summary><strong>Country flags</strong></summary>
+
+Flags come from X's own "About this account" lookup, one author at a time on your X session, which X rate-limits. `unrager serve` can ask the community cache behind the [X-Posed](https://github.com/xaitax/x-account-location-device) extension first: one batched request returns the country, device and account age of every author on screen, and flags keep loading while X refuses the query. It is off by default because each lookup tells that third-party service which handles you are looking at (nothing else, and nothing is ever contributed back). The terminal client always asks X.
+
+```toml
+[about]
+community_cache = true
+```
+
+</details>
+
+<details>
 <summary><strong>Theme</strong></summary>
 
 ```toml

@@ -26,6 +26,20 @@ pub struct AppConfig {
     pub oauth: OAuthConfig,
     #[serde(default)]
     pub feed: FeedConfig,
+    #[serde(default)]
+    pub about: AboutConfig,
+}
+
+/// Where country flags come from.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct AboutConfig {
+    /// Ask the X-Posed community cache for an author's country before asking
+    /// X, so flags load in one batched request and keep loading while X
+    /// rate-limits `AboutAccountQuery`. Off by default: each lookup sends the
+    /// handles being looked at to a third-party service. Applies to
+    /// `unrager serve` (the iPhone app's flags); the terminal client asks X.
+    #[serde(default)]
+    pub community_cache: bool,
 }
 
 /// Controls the materialized Home-feed buffer (`feed.db`) and how aggressively

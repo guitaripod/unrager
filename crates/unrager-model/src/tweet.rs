@@ -181,4 +181,9 @@ pub struct AboutProfile {
     pub verified: bool,
     #[serde(default)]
     pub verified_since: Option<DateTime<Utc>>,
+    /// Filled from the X-Posed community cache rather than X: the country,
+    /// device and a few counters, with verification and the display name
+    /// unknown. Omitted when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub community: bool,
 }

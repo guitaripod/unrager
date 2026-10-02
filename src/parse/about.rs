@@ -91,6 +91,7 @@ pub fn parse(response: &Value) -> Result<AboutProfile> {
         is_blue_verified,
         verified,
         verified_since,
+        community: false,
     })
 }
 

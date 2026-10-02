@@ -8,6 +8,7 @@ use crate::model::{Tweet, User};
 use crate::parse::tweet as parse_tweet;
 use crate::parse::user as parse_user;
 use crate::store::about::{self, AboutFetcher, AboutStore};
+use crate::store::community::{self, CommunityCache};
 use crate::store::feed::FeedStore;
 use crate::store::ingest::Activity;
 use crate::tui::filter::{Classifier, FilterCache, FilterConfig};
@@ -113,7 +114,14 @@ impl AppState {
         let feed = FeedStore::open_reader(&feed_db_path)?;
 
         let about_store = AboutStore::open(&about::db_path(&cache_dir))?;
-        let about_fetcher = AboutFetcher::new(gql.clone());
+        let community = app_config.about.community_cache.then(|| {
+            tracing::info!(
+                "community flag cache on: handles in view are sent to {}",
+                community::DEFAULT_URL
+            );
+            CommunityCache::new(community::DEFAULT_URL)
+        });
+        let about_fetcher = AboutFetcher::new(gql.clone()).with_community(community);
 
         let session_path = config_dir.join("server-session.json");
         let state: SessionState = load_session_state(&session_path).unwrap_or_default();

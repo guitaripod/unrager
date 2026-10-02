@@ -4,6 +4,7 @@
 //! so opening the app is instant instead of waiting on a live X fetch + Ollama.
 
 pub mod about;
+pub mod community;
 pub mod feed;
 pub mod ingest;
 

@@ -63,6 +63,7 @@ final class RootViewController: UITabBarController {
     }
 
     @objc private func newTweetCommand() {
+        guard presentedViewController == nil else { return }
         let compose = ComposeViewController(mode: .new)
         present(UINavigationController(rootViewController: compose), animated: true)
     }
@@ -75,8 +76,11 @@ final class RootViewController: UITabBarController {
     }
 
     @objc private func searchCommand() {
-        guard let index = selectedTabs.firstIndex(of: .search) else { return }
+        guard presentedViewController == nil, let index = selectedTabs.firstIndex(of: .search) else { return }
         selectedIndex = index
+        let nav = viewControllers?[index] as? UINavigationController
+        nav?.popToRootViewController(animated: false)
+        (nav?.viewControllers.first as? SearchViewController)?.focusSearchField()
     }
 
     // MARK: - Notifications tab
@@ -105,7 +109,7 @@ final class RootViewController: UITabBarController {
     private weak var activeToast: NotificationToast?
 
     /// Drops an in-app Liquid Glass toast for freshly-arrived notifications while
-    /// the app is foregrounded. A single item shows who-did-what + the snippet; a
+    /// the app is foregrounded, on the window so it shows above an open sheet. A single item shows who-did-what + the snippet; a
     /// batch coalesces into a count. Tapping deep-links into the activity.
     func showNotificationToast(_ notifications: [XNotification]) {
         guard let first = notifications.first else { return }
@@ -117,7 +121,7 @@ final class RootViewController: UITabBarController {
             [weak self] in self?.handleToastTap(notifications)
         }
         activeToast = toast
-        toast.present(in: view)
+        toast.present(in: view.window ?? view)
     }
 
     private func handleToastTap(_ notifications: [XNotification]) {
@@ -134,26 +138,85 @@ final class RootViewController: UITabBarController {
         }
     }
 
-    /// Switches to the Notifications tab at its root (or Home as a fallback) —
-    /// where a tapped summary banner lands.
+    /// Switches to the Notifications tab at its root — where a tapped summary
+    /// banner lands — or, without that tab, pushes the list onto the stack in
+    /// front.
     func showNotificationsTab() {
-        guard let index = notificationsTabIndex else {
-            (selectedViewController as? UINavigationController)?
-                .pushViewController(NotificationsViewController(), animated: true)
-            return
+        afterClosingSheets { [weak self] in
+            guard let self else { return }
+            guard let index = self.notificationsTabIndex else {
+                (self.selectedViewController as? UINavigationController)?
+                    .pushViewController(NotificationsViewController(), animated: true)
+                return
+            }
+            self.selectedIndex = index
+            (self.viewControllers?[index] as? UINavigationController)?.popToRootViewController(animated: false)
         }
-        selectedIndex = index
-        (viewControllers?[index] as? UINavigationController)?.popToRootViewController(animated: false)
     }
 
-    /// Switches to the Notifications tab (or Home as a fallback) and pushes a
-    /// view controller onto that stack — used to deep-link a tapped banner.
+    /// Pushes a view controller onto the Notifications tab's stack — used to
+    /// deep-link a tapped banner or toast — or, without that tab, onto the
+    /// stack in front, leaving what the user was reading underneath.
     func openInNotificationsStack(_ controller: UIViewController) {
-        let index = notificationsTabIndex ?? 0
-        selectedIndex = index
-        guard let nav = viewControllers?[index] as? UINavigationController else { return }
-        nav.popToRootViewController(animated: false)
-        nav.pushViewController(controller, animated: true)
+        afterClosingSheets { [weak self] in
+            guard let self else { return }
+            guard let index = self.notificationsTabIndex else {
+                (self.selectedViewController as? UINavigationController)?.pushViewController(controller, animated: true)
+                return
+            }
+            self.selectedIndex = index
+            guard let nav = self.viewControllers?[index] as? UINavigationController else { return }
+            nav.popToRootViewController(animated: false)
+            nav.pushViewController(controller, animated: true)
+        }
+    }
+
+    // MARK: - Routing past sheets
+
+    /// A route held back by a sheet that can't be closed for it (a composer
+    /// with a draft), run once that sheet is dismissed.
+    private var pendingRoute: (() -> Void)?
+
+    /// Runs `route` where the user can see it: at once when nothing is
+    /// presented, after closing the sheets when something is, and once the
+    /// sheet closes on its own when it holds unsaved work.
+    private func afterClosingSheets(_ route: @escaping () -> Void) {
+        guard let presented = presentedViewController else {
+            pendingRoute = nil
+            route()
+            return
+        }
+        if Self.holdsUnsavedWork(presented) {
+            pendingRoute = route
+            return
+        }
+        pendingRoute = nil
+        dismiss(animated: true, completion: route)
+    }
+
+    /// Whether any sheet in the chain refuses to be swiped away, which is how
+    /// the composer marks a draft.
+    private static func holdsUnsavedWork(_ presented: UIViewController) -> Bool {
+        var controller: UIViewController? = presented
+        while let current = controller {
+            if current.isModalInPresentation
+                || (current as? UINavigationController)?.topViewController?.isModalInPresentation == true {
+                return true
+            }
+            controller = current.presentedViewController
+        }
+        return false
+    }
+
+    /// A sheet closing (its own Cancel or Post goes through here) releases a
+    /// route it held back.
+    override func dismiss(animated flag: Bool, completion: (() -> Void)? = nil) {
+        super.dismiss(animated: flag) { [weak self] in
+            completion?()
+            guard let self, self.presentedViewController == nil, let route = self.pendingRoute else { return }
+            self.pendingRoute = nil
+            route()
+        }
     }
 }
 

@@ -35,6 +35,17 @@ final class SearchViewController: FeedViewController {
         refreshRecents()
     }
 
+    /// Puts the cursor in the search field (⌘F). Waits a run-loop turn so a
+    /// tab that was only just selected is on screen first.
+    func focusSearchField() {
+        loadViewIfNeeded()
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.searchController.isActive = true
+            self.searchController.searchBar.becomeFirstResponder()
+        }
+    }
+
     /// People results are accounts rather than tweets, so they are listed by
     /// their own screen laid over the feed.
     private var peopleController: PeopleResultsViewController?

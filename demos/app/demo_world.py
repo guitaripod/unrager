@@ -269,7 +269,7 @@ class World:
     def profile_user(self, handle: str) -> dict:
         c = next(c for c in CAST if c[0] == handle)
         user = self._user(c, banner=True)
-        user["followed_by_me"] = handle in ("mirakoski", "fieldnotes", "anyavoss", "kitwren")
+        user["followed_by_me"] = handle in ("mirakoski", "fieldnotes", "anyavoss", "kitwren", "quietfern")
         details = PROFILES.get(handle)
         if details:
             bio, location, website, joined = details
@@ -411,23 +411,42 @@ class World:
 
         o1 = self.by_key["o1"]
         o2 = self.by_key["o2"]
+        clip = self.by_key["f17"]
         return [
             {"id": "n1", "type": "Like", "actors": [actor("mirakoski"), actor("anyavoss"), actor("fieldnotes")],
              "others_count": 41, "target_tweet_id": o2["rest_id"], "target_tweet_snippet": o2["text"],
-             "target_tweet_like_count": 144, "target_media": o2["media"], "timestamp": ago(minutes=6)},
+             "target_tweet_like_count": 1432, "target_media": o2["media"], "timestamp": ago(minutes=6)},
             {"id": "n2", "type": "Reply", "actors": [actor("tomasbuilds")], "target_tweet_id": self.ids["q2"],
-             "target_tweet_snippet": "Details are the whole thing. Saving this one.", "target_media": [],
-             "timestamp": ago(minutes=11)},
+             "target_tweet_snippet": "Details are the whole thing. Saving this one. Also: the way the tab bar tucks away on scroll is the nicest thing I have used all year 🙌",
+             "target_media": [], "timestamp": ago(minutes=11)},
             {"id": "n3", "type": "Follow", "actors": [actor("kitwren"), actor("junocooks")], "others_count": 6,
              "target_media": [], "timestamp": ago(minutes=38)},
+            {"id": "n3b", "type": "Follow", "actors": [actor("maxplays")], "target_media": [],
+             "timestamp": ago(minutes=52)},
             {"id": "n4", "type": "Retweet", "actors": [actor("orbitaldaily")], "target_tweet_id": o1["rest_id"],
-             "target_tweet_snippet": o1["text"], "target_media": [], "timestamp": ago(minutes=64)},
+             "target_tweet_snippet": o1["text"], "target_tweet_like_count": 61, "target_media": [],
+             "timestamp": ago(minutes=64)},
             {"id": "n5", "type": "Mention", "actors": [actor("lenapark")], "target_tweet_id": self.ids["f6"],
              "target_tweet_snippet": "@noralind have you seen Mira's two onboarding directions?", "target_media": [],
              "timestamp": ago(minutes=95)},
             {"id": "n6", "type": "Like", "actors": [actor("ravimenon"), actor("inesduarte")], "others_count": 4,
-             "target_tweet_id": o1["rest_id"], "target_tweet_snippet": o1["text"], "target_media": [],
-             "timestamp": ago(minutes=130)},
-            {"id": "n7", "type": "Follow", "actors": [actor("maxplays")], "target_media": [],
-             "timestamp": ago(minutes=240)},
+             "target_tweet_id": o1["rest_id"], "target_tweet_snippet": o1["text"], "target_tweet_like_count": 61,
+             "target_media": [], "timestamp": ago(minutes=130)},
+            {"id": "n6b", "type": "Quote", "actors": [actor("fieldnotes")], "target_tweet_id": self.ids["q2"],
+             "target_tweet_snippet": "This is the whole job, really. Taste is just noticing more than other people do.",
+             "target_media": clip["media"], "timestamp": ago(hours=4)},
+            {"id": "n7", "type": "Follow", "actors": [actor("quietfern")], "target_media": [],
+             "timestamp": ago(hours=6)},
+            {"id": "n8", "type": "Like", "actors": [actor("samreyes_")], "target_tweet_id": o2["rest_id"],
+             "target_tweet_snippet": "", "target_tweet_like_count": 1432, "target_media": o2["media"],
+             "timestamp": ago(hours=19)},
+            {"id": "n9", "type": "Poll", "actors": [], "message": "Your poll has ended", "target_media": [],
+             "timestamp": ago(hours=26)},
+            {"id": "n10", "type": "Reply", "actors": [actor("thelongwalk")], "target_tweet_id": self.ids["q2"],
+             "target_tweet_snippet": "Seconded.", "target_media": [], "timestamp": ago(days=2)},
+            {"id": "n11", "type": "Like", "actors": [actor("orbitaldaily"), actor("junocooks"), actor("kitwren")],
+             "others_count": 1200, "target_tweet_id": o1["rest_id"], "target_tweet_snippet": o1["text"],
+             "target_tweet_like_count": 18400, "target_media": [], "timestamp": ago(days=3)},
+            {"id": "n12", "type": "Follow", "actors": [actor("hottakeshourly")], "target_media": [],
+             "timestamp": ago(days=9)},
         ]

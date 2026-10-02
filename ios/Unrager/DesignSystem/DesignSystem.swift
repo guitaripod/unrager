@@ -38,6 +38,23 @@ enum DesignSystem {
             }
         }
         static var quote: UIColor { UIColor(red: 0.471, green: 0.353, blue: 0.961, alpha: 1) }
+        /// New followers: a clear teal that sits apart from the reply blue and
+        /// the repost green.
+        static var follow: UIColor {
+            UIColor { trait in
+                (trait.userInterfaceStyle == .dark
+                    ? UIColor(red: 0.247, green: 0.831, blue: 0.902, alpha: 1)
+                    : UIColor(red: 0.055, green: 0.486, blue: 0.549, alpha: 1)).forContrast(of: trait)
+            }
+        }
+        /// Notes and trends: a warm amber for activity that isn't a person.
+        static var spark: UIColor {
+            UIColor { trait in
+                (trait.userInterfaceStyle == .dark
+                    ? UIColor(red: 1.0, green: 0.541, blue: 0.31, alpha: 1)
+                    : UIColor(red: 0.69, green: 0.337, blue: 0.106, alpha: 1)).forContrast(of: trait)
+            }
+        }
         static var verified: UIColor { accent }
         static var live: UIColor { .systemRed }
         /// The unread count on the Notifications tab: a calm blue that holds

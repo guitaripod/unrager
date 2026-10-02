@@ -114,8 +114,8 @@ final class RootViewController: UITabBarController {
         guard let first = notifications.first else { return }
         activeToast?.dismiss()
         let content = notifications.count > 1
-            ? NotificationsViewController.toastSummary(count: notifications.count)
-            : NotificationsViewController.toastContent(for: first)
+            ? NotificationPresentation.toastSummary(count: notifications.count)
+            : NotificationPresentation.toastContent(for: first)
         let toast = NotificationToast(badge: content.badge, title: content.title, subtitle: content.subtitle) {
             [weak self] in self?.handleToastTap(notifications)
         }

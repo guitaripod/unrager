@@ -279,7 +279,7 @@ final class NotificationCenterService: NSObject {
         }
         for notif in allowed {
             let content = UNMutableNotificationContent()
-            let style = NotificationsViewController.bannerCopy(for: notif)
+            let style = NotificationPresentation.bannerCopy(for: notif)
             content.title = style.title
             content.body = style.body
             content.userInfo = userInfo(for: notif)

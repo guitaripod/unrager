@@ -72,10 +72,10 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                 }
             case "notifications":
                 root.selectedIndex = 2
-                if parts.count > 1, parts[1] == "mentions" {
-                    ((root.viewControllers?[2] as? UINavigationController)?
-                        .viewControllers.first as? NotificationsViewController)?.debugShowMentions()
-                }
+                let list = (root.viewControllers?[2] as? UINavigationController)?
+                    .viewControllers.first as? NotificationsViewController
+                if parts.count > 1 { list?.debugSelect(parts[1]) }
+                if parts.count > 2, let points = Double(parts[2]) { list?.debugScroll(by: CGFloat(points)) }
             case "notifsettings":
                 root.selectedIndex = 3
                 let notificationSettings = NotificationSettingsViewController()

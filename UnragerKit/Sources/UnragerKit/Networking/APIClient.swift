@@ -105,6 +105,16 @@ public final class APIClient: Sendable {
         return try await get("api/thread/\(pathSegment(id))", query: query, as: ThreadView.self)
     }
 
+    /// X's analytics for one of the signed-in account's own posts, or nil for
+    /// anyone else's (X sends nothing, and the server answers 404).
+    public func postAnalytics(tweetID: String) async throws -> PostAnalytics? {
+        do {
+            return try await get("api/tweets/\(pathSegment(tweetID))/analytics", as: PostAnalytics.self)
+        } catch APIError.notFound {
+            return nil
+        }
+    }
+
     // MARK: - Profiles / Likers
 
     public func profile(handle: String, includeReplies: Bool = false) async throws -> ProfileView {

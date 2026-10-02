@@ -73,7 +73,10 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
         cell.configure(with: tweet, imagesEnabled: AppSettings.imagesEnabled,
                        contentWidth: max(120, width - CGFloat(min(indent, 3)) * ThreadRailView.step),
                        impliedReplyHandles: self.impliedReplyHandles(for: id),
-                       focal: isFocal, ownTweet: ownTweet, indentLevel: indent)
+                       focal: isFocal, indentLevel: indent,
+                       stats: PostStatsPolicy.content(
+                           for: tweet, expanded: self.expandedStats.contains(id), isOwn: ownTweet,
+                           changed: { [weak self] in self?.reconfigure(id, animated: false) }))
         self.applyFlag(to: cell, author: tweet.author)
         cell.onTapAuthor = { [weak self] in self?.push(ProfileViewController(handle: tweet.author.handle)) }
         cell.onLike = { [weak self, weak cell] in self?.toggleLike(tweet, cell: cell) }
@@ -82,6 +85,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
         cell.onQuote = { [weak self] in self?.presentQuote(tweet) }
         cell.onToggleBookmark = { [weak self, weak cell] in self?.toggleBookmark(tweet, cell: cell) }
         cell.onShare = { [weak self] in self?.shareTweet(tweet) }
+        cell.onToggleStats = { [weak self] in self?.toggleStats(id) }
         if ownTweet {
             cell.enableLikers { [weak self] in self?.push(LikersViewController(tweetID: tweet.restID)) }
         }
@@ -94,6 +98,22 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
         cell.onTapHashtag = { [weak self] query in
             self?.push(SearchResultsViewController(query: query, product: .top))
         }
+    }
+
+    /// Tweet ids whose stats strip the user opened.
+    private var expandedStats = Set<String>()
+
+    private func toggleStats(_ id: String) {
+        if expandedStats.contains(id) { expandedStats.remove(id) } else { expandedStats.insert(id) }
+        reconfigure(id, animated: true)
+    }
+
+    /// Re-renders one row, easing its height if it changed.
+    private func reconfigure(_ id: String, animated: Bool) {
+        var snapshot = dataSource.snapshot()
+        guard snapshot.itemIdentifiers.contains(id) else { return }
+        snapshot.reconfigureItems([id])
+        dataSource.apply(snapshot, animatingDifferences: animated)
     }
 
     /// Opens by id only — used from notifications / likers taps where the focal

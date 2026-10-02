@@ -72,7 +72,10 @@ class FeedViewController: UIViewController, TweetActionHandling {
         guard let self, let tweet = self.tweetsByID[id] else { return }
         PerfProbe.time("configure") { cell.configure(with: tweet, imagesEnabled: AppSettings.imagesEnabled,
                        contentWidth: max(120, self.collectionView.bounds.width), seen: self.viewModel.isSeen(tweet.restID),
-                       bodyLineLimit: self.expandedBodies.contains(id) ? 0 : TweetCell.feedBodyLineLimit) }
+                       bodyLineLimit: self.expandedBodies.contains(id) ? 0 : TweetCell.feedBodyLineLimit,
+                       stats: PostStatsPolicy.content(
+                           for: tweet, expanded: self.expandedStats.contains(id), isOwn: self.isOwnTweet(tweet),
+                           changed: { [weak self] in self?.reconfigure(id, animated: false) })) }
         self.applyFlag(to: cell, author: tweet.author)
         cell.onTapAuthor = { [weak self] in self?.handleProfile(tweet.author.handle) }
         cell.onTapPhoto = { [weak self] index in self?.openMedia(tweet, at: index) }
@@ -89,6 +92,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
         cell.onTapMention = { [weak self] handle in self?.handleProfile(handle) }
         cell.onTapHashtag = { [weak self] query in self?.openHashtag(query) }
         cell.onShowMore = { [weak self] in self?.expandBody(id) }
+        cell.onToggleStats = { [weak self] in self?.toggleStats(id) }
         cell.onTapReplyCaption = { [weak self] in
             guard let parentID = tweet.inReplyToTweetID else { return }
             self?.navigationController?.pushViewController(ThreadViewController(tweetID: parentID), animated: true)
@@ -103,6 +107,23 @@ class FeedViewController: UIViewController, TweetActionHandling {
     /// Tweet ids the user expanded past the feed's body line cap; those rows
     /// render their full text until the screen goes away.
     private var expandedBodies = Set<String>()
+
+    /// Tweet ids whose stats strip the user opened; those rows keep it until the
+    /// screen goes away.
+    private var expandedStats = Set<String>()
+
+    private func toggleStats(_ id: String) {
+        if expandedStats.contains(id) { expandedStats.remove(id) } else { expandedStats.insert(id) }
+        reconfigure(id, animated: true)
+    }
+
+    /// Re-renders one row, easing its height if it changed.
+    private func reconfigure(_ id: String, animated: Bool) {
+        var snapshot = dataSource.snapshot()
+        guard snapshot.itemIdentifiers.contains(id) else { return }
+        snapshot.reconfigureItems([id])
+        dataSource.apply(snapshot, animatingDifferences: animated)
+    }
 
     /// Re-renders one row with its full body after a "Show more" tap.
     private func expandBody(_ id: String) {

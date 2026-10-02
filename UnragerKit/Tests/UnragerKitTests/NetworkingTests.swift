@@ -95,3 +95,53 @@ struct APIErrorMessageTests {
         #expect(APIError.network("").errorDescription?.contains("()") == false)
     }
 }
+
+@Suite("Post analytics")
+struct PostAnalyticsTests {
+    private actor Canned: HTTPTransport {
+        let status: Int
+        let body: String
+        init(status: Int, body: String) { self.status = status; self.body = body }
+        func send(_ request: HTTPRequest) async throws -> HTTPResponse {
+            HTTPResponse(status: status, headers: [:], body: Data(body.utf8))
+        }
+        func stream(_ request: HTTPRequest) async throws -> (Int, AsyncThrowingStream<String, Error>) {
+            (status, AsyncThrowingStream { $0.finish() })
+        }
+    }
+
+    private func client(status: Int = 200, body: String) -> APIClient {
+        APIClient(transport: Canned(status: status, body: body), baseURL: { URL(string: "http://server:7777")! })
+    }
+
+    @Test("The analytics JSON decodes, with a rate and the hourly series")
+    func decodes() async throws {
+        let json = #"{"impressions":155,"engagements":8,"detail_expands":5,"profile_visits":1,"link_clicks":0,"follows":0,"hourly_impressions":[2,130,23]}"#
+        let analytics = try #require(try await client(body: json).postAnalytics(tweetID: "1"))
+        #expect(analytics.impressions == 155)
+        #expect(analytics.detailExpands == 5)
+        #expect(analytics.hourlyImpressions == [2, 130, 23])
+        #expect(abs(try #require(analytics.engagementRate) - 8.0 / 155.0) < 0.0001)
+        #expect(analytics.videoViews == nil)
+    }
+
+    @Test("Someone else's post has no analytics, which is nil rather than an error")
+    func notYoursIsNil() async throws {
+        let none = try await client(status: 404, body: #"{"error":"no analytics for this post","kind":"not_found"}"#)
+            .postAnalytics(tweetID: "1")
+        #expect(none == nil)
+    }
+
+    @Test("Other failures still throw")
+    func otherErrorsThrow() async {
+        await #expect(throws: APIError.self) {
+            _ = try await client(status: 429, body: #"{"error":"slow down","kind":"rate_limited"}"#)
+                .postAnalytics(tweetID: "1")
+        }
+    }
+
+    @Test("No impressions means no rate")
+    func noRate() {
+        #expect(PostAnalytics(impressions: 0, engagements: 0).engagementRate == nil)
+    }
+}

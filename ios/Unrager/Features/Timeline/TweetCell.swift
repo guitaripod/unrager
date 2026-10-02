@@ -71,6 +71,8 @@ final class TweetCell: UICollectionViewCell {
     /// Fired by the "Show more" affordance under a truncated feed body; the
     /// feed re-renders this row with the full text.
     var onShowMore: (() -> Void)?
+    /// Fired by a tap on the views count: shows or hides the post's stats.
+    var onToggleStats: (() -> Void)?
     /// Fired by a tap on the "Replying to" caption: opens the post being answered.
     var onTapReplyCaption: (() -> Void)?
 
@@ -89,8 +91,6 @@ final class TweetCell: UICollectionViewCell {
     private let quotedBodyLabel = UILabel()
     private let quotedMedia = MediaContentView(compact: true)
     private let actionBar = UIStackView()
-    private let analyticsView = TweetAnalyticsView()
-    private let analyticsWrap = UIView()
     private let separator = HairlineView()
     private let threadRail = ThreadRailView()
     private var columnLeading: NSLayoutConstraint!
@@ -104,6 +104,9 @@ final class TweetCell: UICollectionViewCell {
     private let bookmarkButton = ActionButton(symbol: "bookmark")
     private let shareButton = ActionButton(symbol: "square.and.arrow.up")
     private let viewsLabel = UILabel()
+    private let viewsTap = UITapGestureRecognizer()
+    private let statsView = PostStatsView()
+    private var statsShown = false
     private let showMoreButton = TweetCell.makeShowMoreButton()
     private let likeLongPress = UILongPressGestureRecognizer()
     /// Live engagement state — the optimistic truth the cell currently shows,
@@ -176,6 +179,9 @@ final class TweetCell: UICollectionViewCell {
         onTapMention = nil
         onTapHashtag = nil
         onShowMore = nil
+        onToggleStats = nil
+        statsView.isHidden = true
+        statsShown = false
         onTapReplyCaption = nil
         replyCaption.capturesPlainTaps = false
     }
@@ -196,19 +202,20 @@ final class TweetCell: UICollectionViewCell {
     /// a caption (see `ReplyContext`): `impliedReplyHandles` holds the accounts
     /// whose posts the layout already shows it under, so it names only others,
     /// and is nil for a reply that stands alone, which names them all.
-    /// `focal` switches the timestamp to an
-    /// absolute one and, when `ownTweet`, appends the post-analytics block — the
-    /// same emphasis the TUI gives the open tweet. `bodyLineLimit` caps a
+    /// `focal` switches the timestamp to an absolute one, the same emphasis the
+    /// TUI gives the open tweet. `stats` opens the strip of figures under the
+    /// action bar (nil keeps it closed). `bodyLineLimit` caps a
     /// note-length feed body behind a "Show more" affordance (0 = unlimited,
     /// the focal/thread rendering).
     func configure(
         with tweet: Tweet, imagesEnabled: Bool, contentWidth: CGFloat,
         seen: Bool = false, impliedReplyHandles: Set<String>? = nil,
-        focal: Bool = false, ownTweet: Bool = false, indentLevel: Int = 0,
-        bodyLineLimit: Int = 0
+        focal: Bool = false, indentLevel: Int = 0,
+        bodyLineLimit: Int = 0, stats: PostStatsContent? = nil
     ) {
         tweetID = tweet.restID
         boundTweet = tweet
+        statsShown = stats != nil
         applyFonts()
         setIndent(indentLevel)
         PerfProbe.time("cfg.name") {
@@ -249,13 +256,25 @@ final class TweetCell: UICollectionViewCell {
                             contentWidth: contentWidth - 2 * Self.sideMargin - 22)
         }
         PerfProbe.time("cfg.actions") { configureActions(tweet) }
-        analyticsView.configure(tweet, visible: focal && ownTweet)
-        analyticsWrap.isHidden = analyticsView.isHidden
+        configureStats(tweet, content: stats)
         PerfProbe.time("cfg.a11y") {
             configureAccessibility(tweet, seen: seen)
             isAccessibilityElement = true
             refreshAccessibility(seen: seen)
         }
+    }
+
+    /// Shows or hides the stats strip under the action bar, and makes the views
+    /// count tappable when a tap is how the strip opens.
+    private func configureStats(_ tweet: Tweet, content: PostStatsContent?) {
+        if let content {
+            statsView.configure(tweet: tweet, content: content)
+            statsView.isHidden = false
+        } else {
+            statsView.isHidden = true
+        }
+        viewsTap.isEnabled = AppSettings.postStatsMode == .onTap && (tweet.viewCount ?? 0) > 0
+        viewsLabel.isUserInteractionEnabled = viewsTap.isEnabled
     }
 
     /// Shows the small "Replying to @a" line above a reply's text, or hides it
@@ -445,7 +464,9 @@ final class TweetCell: UICollectionViewCell {
 
     private func configureActions(_ tweet: Tweet) {
         PerfProbe.time("act.reply") { replyButton.set(title: label(tweet.replyCount)) }
-        PerfProbe.time("act.views") { viewsLabel.attributedText = Self.viewsText(tweet.viewCount) }
+        PerfProbe.time("act.views") {
+            viewsLabel.attributedText = Self.viewsText(tweet.viewCount, active: statsShown)
+        }
         PerfProbe.time("act.like") { applyLike(favorited: tweet.favorited, count: tweet.likeCount) }
         PerfProbe.time("act.rt") { applyRetweet(retweeted: tweet.retweeted, count: tweet.retweetCount) }
         PerfProbe.time("act.bm") { applyBookmark(bookmarked: tweet.bookmarked, count: tweet.bookmarkCount) }
@@ -465,11 +486,12 @@ final class TweetCell: UICollectionViewCell {
 
     /// The passive views metric — a glyph + count rendered as plain text, so it
     /// doesn't masquerade as a tappable button in the action row.
-    private static func viewsText(_ count: Int?) -> NSAttributedString? {
+    private static func viewsText(_ count: Int?, active: Bool) -> NSAttributedString? {
         guard let count, count > 0 else { return nil }
         let result = NSMutableAttributedString()
+        let tint = active ? DesignSystem.Color.accent : DesignSystem.Color.secondaryLabel
         if let glyph = DesignSystem.icon("chart.bar", pointSize: 12)?
-            .withTintColor(DesignSystem.Color.secondaryLabel, renderingMode: .alwaysOriginal) {
+            .withTintColor(tint, renderingMode: .alwaysOriginal) {
             let attachment = NSTextAttachment(image: glyph)
             attachment.bounds = CGRect(x: 0, y: -1.5, width: glyph.size.width, height: glyph.size.height)
             result.append(NSAttributedString(attachment: attachment))
@@ -477,7 +499,7 @@ final class TweetCell: UICollectionViewCell {
         }
         result.append(NSAttributedString(string: Format.count(count), attributes: [
             .font: DesignSystem.Typography.metric(),
-            .foregroundColor: DesignSystem.Color.secondaryLabel,
+            .foregroundColor: tint,
         ]))
         return result
     }
@@ -633,6 +655,9 @@ final class TweetCell: UICollectionViewCell {
         if !showMoreButton.isHidden {
             actions.append(action("Show more") { [weak self] in self?.onShowMore?() })
         }
+        if viewsTap.isEnabled {
+            actions.append(action(statsShown ? "Hide stats" : "Show stats") { [weak self] in self?.onToggleStats?() })
+        }
         return actions
     }
 
@@ -722,17 +747,19 @@ final class TweetCell: UICollectionViewCell {
         quotedWrap.addManaged(quotedContainer)
         quotedContainer.pinEdges(to: quotedWrap, insets: UIEdgeInsets(
             top: 0, left: Self.sideMargin, bottom: 0, right: Self.sideMargin))
-        analyticsWrap.addManaged(analyticsView)
-        analyticsView.pinEdges(to: analyticsWrap, insets: UIEdgeInsets(
-            top: 0, left: Self.sideMargin, bottom: 0, right: Self.sideMargin))
         quotedWrap.isHidden = true
-        analyticsWrap.isHidden = true
 
-        let column = UIStackView(arrangedSubviews: [header, replyCaption, bodyView, showMoreButton, mediaContent, quotedWrap, actionBar, analyticsWrap])
+        viewsLabel.isUserInteractionEnabled = true
+        viewsTap.addTarget(self, action: #selector(viewsTapped))
+        viewsLabel.addGestureRecognizer(viewsTap)
+        statsView.isHidden = true
+
+        let column = UIStackView(arrangedSubviews: [header, replyCaption, bodyView, showMoreButton, mediaContent, quotedWrap, actionBar, statsView])
         column.axis = .vertical
         column.spacing = DesignSystem.Spacing.s
         column.setCustomSpacing(DesignSystem.Spacing.xs, after: replyCaption)
         column.setCustomSpacing(DesignSystem.Spacing.xs, after: bodyView)
+        column.setCustomSpacing(DesignSystem.Spacing.xs, after: actionBar)
 
         contentView.addManaged(column)
         threadRail.isHidden = true
@@ -848,8 +875,8 @@ final class TweetCell: UICollectionViewCell {
     /// action bar routes to the button instead of falling through to the row
     /// (which would push the thread).
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        for button in [replyButton, retweetButton, likeButton, bookmarkButton, shareButton]
-        where !button.isHidden && button.window != nil {
+        let targets: [UIView] = [replyButton, retweetButton, likeButton, bookmarkButton, shareButton, viewsLabel]
+        for button in targets where !button.isHidden && button.window != nil && button.isUserInteractionEnabled {
             let local = button.convert(point, from: self)
             if button.point(inside: local, with: event) { break }
             let dx = max(0, (44 - button.bounds.width) / 2)
@@ -857,6 +884,11 @@ final class TweetCell: UICollectionViewCell {
             if button.bounds.insetBy(dx: -dx, dy: -dy).contains(local) { return button }
         }
         return super.hitTest(point, with: event)
+    }
+
+    @objc private func viewsTapped() {
+        Haptics.selection()
+        onToggleStats?()
     }
 
     @objc private func authorTapped() { onTapAuthor?() }

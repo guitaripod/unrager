@@ -46,6 +46,24 @@ public enum FontScale: Int, Sendable, CaseIterable {
     }
 }
 
+/// When a post shows its stats: engagement figures under the action bar.
+public enum PostStatsMode: Int, CaseIterable, Sendable {
+    /// Only when the views count is tapped.
+    case onTap = 0
+    /// Under every post, without a tap.
+    case always = 1
+    /// Never; the views count is just a number.
+    case off = 2
+
+    public var title: String {
+        switch self {
+        case .onTap: return "Tap views"
+        case .always: return "Always"
+        case .off: return "Off"
+        }
+    }
+}
+
 /// Client-side preferences (UserDefaults). The server owns the source/seen/
 /// filter *state*; this only holds what the client decides: where the server
 /// is and how the UI looks. Cross-platform.
@@ -60,6 +78,7 @@ public enum AppSettings {
         static let appearanceMigrated = "unrager.appearanceMigratedToLocal.v1"
         static let fontScale = "unrager.fontScale"
         static let composeViaOfficialApp = "unrager.composeViaOfficialApp"
+        static let postStatsMode = "unrager.postStatsMode"
     }
 
     /// Posted after the user changes `fontScale` so already-visible views can
@@ -118,6 +137,11 @@ public enum AppSettings {
             return FontScale(rawValue: defaults.integer(forKey: Key.fontScale)) ?? .standard
         }
         set { defaults.set(newValue.rawValue, forKey: Key.fontScale) }
+    }
+
+    public static var postStatsMode: PostStatsMode {
+        get { PostStatsMode(rawValue: defaults.integer(forKey: Key.postStatsMode)) ?? .onTap }
+        set { defaults.set(newValue.rawValue, forKey: Key.postStatsMode) }
     }
 
     public static var imagesEnabled: Bool {

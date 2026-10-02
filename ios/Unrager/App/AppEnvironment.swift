@@ -22,6 +22,18 @@ final class AppEnvironment {
     private init() {
         api = APIClient(baseURL: { AppSettings.serverURL })
         flags = AuthorFlags(api: api)
+        NotificationCenter.default.addObserver(
+            forName: AppSettings.serverURLDidChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.forgetAccount() }
+        }
+    }
+
+    /// A new server may hold a different X session, so the cached account is
+    /// fetched again on next use.
+    private func forgetAccount() {
+        cachedWhoami = nil
+        whoamiTask = nil
     }
 
     /// The signed-in handle if already known, else nil. Non-blocking — kicks off

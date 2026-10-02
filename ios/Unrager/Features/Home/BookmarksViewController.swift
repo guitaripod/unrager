@@ -1,3 +1,4 @@
+import Combine
 import UIKit
 import UnragerKit
 
@@ -7,6 +8,7 @@ import UnragerKit
 /// cancelling the search restores the full listing.
 final class BookmarksViewController: FeedViewController {
     private let searchController = UISearchController(searchResultsController: nil)
+    private var serverObserver: AnyCancellable?
 
     init() {
         super.init(viewModel: TimelineViewModel(source: .bookmarks(query: "")))
@@ -25,6 +27,7 @@ final class BookmarksViewController: FeedViewController {
         searchController.obscuresBackgroundDuringPresentation = false
         navigationItem.searchController = searchController
         navigationItem.hidesSearchBarWhenScrolling = false
+        serverObserver = reloadOnServerChange()
     }
 
     private func applyQuery(_ raw: String?) {

@@ -1,10 +1,14 @@
 import UIKit
 import UnragerKit
+import UserNotifications
 
 /// Which notifications raise an alert, and how: a switch per kind, then the
 /// banners (sound and quiet hours) and a way into the system's own settings.
-/// Banners come from an in-app poller while the app is active; there is no push
-/// server, so they don't arrive when it's closed.
+/// While the app is open new activity shows as a toast; in the background a
+/// short refresh the system schedules posts banners. There is no push server,
+/// so nothing arrives once the app is closed. When notifications are off for
+/// Unrager in iOS Settings the Banners switch shows off and the System row
+/// becomes the way to turn them back on.
 final class NotificationSettingsViewController: UIViewController {
     private enum Section: Int, CaseIterable {
         case kinds, banners, system
@@ -16,33 +20,85 @@ final class NotificationSettingsViewController: UIViewController {
             case .system: return "System"
             }
         }
-
-        var footer: String? {
-            switch self {
-            case .kinds:
-                return "These gate both in-app toasts and system banners. The Notifications tab's badge always counts unread activity."
-            case .banners:
-                return "Banners are best-effort and only arrive while Unrager is active. During quiet hours they land silently in Notification Center."
-            case .system:
-                return nil
-            }
-        }
     }
 
     private enum Item: Hashable {
         case kind(NotificationKind)
-        case banners, sound, quietHours, quietWindow
+        case banners, sound, quietHours, quietWindow, quietStart, quietEnd
         case system
     }
 
     private var collectionView: UICollectionView!
     private var dataSource: UICollectionViewDiffableDataSource<Section, Item>!
+    private var footerRegistration: UICollectionView.SupplementaryRegistration<UICollectionViewListCell>!
+
+    /// Whether iOS refuses Unrager's notifications, as last checked. Shared so
+    /// the Settings summary says the same as this screen.
+    @MainActor private static var deniedBySystem = false
+
+    /// Banners as they actually behave: on only when switched on here and
+    /// allowed by iOS.
+    @MainActor private static var bannersEffectivelyOn: Bool {
+        NotificationPrefs.bannersEnabled && !deniedBySystem
+    }
 
     /// "5 of 6 · banners on", the line Settings shows for this screen.
     @MainActor
     static var summary: String {
         let on = NotificationKind.allCases.filter { NotificationPrefs.bannerEnabled(for: $0) }.count
-        return "\(on) of \(NotificationKind.allCases.count) · banners \(NotificationPrefs.bannersEnabled ? "on" : "off")"
+        let banners: String
+        if NotificationPrefs.bannersEnabled && deniedBySystem {
+            banners = "banners off in iOS Settings"
+        } else {
+            banners = "banners \(NotificationPrefs.bannersEnabled ? "on" : "off")"
+        }
+        return "\(on) of \(NotificationKind.allCases.count) · \(banners)"
+    }
+
+    /// Asks iOS whether Unrager may notify and remembers the answer for
+    /// `summary`. Returns whether the answer changed.
+    @MainActor
+    @discardableResult
+    static func refreshSystemPermission() async -> Bool {
+        let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        let denied = status == .denied
+        defer { deniedBySystem = denied }
+        return denied != deniedBySystem
+    }
+
+    /// The Banners footer: how delivery works, what iOS is blocking, and a
+    /// quiet-hours window that can never apply.
+    static func bannersFooter(deniedBySystem: Bool, bannersOn: Bool, quietHoursOn: Bool,
+                              quietStart: Int, quietEnd: Int) -> String {
+        var lines: [String] = []
+        if deniedBySystem && bannersOn {
+            lines.append("Off in iOS Settings: allow notifications for Unrager there to get banners.")
+        }
+        if bannersOn && quietHoursOn && quietStart == quietEnd {
+            lines.append("Start and end are the same, so quiet hours never apply.")
+        }
+        lines.append("While Unrager is open, new activity shows as a toast. In the background iOS checks now and "
+            + "then (often every 15 minutes or more) and posts a banner; nothing arrives once the app is closed. "
+            + "During quiet hours banners land silently in Notification Center.")
+        return lines.joined(separator: "\n\n")
+    }
+
+    private func footer(for section: Section) -> String? {
+        switch section {
+        case .kinds:
+            return "These gate both in-app toasts and system banners. The Notifications tab's badge always counts unread activity."
+        case .banners:
+            return Self.bannersFooter(
+                deniedBySystem: Self.deniedBySystem, bannersOn: NotificationPrefs.bannersEnabled,
+                quietHoursOn: NotificationPrefs.quietHoursEnabled,
+                quietStart: NotificationPrefs.quietHoursStartMinute, quietEnd: NotificationPrefs.quietHoursEndMinute)
+        case .system:
+            return nil
+        }
+    }
+
+    private var isAccessibilitySize: Bool {
+        traitCollection.preferredContentSizeCategory.isAccessibilityCategory
     }
 
     override func viewDidLoad() {
@@ -52,10 +108,14 @@ final class NotificationSettingsViewController: UIViewController {
         navigationItem.largeTitleDisplayMode = .never
         var configuration = UICollectionLayoutListConfiguration(appearance: .insetGrouped)
         configuration.headerMode = .supplementary
-        configuration.footerMode = .supplementary
         configuration.backgroundColor = DesignSystem.Color.background
-        collectionView = UICollectionView(
-            frame: view.bounds, collectionViewLayout: UICollectionViewCompositionalLayout.list(using: configuration))
+        let layout = UICollectionViewCompositionalLayout { [weak self] index, environment in
+            var configuration = configuration
+            let section = Section(rawValue: index)
+            configuration.footerMode = section.flatMap { self?.footer(for: $0) } == nil ? .none : .supplementary
+            return NSCollectionLayoutSection.list(using: configuration, layoutEnvironment: environment)
+        }
+        collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: layout)
         collectionView.backgroundColor = DesignSystem.Color.background
         collectionView.delegate = self
         view.addManaged(collectionView)
@@ -74,13 +134,12 @@ final class NotificationSettingsViewController: UIViewController {
             content.text = Section(rawValue: indexPath.section)?.header
             cell.contentConfiguration = content
         }
-        let footer = UICollectionView.SupplementaryRegistration<UICollectionViewListCell>(
+        footerRegistration = UICollectionView.SupplementaryRegistration<UICollectionViewListCell>(
             elementKind: UICollectionView.elementKindSectionFooter
-        ) { cell, _, indexPath in
-            var content = UIListContentConfiguration.groupedFooter()
-            content.text = Section(rawValue: indexPath.section)?.footer
-            cell.contentConfiguration = content
+        ) { [weak self] cell, _, indexPath in
+            self?.configureFooter(cell, section: indexPath.section)
         }
+        let footer = footerRegistration!
         dataSource.supplementaryViewProvider = { view, kind, indexPath in
             view.dequeueConfiguredReusableSupplementary(
                 using: kind == UICollectionView.elementKindSectionHeader ? header : footer, for: indexPath)
@@ -88,32 +147,79 @@ final class NotificationSettingsViewController: UIViewController {
         var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
         snapshot.appendSections(Section.allCases)
         snapshot.appendItems(NotificationKind.allCases.map(Item.kind), toSection: .kinds)
-        snapshot.appendItems(Self.bannerRows, toSection: .banners)
+        snapshot.appendItems(bannerRows, toSection: .banners)
         snapshot.appendItems([.system], toSection: .system)
         dataSource.apply(snapshot, animatingDifferences: false)
+
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (self: Self, _) in
+            self.refreshBannerRows(animated: false)
+        }
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(appBecameActive), name: UIApplication.didBecomeActiveNotification, object: nil)
     }
 
-    /// The window row only exists while quiet hours are on, so it never sits
-    /// there greyed out.
-    private static var bannerRows: [Item] {
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        checkSystemPermission()
+    }
+
+    @objc private func appBecameActive() { checkSystemPermission() }
+
+    /// Coming back from iOS Settings may have changed the permission; the
+    /// switch, the footer and the System row follow it.
+    private func checkSystemPermission() {
+        Task { [weak self] in
+            await Self.refreshSystemPermission()
+            self?.refreshBannerRows(animated: false)
+            self?.reconfigure([.system])
+        }
+    }
+
+    private func configureFooter(_ cell: UICollectionViewListCell, section: Int) {
+        var content = UIListContentConfiguration.groupedFooter()
+        content.text = Section(rawValue: section).flatMap(footer(for:))
+        cell.contentConfiguration = content
+    }
+
+    /// Redraws the footers on screen in place, so a picker being used isn't
+    /// rebuilt under the finger.
+    private func refreshFooters() {
+        for indexPath in collectionView.indexPathsForVisibleSupplementaryElements(
+            ofKind: UICollectionView.elementKindSectionFooter) {
+            guard let cell = collectionView.supplementaryView(
+                forElementKind: UICollectionView.elementKindSectionFooter, at: indexPath) as? UICollectionViewListCell
+            else { continue }
+            configureFooter(cell, section: indexPath.section)
+        }
+        collectionView.collectionViewLayout.invalidateLayout()
+    }
+
+    /// The window rows only exist while quiet hours are on, so they never sit
+    /// there greyed out; at the accessibility text sizes start and end get a
+    /// row each.
+    private var bannerRows: [Item] {
         var rows: [Item] = [.banners, .sound, .quietHours]
-        if NotificationPrefs.bannersEnabled && NotificationPrefs.quietHoursEnabled { rows.append(.quietWindow) }
+        if Self.bannersEffectivelyOn && NotificationPrefs.quietHoursEnabled {
+            rows += isAccessibilitySize ? [.quietStart, .quietEnd] : [.quietWindow]
+        }
         return rows
     }
 
+    private static let windowRows: Set<Item> = [.quietWindow, .quietStart, .quietEnd]
+
     /// Brings the banner section's rows in line with the settings: the window
-    /// row appears or disappears, and the rest are redrawn.
-    private func refreshBannerRows() {
+    /// rows appear or disappear, and the rest are redrawn.
+    private func refreshBannerRows(animated: Bool = true) {
         var snapshot = dataSource.snapshot()
         let current = snapshot.itemIdentifiers(inSection: .banners)
-        let wanted = Self.bannerRows
-        let removed = current.filter { !wanted.contains($0) }
-        if !removed.isEmpty { snapshot.deleteItems(removed) }
-        if wanted.contains(.quietWindow), !current.contains(.quietWindow) {
-            snapshot.appendItems([.quietWindow], toSection: .banners)
+        let wanted = bannerRows
+        if current != wanted {
+            snapshot.deleteItems(current)
+            snapshot.appendItems(wanted, toSection: .banners)
         }
-        snapshot.reconfigureItems(snapshot.itemIdentifiers(inSection: .banners).filter { $0 != .quietWindow })
-        dataSource.apply(snapshot, animatingDifferences: true)
+        snapshot.reconfigureItems(wanted.filter { !Self.windowRows.contains($0) && current.contains($0) })
+        dataSource.apply(snapshot, animatingDifferences: animated)
+        refreshFooters()
     }
 
     private func configure(_ cell: UICollectionViewListCell, for item: Item) {
@@ -123,7 +229,7 @@ final class NotificationSettingsViewController: UIViewController {
         background.backgroundColor = DesignSystem.Color.elevatedBackground
         cell.backgroundConfiguration = background
         cell.accessories = []
-        let bannersOn = NotificationPrefs.bannersEnabled
+        let bannersOn = Self.bannersEffectivelyOn
 
         func toggle(_ title: String, isOn: Bool, enabled: Bool = true, change: @escaping (Bool) -> Void) {
             content.text = title
@@ -139,6 +245,14 @@ final class NotificationSettingsViewController: UIViewController {
             }, for: .valueChanged)
             cell.accessories = [.customView(configuration: .init(
                 customView: control, placement: .trailing(), maintainsFixedSize: true))]
+        }
+        func timePicker(_ title: String, minute: Int, change: @escaping (Int) -> Void) {
+            let picker = Self.picker(minute: minute, label: "Quiet hours \(title.lowercased())", fixedSize: false) {
+                [weak self] in
+                change($0)
+                self?.refreshFooters()
+            }
+            cell.contentConfiguration = StackedControlConfiguration(title: title, control: picker)
         }
 
         switch item {
@@ -159,36 +273,59 @@ final class NotificationSettingsViewController: UIViewController {
             content.text = "From … until"
             let pickers = UIStackView(arrangedSubviews: [
                 Self.picker(minute: NotificationPrefs.quietHoursStartMinute, label: "Quiet hours start") {
+                    [weak self] in
                     NotificationPrefs.quietHoursStartMinute = $0
+                    self?.refreshFooters()
                 },
                 Self.picker(minute: NotificationPrefs.quietHoursEndMinute, label: "Quiet hours end") {
+                    [weak self] in
                     NotificationPrefs.quietHoursEndMinute = $0
+                    self?.refreshFooters()
                 },
             ])
             pickers.spacing = 6
+            pickers.frame.size = pickers.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
             cell.accessories = [.customView(configuration: .init(
                 customView: pickers, placement: .trailing(), reservedLayoutWidth: .custom(190),
                 maintainsFixedSize: true))]
+        case .quietStart:
+            timePicker("Starts", minute: NotificationPrefs.quietHoursStartMinute) {
+                NotificationPrefs.quietHoursStartMinute = $0
+            }
+            return
+        case .quietEnd:
+            timePicker("Ends", minute: NotificationPrefs.quietHoursEndMinute) {
+                NotificationPrefs.quietHoursEndMinute = $0
+            }
+            return
         case .system:
-            content.text = "System notification settings"
-            content.image = DesignSystem.icon("gear", pointSize: 16)
+            let blocked = Self.deniedBySystem
+            content.text = blocked ? "Turn on notifications in iOS Settings" : "System notification settings"
+            content.textProperties.color = blocked ? DesignSystem.Color.accent : DesignSystem.Color.label
+            content.image = DesignSystem.icon(blocked ? "bell.slash.fill" : "gear", pointSize: 16)
             content.imageProperties.tintColor = DesignSystem.Color.accent
             cell.accessories = [.disclosureIndicator()]
         }
         cell.contentConfiguration = content
     }
 
-    private static func picker(minute: Int, label: String, change: @escaping (Int) -> Void) -> UIDatePicker {
+    /// A compact time picker. In the shared window row it is a fixed 92 × 34
+    /// so two fit side by side; on its own row it takes its natural size, which
+    /// grows with the text size.
+    private static func picker(minute: Int, label: String, fixedSize: Bool = true,
+                               change: @escaping (Int) -> Void) -> UIDatePicker {
         let picker = UIDatePicker()
         picker.datePickerMode = .time
         picker.preferredDatePickerStyle = .compact
         picker.date = Calendar.current.date(bySettingHour: minute / 60, minute: minute % 60, second: 0, of: Date()) ?? Date()
         picker.accessibilityLabel = label
-        picker.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            picker.widthAnchor.constraint(equalToConstant: 92),
-            picker.heightAnchor.constraint(equalToConstant: 34),
-        ])
+        if fixedSize {
+            picker.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                picker.widthAnchor.constraint(equalToConstant: 92),
+                picker.heightAnchor.constraint(equalToConstant: 34),
+            ])
+        }
         picker.addAction(UIAction { [weak picker] _ in
             guard let picker else { return }
             let parts = Calendar.current.dateComponents([.hour, .minute], from: picker.date)
@@ -199,7 +336,7 @@ final class NotificationSettingsViewController: UIViewController {
 
     private func reconfigure(_ items: [Item]) {
         var snapshot = dataSource.snapshot()
-        snapshot.reconfigureItems(items)
+        snapshot.reconfigureItems(items.filter { snapshot.indexOfItem($0) != nil })
         dataSource.apply(snapshot, animatingDifferences: false)
     }
 
@@ -213,9 +350,11 @@ final class NotificationSettingsViewController: UIViewController {
         }
         Task { [weak self] in
             let granted = await NotificationCenterService.shared.requestAuthorization()
+            await Self.refreshSystemPermission()
             guard let self else { return }
             NotificationPrefs.bannersEnabled = granted
             self.refreshBannerRows()
+            self.reconfigure([.system])
             if !granted { self.present(self.permissionDeniedAlert(), animated: true) }
         }
     }
@@ -246,3 +385,63 @@ extension NotificationSettingsViewController: UICollectionViewDelegate {
         if dataSource.itemIdentifier(for: indexPath) == .system { Self.openSystemSettings() }
     }
 }
+
+/// A row with its title on one line and a control under it, for the
+/// accessibility text sizes where the two don't fit side by side.
+private struct StackedControlConfiguration: UIContentConfiguration {
+    let title: String
+    let control: UIView
+
+    @MainActor
+    func makeContentView() -> UIView & UIContentView { StackedControlView(configuration: self) }
+
+    func updated(for state: UIConfigurationState) -> StackedControlConfiguration { self }
+}
+
+@MainActor
+private final class StackedControlView: UIView, UIContentView {
+    private let titleLabel = UILabel()
+    private let column = UIStackView()
+
+    var configuration: UIContentConfiguration {
+        didSet { apply() }
+    }
+
+    init(configuration: StackedControlConfiguration) {
+        self.configuration = configuration
+        super.init(frame: .zero)
+        titleLabel.numberOfLines = 0
+        titleLabel.textColor = DesignSystem.Color.label
+        column.axis = .vertical
+        column.alignment = .leading
+        column.spacing = 8
+        addManaged(column)
+        column.pinEdges(to: self, insets: UIEdgeInsets(top: 12, left: 20, bottom: 12, right: 20))
+        apply()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func apply() {
+        guard let configuration = configuration as? StackedControlConfiguration else { return }
+        titleLabel.font = DesignSystem.Typography.body()
+        titleLabel.text = configuration.title
+        column.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        column.addArrangedSubview(titleLabel)
+        column.addArrangedSubview(configuration.control)
+    }
+}
+
+#if DEBUG
+extension NotificationSettingsViewController {
+    /// Screenshot-QA hook (`UNRAGER_SCREEN=notifsettings/<points>`): scrolls
+    /// the list `points` down.
+    func debugScroll(by points: CGFloat) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self, let list = self.view.subviews.compactMap({ $0 as? UICollectionView }).first else { return }
+            list.setContentOffset(CGPoint(x: 0, y: points - list.adjustedContentInset.top), animated: false)
+        }
+    }
+}
+#endif

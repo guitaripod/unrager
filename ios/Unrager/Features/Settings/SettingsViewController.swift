@@ -91,6 +91,11 @@ final class SettingsViewController: UIViewController {
         super.viewWillAppear(animated)
         refreshConnection()
         reconfigure(Item.allSettingsRows)
+        Task { [weak self] in
+            if await NotificationSettingsViewController.refreshSystemPermission() {
+                self?.reconfigure([.notifications])
+            }
+        }
     }
 
     #if DEBUG

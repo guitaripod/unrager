@@ -9,7 +9,7 @@ use axum::extract::{Request, State};
 use axum::http::{HeaderValue, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use state::AppState;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -177,7 +177,27 @@ fn is_extension_origin(origin: &HeaderValue) -> bool {
 }
 
 fn router(state: Arc<AppState>) -> Router {
-    let app_routes: Router<Arc<AppState>> = Router::new()
+    let app_routes = app_routes().route_layer(middleware::from_fn_with_state(
+        state.clone(),
+        reject_when_filter_only,
+    ));
+    let api = filter_routes().merge(app_routes);
+
+    Router::new()
+        .nest("/api", api)
+        .fallback(fallback)
+        .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
+        .layer(CompressionLayer::new())
+        .layer(middleware::from_fn(reject_web_origins))
+        .layer(middleware::map_response(stamp_version))
+        .layer(TraceLayer::new_for_http())
+        .with_state(state)
+}
+
+/// Everything the iPhone app uses beyond the filter; `router` closes it to
+/// `--filter-only` servers.
+fn app_routes() -> Router<Arc<AppState>> {
+    Router::new()
         .route("/whoami", get(routes::whoami::whoami))
         .route("/sources/home", get(routes::timeline::home))
         .route("/sources/user/{handle}", get(routes::timeline::user))
@@ -202,6 +222,8 @@ fn router(state: Arc<AppState>) -> Router {
             "/tweets/{tweet_id}/analytics",
             get(routes::tweet::analytics),
         )
+        .route("/tweets/{tweet_id}", delete(routes::posts::delete))
+        .route("/tweets/{tweet_id}/quotes", get(routes::posts::quotes))
         .route("/thread/{id}", get(routes::tweet::thread))
         .route("/about/{rest_id}", get(routes::about::about))
         .route("/profile/{handle}", get(routes::profile::profile))
@@ -219,6 +241,14 @@ fn router(state: Arc<AppState>) -> Router {
         .route(
             "/users/{user_id}/follow",
             post(routes::users::follow).delete(routes::users::unfollow),
+        )
+        .route(
+            "/users/{user_id}/mute",
+            post(routes::moderation::mute).delete(routes::moderation::unmute),
+        )
+        .route(
+            "/users/{user_id}/block",
+            post(routes::moderation::block).delete(routes::moderation::unblock),
         )
         .route("/users/{user_id}/followers", get(routes::users::followers))
         .route("/users/{user_id}/following", get(routes::users::following))
@@ -248,21 +278,6 @@ fn router(state: Arc<AppState>) -> Router {
         )
         .route("/sse/brief", get(sse::brief_stream))
         .route("/sse/translate", get(sse::translate_stream))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            reject_when_filter_only,
-        ));
-    let api = filter_routes().merge(app_routes);
-
-    Router::new()
-        .nest("/api", api)
-        .fallback(fallback)
-        .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
-        .layer(CompressionLayer::new())
-        .layer(middleware::from_fn(reject_web_origins))
-        .layer(middleware::map_response(stamp_version))
-        .layer(TraceLayer::new_for_http())
-        .with_state(state)
 }
 
 async fn fallback(uri: Uri) -> impl IntoResponse {
@@ -329,6 +344,11 @@ mod tests {
             .await
             .unwrap()
             .status()
+    }
+
+    #[test]
+    fn every_route_registers_without_a_conflict() {
+        let _ = filter_routes().merge(app_routes());
     }
 
     #[tokio::test]

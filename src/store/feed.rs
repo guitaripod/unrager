@@ -177,6 +177,16 @@ impl FeedStore {
         serde_json::from_str(&payload).ok()
     }
 
+    /// Drops a post from both variants, for a post the user deleted. Any
+    /// handle may do this, not only the writer: the ingest worker never
+    /// sees a deleted post again, so nothing races to put it back. Returns
+    /// how many rows went.
+    pub fn remove(&mut self, rest_id: &str) -> Result<usize> {
+        Ok(self
+            .conn
+            .execute("DELETE FROM tweets WHERE rest_id = ?1", params![rest_id])?)
+    }
+
     /// The rubric hash the stored verdicts were classified under, if any
     /// writer has recorded one. Readers compare it against their own live
     /// rubric hash before trusting `filter_verdict` values — a mismatch means
@@ -653,6 +663,20 @@ mod tests {
         let page = s.read_page(FeedVariant::ForYou, None, 10).unwrap();
         assert_eq!(page.items.len(), 1);
         assert_eq!(page.items[0].tweet.like_count, 99, "payload should refresh");
+    }
+
+    #[test]
+    fn remove_drops_a_post_from_both_variants_through_a_reader_too() {
+        let dir = TempDir::new().unwrap();
+        let mut s = writer(&dir);
+        s.upsert(FeedVariant::ForYou, &tweet("1", 100)).unwrap();
+        s.upsert(FeedVariant::Following, &tweet("1", 100)).unwrap();
+        s.upsert(FeedVariant::Following, &tweet("2", 200)).unwrap();
+        let mut reader = FeedStore::open_reader(&dir.path().join("feed.db")).unwrap();
+        assert_eq!(reader.remove("1").unwrap(), 2);
+        assert_eq!(reader.remove("1").unwrap(), 0);
+        assert!(s.tweet("1").is_none());
+        assert_eq!(s.count(FeedVariant::Following).unwrap(), 1);
     }
 
     #[test]

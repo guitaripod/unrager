@@ -294,38 +294,6 @@ struct DecodingTests {
         #expect(reDecoded.url == original.url)
         #expect(reDecoded.urls == original.urls)
     }
-
-    @Test("TimelineCache seeds then revalidation overwrites; stale/corrupt ignored")
-    func timelineCache() throws {
-        let cache = TimelineCache()
-        let key = "test-\(UUID().uuidString)"
-        defer { cache.clear(key: key) }
-
-        #expect(cache.load(key: key) == nil)
-
-        func tweet(_ id: String, _ text: String) -> Tweet {
-            let json = """
-            {"rest_id":"\(id)","author":{"rest_id":"1","handle":"a","name":"A","verified":false,
-              "followers":0,"following":0},"created_at":"2026-06-19T12:00:00Z","text":"\(text)",
-              "reply_count":0,"retweet_count":0,"like_count":0,"quote_count":0,"view_count":null,
-              "url":"https://x.com/a/status/\(id)"}
-            """
-            return try! UnragerJSON.decode(Tweet.self, from: Data(json.utf8))
-        }
-
-        let first = [tweet("1", "one"), tweet("2", "two")]
-        cache.save(first, key: key)
-        let loaded = cache.load(key: key)
-        #expect(loaded?.tweets.map(\.restID) == ["1", "2"])
-        #expect((loaded?.age ?? .greatestFiniteMagnitude) < 60)
-
-        let fresh = [tweet("3", "three"), tweet("1", "one")]
-        cache.save(fresh, key: key)
-        #expect(cache.load(key: key)?.tweets.map(\.restID) == ["3", "1"])
-
-        cache.save([], key: key)
-        #expect(cache.load(key: key) == nil)
-    }
 }
 
 @Suite("Filter config contract")

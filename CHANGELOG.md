@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+## [0.27.0] — 2026-10-02
+
 - **`unrager setup --apps` ends by printing the address to type into the iPhone app.** With Tailscale running it prints this computer's `http://100.x.y.z:7777` (and its MagicDNS name); without it, says what to enter; and when the server listens only on this computer, warns that a phone can't reach it and gives the `--bind 0.0.0.0:7777` to use.
 - **The iPhone app installs with one script and a free Apple ID.** `ios/scripts/install.sh` finds your iPhone and signing team, asks where your server is, builds with Xcode's automatic signing under an app identifier of your own and installs it, naming the one thing to fix when something is missing; `--check` shows what it found without building. `ios/README.md` is a step-by-step guide with a troubleshooting table, and the app no longer ships pointed at the maintainer's Tailscale address: it asks for yours in Settings > Server when the script hasn't set it.
 ## [0.26.0] — 2026-10-02
@@ -347,7 +349,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.26.0...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.27.0...HEAD
+[0.27.0]: https://github.com/guitaripod/unrager/releases/tag/0.27.0
 [0.26.0]: https://github.com/guitaripod/unrager/releases/tag/0.26.0
 [0.25.0]: https://github.com/guitaripod/unrager/releases/tag/0.25.0
 [0.24.0]: https://github.com/guitaripod/unrager/releases/tag/0.24.0

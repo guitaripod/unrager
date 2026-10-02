@@ -2,6 +2,26 @@ import Foundation
 import ImageIO
 import CoreGraphics
 
+/// `NSCache` behind a `Sendable` face. `NSCache` is thread-safe but, depending
+/// on the SDK, not declared `Sendable`, which a `nonisolated` read of it from
+/// the pipeline actor can't get past on older toolchains.
+private final class MemoryImageCache: @unchecked Sendable {
+    private let storage = NSCache<NSURL, DecodedImage>()
+
+    var totalCostLimit: Int {
+        get { storage.totalCostLimit }
+        set { storage.totalCostLimit = newValue }
+    }
+
+    func object(forKey key: NSURL) -> DecodedImage? {
+        storage.object(forKey: key)
+    }
+
+    func setObject(_ image: DecodedImage, forKey key: NSURL, cost: Int) {
+        storage.setObject(image, forKey: key, cost: cost)
+    }
+}
+
 /// A decoded, downsampled image. `CGImage` is immutable and thread-safe, so the
 /// wrapper is safe to hand across actors; the platform layer wraps it in a
 /// `UIImage`/`NSImage` on the main actor.
@@ -91,9 +111,9 @@ public actor ImagePipeline {
         }
     }
 
-    /// `NSCache` is thread-safe, so the memory cache can be read from any thread
+    /// The memory cache is thread-safe, so it can be read from any thread
     /// without hopping onto this actor (see `cachedImageImmediately`).
-    nonisolated(unsafe) private let cache = NSCache<NSURL, DecodedImage>()
+    private let cache = MemoryImageCache()
     private var inFlight: [LoadKey: InFlightLoad] = [:]
     private var prefetches: [URL: Task<Void, Never>] = [:]
     private let gate = DecodeGate(limit: 4)

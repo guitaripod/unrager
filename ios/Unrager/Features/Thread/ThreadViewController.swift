@@ -100,7 +100,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
             cell.enableLikers { [weak self] in self?.push(LikersViewController(tweetID: tweet.restID)) }
         }
         cell.onTapPhoto = { [weak self] index in self?.openMedia(tweet, at: index) }
-        cell.onTapCard = { url in UIApplication.shared.open(url) }
+        cell.onTapCard = { [weak self] url in self?.openLink(url) }
         cell.onTapQuoted = { [weak self] in
             if let q = tweet.quotedTweet { self?.push(ThreadViewController(tweet: q)) }
         }

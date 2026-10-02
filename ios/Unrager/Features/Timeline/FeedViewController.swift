@@ -82,7 +82,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
             cell.onTapReposter = { [weak self] in self?.handleProfile(reposter.handle) }
         }
         cell.onTapPhoto = { [weak self] index in self?.openMedia(tweet, at: index) }
-        cell.onTapCard = { url in UIApplication.shared.open(url) }
+        cell.onTapCard = { [weak self] url in self?.openLink(url) }
         cell.onReply = { [weak self] in self?.presentReply(tweet) }
         cell.onTapQuoted = { [weak self] in
             if let quoted = tweet.quotedTweet { self?.handleSelect(quoted) }

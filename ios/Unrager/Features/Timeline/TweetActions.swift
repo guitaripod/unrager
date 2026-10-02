@@ -1,3 +1,4 @@
+import SafariServices
 import UIKit
 import UnragerKit
 
@@ -89,6 +90,28 @@ extension TweetActionHandling {
     /// after launch just hides it for a moment.
     func isOwnTweet(_ tweet: Tweet) -> Bool {
         OwnPost.isOwn(tweet, viewerHandle: AppEnvironment.shared.currentHandle)
+    }
+
+    /// Opens a link tapped in a post or its card: a post or profile on X opens
+    /// in the app, any other web page in Safari's in-app view (Reader
+    /// included), and anything that isn't a web page in the app that owns it.
+    func openLink(_ url: URL) {
+        switch XLink.classify(url) {
+        case let .post(id):
+            navigationController?.pushViewController(ThreadViewController(tweetID: id), animated: true)
+        case let .profile(handle):
+            navigationController?.pushViewController(ProfileViewController(handle: handle), animated: true)
+        case let .web(target):
+            guard ["http", "https"].contains(target.scheme?.lowercased() ?? "") else {
+                UIApplication.shared.open(target)
+                return
+            }
+            let configuration = SFSafariViewController.Configuration()
+            configuration.entersReaderIfAvailable = false
+            let safari = SFSafariViewController(url: target, configuration: configuration)
+            safari.preferredControlTintColor = DesignSystem.Color.accent
+            present(safari, animated: true)
+        }
     }
 
     /// Pushes the list of posts quoting `tweet`.

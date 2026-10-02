@@ -82,6 +82,15 @@ enum RequestPlumbing {
         raw.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? raw
     }
 
+    /// Sends a request whose success carries no body (a 204).
+    static func performEmpty(_ request: HTTPRequest, over transport: HTTPTransport) async throws {
+        let response = try await transport.send(request)
+        guard response.isSuccess else {
+            let body = try? UnragerJSON.decoder.decode(ServerError.self, from: response.body)
+            throw APIError.from(status: response.status, body: body)
+        }
+    }
+
     static func perform<T: Decodable>(_ request: HTTPRequest, over transport: HTTPTransport) async throws -> T {
         let response = try await transport.send(request)
         guard response.isSuccess else {

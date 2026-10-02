@@ -7,4 +7,5 @@ import UnragerKit
 enum EngageService {
     static let engage = EngageAPI(baseURL: { AppSettings.serverURL })
     static let publish = MediaUploadAPI(baseURL: { AppSettings.serverURL })
+    static let filter = FilterAPI(baseURL: { AppSettings.serverURL })
 }

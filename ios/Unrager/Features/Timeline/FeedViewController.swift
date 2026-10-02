@@ -530,13 +530,13 @@ class FeedViewController: UIViewController, TweetActionHandling {
         apply(viewModel.tweets.value)
     }
 
+    /// Publishes the model's tweets to the list. Replacing the list mid-scroll
+    /// (a network result landing over the cache seed) would reflow tweets under
+    /// the user's finger, so while they are scrolling it is held until the
+    /// scroll settles; a pure pagination append (more tweets than shown, same
+    /// prefix) only grows the bottom and is applied at once.
     private func apply(_ incoming: [Tweet]) {
         let tweets = chronologicalSort ? incoming.sorted { $0.createdAt > $1.createdAt } : incoming
-        // Replacing the list mid-scroll (network result landing over the cache
-        // seed) reflows tweets under the user. While they're actively scrolling,
-        // stash it and apply when the scroll settles; a pure pagination append
-        // (more tweets than shown, same prefix) is safe to apply immediately
-        // since it only grows the bottom.
         let hadItems = dataSource.snapshot().numberOfItems > 0
         let activelyScrolling = collectionView.isDragging || collectionView.isDecelerating
         if hadItems, !tweets.isEmpty, activelyScrolling, !isPureAppend(tweets) {
@@ -556,6 +556,11 @@ class FeedViewController: UIViewController, TweetActionHandling {
         return zip(current, tweets).allSatisfy { $0 == $1.restID }
     }
 
+    /// Applies `tweets` to the list. Once the user has scrolled into it, their
+    /// viewport is held still across the update: the topmost visible tweet is
+    /// the anchor, the snapshot applies without animation, and the anchor's
+    /// on-screen position is restored, so inserts and removals above it never
+    /// shove the content.
     private func applyNow(_ tweets: [Tweet]) {
         var changed: [String] = []
         for tweet in tweets {
@@ -570,10 +575,6 @@ class FeedViewController: UIViewController, TweetActionHandling {
         if !changed.isEmpty { snapshot.reconfigureItems(changed) }
         if !tweets.isEmpty { lastErrorText = nil }
 
-        // When the user has scrolled into the list, keep their viewport visually
-        // fixed across the update: anchor on a visible tweet, apply without
-        // animation, and restore its on-screen position so inserts/removals
-        // above it don't shove the content.
         let hadItems = dataSource.snapshot().numberOfItems > 0
         let growsBottomOnly = hadItems && changed.isEmpty && isPureAppend(tweets)
         let anchor = (hadItems && !tweets.isEmpty && !growsBottomOnly && collectionView.contentOffset.y > 1)

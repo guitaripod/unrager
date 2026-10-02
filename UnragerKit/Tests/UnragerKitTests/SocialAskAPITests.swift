@@ -235,3 +235,43 @@ struct AskAPITests {
         #expect(entry.text == "hello thread")
     }
 }
+
+@Suite("FilterAPI")
+struct FilterAPITests {
+    @Test("setOverride POSTs ids and the verdict, and accepts the empty 204")
+    func overrideRoute() async throws {
+        let transport = CapturingTransport(body: "", status: 204)
+        let api = FilterAPI(transport: transport, baseURL: { URL(string: "http://server:7777")! })
+        try await api.setOverride(ids: ["1", "2"], verdict: .keep)
+        let request = try #require(await transport.last())
+        #expect(request.method == .post)
+        #expect(request.url.path == "/api/filter/overrides")
+        let body = try #require(request.body)
+        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(json["ids"] as? [String] == ["1", "2"])
+        #expect(json["verdict"] as? String == "keep")
+    }
+
+    @Test("A nil verdict is sent as null, handing the posts back to the model")
+    func clearOverride() async throws {
+        let transport = CapturingTransport(body: "", status: 204)
+        let api = FilterAPI(transport: transport, baseURL: { URL(string: "http://server:7777")! })
+        try await api.setOverride(ids: ["9"], verdict: nil)
+        let request = try #require(await transport.last())
+        let body = try #require(request.body)
+        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(json["verdict"] is NSNull)
+    }
+
+    @Test("A server refusal surfaces as an error")
+    func refusal() async {
+        let transport = CapturingTransport(body: #"{"error":"ids must be numeric post ids","kind":"bad_request"}"#, status: 400)
+        let api = FilterAPI(transport: transport, baseURL: { URL(string: "http://server:7777")! })
+        do {
+            try await api.setOverride(ids: ["x"], verdict: .keep)
+            Issue.record("expected throw")
+        } catch {
+            #expect(error is APIError)
+        }
+    }
+}

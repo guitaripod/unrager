@@ -1,3 +1,4 @@
+import Combine
 import UIKit
 import UnragerKit
 
@@ -9,6 +10,7 @@ final class HomeViewController: FeedViewController {
     private var chronological = false
     private let titleButton = UIButton(type: .system)
     private var filterWasEnabled = AppSettings.filterEnabled
+    private var hiddenObserver: AnyCancellable?
 
     /// The Home tab reopens on whatever mode it was last left on
     /// (`ClientSettings.homeFollowing`); Originals is restored too. Local state
@@ -30,6 +32,11 @@ final class HomeViewController: FeedViewController {
         super.viewDidLoad()
         configureTitleMenu()
         configureNavItems()
+        hiddenObserver = viewModel.hiddenPosts
+            .map(\.count)
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshRightBarItems() }
         configureComposeButton()
         updateTabBarItem()
         setChronologicalSort(chronological && following)
@@ -78,6 +85,16 @@ final class HomeViewController: FeedViewController {
         if following {
             children.append(UIAction(title: "Chronological order", image: DesignSystem.icon("clock"),
                                      state: chronological ? .on : .off) { [weak self] _ in self?.toggleChronological() })
+        }
+        let hidden = viewModel.hiddenPosts.value.count
+        if hidden > 0, isHomeSource {
+            children.append(UIMenu(options: .displayInline, children: [
+                UIAction(title: "Hidden posts (\(hidden))", image: DesignSystem.icon("eye.slash")) { [weak self] _ in
+                    guard let self else { return }
+                    self.navigationController?.pushViewController(
+                        HiddenPostsViewController(viewModel: self.viewModel), animated: true)
+                },
+            ]))
         }
         return UIMenu(children: children)
     }

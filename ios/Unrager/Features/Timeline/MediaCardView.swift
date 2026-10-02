@@ -30,12 +30,7 @@ final class MediaCardView: UIView {
 
         cover.translatesAutoresizingMaskIntoConstraints = false
         cover.contentMode = .scaleAspectFill
-        // The cover height is driven by its constraint (contentWidth*0.52), not by
-        // the loaded image. Without these, the image view's intrinsic height ties
-        // with the height constraint and wins after an async/prefetched load,
-        // over-reserving space and leaving a gap above the labels in the feed.
-        cover.setContentHuggingPriority(.defaultLow, for: .vertical)
-        cover.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        letConstraintDriveCoverHeight()
 
         livePill.text = "● LIVE"
         livePill.font = DesignSystem.Typography.system(11, weight: .heavy)
@@ -89,6 +84,15 @@ final class MediaCardView: UIView {
             livePill.widthAnchor.constraint(equalToConstant: 52),
             livePill.heightAnchor.constraint(equalToConstant: 20),
         ])
+    }
+
+    /// The cover's height comes from its constraint (contentWidth * 0.52), not
+    /// from the loaded image. With default priorities the image view's intrinsic
+    /// height ties with that constraint and wins after an async or prefetched
+    /// load, over-reserving space and leaving a gap above the labels.
+    private func letConstraintDriveCoverHeight() {
+        cover.setContentHuggingPriority(.defaultLow, for: .vertical)
+        cover.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
     }
 
     @available(*, unavailable)

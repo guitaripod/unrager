@@ -148,7 +148,7 @@ public enum AskPreset: String, Sendable, CaseIterable {
     }
 }
 
-public enum FilterVerdict: String, Decodable, Sendable {
+public enum FilterVerdict: String, Codable, Sendable {
     case hide
     case keep
 }

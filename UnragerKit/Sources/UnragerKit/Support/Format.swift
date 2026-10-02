@@ -1,11 +1,11 @@
 import Foundation
 
 public enum Format {
-    /// Compact engagement count, e.g. 1234 → "1.2K", 2_500_000 → "2.5M".
+    /// Compact engagement count, e.g. 1234 → "1.2K", 2_500_000 → "2.5M". The
+    /// thresholds sit just below each power, so a value that would round up to
+    /// "1000K" or "1000M" rolls over to "1M" or "1B" instead.
     public static func count(_ value: Int) -> String {
         let n = Double(value)
-        // Thresholds sit just below each power so a value that would round up to
-        // "1000K" / "1000M" rolls over to "1M" / "1B" instead.
         switch abs(value) {
         case 999_500_000...:
             return trim(n / 1_000_000_000) + "B"

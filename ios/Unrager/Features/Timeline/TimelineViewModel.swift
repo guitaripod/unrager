@@ -33,6 +33,16 @@ struct FeedExhaustion {
     }
 }
 
+/// A post the rage filter hid from Home, kept for the session so the user can
+/// see which rule hid it and show it anyway.
+struct HiddenPost: Identifiable {
+    let tweet: Tweet
+    /// The rule behind the hide, as the user wrote it or a built-in rule's
+    /// name; nil when the model named none.
+    let reason: String?
+    var id: String { tweet.restID }
+}
+
 /// Drives any tweet feed: fetches a page, paginates on demand, dedupes by id,
 /// and publishes the accumulated tweets. Presentation-agnostic so the same
 /// model backs Home, Search, profile timelines, bookmarks and mentions.
@@ -81,6 +91,11 @@ final class TimelineViewModel {
     /// Emits ids whose seen-state flipped after a server check, so the feed can
     /// reconfigure exactly those rows (dim them) without a full reload.
     let seenChanged = PassthroughSubject<[String], Never>()
+    /// What the filter hid from the current Home feed (newest batch last), so
+    /// nothing is hidden without a way to see it. Cleared when the feed is
+    /// replaced or switched.
+    let hiddenPosts = CurrentValueSubject<[HiddenPost], Never>([])
+    private static let hiddenCap = 200
 
     private(set) var source: Source
     var awaitingQuery: Bool { isAwaitingQuery }
@@ -230,7 +245,20 @@ final class TimelineViewModel {
         persistTask = nil
         freshnessAnchor = nil
         freshness.send(nil)
+        hiddenPosts.send([])
         tweets.send([])
+    }
+
+    /// Shows a hidden post anyway: the user's own call goes to the server, where
+    /// it outranks the model in every client and survives rule changes, and the
+    /// post joins the top of the feed.
+    func showHidden(_ post: HiddenPost) async throws {
+        try await EngageService.filter.setOverride(ids: [post.id], verdict: .keep)
+        hiddenPosts.send(hiddenPosts.value.filter { $0.id != post.id })
+        guard !tweets.value.contains(where: { $0.restID == post.id }) else { return }
+        let updated = [post.tweet] + tweets.value
+        tweets.send(updated)
+        persistCache(updated)
     }
 
     // MARK: - Engagement
@@ -564,6 +592,7 @@ final class TimelineViewModel {
         var workingExhaustion = reset ? FeedExhaustion() : exhaustion
         collectingProgress.send(0)
         var survivors: [Tweet] = []
+        var newlyHidden: [HiddenPost] = []
         var pages = 0
         var failure: (any Error)?
         do {
@@ -576,10 +605,14 @@ final class TimelineViewModel {
                 workingCursor = page.cursor
 
                 let fresh = page.tweets.filter { ids.insert($0.restID).inserted }
-                let hidden = await streamHidden(fresh.map(\.restID), baseCount: survivors.count)
+                let judged = await streamHidden(fresh.map(\.restID), baseCount: survivors.count)
                 if Task.isCancelled { return }
-                for tweet in fresh where !hidden.contains(tweet.restID) {
-                    survivors.append(tweet)
+                for tweet in fresh {
+                    if judged.hidden.contains(tweet.restID) {
+                        newlyHidden.append(HiddenPost(tweet: tweet, reason: judged.reasons[tweet.restID]))
+                    } else {
+                        survivors.append(tweet)
+                    }
                 }
                 collectingProgress.send(survivors.count)
                 workingExhaustion.registerPage(added: fresh.count, pageCursor: page.cursor,
@@ -605,6 +638,8 @@ final class TimelineViewModel {
         current.append(contentsOf: survivors)
         tweets.send(current)
         persistCache(current)
+        let allHidden = (reset ? [] : hiddenPosts.value) + newlyHidden
+        hiddenPosts.send(Array(allHidden.suffix(Self.hiddenCap)))
         reconcileSeen(survivors.map(\.restID))
         AppLogger.shared.info(
             "filter batch +\(survivors.count) survivors over \(pages) page(s) (\(current.count) total)",
@@ -629,9 +664,10 @@ final class TimelineViewModel {
     /// end. When the stream drops before every post was judged, the unjudged
     /// ones are asked about once more; anything still without a verdict is kept,
     /// so a model that is down never blanks the feed.
-    private func streamHidden(_ ids: [String], baseCount: Int) async -> Set<String> {
-        guard !ids.isEmpty else { return [] }
+    private func streamHidden(_ ids: [String], baseCount: Int) async -> (hidden: Set<String>, reasons: [String: String]) {
+        guard !ids.isEmpty else { return ([], [:]) }
         var hidden = Set<String>()
+        var reasons: [String: String] = [:]
         var judged = Set<String>()
         var keeps = 0
         for attempt in 0..<2 {
@@ -639,10 +675,11 @@ final class TimelineViewModel {
             guard !remaining.isEmpty else { break }
             do {
                 for try await verdict in api.filterStream(ids: remaining) {
-                    if Task.isCancelled { return hidden }
+                    if Task.isCancelled { return (hidden, reasons) }
                     judged.insert(verdict.id)
                     if verdict.verdict == .hide {
                         hidden.insert(verdict.id)
+                        if let reason = verdict.reason { reasons[verdict.id] = reason }
                     } else {
                         keeps += 1
                         collectingProgress.send(baseCount + keeps)
@@ -655,7 +692,7 @@ final class TimelineViewModel {
         if judged.count < ids.count {
             AppLogger.shared.warn("filter left \(ids.count - judged.count) of \(ids.count) posts unjudged; showing them", category: .timeline)
         }
-        return hidden
+        return (hidden, reasons)
     }
 
     private func reportLoadError(_ error: APIError) {

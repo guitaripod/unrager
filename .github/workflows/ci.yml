@@ -84,6 +84,19 @@ jobs:
           cargo run --release -- serve --help > /dev/null
           cargo run --release -- setup --help > /dev/null
 
+  # The shared Swift package under the iPhone app: its decoding, networking,
+  # cache and notification logic is tested here, against the same JSON the
+  # server sends. Needs macOS (ImageIO), so the Linux job can't run it.
+  swift-kit:
+    name: UnragerKit tests
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: swift test
+        run: swift test
+        working-directory: UnragerKit
+
   publish-dry-run:
     name: crates.io publish dry-run
     runs-on: ubuntu-latest

@@ -343,7 +343,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8790)
     parser.add_argument("--assets", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets"))
+    parser.add_argument("--lab", action="store_true",
+                        help="serve the media lab (python3 make_lab.py first): a feed of test charts in every aspect ratio")
     args = parser.parse_args()
+    if args.lab:
+        dw.enable_lab()
+        global PAGE
+        PAGE = 60
     Handler.assets_dir = args.assets
     server = Server(("0.0.0.0", args.port), Handler)
     print(f"mock unrager on :{args.port} (assets {args.assets})", flush=True)

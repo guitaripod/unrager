@@ -177,6 +177,69 @@ ANALYTICS = {
 }
 
 
+LAB = False
+
+
+def lab_dims(name: str) -> tuple[int, int]:
+    """The pixel size a media-lab chart is named for: `lab_1080x1920_b` or `vlab_720x720`."""
+    w, h = name.split("_")[1].split("x")
+    return int(w), int(h)
+
+
+def lab_posts() -> list:
+    """One post per case in the media lab: every aspect ratio alone, photo groups
+    of two to five, clips, a link card and a quote of a tall photo."""
+    def photos(*sizes):
+        seen: dict[str, int] = {}
+        names = []
+        for size in sizes:
+            count = seen.get(size, 0)
+            seen[size] = count + 1
+            names.append(f"lab_{size}" + (f"_{'abcde'[count - 1]}" if count else ""))
+        return ("photos", names)
+
+    counts = (3, 5, 120, 1, 2400, 12)
+    cases = [
+        ("1:1 square", photos("1080x1080")), ("4:3 landscape", photos("1600x1200")),
+        ("3:2 landscape", photos("1620x1080")), ("16:9", photos("1920x1080")),
+        ("21:9 ultrawide", photos("2100x900")), ("3:1 panorama", photos("3000x1000")),
+        ("5:1 banner", photos("3000x600")), ("4:5 portrait", photos("1080x1350")),
+        ("3:4 phone portrait", photos("1200x1600")), ("2:3 portrait", photos("1000x1500")),
+        ("9:16 story", photos("1080x1920")), ("1:2 tall screenshot", photos("900x1800")),
+        ("1:3 long screenshot", photos("1000x3000")), ("1:5 very long", photos("600x3000")),
+        ("200×150 tiny", photos("200x150")),
+        ("two landscapes", photos("1600x1200", "1600x1200")), ("two portraits", photos("1200x1600", "1200x1600")),
+        ("landscape + portrait", photos("1600x1200", "1200x1600")),
+        ("landscape + two portraits", photos("1600x1200", "1200x1600", "1200x1600")),
+        ("portrait + two landscapes", photos("1200x1600", "1600x1200", "1600x1200")),
+        ("four squares", photos("1080x1080", "1080x1080", "1080x1080", "1080x1080")),
+        ("four mixed", photos("1920x1080", "1080x1920", "1080x1080", "1600x1200")),
+        ("four stories", photos("1080x1920", "1080x1920", "1080x1920", "1080x1920")),
+        ("two panoramas", photos("3000x1000", "3000x1000")), ("five photos", photos("1080x1080", "1600x1200", "1200x1600", "1920x1080", "1080x1080")),
+        ("two long screenshots", photos("1000x3000", "1000x3000")),
+        ("16:9 clip", ("video", "vlab_1280x720")), ("9:16 clip", ("video", "vlab_720x1280")),
+        ("1:1 clip", ("video", "vlab_720x720")), ("4:5 clip", ("video", "vlab_864x1080")),
+        ("21:9 clip", ("video", "vlab_1260x540")), ("9:16 GIF", ("gif", "vlab_720x1280")),
+        ("1.91:1 link card", ("card", {"cover": "lab_1200x628", "title": "A link with a wide cover image",
+                                       "description": "The cover is drawn whole, whatever its shape.",
+                                       "domain": "example.com", "target": "https://example.com/a"})),
+    ]
+    posts = []
+    for i, (title, media) in enumerate(cases):
+        posts.append((f"m{i:02d}", "medialab", 5 + i * 2, f"{title}", media, counts, {}))
+    posts.append(("m90", "medialab", 90, "quoting a 1:3 long screenshot", None, counts, {"quote": "m12"}))
+    return posts
+
+
+def enable_lab() -> None:
+    """Turns the mock into the media lab: the Home feed becomes the lab posts."""
+    global LAB
+    LAB = True
+    CAST.append(("medialab", "Media Lab", True, 1000, 10, "a05", "b05", ("Finland", "FI", "🇫🇮")))
+    HANDLES["medialab"] = len(CAST)
+    POSTS[:] = lab_posts() + POSTS
+
+
 class World:
     def __init__(self, base: str):
         self.base = base.rstrip("/")
@@ -227,14 +290,19 @@ class World:
             out = []
             for name in value:
                 group = name.split("_")[0]
-                w, h = MEDIA_DIMS[group]
+                w, h = lab_dims(name) if group == "lab" else MEDIA_DIMS[group]
+                alt = "A test chart with a smiley, a circle and a coloured triangle in each corner" if name.startswith("lab_1600x1200") else None
                 out.append({"kind": "photo", "url": self.asset("photos", name), "video_url": None,
-                            "alt_text": None, "width": w, "height": h})
+                            "alt_text": alt, "width": w, "height": h})
             return out
-        if kind == "video":
-            vertical = value.startswith("v_port")
-            return [{"kind": "video", "url": self.asset("videos", value), "video_url": self.asset("videos", value, "mp4"),
-                     "alt_text": None, "width": 9 if vertical else 16, "height": 16 if vertical else 9}]
+        if kind in ("video", "gif"):
+            if value.startswith("vlab_"):
+                w, h = lab_dims(value)
+            else:
+                vertical = value.startswith("v_port")
+                w, h = (9, 16) if vertical else (16, 9)
+            return [{"kind": "video" if kind == "video" else "animated_gif", "url": self.asset("videos", value),
+                     "video_url": self.asset("videos", value, "mp4"), "alt_text": None, "width": w, "height": h}]
         if kind == "card":
             return [{"kind": {"link_card": {"title": value["title"], "description": value["description"],
                                             "domain": value["domain"], "target_url": value["target"]}},
@@ -292,6 +360,8 @@ class World:
 
 
     def home_keys(self) -> list[str]:
+        if LAB:
+            return [p[0] for p in POSTS if p[1] == "medialab"]
         keys = []
         for post in POSTS:
             key, extra = post[0], post[6]

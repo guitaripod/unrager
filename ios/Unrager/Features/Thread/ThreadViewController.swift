@@ -41,7 +41,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
     /// reloaded thread shows it.
     private var postedReplyID: String?
     private let emptyState = EmptyStateView()
-    private let loadingIndicator = UIActivityIndicatorView(style: .medium)
+    private let loadingSkeleton = FeedSkeletonView()
 
     private enum Section: Int { case ancestors, focal, replies }
 
@@ -171,11 +171,12 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
         view.addManaged(emptyState)
         emptyState.pinEdges(toSafeAreaOf: view)
 
-        loadingIndicator.hidesWhenStopped = true
-        view.addManaged(loadingIndicator)
+        loadingSkeleton.isHidden = true
+        view.addManaged(loadingSkeleton)
         NSLayoutConstraint.activate([
-            loadingIndicator.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            loadingIndicator.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            loadingSkeleton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            loadingSkeleton.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            loadingSkeleton.trailingAnchor.constraint(equalTo: view.trailingAnchor),
         ])
 
         navigationItem.rightBarButtonItems = [
@@ -388,9 +389,23 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
 
     /// Paints just the focal tweet immediately (when handed a `Tweet`), so the
     /// screen shows content before the network round-trip resolves.
+    /// Shows the placeholder posts while the conversation is on its way.
+    private func showLoading() {
+        guard loadingSkeleton.isHidden else { return }
+        loadingSkeleton.alpha = 0
+        loadingSkeleton.isHidden = false
+        UIView.animate(withDuration: 0.25) { self.loadingSkeleton.alpha = 1 }
+    }
+
+    private func hideLoading() {
+        guard !loadingSkeleton.isHidden else { return }
+        loadingSkeleton.layer.removeAllAnimations()
+        loadingSkeleton.isHidden = true
+    }
+
     private func renderFocalIfAvailable() {
         guard let focalID, tweetsByID[focalID] != nil else {
-            loadingIndicator.startAnimating()
+            showLoading()
             return
         }
         var snapshot = NSDiffableDataSourceSnapshot<Section, String>()
@@ -420,20 +435,20 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
     private func load() {
         emptyState.isHidden = true
         repliesFailure = nil
-        if !didRenderFocal { loadingIndicator.startAnimating() }
+        if !didRenderFocal { showLoading() }
         updateFooter()
         Task {
             defer { collectionView.refreshControl?.endRefreshing() }
             do {
                 let thread = try await AppEnvironment.shared.api.thread(id: tweetID)
                 guard let focal = thread.focal ?? knownFocal else {
-                    loadingIndicator.stopAnimating()
+                    hideLoading()
                     emptyState.isHidden = false
                     emptyState.show(symbol: "exclamationmark.triangle", title: "Couldn't load thread",
                                     subtitle: "The conversation is unavailable.", showRetry: true)
                     return
                 }
-                loadingIndicator.stopAnimating()
+                hideLoading()
                 focalID = focal.restID
                 replyOrder = []
                 for tweet in thread.ancestors + [focal] {
@@ -462,7 +477,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
                     revealPostedReply()
                     return
                 }
-                loadingIndicator.stopAnimating()
+                hideLoading()
                 emptyState.isHidden = false
                 emptyState.show(symbol: "exclamationmark.triangle", title: "Couldn't load thread",
                                 subtitle: error.localizedDescription, showRetry: true)

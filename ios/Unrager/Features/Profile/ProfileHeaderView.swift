@@ -30,11 +30,15 @@ final class ProfileHeaderView: UIView {
     private let followersButton = UIButton(configuration: .plain())
     private let followButton = UIButton(configuration: .filled())
     private let briefButton = UIButton(configuration: .tinted())
-    private let segment = UISegmentedControl(items: ["Posts", "Replies"])
+    private let segment = UISegmentedControl(items: ["Posts", "Replies", "Media"])
     private let separator = HairlineView()
     private let counts = UIStackView()
     private let retryButton = UIButton(configuration: .tinted())
     private let retryRow = UIStackView()
+    private let insightsView = ProfileInsightsView()
+    private let nameSkeleton = BarsSkeletonView(bars: [(0.5, 24)])
+    private let detailSkeleton = BarsSkeletonView(
+        bars: [(0.92, 14), (0.7, 14), (0.52, 14)], spacing: 8)
 
     var onBrief: (() -> Void)?
     var onFollowToggle: (() -> Void)?
@@ -45,6 +49,7 @@ final class ProfileHeaderView: UIView {
     var onTapMention: ((String) -> Void)?
     var onTapHashtag: ((String) -> Void)?
     var onTapURL: ((URL) -> Void)?
+    var onTapTopPost: ((String) -> Void)?
 
     private var user: User?
     private var state = ProfileLoadState.loading
@@ -151,14 +156,16 @@ final class ProfileHeaderView: UIView {
         }
         topRow.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
 
-        [topRow, text, statusLabel, retryRow, bioLabel, metaLabel, counts, segment, lockedNotice]
-            .forEach(column.addArrangedSubview)
+        [topRow, nameSkeleton, text, detailSkeleton, statusLabel, retryRow, bioLabel, metaLabel, counts, insightsView,
+         segment, lockedNotice].forEach(column.addArrangedSubview)
         column.axis = .vertical
         column.spacing = DesignSystem.Spacing.m
         column.alignment = .fill
         column.setCustomSpacing(DesignSystem.Spacing.s, after: topRow)
         column.setCustomSpacing(DesignSystem.Spacing.s, after: bioLabel)
         retryRow.isHidden = true
+        insightsView.isHidden = true
+        insightsView.onTapTop = { [weak self] id in self?.onTapTopPost?(id) }
 
         addManaged(panel)
         panel.addManaged(column)
@@ -263,6 +270,8 @@ final class ProfileHeaderView: UIView {
             avatar.load(url: nil, targetSize: CGSize(width: Self.avatarSize, height: Self.avatarSize))
         }
         nameLabel.isHidden = !loaded
+        nameSkeleton.isHidden = state != .loading
+        detailSkeleton.isHidden = state != .loading
         statusLabel.text = state.message
         statusLabel.isHidden = state.message == nil
         retryRow.isHidden = !state.offersRetry
@@ -467,6 +476,17 @@ final class ProfileHeaderView: UIView {
     /// part of the header that stays visible when switching tabs.
     var segmentHeight: CGFloat {
         segment.bounds.height + 12
+    }
+
+    /// Shows the Recent posts card, or takes it away when there is nothing
+    /// to say or the account isn't the viewer's own.
+    func setInsights(_ insights: ProfileInsights?) {
+        guard let insights else {
+            insightsView.isHidden = true
+            return
+        }
+        insightsView.configure(with: insights)
+        insightsView.isHidden = false
     }
 
     func setSegment(_ index: Int) {

@@ -14,6 +14,12 @@ class FeedViewController: UIViewController, TweetActionHandling {
     private var cancellables = Set<AnyCancellable>()
     private let emptyState = EmptyStateView()
     private let loadingIndicator = UIActivityIndicatorView(style: .medium)
+    private let skeleton = FeedSkeletonView()
+    private var contentSizeObservation: NSKeyValueObservation?
+    /// Until when rows coming on screen glide in one after another: set when a
+    /// list that was empty first fills, so the first posts arrive as a wave
+    /// rather than all at once.
+    private var entranceUntil: CFTimeInterval = 0
     private let collectingLabel = UILabel()
     private var collectingStorage: MetalCollectingView?
     /// Built only when the filter's collect-then-show phase actually runs: it
@@ -173,6 +179,11 @@ class FeedViewController: UIViewController, TweetActionHandling {
         viewModel.first()
     }
 
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        positionSkeleton()
+    }
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         settleVideoPlayback()
@@ -288,6 +299,12 @@ class FeedViewController: UIViewController, TweetActionHandling {
 
         loadingIndicator.hidesWhenStopped = true
         view.addManaged(loadingIndicator)
+
+        skeleton.isHidden = true
+        collectionView.addSubview(skeleton)
+        contentSizeObservation = collectionView.observe(\.contentSize) { [weak self] _, _ in
+            MainActor.assumeIsolated { self?.positionSkeleton() }
+        }
 
         collectingLabel.font = DesignSystem.Typography.metric()
         collectingLabel.textColor = DesignSystem.Color.secondaryLabel
@@ -639,7 +656,8 @@ class FeedViewController: UIViewController, TweetActionHandling {
         let scrolledIn = collectionView.contentOffset.y > -collectionView.adjustedContentInset.top + 1
         let anchor = (hadItems && !tweets.isEmpty && !growsBottomOnly && scrolledIn)
             ? scrollAnchor(in: snapshot) : nil
-        let animated = anchor == nil && !growsBottomOnly && !tweets.isEmpty
+        let animated = hadItems && anchor == nil && !growsBottomOnly && !tweets.isEmpty
+        if !hadItems, !tweets.isEmpty { entranceUntil = CACurrentMediaTime() + 0.7 }
         PerfProbe.time("snapshot") {
             dataSource.apply(snapshot, animatingDifferences: animated) { [weak self] in
                 if let anchor { self?.restoreScrollAnchor(anchor) }
@@ -743,15 +761,18 @@ class FeedViewController: UIViewController, TweetActionHandling {
             emptyState.isHidden = true
             loadingIndicator.stopAnimating()
             hideCollecting()
+            hideSkeleton()
             return
         }
         if viewModel.awaitingQuery {
+            hideSkeleton()
             loadingIndicator.stopAnimating()
             hideCollecting()
             emptyState.isHidden = false
             emptyState.show(symbol: "magnifyingglass", title: "Search X",
                             subtitle: "Find posts, people, and topics.", showRetry: false)
         } else if viewModel.collectingProgress.value != nil, MetalCollectingView.isSupported {
+            hideSkeleton()
             emptyState.isHidden = true
             loadingIndicator.stopAnimating()
             collectingLabel.isHidden = true
@@ -759,20 +780,55 @@ class FeedViewController: UIViewController, TweetActionHandling {
         } else if viewModel.isLoading.value || !viewModel.hasLoadedOnce {
             emptyState.isHidden = true
             hideCollecting()
-            loadingIndicator.startAnimating()
-            updateCollectingLabel()
+            if viewModel.usesFilterCollect, AppSettings.filterEnabled {
+                loadingIndicator.startAnimating()
+                updateCollectingLabel()
+            } else {
+                showSkeleton()
+            }
         } else if let error = lastErrorText {
+            hideSkeleton()
             loadingIndicator.stopAnimating()
             hideCollecting()
             emptyState.isHidden = false
             emptyState.show(symbol: "exclamationmark.triangle", title: "Couldn't load", subtitle: error, showRetry: true)
         } else {
+            hideSkeleton()
             loadingIndicator.stopAnimating()
             hideCollecting()
             emptyState.isHidden = false
             let empty = viewModel.emptyContent
             emptyState.show(symbol: empty.symbol, title: empty.title, subtitle: empty.subtitle, showRetry: true)
         }
+    }
+
+    /// Shows the placeholder posts where the real ones will land.
+    private func showSkeleton() {
+        loadingIndicator.stopAnimating()
+        collectingLabel.isHidden = true
+        guard skeleton.isHidden else { return }
+        positionSkeleton()
+        skeleton.alpha = 0
+        skeleton.isHidden = false
+        UIView.animate(withDuration: 0.25) { self.skeleton.alpha = 1 }
+    }
+
+    private func hideSkeleton() {
+        guard !skeleton.isHidden else { return }
+        skeleton.layer.removeAllAnimations()
+        skeleton.isHidden = true
+    }
+
+    /// Puts the placeholders just under the header (a profile's, say), or at
+    /// the top of the list when there is none.
+    private func positionSkeleton() {
+        guard isViewLoaded, collectionView != nil else { return }
+        let width = collectionView.bounds.width
+        guard width > 0 else { return }
+        let headerBottom = collectionView.collectionViewLayout.layoutAttributesForSupplementaryView(
+            ofKind: Self.headerKind, at: IndexPath(item: 0, section: 0))?.frame.maxY ?? 0
+        let frame = CGRect(x: 0, y: headerBottom, width: width, height: skeleton.fittingHeight(width: width))
+        if skeleton.frame != frame { skeleton.frame = frame }
     }
 
     /// Reveals the full-screen Metal collecting state, driving the latest
@@ -1042,6 +1098,20 @@ extension FeedViewController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
         viewModel.loadMoreIfNeeded(currentIndex: indexPath.item)
         if let id = dataSource.itemIdentifier(for: indexPath) { viewModel.enqueueSeen([id]) }
+        glideIn(cell, at: indexPath)
+    }
+
+    /// While the first posts of an empty list arrive, each row fades up into
+    /// place a beat after the one above it.
+    private func glideIn(_ cell: UICollectionViewCell, at indexPath: IndexPath) {
+        guard CACurrentMediaTime() < entranceUntil, !UIAccessibility.isReduceMotionEnabled else { return }
+        cell.alpha = 0
+        cell.transform = CGAffineTransform(translationX: 0, y: 18)
+        UIView.animate(withDuration: 0.5, delay: Double(min(indexPath.item, 7)) * 0.05,
+                       usingSpringWithDamping: 0.9, initialSpringVelocity: 0, options: [.allowUserInteraction]) {
+            cell.alpha = 1
+            cell.transform = .identity
+        }
     }
 
     func collectionView(_ collectionView: UICollectionView, didEndDisplaying cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {

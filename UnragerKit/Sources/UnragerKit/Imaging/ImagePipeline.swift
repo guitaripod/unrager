@@ -20,6 +20,10 @@ private final class MemoryImageCache: @unchecked Sendable {
     func setObject(_ image: DecodedImage, forKey key: NSURL, cost: Int) {
         storage.setObject(image, forKey: key, cost: cost)
     }
+
+    func removeAll() {
+        storage.removeAllObjects()
+    }
 }
 
 /// A decoded, downsampled image. `CGImage` is immutable and thread-safe, so the
@@ -103,7 +107,9 @@ actor DecodeGate {
 /// caller that never registered can't decrement anything. The shared download
 /// is aborted only once the last interested consumer has cancelled, so
 /// recycling one cell never blanks an identical load another visible view is
-/// awaiting. Cross-platform.
+/// awaiting. Under the memory cache sits a `MediaDiskCache`: a picture seen
+/// before is read back from a small downsampled copy instead of being fetched
+/// and decoded in full again. Cross-platform.
 public actor ImagePipeline {
     public static let shared = ImagePipeline()
 
@@ -132,28 +138,48 @@ public actor ImagePipeline {
     private var prefetches: [URL: Task<Void, Never>] = [:]
     private let gate = DecodeGate(limit: 4)
     private let session: URLSession
+    private let disk: MediaDiskCache?
 
-    public init(memoryLimitBytes: Int = 96 * 1024 * 1024) {
+    public init(memoryLimitBytes: Int = 96 * 1024 * 1024, disk: MediaDiskCache? = .shared) {
         cache.totalCostLimit = memoryLimitBytes
         session = URLSession(configuration: Self.defaultConfiguration())
+        self.disk = disk
     }
 
-    init(memoryLimitBytes: Int, sessionConfiguration: URLSessionConfiguration) {
+    init(memoryLimitBytes: Int, sessionConfiguration: URLSessionConfiguration, disk: MediaDiskCache? = nil) {
         cache.totalCostLimit = memoryLimitBytes
         session = URLSession(configuration: sessionConfiguration)
+        self.disk = disk
     }
 
     private static func defaultConfiguration() -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.default
         configuration.requestCachePolicy = .returnCacheDataElseLoad
         configuration.urlCache = URLCache(memoryCapacity: 8 * 1024 * 1024,
-                                          diskCapacity: 256 * 1024 * 1024)
+                                          diskCapacity: 48 * 1024 * 1024)
         configuration.timeoutIntervalForRequest = 30
         return configuration
     }
 
     public func cached(_ url: URL) -> DecodedImage? {
         cache.object(forKey: url as NSURL)
+    }
+
+    /// Drops every decoded picture held in memory, for a memory warning. The
+    /// disk copies stay, so what is on screen reloads in a moment.
+    public nonisolated func purgeMemory() {
+        cache.removeAll()
+    }
+
+    /// Bytes the disk tier takes, for Settings.
+    public func diskUsage() async -> Int {
+        await disk?.diskUsage() ?? 0
+    }
+
+    /// Forgets every picture on disk and in memory.
+    public func clearMedia() {
+        cache.removeAll()
+        disk?.clear()
     }
 
     /// The decoded image for `url` if memory already holds one big enough for
@@ -219,7 +245,10 @@ public actor ImagePipeline {
         }
         let url = key.url
         let maxPixel = CGFloat(key.maxPixel)
-        let task = Task<DecodedImage?, Never> { [session, gate] in
+        let task = Task<DecodedImage?, Never> { [session, gate, disk] in
+            if let disk, let stored = await Self.decodeFromDisk(disk, url: url, maxPixel: maxPixel, gate: gate) {
+                return stored
+            }
             let delegate = TaskPriorityDelegate(for: Task.currentPriority)
             guard let data = try? await session.data(from: url, delegate: delegate).0, !Task.isCancelled else {
                 return nil
@@ -227,12 +256,44 @@ public actor ImagePipeline {
             await gate.acquire()
             defer { Task { await gate.release() } }
             if Task.isCancelled { return nil }
-            return await Task.detached(priority: Task.currentPriority) {
+            let decoded = await Task.detached(priority: Task.currentPriority) {
                 Self.downsample(data: data, maxPixel: maxPixel)
             }.value
+            if let decoded, let disk { Self.persist(data: data, decoded: decoded, url: url, maxPixel: maxPixel, disk: disk) }
+            return decoded
         }
         inFlight[key] = InFlightLoad(task: task, interest: 1)
         return task
+    }
+
+    /// The picture from its stored copy, decoded at `maxPixel`; nil when the
+    /// disk has none big enough or it will not decode.
+    private static func decodeFromDisk(_ disk: MediaDiskCache, url: URL, maxPixel: CGFloat,
+                                       gate: DecodeGate) async -> DecodedImage? {
+        guard let data = await disk.data(for: url, atLeast: Int(maxPixel.rounded(.up))) else { return nil }
+        await gate.acquire()
+        defer { Task { await gate.release() } }
+        if Task.isCancelled { return nil }
+        return await Task.detached(priority: Task.currentPriority) {
+            Self.downsample(data: data, maxPixel: maxPixel)
+        }.value
+    }
+
+    /// Keeps a downsampled copy of a fresh download for the next launch, at
+    /// the size steps `MediaDiskCache` uses, unless the disk already has one
+    /// big enough. Runs at utility priority after the picture is on screen.
+    private static func persist(data: Data, decoded: DecodedImage, url: URL, maxPixel: CGFloat,
+                                disk: MediaDiskCache) {
+        let bucket = MediaDiskCache.bucket(for: maxPixel)
+        Task.detached(priority: .utility) {
+            guard await disk.wants(url, bucket: bucket) else { return }
+            let longest = CGFloat(max(decoded.pixelWidth, decoded.pixelHeight))
+            let sized = longest >= CGFloat(bucket) - 1 || longest < maxPixel - 1
+                ? decoded : Self.downsample(data: data, maxPixel: CGFloat(bucket))
+            guard let sized else { return }
+            let complete = CGFloat(max(sized.pixelWidth, sized.pixelHeight)) < CGFloat(bucket) - 1
+            disk.store(sized.cgImage, for: url, bucket: bucket, complete: complete)
+        }
     }
 
     /// Gives back the one unit of interest a cancelled `image(for:)` call

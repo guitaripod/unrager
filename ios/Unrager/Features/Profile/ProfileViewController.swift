@@ -1,3 +1,4 @@
+import Combine
 import UIKit
 import SafariServices
 import UnragerKit
@@ -23,15 +24,28 @@ final class ProfileViewController: FeedViewController {
     private var loadState = ProfileLoadState.loading
     private let moderation = ProfileModeration()
     private var measuredWidth: CGFloat = 0
+    private var insights: ProfileInsights?
+    private var profileCancellables = Set<AnyCancellable>()
 
     /// The Replies tab: a sibling feed over `/api/sources/user/{handle}/replies`,
     /// created lazily on first switch. It carries its own copy of the profile
     /// header so the header stays visible (and scrolls naturally) on both tabs.
     private var repliesController: ProfileRepliesFeedViewController?
     private let repliesHeader = ProfileHeaderView()
-    private var showingReplies = false
 
-    private var headers: [ProfileHeaderView] { [profileHeader, repliesHeader] }
+    /// The Media tab: every picture and clip from the account's own posts,
+    /// built on first use like Replies and under its own copy of the header.
+    private var mediaController: ProfileMediaViewController?
+    private let mediaHeader = ProfileHeaderView()
+
+    /// The three views under the header, in the order of its segment control.
+    private enum Section: Int {
+        case posts, replies, media
+    }
+
+    private var section = Section.posts
+
+    private var headers: [ProfileHeaderView] { [profileHeader, repliesHeader, mediaHeader] }
 
     override var refreshTextColor: UIColor { .white }
 
@@ -62,7 +76,12 @@ final class ProfileViewController: FeedViewController {
         installBanner()
         installMenu()
         moderation.onChange = { [weak self] in self?.applyHeaderState() }
+        seedFromCache()
         loadProfile()
+        viewModel.tweets
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] tweets in self?.updateInsights(from: tweets) }
+            .store(in: &profileCancellables)
         NotificationCenter.default.addObserver(
             self, selector: #selector(textSizeChanged), name: AppSettings.fontScaleDidChange, object: nil)
         NotificationCenter.default.addObserver(
@@ -105,6 +124,28 @@ final class ProfileViewController: FeedViewController {
         loadProfile()
     }
 
+    /// Draws the last account details saved for this handle at once, so the
+    /// profile opens with its name, bio, counts and banner while the real
+    /// request is on its way. A load that lands first wins, and the fresh
+    /// account always replaces the seed.
+    private func seedFromCache() {
+        Task {
+            guard let cached = await ProfileCache.shared.load(handle: handle),
+                  user == nil, loadState == .loading else { return }
+            user = cached.user
+            loadState = .loaded
+            isFollowing = cached.followedByMe
+            isOwnProfile = AppEnvironment.shared.currentHandle?.caseInsensitiveCompare(handle) == .orderedSame
+            title = cached.user.name
+            titleLabel.text = cached.user.name
+            titleLabel.sizeToFit()
+            banner.configure(url: cached.user.bannerURL.flatMap(URL.init), handle: handle,
+                             imagesEnabled: AppSettings.imagesEnabled)
+            applyHeaderState()
+            AppLogger.shared.debug("seeded @\(handle) header from cache", category: .profile)
+        }
+    }
+
     private func wire(_ header: ProfileHeaderView) {
         header.onBrief = { [weak self] in
             guard let self else { return }
@@ -115,11 +156,14 @@ final class ProfileViewController: FeedViewController {
         header.onFollowToggle = { [weak self] in self?.toggleFollow() }
         header.onTapFollowers = { [weak self] in self?.pushUserList(mode: .followers) }
         header.onTapFollowing = { [weak self] in self?.pushUserList(mode: .following) }
-        header.onSegmentChange = { [weak self] index in self?.setShowingReplies(index == 1) }
+        header.onSegmentChange = { [weak self] index in self?.setSection(Section(rawValue: index) ?? .posts) }
         header.onRetry = { [weak self] in self?.loadProfile() }
         header.onTapMention = { [weak self] handle in self?.openMention(handle) }
         header.onTapHashtag = { [weak self] query in self?.openHashtagSearch(query) }
         header.onTapURL = { [weak self] url in self?.openInBrowser(url) }
+        header.onTapTopPost = { [weak self] id in
+            self?.navigationController?.pushViewController(ThreadViewController(tweetID: id), animated: true)
+        }
     }
 
     /// Loads the account alone (the feed fetches the posts itself). A failure
@@ -140,6 +184,7 @@ final class ProfileViewController: FeedViewController {
                 let profile = try await social.profile(handle: handle, includeTweets: false)
                 user = profile.user
                 loadState = .loaded
+                ProfileCache.shared.save(user: profile.user, followedByMe: profile.followedByMe, handle: handle)
                 banner.configure(url: profile.user.bannerURL.flatMap(URL.init), handle: handle,
                                  imagesEnabled: AppSettings.imagesEnabled)
                 isOwnProfile = await me?.handle.caseInsensitiveCompare(handle) == .orderedSame
@@ -161,6 +206,15 @@ final class ProfileViewController: FeedViewController {
                 applyHeaderState()
             }
         }
+    }
+
+    /// Works out the Recent posts card from the posts loaded so far, and
+    /// redraws the header only when it changed.
+    private func updateInsights(from tweets: [Tweet]) {
+        let updated = ProfileInsights.make(from: tweets)
+        guard updated != insights else { return }
+        insights = updated
+        applyHeaderState()
     }
 
     /// Forgets an account that has gone away, so nothing of it stays on screen
@@ -193,15 +247,18 @@ final class ProfileViewController: FeedViewController {
             header.setBasedIn(flag: basedIn?.flag, country: basedIn?.country)
             header.setModeration(muting: moderation.muting, blocking: moderation.blocking)
             header.setPostsLocked(postsLocked, handle: handle)
+            header.setInsights(isOwnProfile && loadState == .loaded ? insights : nil)
             header.setModerationActions(accessibilityActions())
-            header.setSegment(showingReplies ? 1 : 0)
+            header.setSegment(section.rawValue)
             header.placeActions(width: width)
         }
         let blank = loadState.isFinal || postsLocked
         hidesEmptyState = blank
         repliesController?.hidesEmptyState = blank
+        mediaController?.hidesEmptyState = blank
         collectionView.collectionViewLayout.invalidateLayout()
         repliesController?.collectionView.collectionViewLayout.invalidateLayout()
+        mediaController?.collectionView.collectionViewLayout.invalidateLayout()
     }
 
     /// Resolves the profiled user's country flag and shows the header's
@@ -367,7 +424,19 @@ final class ProfileViewController: FeedViewController {
     // MARK: - Banner
 
     private var activeScrollView: UIScrollView {
-        showingReplies ? (repliesController?.collectionView ?? collectionView) : collectionView
+        switch section {
+        case .posts: return collectionView
+        case .replies: return repliesController?.collectionView ?? collectionView
+        case .media: return mediaController?.collectionView ?? collectionView
+        }
+    }
+
+    private var activeHeader: ProfileHeaderView {
+        switch section {
+        case .posts: return profileHeader
+        case .replies: return repliesHeader
+        case .media: return mediaHeader
+        }
     }
 
     /// Parks the header image behind the feed, shows a placeholder wash until
@@ -390,6 +459,7 @@ final class ProfileViewController: FeedViewController {
         let follow: (UIScrollView) -> Void = { [weak self] scrollView in self?.updateBanner(for: scrollView) }
         onScroll = follow
         repliesController?.onScroll = follow
+        mediaController?.onScroll = follow
     }
 
     /// Plays the banner, the avatar and the navigation title to where
@@ -406,7 +476,7 @@ final class ProfileViewController: FeedViewController {
             setNeedsStatusBarAppearanceUpdate()
         }
         for header in headers { header.setAvatar(scale: motion.avatarScale, alpha: motion.avatarAlpha) }
-        let nameBottom = (showingReplies ? repliesHeader : profileHeader).nameBottom
+        let nameBottom = activeHeader.nameBottom
         titleLabel.alpha = ProfileBannerMotion.titleAlpha(scroll: scroll, nameBottom: nameBottom)
     }
 
@@ -447,15 +517,17 @@ final class ProfileViewController: FeedViewController {
 
     // MARK: - Posts / Replies toggle
 
-    private func setShowingReplies(_ replies: Bool) {
-        guard replies != showingReplies else { return }
+    private func setSection(_ newSection: Section) {
+        guard newSection != section else { return }
         let outgoing = activeScrollView
-        showingReplies = replies
+        section = newSection
         Haptics.selection()
-        if replies { embedRepliesIfNeeded() }
+        if newSection == .replies { embedRepliesIfNeeded() }
+        if newSection == .media { embedMediaIfNeeded() }
         alignIncomingTab(with: outgoing)
-        repliesController?.view.isHidden = !replies
-        collectionView.isHidden = replies
+        collectionView.isHidden = newSection != .posts
+        repliesController?.view.isHidden = newSection != .replies
+        mediaController?.view.isHidden = newSection != .media
         applyHeaderState()
         navigationHost.setContentScrollView(activeScrollView, for: .top)
         updateBanner(for: activeScrollView)
@@ -501,7 +573,14 @@ final class ProfileViewController: FeedViewController {
     /// Screenshot-QA hook: jumps straight to the Replies tab.
     func debugShowReplies() {
         loadViewIfNeeded()
-        setShowingReplies(true)
+        setSection(.replies)
+        applyHeaderState()
+    }
+
+    /// Screenshot-QA hook: jumps straight to the Media tab.
+    func debugShowMedia() {
+        loadViewIfNeeded()
+        setSection(.media)
         applyHeaderState()
     }
 
@@ -530,6 +609,23 @@ final class ProfileViewController: FeedViewController {
         controller.onScroll = { [weak self] scrollView in self?.updateBanner(for: scrollView) }
         controller.hidesEmptyState = hidesEmptyState
         repliesController = controller
+    }
+
+    /// Builds the Media tab on first use: its own grid under its own copy of
+    /// the header.
+    private func embedMediaIfNeeded() {
+        guard mediaController == nil else { return }
+        let controller = ProfileMediaViewController(handle: handle)
+        controller.onPullToRefresh = { [weak self] in self?.loadProfile() }
+        controller.headerView = mediaHeader
+        addChild(controller)
+        view.addManaged(controller.view)
+        controller.view.pinEdges(to: view)
+        controller.didMove(toParent: self)
+        controller.view.backgroundColor = .clear
+        controller.onScroll = { [weak self] scrollView in self?.updateBanner(for: scrollView) }
+        controller.hidesEmptyState = hidesEmptyState
+        mediaController = controller
     }
 }
 

@@ -12,7 +12,12 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             AppSettings.serverURLString = server
         }
         #endif
+        Task { _ = await ImagePipeline.shared.diskUsage() }
         MediaAudioSession.configureMixable()
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main) { _ in
+            ImagePipeline.shared.purgeMemory()
+        }
         NotificationCenterService.shared.registerLaunchHandlers()
         AppLogger.shared.info("app launched · server=\(AppSettings.serverURLString)", category: .app)
         return true

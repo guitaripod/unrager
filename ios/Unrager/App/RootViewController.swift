@@ -27,6 +27,7 @@ final class RootViewController: UITabBarController {
     /// saved from the old one.
     @objc private func serverChanged() {
         TimelineCache.shared.clearAll()
+        ProfileCache.shared.clearAll()
         SessionSync.restore()
     }
 

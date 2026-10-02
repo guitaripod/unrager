@@ -41,7 +41,21 @@ final class AppEnvironment {
     var currentHandle: String? {
         if let cachedWhoami { return cachedWhoami.handle }
         prefetchWhoami()
-        return nil
+        return rememberedHandle
+    }
+
+    private static var handleKey: String { "unrager.cache.handle.\(AppSettings.serverURLString)" }
+
+    /// The handle this server last said was signed in, kept across launches so
+    /// the profile tab can open at once instead of waiting on `whoami`. A hint
+    /// only: the real answer replaces it as soon as it arrives.
+    var rememberedHandle: String? {
+        UserDefaults.standard.string(forKey: Self.handleKey)
+    }
+
+    private func remember(_ account: Whoami?) {
+        guard let account else { return }
+        UserDefaults.standard.set(account.handle, forKey: Self.handleKey)
     }
 
     func prefetchWhoami() {
@@ -50,6 +64,7 @@ final class AppEnvironment {
         Task { [weak self] in
             let result = await self?.whoamiTask?.value
             self?.cachedWhoami = result ?? nil
+            self?.remember(result ?? nil)
             self?.whoamiTask = nil
         }
     }
@@ -58,7 +73,10 @@ final class AppEnvironment {
     func whoami() async -> Whoami? {
         if let cachedWhoami { return cachedWhoami }
         let result = try? await api.whoami()
-        if let result { cachedWhoami = result }
+        if let result {
+            cachedWhoami = result
+            remember(result)
+        }
         return result
     }
 }

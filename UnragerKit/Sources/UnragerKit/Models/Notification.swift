@@ -76,15 +76,8 @@ public struct XNotification: Decodable, Sendable, Hashable, Identifiable {
             .map(Self.smallRendition)
     }
 
-    /// X's image host serves a ~680 px rendition for `?name=small`, which is
-    /// plenty for a 44 pt tile and a fraction of the full-size download. Other
-    /// hosts, and URLs that already pick a rendition, are left alone.
     static func smallRendition(of url: URL) -> URL {
-        guard url.host == "pbs.twimg.com",
-              var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              components.queryItems?.contains(where: { $0.name == "name" }) != true else { return url }
-        components.queryItems = (components.queryItems ?? []) + [URLQueryItem(name: "name", value: "small")]
-        return components.url ?? url
+        ImageRendition.small(url)
     }
 }
 

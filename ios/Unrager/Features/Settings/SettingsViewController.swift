@@ -45,7 +45,7 @@ final class SettingsViewController: UIViewController {
         case theme, textSize, tabs
         case officialCompose
         case notifications
-        case savedTimelines, shareLogs, resetSettings
+        case savedTimelines, imageCache, shareLogs, resetSettings
         case whatsNew, version, source
     }
 
@@ -60,6 +60,7 @@ final class SettingsViewController: UIViewController {
     private var dataSource: UICollectionViewDiffableDataSource<Section, Item>!
     private var connection = Connection.checking
     private var account: Whoami?
+    private var imageCacheBytes: Int?
     private var filterSummary: String?
     private var checkTask: Task<Void, Never>?
     /// Bumped on every flip of the rage-filter switch, so a late failure of an
@@ -89,6 +90,7 @@ final class SettingsViewController: UIViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        refreshImageCacheSize()
         refreshConnection()
         reconfigure(Item.allSettingsRows)
         Task { [weak self] in
@@ -180,7 +182,7 @@ final class SettingsViewController: UIViewController {
         snapshot.appendItems([.theme, .textSize, .tabs], toSection: .appearance)
         snapshot.appendItems([.officialCompose], toSection: .writing)
         snapshot.appendItems([.notifications], toSection: .notifications)
-        snapshot.appendItems([.savedTimelines, .shareLogs, .resetSettings], toSection: .data)
+        snapshot.appendItems([.savedTimelines, .imageCache, .shareLogs, .resetSettings], toSection: .data)
         snapshot.appendItems([.whatsNew, .version, .source], toSection: .about)
         dataSource.apply(snapshot, animatingDifferences: false)
     }
@@ -330,6 +332,10 @@ final class SettingsViewController: UIViewController {
             tile("clock.arrow.circlepath", .systemGray)
             content.text = "Saved timelines"
             content.secondaryText = SettingsFormat.bytes(TimelineCache.shared.diskUsage())
+        case .imageCache:
+            tile("photo.stack", .systemGray)
+            content.text = "Saved pictures"
+            content.secondaryText = imageCacheBytes.map(SettingsFormat.bytes) ?? "Counting…"
         case .shareLogs:
             tile("doc.text.magnifyingglass", .systemGray)
             content.text = "Share logs"
@@ -536,11 +542,34 @@ final class SettingsViewController: UIViewController {
 
     // MARK: - Data
 
+    /// Reads how much the picture cache takes and shows it on its row.
+    private func refreshImageCacheSize() {
+        Task {
+            imageCacheBytes = await ImagePipeline.shared.diskUsage()
+            reconfigure([.imageCache])
+        }
+    }
+
+    private func confirmClearImages() {
+        let sheet = UIAlertController(title: nil, message: "Pictures load from the network again the next time they are shown.",
+                                      preferredStyle: .actionSheet)
+        sheet.addAction(UIAlertAction(title: "Clear Saved Pictures", style: .destructive) { [weak self] _ in
+            Task {
+                await ImagePipeline.shared.clearMedia()
+                Haptics.success()
+                self?.refreshImageCacheSize()
+            }
+        })
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        present(sheet, animated: true)
+    }
+
     private func confirmClearTimelines() {
         let sheet = UIAlertController(title: nil, message: "Feeds will load from the server the next time you open them.",
                                       preferredStyle: .actionSheet)
         sheet.addAction(UIAlertAction(title: "Clear Saved Timelines", style: .destructive) { [weak self] _ in
             TimelineCache.shared.clearAll()
+            ProfileCache.shared.clearAll()
             Haptics.success()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self?.reconfigure([.savedTimelines]) }
         })
@@ -637,6 +666,8 @@ extension SettingsViewController: UICollectionViewDelegate {
             navigationController?.pushViewController(NotificationSettingsViewController(), animated: true)
         case .savedTimelines:
             confirmClearTimelines()
+        case .imageCache:
+            confirmClearImages()
         case .shareLogs:
             shareLogs()
         case .resetSettings:

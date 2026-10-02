@@ -8,7 +8,7 @@ import UnragerKit
 /// screen's status bar, title and scroll edge, since this is the screen the
 /// navigation stack shows.
 final class MyProfileViewController: UIViewController {
-    private let loadingIndicator = UIActivityIndicatorView(style: .large)
+    private let skeleton = ProfileSkeletonView()
     private let emptyState = EmptyStateView()
     private var profile: ProfileViewController?
 
@@ -20,34 +20,53 @@ final class MyProfileViewController: UIViewController {
         view.backgroundColor = DesignSystem.Color.background
         navigationItem.largeTitleDisplayMode = .never
 
-        view.addManaged(loadingIndicator)
+        view.addManaged(skeleton)
+        skeleton.pinEdges(to: view)
+        skeleton.isHidden = true
         emptyState.isHidden = true
         emptyState.onRetry = { [weak self] in self?.resolve() }
         view.addManaged(emptyState)
         emptyState.pinEdges(toSafeAreaOf: view)
-        NSLayoutConstraint.activate([
-            loadingIndicator.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            loadingIndicator.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-        ])
         resolve()
     }
 
     private func resolve() {
         guard profile == nil else { return }
         emptyState.isHidden = true
-        loadingIndicator.startAnimating()
+        if let remembered = AppEnvironment.shared.rememberedHandle {
+            embed(handle: remembered)
+            verify(handle: remembered)
+            return
+        }
+        skeleton.isHidden = false
         Task {
             do {
                 let me = try await AppEnvironment.shared.api.whoami()
-                loadingIndicator.stopAnimating()
                 embed(handle: me.handle)
             } catch {
-                loadingIndicator.stopAnimating()
+                skeleton.isHidden = true
                 emptyState.isHidden = false
                 emptyState.show(symbol: "person.crop.circle.badge.exclamationmark",
                                 title: "Couldn't load profile", subtitle: error.localizedDescription, showRetry: true)
                 AppLogger.shared.warn("my-profile whoami failed: \(error)", category: .profile)
             }
+        }
+    }
+
+    /// Checks the remembered handle against the server's answer in the
+    /// background, and swaps to the right profile if the account has changed.
+    private func verify(handle: String) {
+        Task {
+            guard let me = await AppEnvironment.shared.whoami(),
+                  me.handle.caseInsensitiveCompare(handle) != .orderedSame else { return }
+            AppLogger.shared.info("signed-in account changed from @\(handle) to @\(me.handle)", category: .profile)
+            if let profile {
+                profile.willMove(toParent: nil)
+                profile.view.removeFromSuperview()
+                profile.removeFromParent()
+                self.profile = nil
+            }
+            embed(handle: me.handle)
         }
     }
 
@@ -58,6 +77,7 @@ final class MyProfileViewController: UIViewController {
         child.view.pinEdges(to: view)
         child.didMove(toParent: self)
         profile = child
+        skeleton.isHidden = true
         setNeedsStatusBarAppearanceUpdate()
     }
 }

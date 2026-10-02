@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import demo_world as dw  # noqa: E402
 
 PAGE = 8
+LATENCY = {"api": 0.0, "assets": 0.0}
 STATE = {"filter_enabled": True, "likes": set(), "bookmarks": set(), "retweets": set(), "overrides": {},
          "deleted": set(), "muting": {"hottakeshourly"}, "blocking": set(), "replies": []}
 
@@ -152,7 +153,11 @@ class Handler(BaseHTTPRequestHandler):
         w = self.world
 
         if path.startswith("/assets/"):
+            if LATENCY["assets"]:
+                time.sleep(LATENCY["assets"])
             return self.serve_asset(path)
+        if LATENCY["api"] and path.startswith(("/api/sources", "/api/profile", "/api/whoami")):
+            time.sleep(LATENCY["api"])
         if path == "/api/health":
             return self.send_json({"ok": True, "name": "unrager", "version": "0.24.0"})
         if path == "/api/whoami":
@@ -391,7 +396,13 @@ def main():
     parser.add_argument("--assets", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets"))
     parser.add_argument("--lab", action="store_true",
                         help="serve the media lab (python3 make_lab.py first): a feed of test charts in every aspect ratio")
+    parser.add_argument("--latency", type=float, default=0.0,
+                        help="seconds every timeline, profile and whoami request waits, to see the loading states")
+    parser.add_argument("--asset-latency", type=float, default=0.0,
+                        help="seconds every picture waits")
     args = parser.parse_args()
+    LATENCY["api"] = args.latency
+    LATENCY["assets"] = args.asset_latency
     if args.lab:
         dw.enable_lab()
         global PAGE

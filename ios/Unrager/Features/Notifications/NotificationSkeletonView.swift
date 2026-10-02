@@ -3,28 +3,14 @@ import UIKit
 /// What the list looks like before its first page lands: rows of grey shapes in
 /// the real rows' proportions, with a soft light passing across them. It stands
 /// in for a spinner so the screen already has the right shape when the
-/// activity arrives. Still, without the sweep, under Reduce Motion.
-final class NotificationSkeletonView: UIView {
+/// activity arrives.
+final class NotificationSkeletonView: SkeletonView {
     private static let rowCount = 9
-
-    private let content = UIView()
-    private let sweep = CAGradientLayer()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        isUserInteractionEnabled = false
-        isAccessibilityElement = true
         accessibilityLabel = "Loading notifications"
-        content.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(content)
-        content.pinEdges(to: self)
         buildRows()
-
-        sweep.colors = [UIColor.black.withAlphaComponent(0.35).cgColor, UIColor.black.cgColor,
-                        UIColor.black.withAlphaComponent(0.35).cgColor]
-        sweep.startPoint = CGPoint(x: 0, y: 0.5)
-        sweep.endPoint = CGPoint(x: 1, y: 0.5)
-        sweep.locations = [0, 0.5, 1]
     }
 
     @available(*, unavailable)
@@ -82,44 +68,5 @@ final class NotificationSkeletonView: UIView {
             equalTo: row.bottomAnchor, constant: 14)
         bottom.isActive = true
         return row
-    }
-
-    private func shape(radius: CGFloat) -> UIView {
-        let view = UIView()
-        view.backgroundColor = .tertiarySystemFill
-        view.layer.cornerRadius = radius
-        view.layer.cornerCurve = .continuous
-        view.translatesAutoresizingMaskIntoConstraints = false
-        return view
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        sweep.frame = bounds
-    }
-
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        updateAnimation()
-    }
-
-    override var isHidden: Bool {
-        didSet { updateAnimation() }
-    }
-
-    private func updateAnimation() {
-        sweep.removeAllAnimations()
-        guard window != nil, !isHidden, !UIAccessibility.isReduceMotionEnabled else {
-            content.layer.mask = nil
-            return
-        }
-        content.layer.mask = sweep
-        let animation = CABasicAnimation(keyPath: "locations")
-        animation.fromValue = [-1.0, -0.5, 0.0]
-        animation.toValue = [1.0, 1.5, 2.0]
-        animation.duration = 1.4
-        animation.repeatCount = .infinity
-        animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        sweep.add(animation, forKey: "sweep")
     }
 }

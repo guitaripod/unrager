@@ -127,6 +127,10 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                     profile.debugShowReplies()
                     if parts.count > 3, let points = Double(parts[3]) { profile.debugScroll(by: CGFloat(points)) }
                 }
+                if parts.count > 2, parts[2] == "media" {
+                    profile.debugShowMedia()
+                    if parts.count > 3, let points = Double(parts[3]) { profile.debugScroll(by: CGFloat(points)) }
+                }
                 if parts.count > 3, parts[2] == "scroll", let points = Double(parts[3]) {
                     profile.debugScroll(by: CGFloat(points))
                 }

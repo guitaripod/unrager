@@ -1,5 +1,4 @@
 import UIKit
-import AVKit
 import Combine
 import UnragerKit
 
@@ -638,11 +637,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
             let url = video.element.videoURL.flatMap(URL.init)
                 ?? AppEnvironment.shared.api.mediaURL(tweetID: tweet.restID, index: video.offset)
             for case let cell as TweetCell in collectionView.visibleCells { cell.pauseVideo() }
-            MediaAudioSession.activatePlayback()
-            let player = AVPlayer(url: url)
-            let controller = AVPlayerViewController()
-            controller.player = player
-            present(controller, animated: true) { player.play() }
+            presentFullScreenVideo(url)
             return
         }
         let photoIndices = tweet.media.enumerated().compactMap { index, media -> Int? in

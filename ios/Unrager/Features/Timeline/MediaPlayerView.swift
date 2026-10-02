@@ -96,10 +96,10 @@ final class MediaPlayerView: UIView {
 
     /// Flips the session-wide inline-audio preference, applies it to the live
     /// player, and switches the audio session to `.playback` so sound is audible
-    /// even with the ring switch on.
+    /// even with the ring switch on — or, muting again, back to the passive one.
     private func toggleMute() {
         Self.audioEnabled.toggle()
-        if Self.audioEnabled { MediaAudioSession.activatePlayback() }
+        if Self.audioEnabled { MediaAudioSession.activatePlayback() } else { MediaAudioSession.deactivate() }
         player?.isMuted = !Self.audioEnabled
         updateMuteIcon()
     }

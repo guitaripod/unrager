@@ -134,9 +134,28 @@ extension UIViewController {
     /// after a second.
     func showToast(_ message: String) {
         let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
-        present(alert, animated: true)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { alert.dismiss(animated: true) }
+        alert.view.accessibilityIdentifier = Self.toastIdentifier
+        presentReplacingToast(alert) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                if alert.presentingViewController != nil { alert.dismiss(animated: true) }
+            }
+        }
     }
+
+    /// Presents `controller`, first closing a toast that is still up rather
+    /// than letting it block the new one ("Saving…" giving way to "Saved to
+    /// Photos", or to the alert saying why saving failed).
+    func presentReplacingToast(_ controller: UIViewController, completion: (() -> Void)? = nil) {
+        let show: () -> Void = { [weak self] in self?.present(controller, animated: true, completion: completion) }
+        if let toast = presentedViewController as? UIAlertController,
+           toast.view.accessibilityIdentifier == Self.toastIdentifier {
+            toast.dismiss(animated: false, completion: show)
+        } else {
+            show()
+        }
+    }
+
+    private static var toastIdentifier: String { "unrager.toast" }
 
     /// One Save action for a lone attachment, or a "Save media" submenu with
     /// "Save all (N)" plus a per-item list when a tweet carries several. Each
@@ -176,14 +195,17 @@ extension UIViewController {
 
     private func saveMedia(tweetID: String, index: Int, isVideo: Bool) {
         let url = AppEnvironment.shared.api.mediaURL(tweetID: tweetID, index: index)
+        guard MediaSaver.inFlight.insert(url).inserted else { return }
+        showToast("Saving…")
         Task {
+            defer { MediaSaver.inFlight.remove(url) }
             do {
                 try await MediaSaver.save(from: url, isVideo: isVideo)
                 Haptics.success()
                 showToast("Saved to Photos")
             } catch {
                 AppLogger.shared.warn("save media failed: \(error)", category: .media)
-                present(MediaSaver.alert(for: error), animated: true)
+                presentReplacingToast(MediaSaver.alert(for: error))
             }
         }
     }
@@ -192,7 +214,12 @@ extension UIViewController {
     /// no parallel proxy hammering — then reports how many landed.
     private func saveAllMedia(tweetID: String, items: [(index: Int, isVideo: Bool)]) {
         let api = AppEnvironment.shared.api
+        let urls = items.map { api.mediaURL(tweetID: tweetID, index: $0.index) }
+        guard urls.allSatisfy({ !MediaSaver.inFlight.contains($0) }) else { return }
+        MediaSaver.inFlight.formUnion(urls)
+        showToast("Saving \(items.count)…")
         Task {
+            defer { MediaSaver.inFlight.subtract(urls) }
             var saved = 0
             var lastError: Error?
             for item in items {
@@ -212,7 +239,7 @@ extension UIViewController {
                 showToast("Saved \(saved) of \(items.count)")
             } else {
                 Haptics.error()
-                present(MediaSaver.alert(for: lastError ?? MediaSaver.Failure.download), animated: true)
+                presentReplacingToast(MediaSaver.alert(for: lastError ?? MediaSaver.Failure.download))
             }
         }
     }

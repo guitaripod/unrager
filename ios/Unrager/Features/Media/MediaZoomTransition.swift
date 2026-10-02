@@ -1,3 +1,4 @@
+import AVFoundation
 import UIKit
 
 /// App Store–style zoom: tapped media grows from its thumbnail in the feed into
@@ -70,14 +71,23 @@ private final class ZoomAnimator: NSObject, UIViewControllerAnimatedTransitionin
             return
         }
 
-        let source = sourceFrame(forPage: viewer?.startPage ?? 0, in: container)
-        let snapshot = makeSnapshot(forPage: viewer?.startPage ?? 0)
+        let page = viewer?.startPage ?? 0
+        let source = sourceFrame(forPage: page, in: container)
+        let snapshot: UIView
+        let target: CGRect
+        if let tile = sourceImageView(forPage: page), let image = tile.image {
+            snapshot = growingImage(image, contentMode: tile.contentMode)
+            target = AVMakeRect(aspectRatio: image.size, insideRect: container.bounds)
+        } else {
+            snapshot = makeSnapshot(forPage: page)
+            target = fittedFrame(aspectOf: source.size, in: container.bounds)
+        }
         snapshot.frame = source
         container.addSubview(snapshot)
 
         UIView.animate(withDuration: transitionDuration(using: context), delay: 0,
                        usingSpringWithDamping: 0.85, initialSpringVelocity: 0, options: [.curveEaseInOut]) {
-            snapshot.frame = self.fittedFrame(aspectOf: source.size, in: container.bounds)
+            snapshot.frame = target
             toView.alpha = 1
         } completion: { _ in
             snapshot.removeFromSuperview()
@@ -105,7 +115,7 @@ private final class ZoomAnimator: NSObject, UIViewControllerAnimatedTransitionin
         snapshot.frame = current.frame
         container.addSubview(snapshot)
         viewer.hidePhotosForTransition()
-        let target = sourceFrame(forPage: viewer.page, in: container)
+        let target = dismissalTarget(forPage: viewer.page, imageSize: current.image.size, in: container)
 
         UIView.animate(withDuration: transitionDuration(using: context), delay: 0, options: [.curveEaseInOut]) {
             snapshot.frame = target
@@ -126,6 +136,33 @@ private final class ZoomAnimator: NSObject, UIViewControllerAnimatedTransitionin
                           width: side, height: side)
         }
         return superview.convert(sourceView.frame, to: container)
+    }
+
+    /// The tile's photo view, when it is one that holds the decoded image.
+    private func sourceImageView(forPage page: Int) -> UIImageView? {
+        guard let tile = sourceProvider(page) as? UIImageView, tile.window != nil else { return nil }
+        return tile
+    }
+
+    /// An image view that starts drawn the way the tile draws it — cropped for
+    /// a filled tile, letterboxed for a whole one — and ends as the photo's
+    /// real shape, so nothing pops when the full image lands.
+    private func growingImage(_ image: UIImage, contentMode: UIView.ContentMode) -> UIImageView {
+        let view = UIImageView(image: image)
+        view.contentMode = contentMode
+        view.clipsToBounds = true
+        view.layer.cornerCurve = .continuous
+        view.accessibilityIgnoresInvertColors = true
+        return view
+    }
+
+    /// Where the closing photo lands: the tile's frame for a filled tile, or
+    /// the photo's own shape inside it for a tile that shows the whole photo.
+    private func dismissalTarget(forPage page: Int, imageSize: CGSize, in container: UIView) -> CGRect {
+        let frame = sourceFrame(forPage: page, in: container)
+        guard sourceImageView(forPage: page)?.contentMode == .scaleAspectFit,
+              imageSize.width > 0, imageSize.height > 0 else { return frame }
+        return AVMakeRect(aspectRatio: imageSize, insideRect: frame)
     }
 
     private func fittedFrame(aspectOf size: CGSize, in bounds: CGRect) -> CGRect {

@@ -134,6 +134,9 @@ public final class NotificationPoller {
         let page: NotificationsPage
         do {
             page = try await api.notifications(cursor: nil)
+        } catch where error.isCancellation {
+            AppLogger.shared.debug("notification poll cancelled", category: .api)
+            return false
         } catch {
             AppLogger.shared.warn("notification poll failed: \(error)", category: .api)
             return false

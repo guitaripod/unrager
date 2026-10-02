@@ -57,6 +57,8 @@ public final class URLSessionTransport: HTTPTransport {
             throw error
         } catch let error as URLError {
             throw Self.map(error)
+        } catch where error.isCancellation {
+            throw APIError.cancelled
         } catch {
             throw APIError.network(error.localizedDescription)
         }

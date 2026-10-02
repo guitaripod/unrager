@@ -104,6 +104,19 @@ struct APIErrorMessageTests {
     }
 }
 
+@Suite("Cancellation")
+struct CancellationTests {
+    @Test("Every form of cancellation reads as one, and nothing else does")
+    func recognisesCancellation() {
+        #expect(CancellationError().isCancellation)
+        #expect(APIError.cancelled.isCancellation)
+        #expect(URLError(.cancelled).isCancellation)
+        #expect(!APIError.timeout.isCancellation)
+        #expect(!URLError(.timedOut).isCancellation)
+        #expect(!APIError.network("x").isCancellation)
+    }
+}
+
 @Suite("Post analytics")
 struct PostAnalyticsTests {
     private actor Canned: HTTPTransport {

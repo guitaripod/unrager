@@ -101,3 +101,15 @@ extension APIError: LocalizedError {
         }
     }
 }
+
+public extension Error {
+    /// Whether this error only says the work was cancelled (a task cancelled,
+    /// a request abandoned), which a screen should drop silently rather than
+    /// report as a failure.
+    var isCancellation: Bool {
+        if self is CancellationError { return true }
+        if let error = self as? APIError { return error == .cancelled }
+        if let error = self as? URLError { return error.code == .cancelled }
+        return false
+    }
+}

@@ -4,8 +4,9 @@ import UIKit
 /// Inline, autoplaying video surface backed by a streamed `AVPlayer`. Streams
 /// from the server media proxy (which forwards real `video/mp4` bytes), shows
 /// the poster image until the first frame is ready, loops forever, and stays
-/// muted. The clip is letterboxed (`videoGravity = .resizeAspect`) so it scales
-/// to fit without cropping, matching X's inline player. Reuse-safe:
+/// muted. The box takes the clip's own shape, so the picture fills it
+/// (`videoGravity = .resizeAspectFill`) with no bars; only a clip beyond
+/// `MediaShape`'s limits loses a sliver at its edges. Reuse-safe:
 /// `tearDown()` releases the player and its observers so a recycled cell never
 /// plays the previous tweet's clip.
 final class MediaPlayerView: UIView {
@@ -33,7 +34,7 @@ final class MediaPlayerView: UIView {
         accessibilityIgnoresInvertColors = true
         clipsToBounds = true
         backgroundColor = .black
-        playerLayer.videoGravity = .resizeAspect
+        playerLayer.videoGravity = .resizeAspectFill
         setAspectRatio(16.0 / 9.0)
 
         poster.translatesAutoresizingMaskIntoConstraints = false
@@ -106,8 +107,8 @@ final class MediaPlayerView: UIView {
 
     /// Sizes the player box from a width ÷ height aspect by replacing the
     /// height-to-width constraint (cheaper than mutating a multiplier and avoids
-    /// stale priorities on reuse). The clip itself stays `.resizeAspect`, so it
-    /// fits the box without cropping.
+    /// stale priorities on reuse). The clip fills the box, which already has its
+    /// shape, so no black shows around it.
     func setAspectRatio(_ ratio: CGFloat) {
         aspectConstraint?.isActive = false
         let safe = ratio > 0 ? ratio : 16.0 / 9.0

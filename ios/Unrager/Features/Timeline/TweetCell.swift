@@ -81,15 +81,17 @@ final class TweetCell: UICollectionViewCell {
     private let bodyView = TweetBodyTextView()
     private let mediaContent = MediaContentView(compact: false)
     private let quotedContainer = UIView()
+    private let quotedWrap = UIView()
     private let quotedAvatar = AsyncImageView(frame: .zero)
     private let quotedAuthorLabel = UILabel()
     private let quotedBodyLabel = UILabel()
     private let quotedMedia = MediaContentView(compact: true)
     private let actionBar = UIStackView()
     private let analyticsView = TweetAnalyticsView()
+    private let analyticsWrap = UIView()
     private let separator = HairlineView()
     private let threadRail = ThreadRailView()
-    private var avatarLeading: NSLayoutConstraint!
+    private var columnLeading: NSLayoutConstraint!
     private var railWidth: NSLayoutConstraint!
 
     private static let maxIndent = 3
@@ -121,6 +123,11 @@ final class TweetCell: UICollectionViewCell {
 
     /// Feed-context body cap (v. the unlimited focal/thread rendering).
     static let feedBodyLineLimit = 10
+
+    private static let avatarSize: CGFloat = 36
+    private static let sideMargin = DesignSystem.Spacing.l
+    private static let sideInsets = NSDirectionalEdgeInsets(
+        top: 0, leading: sideMargin, bottom: 0, trailing: sideMargin)
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -199,7 +206,7 @@ final class TweetCell: UICollectionViewCell {
         let body = TweetText.attributed(
             for: tweet, stripLeadingMentions: inReplyContext, seen: seen,
             font: DesignSystem.Typography.body())
-        applyBodyLimit(body, limit: bodyLineLimit, contentWidth: contentWidth)
+        applyBodyLimit(body, limit: bodyLineLimit, contentWidth: contentWidth - 2 * Self.sideMargin)
         bodyView.attributedText = body
         bodyView.isHidden = body.length == 0
         bodyView.onTapMention = { [weak self] in self?.onTapMention?($0) }
@@ -207,15 +214,19 @@ final class TweetCell: UICollectionViewCell {
         bodyView.onTapURL = { [weak self] in self?.onTapCard?($0) }
         contentView.alpha = seen ? 0.85 : 1
 
-        loadAvatar(into: avatar, url: tweet.author.avatarURL, size: 44, fallbackPoint: 36, enabled: imagesEnabled)
+        loadAvatar(into: avatar, url: tweet.author.avatarURL, size: Self.avatarSize, fallbackPoint: 30,
+                   enabled: imagesEnabled)
 
         mediaContent.onTapPhoto = { [weak self] index in self?.onTapPhoto?(index) }
         mediaContent.onTapCard = { [weak self] url in self?.onTapCard?(url) }
+        mediaContent.bleedsEdgeToEdge = indentLevel == 0
         mediaContent.configure(with: tweet, imagesEnabled: imagesEnabled, contentWidth: contentWidth)
 
-        configureQuoted(tweet.quotedTweet, imagesEnabled: imagesEnabled, contentWidth: contentWidth - 20)
+        configureQuoted(tweet.quotedTweet, imagesEnabled: imagesEnabled,
+                        contentWidth: contentWidth - 2 * Self.sideMargin - 22)
         configureActions(tweet)
         analyticsView.configure(tweet, visible: focal && ownTweet)
+        analyticsWrap.isHidden = analyticsView.isHidden
         configureAccessibility(tweet, seen: seen)
         isAccessibilityElement = true
         refreshAccessibility(seen: seen)
@@ -297,7 +308,7 @@ final class TweetCell: UICollectionViewCell {
     /// depth; the postcard renders flat and never calls this.
     func setIndent(_ level: Int) {
         let clamped = min(max(0, level), Self.maxIndent)
-        avatarLeading.constant = DesignSystem.Spacing.l + CGFloat(clamped) * ThreadRailView.step
+        columnLeading.constant = CGFloat(clamped) * ThreadRailView.step
         railWidth.constant = CGFloat(clamped) * ThreadRailView.step
         threadRail.level = clamped
         threadRail.isHidden = clamped == 0
@@ -330,12 +341,12 @@ final class TweetCell: UICollectionViewCell {
 
     private func configureQuoted(_ quoted: Tweet?, imagesEnabled: Bool, contentWidth: CGFloat) {
         guard let quoted else {
-            quotedContainer.isHidden = true
+            quotedWrap.isHidden = true
             quotedMedia.prepareForReuse()
             quotedMedia.isHidden = true
             return
         }
-        quotedContainer.isHidden = false
+        quotedWrap.isHidden = false
         quotedAuthorLabel.attributedText = Self.quotedHeader(quoted)
         quotedBodyLabel.text = quoted.text
         quotedBodyLabel.isHidden = quoted.text.isEmpty
@@ -544,7 +555,7 @@ final class TweetCell: UICollectionViewCell {
 
     private func buildHierarchy() {
         avatar.translatesAutoresizingMaskIntoConstraints = false
-        avatar.setRounded(22)
+        avatar.setRounded(Self.avatarSize / 2)
         avatar.isUserInteractionEnabled = true
         avatar.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(authorTapped)))
 
@@ -573,10 +584,21 @@ final class TweetCell: UICollectionViewCell {
         handleTimeLabel.textColor = DesignSystem.Color.secondaryLabel
         handleTimeLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let header = UIStackView(arrangedSubviews: [replyMarker, nameLabel, flagLabel, verifiedBadge, handleTimeLabel, UIView()])
+        let nameRow = UIStackView(arrangedSubviews: [replyMarker, nameLabel, flagLabel, verifiedBadge, UIView()])
+        nameRow.axis = .horizontal
+        nameRow.spacing = 4
+        nameRow.alignment = .center
+
+        let identity = UIStackView(arrangedSubviews: [nameRow, handleTimeLabel])
+        identity.axis = .vertical
+        identity.spacing = 1
+
+        let header = UIStackView(arrangedSubviews: [avatar, identity])
         header.axis = .horizontal
-        header.spacing = 4
+        header.spacing = DesignSystem.Spacing.m
         header.alignment = .center
+        header.isLayoutMarginsRelativeArrangement = true
+        header.directionalLayoutMargins = Self.sideInsets
         header.isAccessibilityElement = false
 
         mediaContent.translatesAutoresizingMaskIntoConstraints = false
@@ -589,6 +611,8 @@ final class TweetCell: UICollectionViewCell {
 
         actionBar.axis = .horizontal
         actionBar.distribution = .equalSpacing
+        actionBar.isLayoutMarginsRelativeArrangement = true
+        actionBar.directionalLayoutMargins = Self.sideInsets
         actionBar.addArrangedSubview(replyButton)
         actionBar.addArrangedSubview(retweetButton)
         actionBar.addArrangedSubview(likeButton)
@@ -608,38 +632,45 @@ final class TweetCell: UICollectionViewCell {
         showMoreButton.isHidden = true
         showMoreButton.addTarget(self, action: #selector(showMoreTapped), for: .touchUpInside)
 
-        let column = UIStackView(arrangedSubviews: [header, bodyView, showMoreButton, mediaContent, quotedContainer, actionBar, analyticsView])
+        bodyView.textContainerInset = UIEdgeInsets(top: 0, left: Self.sideMargin, bottom: 0, right: Self.sideMargin)
+        showMoreButton.configuration?.contentInsets = NSDirectionalEdgeInsets(
+            top: 2, leading: Self.sideMargin, bottom: 2, trailing: Self.sideMargin)
+        quotedWrap.addManaged(quotedContainer)
+        quotedContainer.pinEdges(to: quotedWrap, insets: UIEdgeInsets(
+            top: 0, left: Self.sideMargin, bottom: 0, right: Self.sideMargin))
+        analyticsWrap.addManaged(analyticsView)
+        analyticsView.pinEdges(to: analyticsWrap, insets: UIEdgeInsets(
+            top: 0, left: Self.sideMargin, bottom: 0, right: Self.sideMargin))
+        quotedWrap.isHidden = true
+        analyticsWrap.isHidden = true
+
+        let column = UIStackView(arrangedSubviews: [header, bodyView, showMoreButton, mediaContent, quotedWrap, actionBar, analyticsWrap])
         column.axis = .vertical
         column.spacing = DesignSystem.Spacing.s
-        column.setCustomSpacing(DesignSystem.Spacing.xs, after: header)
         column.setCustomSpacing(DesignSystem.Spacing.xs, after: bodyView)
 
-        contentView.addManaged(avatar)
         contentView.addManaged(column)
         threadRail.isHidden = true
         contentView.addManaged(threadRail)
         contentView.addManaged(separator)
 
-        let avatarLeading = avatar.leadingAnchor.constraint(
-            equalTo: contentView.leadingAnchor, constant: DesignSystem.Spacing.l)
-        self.avatarLeading = avatarLeading
+        let columnLeading = column.leadingAnchor.constraint(equalTo: contentView.leadingAnchor)
+        self.columnLeading = columnLeading
         let railWidth = threadRail.widthAnchor.constraint(equalToConstant: 0)
         self.railWidth = railWidth
 
         NSLayoutConstraint.activate([
-            avatar.topAnchor.constraint(equalTo: contentView.topAnchor, constant: DesignSystem.Spacing.m),
-            avatarLeading,
-            avatar.widthAnchor.constraint(equalToConstant: 44),
-            avatar.heightAnchor.constraint(equalToConstant: 44),
+            avatar.widthAnchor.constraint(equalToConstant: Self.avatarSize),
+            avatar.heightAnchor.constraint(equalToConstant: Self.avatarSize),
 
-            threadRail.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: DesignSystem.Spacing.l),
+            threadRail.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: DesignSystem.Spacing.s),
             railWidth,
             threadRail.topAnchor.constraint(equalTo: contentView.topAnchor),
             threadRail.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
 
             column.topAnchor.constraint(equalTo: contentView.topAnchor, constant: DesignSystem.Spacing.m),
-            column.leadingAnchor.constraint(equalTo: avatar.trailingAnchor, constant: DesignSystem.Spacing.m),
-            column.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -DesignSystem.Spacing.l),
+            columnLeading,
+            column.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             column.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -DesignSystem.Spacing.s),
 
             separator.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),

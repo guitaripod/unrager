@@ -5,12 +5,18 @@ import UnragerKit
 /// renders exactly one of: a photo grid, an inline video/GIF player, a poll, or
 /// a preview card (link / article / broadcast / YouTube). Subviews are created
 /// lazily and toggled on reuse so a recycled cell never shows the wrong kind.
-/// `compact` shrinks everything for quoted-tweet contexts.
+/// `compact` shrinks everything for quoted-tweet contexts. Photos and video run
+/// edge to edge when `bleedsEdgeToEdge` is set; cards and polls always keep the
+/// side margin.
 final class MediaContentView: UIView {
     /// Open the photo viewer at a given attachment index.
     var onTapPhoto: ((Int) -> Void)?
     /// Open a card's external target (link, article, broadcast, YouTube).
     var onTapCard: ((URL) -> Void)?
+
+    /// Whether photos and video use the whole width of the row, square-cornered,
+    /// instead of sitting inside the side margin with rounded corners.
+    var bleedsEdgeToEdge = false
 
     private let compact: Bool
     private var grid: PhotoGridView?
@@ -22,6 +28,8 @@ final class MediaContentView: UIView {
     init(compact: Bool = false) {
         self.compact = compact
         super.init(frame: .zero)
+        insetsLayoutMarginsFromSafeArea = false
+        directionalLayoutMargins = .zero
     }
 
     @available(*, unavailable)
@@ -106,12 +114,17 @@ final class MediaContentView: UIView {
         media.firstIndex(of: target) ?? 0
     }
 
-    /// Clamps a media aspect (width ÷ height) so the inline player is neither a
-    /// thin panoramic strip nor a screen-eating portrait column. Defaults to
-    /// 16:9 when the server didn't report dimensions.
-    private func clampedMediaRatio(_ ratio: CGFloat?) -> CGFloat {
-        guard let ratio, ratio > 0 else { return 16.0 / 9.0 }
-        return min(max(ratio, 1.0 / 1.3), 2.0)
+    /// The side margin around a surface: none for compact (quoted) media or for
+    /// photos and video that bleed, the row's margin for everything else.
+    private func sideInset(isPicture: Bool) -> CGFloat {
+        if compact || (bleedsEdgeToEdge && isPicture) { return 0 }
+        return DesignSystem.Spacing.l
+    }
+
+    /// Corner radius for a picture surface: square when it runs edge to edge.
+    private func pictureRadius(inset: CGFloat) -> CGFloat {
+        if compact { return DesignSystem.Radius.control }
+        return inset == 0 ? 0 : DesignSystem.Radius.media
     }
 
     // MARK: - Surfaces
@@ -122,15 +135,15 @@ final class MediaContentView: UIView {
         guard !urls.isEmpty else { hideAll(); isHidden = true; return }
         let view = grid ?? {
             let made = PhotoGridView(frame: .zero)
-            made.setRounded(compact ? DesignSystem.Radius.control : DesignSystem.Radius.media)
             grid = made
             return made
         }()
+        let inset = sideInset(isPicture: true)
+        view.setRounded(pictureRadius(inset: inset))
         view.onTapPhoto = { [weak self] index in self?.onTapPhoto?(index) }
-        let aspect = urls.count == 1 ? photos.first?.aspectRatio : nil
-        view.configure(urls: urls, contentWidth: contentWidth, imagesEnabled: imagesEnabled, aspectRatio: aspect,
-                       altTexts: photos.map(\.altText))
-        swap(to: view)
+        view.configure(urls: urls, ratios: photos.map(\.aspectRatio), width: contentWidth - 2 * inset,
+                       imagesEnabled: imagesEnabled, altTexts: photos.map(\.altText))
+        swap(to: view, inset: inset)
     }
 
     private func showPlayer(tweet: Tweet, media: Media, index: Int, contentWidth: CGFloat, imagesEnabled: Bool) {
@@ -141,7 +154,6 @@ final class MediaContentView: UIView {
         }
         let view = player ?? {
             let made = MediaPlayerView(frame: .zero)
-            made.setRounded(compact ? DesignSystem.Radius.control : DesignSystem.Radius.media)
             made.translatesAutoresizingMaskIntoConstraints = false
             made.isUserInteractionEnabled = true
             let tap = UITapGestureRecognizer(target: self, action: #selector(playerTapped))
@@ -151,30 +163,35 @@ final class MediaContentView: UIView {
             return made
         }()
         let isGIF: Bool = { if case .animatedGif = media.kind { return true } else { return false } }()
-        let ratio = clampedMediaRatio(media.aspectRatio)
-        let height = (contentWidth / ratio).rounded()
+        let inset = sideInset(isPicture: true)
+        let width = contentWidth - 2 * inset
+        let ratio = MediaShape.ratio(media.aspectRatio, fallback: 16.0 / 9.0)
+        view.setRounded(pictureRadius(inset: inset))
         view.configure(posterURL: imagesEnabled ? URL(string: media.url) : nil,
                        videoURL: videoURL, isGIF: isGIF, aspectRatio: ratio,
-                       posterSize: CGSize(width: contentWidth, height: height), imagesEnabled: imagesEnabled)
-        swap(to: view)
+                       posterSize: CGSize(width: width, height: (width / ratio).rounded()),
+                       imagesEnabled: imagesEnabled)
+        swap(to: view, inset: inset)
     }
 
     private func showPoll(options: [PollOption], endsAt: Date?, countsFinal: Bool) {
         let view = poll ?? { let made = PollView(frame: .zero); poll = made; return made }()
         view.configure(options: options, endsAt: endsAt, countsFinal: countsFinal)
-        swap(to: view)
+        swap(to: view, inset: sideInset(isPicture: false))
     }
 
     private func showCard(_ model: MediaCardView.Model, target: URL?, contentWidth: CGFloat, imagesEnabled: Bool) {
         let view = card ?? { let made = MediaCardView(frame: .zero); card = made; return made }()
         view.onTap = { [weak self] in if let target { self?.onTapCard?(target) } }
-        view.configure(model, contentWidth: contentWidth, imagesEnabled: imagesEnabled)
-        swap(to: view)
+        let inset = sideInset(isPicture: false)
+        view.configure(model, contentWidth: contentWidth - 2 * inset, imagesEnabled: imagesEnabled)
+        swap(to: view, inset: inset)
     }
 
     // MARK: - View swapping
 
-    private func swap(to view: UIView) {
+    private func swap(to view: UIView, inset: CGFloat) {
+        directionalLayoutMargins = NSDirectionalEdgeInsets(top: 0, leading: inset, bottom: 0, trailing: inset)
         if activeView === view {
             view.isHidden = false
             return
@@ -183,7 +200,12 @@ final class MediaContentView: UIView {
         if view.superview !== self {
             view.translatesAutoresizingMaskIntoConstraints = false
             addManaged(view)
-            view.pinEdges(to: self)
+            NSLayoutConstraint.activate([
+                view.leadingAnchor.constraint(equalTo: layoutMarginsGuide.leadingAnchor),
+                view.trailingAnchor.constraint(equalTo: layoutMarginsGuide.trailingAnchor),
+                view.topAnchor.constraint(equalTo: topAnchor),
+                view.bottomAnchor.constraint(equalTo: bottomAnchor),
+            ])
         }
         view.isHidden = false
         activeView = view

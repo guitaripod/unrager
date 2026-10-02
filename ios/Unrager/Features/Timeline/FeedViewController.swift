@@ -70,10 +70,8 @@ class FeedViewController: UIViewController, TweetActionHandling {
     private lazy var cellRegistration = UICollectionView.CellRegistration<TweetCell, String> {
         [weak self] cell, indexPath, id in
         guard let self, let tweet = self.tweetsByID[id] else { return }
-        let contentWidth = self.collectionView.bounds.width - 44 - DesignSystem.Spacing.l
-            - DesignSystem.Spacing.m - DesignSystem.Spacing.l
         cell.configure(with: tweet, imagesEnabled: AppSettings.imagesEnabled,
-                       contentWidth: max(120, contentWidth), seen: self.viewModel.isSeen(tweet.restID),
+                       contentWidth: max(120, self.collectionView.bounds.width), seen: self.viewModel.isSeen(tweet.restID),
                        bodyLineLimit: self.expandedBodies.contains(id) ? 0 : TweetCell.feedBodyLineLimit)
         self.applyFlag(to: cell, author: tweet.author)
         cell.onTapAuthor = { [weak self] in self?.handleProfile(tweet.author.handle) }

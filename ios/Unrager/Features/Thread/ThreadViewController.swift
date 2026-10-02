@@ -66,8 +66,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
     private lazy var registration = UICollectionView.CellRegistration<TweetCell, String> {
         [weak self] cell, _, id in
         guard let self, let tweet = self.tweetsByID[id] else { return }
-        let width = self.collectionView.bounds.width - 44 - DesignSystem.Spacing.l
-            - DesignSystem.Spacing.m - DesignSystem.Spacing.l
+        let width = self.collectionView.bounds.width
         let isFocal = id == self.focalID
         let ownTweet = self.selfHandle?.caseInsensitiveCompare(tweet.author.handle) == .orderedSame
         let indent = self.indentLevel(for: id)

@@ -44,6 +44,21 @@ struct NotificationsLogicTests {
         #expect(NotificationActorsViewController.othersNote(47) == "And 47 others X doesn't list here.")
     }
 
+    @Test("Diagnostics say when the last check ran and why it failed")
+    func diagnosticsText() {
+        let now = Date(timeIntervalSince1970: 10_000)
+        #expect(NotificationSettingsViewController.checkText(at: nil, error: nil, now: now) == "Not yet")
+        #expect(NotificationSettingsViewController.checkText(at: now, error: nil, now: now) == "OK, just now")
+        #expect(NotificationSettingsViewController.checkText(
+            at: now.addingTimeInterval(-120), error: nil, now: now) == "OK, 2m ago")
+        #expect(NotificationSettingsViewController.checkText(
+            at: now.addingTimeInterval(-30), error: "Server unreachable", now: now)
+            == "Failed 30s ago: Server unreachable")
+        #expect(NotificationSettingsViewController.permissionText(.denied) == "Off in iOS Settings")
+        #expect(NotificationSettingsViewController.permissionText(nil) == "Checking…")
+        #expect(NotificationSettingsViewController.seenSyncText(.unsupported) == "Off: this server doesn't sync it")
+    }
+
     @Test("The banners footer explains a refusal in iOS Settings and a window that never applies")
     func bannersFooter() {
         let plain = NotificationSettingsViewController.bannersFooter(

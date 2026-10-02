@@ -11,13 +11,14 @@ import UserNotifications
 /// becomes the way to turn them back on.
 final class NotificationSettingsViewController: UIViewController {
     private enum Section: Int, CaseIterable {
-        case kinds, banners, system
+        case kinds, banners, system, diagnostics
 
         var header: String {
             switch self {
             case .kinds: return "Alert me about"
             case .banners: return "Banners"
             case .system: return "System"
+            case .diagnostics: return "Diagnostics"
             }
         }
     }
@@ -26,7 +27,12 @@ final class NotificationSettingsViewController: UIViewController {
         case kind(NotificationKind)
         case banners, sound, quietHours, quietWindow, quietStart, quietEnd
         case system
+        case lastCheck, backgroundCheck, permission, seenSync, seenMarker, testBanner
     }
+
+    private static let diagnosticRows: [Item] = [
+        .lastCheck, .backgroundCheck, .permission, .seenSync, .seenMarker, .testBanner,
+    ]
 
     private var collectionView: UICollectionView!
     private var dataSource: UICollectionViewDiffableDataSource<Section, Item>!
@@ -35,6 +41,8 @@ final class NotificationSettingsViewController: UIViewController {
     /// Whether iOS refuses Unrager's notifications, as last checked. Shared so
     /// the Settings summary says the same as this screen.
     @MainActor private static var deniedBySystem = false
+    /// What iOS last said about Unrager's notifications, nil until asked.
+    @MainActor private static var permissionStatus: UNAuthorizationStatus?
 
     /// Banners as they actually behave: on only when switched on here and
     /// allowed by iOS.
@@ -62,6 +70,7 @@ final class NotificationSettingsViewController: UIViewController {
     static func refreshSystemPermission() async -> Bool {
         let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
         let denied = status == .denied
+        permissionStatus = status
         defer { deniedBySystem = denied }
         return denied != deniedBySystem
     }
@@ -94,6 +103,38 @@ final class NotificationSettingsViewController: UIViewController {
                 quietStart: NotificationPrefs.quietHoursStartMinute, quietEnd: NotificationPrefs.quietHoursEndMinute)
         case .system:
             return nil
+        case .diagnostics:
+            return "Unrager has no push server: banners come from checks it runs itself, every 15 seconds while it's "
+                + "open and in the background only when iOS schedules one. A test banner arrives five seconds after "
+                + "the tap, so there is time to leave the app."
+        }
+    }
+
+    /// "OK, 2m ago", "Failed 2m ago: <reason>" or "Not yet".
+    static func checkText(at date: Date?, error: String?, now: Date = Date()) -> String {
+        guard let date else { return "Not yet" }
+        let ago = now.timeIntervalSince(date) < 5 ? "just now" : "\(Format.relativeTime(date, now: now)) ago"
+        guard let error else { return "OK, \(ago)" }
+        return "Failed \(ago): \(error)"
+    }
+
+    static func permissionText(_ status: UNAuthorizationStatus?) -> String {
+        switch status {
+        case .authorized?, .ephemeral?: return "Allowed"
+        case .provisional?: return "Delivered quietly"
+        case .denied?: return "Off in iOS Settings"
+        case .notDetermined?: return "Not asked yet"
+        case nil: return "Checking…"
+        @unknown default: return "Unknown"
+        }
+    }
+
+    static func seenSyncText(_ state: NotificationPoller.SeenSyncState) -> String {
+        switch state {
+        case .unknown: return "Not checked yet"
+        case .ok: return "On"
+        case .unsupported: return "Off: this server doesn't sync it"
+        case .failed: return "Last sync failed"
         }
     }
 
@@ -149,6 +190,7 @@ final class NotificationSettingsViewController: UIViewController {
         snapshot.appendItems(NotificationKind.allCases.map(Item.kind), toSection: .kinds)
         snapshot.appendItems(bannerRows, toSection: .banners)
         snapshot.appendItems([.system], toSection: .system)
+        snapshot.appendItems(Self.diagnosticRows, toSection: .diagnostics)
         dataSource.apply(snapshot, animatingDifferences: false)
 
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (self: Self, _) in
@@ -171,7 +213,7 @@ final class NotificationSettingsViewController: UIViewController {
         Task { [weak self] in
             await Self.refreshSystemPermission()
             self?.refreshBannerRows(animated: false)
-            self?.reconfigure([.system])
+            self?.reconfigure([.system] + Self.diagnosticRows)
         }
     }
 
@@ -298,6 +340,14 @@ final class NotificationSettingsViewController: UIViewController {
                 NotificationPrefs.quietHoursEndMinute = $0
             }
             return
+        case .lastCheck, .backgroundCheck, .permission, .seenSync, .seenMarker:
+            content.text = diagnosticTitle(item)
+            content.secondaryText = diagnosticValue(item)
+            content.secondaryTextProperties.numberOfLines = 0
+            content.secondaryTextProperties.color = DesignSystem.Color.secondaryLabel
+        case .testBanner:
+            content.text = "Send a test banner"
+            content.textProperties.color = DesignSystem.Color.accent
         case .system:
             let blocked = Self.deniedBySystem
             content.text = blocked ? "Turn on notifications in iOS Settings" : "System notification settings"
@@ -307,6 +357,48 @@ final class NotificationSettingsViewController: UIViewController {
             cell.accessories = [.disclosureIndicator()]
         }
         cell.contentConfiguration = content
+    }
+
+    private func diagnosticTitle(_ item: Item) -> String {
+        switch item {
+        case .lastCheck: return "Last check"
+        case .backgroundCheck: return "Last background check"
+        case .permission: return "iOS permission"
+        case .seenSync: return "Read sync with server"
+        case .seenMarker: return "Read up to"
+        default: return ""
+        }
+    }
+
+    private func diagnosticValue(_ item: Item) -> String {
+        let diagnostics = NotificationCenterService.shared.diagnostics
+        switch item {
+        case .lastCheck:
+            return Self.checkText(at: diagnostics.lastPollAt, error: diagnostics.lastPollError)
+        case .backgroundCheck:
+            return NotificationPrefs.lastBackgroundRefreshAt.map { "\(Format.relativeTime($0)) ago" } ?? "Never yet"
+        case .permission:
+            return Self.permissionText(Self.permissionStatus)
+        case .seenSync:
+            return Self.seenSyncText(diagnostics.seenSync)
+        case .seenMarker:
+            return NotificationPrefs.lastSeenTimestamp.map(Format.absoluteTime) ?? "Nothing yet"
+        default:
+            return ""
+        }
+    }
+
+    private func sendTestBanner() {
+        Task { [weak self] in
+            let sent = await NotificationCenterService.shared.sendTestBanner()
+            guard let self else { return }
+            if sent {
+                Haptics.success()
+                self.showToast("A test banner arrives in 5 seconds")
+            } else {
+                self.present(self.permissionDeniedAlert(), animated: true)
+            }
+        }
     }
 
     /// A compact time picker. In the shared window row it is a fixed 92 × 34
@@ -377,12 +469,17 @@ final class NotificationSettingsViewController: UIViewController {
 
 extension NotificationSettingsViewController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
-        dataSource.itemIdentifier(for: indexPath) == .system
+        let item = dataSource.itemIdentifier(for: indexPath)
+        return item == .system || item == .testBanner
     }
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         collectionView.deselectItem(at: indexPath, animated: true)
-        if dataSource.itemIdentifier(for: indexPath) == .system { Self.openSystemSettings() }
+        switch dataSource.itemIdentifier(for: indexPath) {
+        case .system?: Self.openSystemSettings()
+        case .testBanner?: sendTestBanner()
+        default: break
+        }
     }
 }
 

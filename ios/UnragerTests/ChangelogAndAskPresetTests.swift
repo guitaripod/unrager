@@ -32,6 +32,38 @@ struct ChangelogRenderTests {
         #expect(!rendered.contains("https://example.com"))
     }
 
+    @Test("The newest versions with entries show first; an empty Unreleased is skipped and the rest wait")
+    func splitsRecentVersions() {
+        let markdown = """
+        # Changelog
+
+        Intro.
+
+        ## [Unreleased]
+
+        ## [0.3.0] — 2026-09-01
+
+        - Three.
+
+        ## [0.2.0] — 2026-08-01
+
+        - Two.
+
+        ## [0.1.0] — 2026-07-01
+
+        - One.
+
+        [0.1.0]: https://example.com/tag
+        """
+        let parts = ChangelogViewController.split(markdown: markdown, recent: 2)
+        #expect(parts.recent.contains("Intro."))
+        #expect(!parts.recent.contains("Unreleased"))
+        #expect(parts.recent.contains("- Three.") && parts.recent.contains("- Two."))
+        #expect(!parts.recent.contains("- One."))
+        #expect(parts.older.count == 1 && parts.older[0].hasPrefix("## [0.1.0]"))
+        #expect(ChangelogViewController.split(markdown: "## [0.1.0]\n\n- One.", recent: 2).older.isEmpty)
+    }
+
     @Test("The bundled CHANGELOG.md ships in the app bundle")
     func changelogIsBundled() {
         let url = Bundle(for: ChangelogViewController.self).url(forResource: "CHANGELOG", withExtension: "md")

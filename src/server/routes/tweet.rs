@@ -53,7 +53,6 @@ pub async fn analytics(
             &endpoints::tweet_activity_features(),
         )
         .await;
-    let _ = std::fs::write("/tmp/unrager-activity.json", format!("{response:?}"));
     match response {
         Ok(response) => parse_activity::parse_post_analytics(&response)
             .map(Json)

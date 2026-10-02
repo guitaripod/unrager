@@ -26,7 +26,7 @@ This starts the full server in the background (a systemd user service on Linux, 
 ✓ iphone      in the app, open Settings → Server and enter http://100.64.0.9:7777
 ```
 
-Keep that address. unrager has no login of its own, so `0.0.0.0` belongs on a private network such as Tailscale, not on public Wi-Fi. To check the server from the phone, open that address followed by `/api/health` in Safari (`http://100.64.0.9:7777/api/health`): it answers with a line of JSON.
+Keep that address. (Versions before 0.27 don't print it: `tailscale ip -4` gives the same number.) unrager has no login of its own, so `0.0.0.0` belongs on a private network such as Tailscale, not on public Wi-Fi. To check the server from the phone, open that address followed by `/api/health` in Safari (`http://100.64.0.9:7777/api/health`): it answers with a line of JSON.
 
 `unrager doctor` says what's wrong if the server can't read your X login.
 

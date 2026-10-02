@@ -520,12 +520,16 @@ class FeedViewController: UIViewController, TweetActionHandling {
         dataSource.apply(snapshot, animatingDifferences: false)
     }
 
-    /// Re-renders on-screen rows once Twemoji art lands so a cold-cache emoji
-    /// flips from the native glyph to the flat Twemoji image — never during a
-    /// scroll, so it stays off the hot path.
+    /// Re-renders the on-screen rows whose emoji just got their Twemoji art, so
+    /// a cold-cache emoji flips from the native glyph to the flat image — never
+    /// during a scroll, so it stays off the hot path, and never a row the new
+    /// art doesn't touch, whose photos would reload for nothing.
     private func reconfigureVisibleForEmoji() {
         guard !isScrolling else { return }
-        let visible = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
+        let visible = collectionView.indexPathsForVisibleItems.compactMap { indexPath -> String? in
+            guard let cell = collectionView.cellForItem(at: indexPath) as? TweetCell, cell.awaitsLoadedEmoji else { return nil }
+            return dataSource.itemIdentifier(for: indexPath)
+        }
         guard !visible.isEmpty else { return }
         var snapshot = dataSource.snapshot()
         let present = visible.filter { snapshot.itemIdentifiers.contains($0) }
@@ -1045,7 +1049,7 @@ extension FeedViewController: UICollectionViewDelegate {
     }
 
     func collectionView(_ collectionView: UICollectionView, didEndDisplaying cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
-        (cell as? TweetCell)?.pauseVideo()
+        (cell as? TweetCell)?.releaseVideo()
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) { onScroll?(scrollView) }

@@ -193,7 +193,9 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let self else { return }
-                self.dataSource.reconfigureVisibleItems(of: self.collectionView)
+                self.dataSource.reconfigureVisibleItems(of: self.collectionView) {
+                    ($0 as? TweetCell)?.awaitsLoadedEmoji ?? true
+                }
             }
             .store(in: &cancellables)
     }

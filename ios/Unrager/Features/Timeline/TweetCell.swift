@@ -197,6 +197,10 @@ final class TweetCell: UICollectionViewCell {
     func mediaSourceView(at index: Int) -> UIView? { mediaContent.photoSourceView(at: index) }
     func playVideo() { mediaContent.playVideo() }
     func pauseVideo() { mediaContent.pauseVideo() }
+    func releaseVideo() {
+        mediaContent.releaseVideo()
+        quotedMedia.releaseVideo()
+    }
 
     /// A reply's leading `@mentions` are taken out of its text and summed up in
     /// a caption (see `ReplyContext`): `impliedReplyHandles` holds the accounts
@@ -257,6 +261,9 @@ final class TweetCell: UICollectionViewCell {
         }
         PerfProbe.time("cfg.actions") { configureActions(tweet) }
         configureStats(tweet, content: stats)
+        pendingEmoji = TwemojiText.uncachedEmoji(in: [
+            tweet.author.name, body.string, tweet.quotedTweet?.author.name ?? "", tweet.quotedTweet?.text ?? "",
+        ])
         PerfProbe.time("cfg.a11y") {
             configureAccessibility(tweet, seen: seen)
             isAccessibilityElement = true
@@ -384,7 +391,17 @@ final class TweetCell: UICollectionViewCell {
             TwemojiText.attributed($0, font: DesignSystem.Typography.name(), color: DesignSystem.Color.label)
         }
         flagLabel.isHidden = (flag ?? "").isEmpty
+        if let flag { pendingEmoji.formUnion(TwemojiText.uncachedEmoji(in: [flag])) }
     }
+
+    /// Emoji the row shows as system glyphs because their Twemoji art was not
+    /// in memory when it was built.
+    private var pendingEmoji: Set<String> = []
+
+    /// Whether Twemoji art that arrived since the row was built would change
+    /// it, so a feed re-renders only those rows (a re-render elsewhere would
+    /// rebuild photos for nothing).
+    var awaitsLoadedEmoji: Bool { TwemojiText.anyCached(pendingEmoji) }
 
     /// Indents the card by reply depth so a reply-to-a-reply sits further right
     /// than a reply-to-the-root; level 0 (feed / root / focal) is flush. A thin

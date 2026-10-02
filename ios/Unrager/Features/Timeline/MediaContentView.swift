@@ -49,6 +49,9 @@ final class MediaContentView: UIView {
 
     func playVideo() { if hasVideo { player?.play() } }
     func pauseVideo() { player?.pause() }
+    /// Frees the inline player's decoder and buffer once the row leaves the
+    /// screen; the poster stays, and playback starts afresh at the next rest.
+    func releaseVideo() { player?.releasePlayer() }
 
     /// The view to zoom from for the photo at `index` — the exact grid tile, so a
     /// multi-photo tweet grows from the tapped image rather than the whole grid.

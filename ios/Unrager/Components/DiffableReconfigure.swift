@@ -11,10 +11,16 @@ extension UICollectionViewDiffableDataSource {
     }
 
     /// Re-renders only the rows on screen — when something that affects how
-    /// they draw (an emoji image) lands, without touching the rest.
-    func reconfigureVisibleItems(of collectionView: UICollectionView) {
+    /// they draw (an emoji image) lands, without touching the rest; `affected`
+    /// narrows it to the on-screen cells the change actually reaches.
+    func reconfigureVisibleItems(
+        of collectionView: UICollectionView, where affected: (UICollectionViewCell) -> Bool = { _ in true }
+    ) {
         var snapshot = self.snapshot()
-        let visible = collectionView.indexPathsForVisibleItems.compactMap { itemIdentifier(for: $0) }
+        let visible = collectionView.indexPathsForVisibleItems.compactMap { indexPath -> ItemIdentifierType? in
+            guard let cell = collectionView.cellForItem(at: indexPath), affected(cell) else { return nil }
+            return itemIdentifier(for: indexPath)
+        }
         let present = visible.filter { snapshot.indexOfItem($0) != nil }
         guard !present.isEmpty else { return }
         snapshot.reconfigureItems(present)

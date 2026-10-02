@@ -45,6 +45,27 @@ enum TwemojiText {
         Task { await TwemojiCache.shared.prewarm(graphemesIn: pending) }
     }
 
+    /// The emoji graphemes in `texts` whose Twemoji art is not in memory yet, so
+    /// a view knows which arrivals would change what it shows.
+    @MainActor
+    static func uncachedEmoji(in texts: [String]) -> Set<String> {
+        var missing: Set<String> = []
+        for text in texts where !text.isEmpty && !isPlainASCII(text) {
+            for character in text {
+                let grapheme = String(character)
+                guard TwemojiCache.isEmoji(grapheme), TwemojiCache.shared.cachedImage(for: grapheme) == nil else { continue }
+                missing.insert(grapheme)
+            }
+        }
+        return missing
+    }
+
+    /// Whether any of `graphemes` now has its Twemoji art in memory.
+    @MainActor
+    static func anyCached(_ graphemes: Set<String>) -> Bool {
+        graphemes.contains { TwemojiCache.shared.cachedImage(for: $0) != nil }
+    }
+
     /// Whether `text` is plain ASCII, which holds no emoji: most posts, and
     /// walking their graphemes one by one would be the bulk of building them.
     private static func isPlainASCII(_ text: String) -> Bool {

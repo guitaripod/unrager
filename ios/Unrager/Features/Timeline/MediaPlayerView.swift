@@ -1,5 +1,6 @@
 import AVFoundation
 import UIKit
+import UnragerKit
 
 /// Inline, autoplaying video surface backed by a streamed `AVPlayer`. Streams
 /// from the server media proxy (which forwards real `video/mp4` bytes), shows
@@ -29,6 +30,7 @@ final class MediaPlayerView: UIView {
     private var pendingVideoURL: URL?
     private var isGIF = false
     private var statusObservation: NSKeyValueObservation?
+    private var displayObservation: NSKeyValueObservation?
     private nonisolated(unsafe) var loopObserver: (any NSObjectProtocol)?
     private var aspectConstraint: NSLayoutConstraint?
 
@@ -132,14 +134,19 @@ final class MediaPlayerView: UIView {
     /// Shows the poster and remembers the clip, but creates NO `AVPlayer` and
     /// starts NO decode — so scrolling a video cell into view costs nothing.
     /// Playback begins only when `play()` is called (by the feed once it's at
-    /// rest and this is the focused clip).
+    /// rest and this is the focused clip). Configuring the same clip again
+    /// while its player is live (a like, an expanded body or newly loaded emoji
+    /// re-rendering the row) only reshapes the box, so playback and sound
+    /// carry on where they were.
     func configure(posterURL: URL?, videoURL: URL, isGIF: Bool, aspectRatio: CGFloat, fills: Bool,
                    posterSize: CGSize, imagesEnabled: Bool) {
+        if videoURL == pendingVideoURL, player != nil, isGIF == self.isGIF {
+            applyShape(aspectRatio: aspectRatio, fills: fills)
+            updateMuteIcon()
+            return
+        }
         tearDown()
-        setAspectRatio(aspectRatio)
-        playerLayer.videoGravity = fills ? .resizeAspectFill : .resizeAspect
-        poster.contentMode = fills ? .scaleAspectFill : .scaleAspectFit
-        ambient.isHidden = fills
+        applyShape(aspectRatio: aspectRatio, fills: fills)
         poster.onLoad = fills ? nil : { [weak self] image in self?.softenBackdrop(from: image, key: posterURL) }
         pendingVideoURL = videoURL
         self.isGIF = isGIF
@@ -154,6 +161,13 @@ final class MediaPlayerView: UIView {
         }
     }
 
+    private func applyShape(aspectRatio: CGFloat, fills: Bool) {
+        setAspectRatio(aspectRatio)
+        playerLayer.videoGravity = fills ? .resizeAspectFill : .resizeAspect
+        poster.contentMode = fills ? .scaleAspectFill : .scaleAspectFit
+        ambient.isHidden = fills
+    }
+
     /// Lazily creates the player on first call (off the scroll path), loops
     /// forever, plays muted. Cheap to call repeatedly — resumes an existing player.
     func play() {
@@ -165,10 +179,7 @@ final class MediaPlayerView: UIView {
             player.actionAtItemEnd = .none
             self.player = player
             playerLayer.player = player
-            statusObservation = player.observe(\.status, options: [.new]) { [weak self] player, _ in
-                guard player.status == .readyToPlay else { return }
-                Task { @MainActor in self?.firstFrameReady() }
-            }
+            observeReadiness(of: player)
             loopObserver = NotificationCenter.default.addObserver(
                 forName: .AVPlayerItemDidPlayToEndTime,
                 object: player.currentItem, queue: .main) { [weak player] _ in
@@ -181,9 +192,33 @@ final class MediaPlayerView: UIView {
 
     func pause() { player?.pause() }
 
+    /// Fades the poster only once the layer has a decoded frame to show (a
+    /// player that is merely `readyToPlay` may still be buffering on a slow
+    /// link, which would leave a black box), and brings the poster back if the
+    /// clip fails to load.
+    private func observeReadiness(of player: AVPlayer) {
+        displayObservation = playerLayer.observe(\.isReadyForDisplay, options: [.initial, .new]) { [weak self] layer, _ in
+            guard layer.isReadyForDisplay else { return }
+            Task { @MainActor in self?.firstFrameReady() }
+        }
+        statusObservation = player.currentItem?.observe(\.status, options: [.new]) { [weak self] item, _ in
+            guard item.status == .failed else { return }
+            Task { @MainActor in self?.playbackFailed() }
+        }
+    }
+
     private func firstFrameReady() {
+        guard player != nil, playerLayer.isReadyForDisplay else { return }
         UIView.animate(withDuration: 0.2) { self.poster.alpha = 0 }
         playBadge.isHidden = true
+    }
+
+    private func playbackFailed() {
+        guard player != nil else { return }
+        AppLogger.shared.warn("inline video failed to load", category: .timeline)
+        poster.layer.removeAllAnimations()
+        poster.alpha = 1
+        playBadge.isHidden = false
     }
 
     private func softenBackdrop(from image: UIImage, key: URL?) {
@@ -195,8 +230,12 @@ final class MediaPlayerView: UIView {
         }
     }
 
-    func tearDown() {
-        ambientTask?.cancel()
+    /// Drops the player, its buffered item and observers while keeping the
+    /// poster and the clip's address, so an off-screen row holds no decoder
+    /// and starts again from its poster when it next comes to rest on screen.
+    func releasePlayer() {
+        displayObservation?.invalidate()
+        displayObservation = nil
         statusObservation?.invalidate()
         statusObservation = nil
         if let loopObserver { NotificationCenter.default.removeObserver(loopObserver) }
@@ -204,14 +243,22 @@ final class MediaPlayerView: UIView {
         player?.pause()
         player = nil
         playerLayer.player = nil
-        poster.cancel()
+        poster.layer.removeAllAnimations()
         poster.alpha = 1
         playBadge.isHidden = false
+    }
+
+    func tearDown() {
+        ambientTask?.cancel()
+        releasePlayer()
+        pendingVideoURL = nil
+        poster.cancel()
         muteButton.isHidden = true
     }
 
     deinit {
         statusObservation?.invalidate()
+        displayObservation?.invalidate()
         if let loopObserver { NotificationCenter.default.removeObserver(loopObserver) }
     }
 }

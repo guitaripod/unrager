@@ -66,6 +66,7 @@ PROFILES = {
     "quietfern": ("Notes for friends. Garden, books, the odd sourdough.", "Galway", None, "2020-04-02T10:00:00Z"),
 }
 PROTECTED = {"quietfern"}
+PINNED = {"mirakoski": "f18"}
 SUSPENDED = {"spamking"}
 
 MEDIA_DIMS = {

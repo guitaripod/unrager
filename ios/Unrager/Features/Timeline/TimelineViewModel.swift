@@ -108,6 +108,10 @@ final class TimelineViewModel {
     var isExhausted: Bool { exhaustion.isExhausted }
     private let api = AppEnvironment.shared.api
     private var cursor: String?
+
+    /// The post a profile pins, put first in its posts and drawn with a
+    /// "Pinned" line; the first page of a user's posts sets it.
+    private(set) var pinnedID: String?
     private var exhaustion = FeedExhaustion()
     private var loadTask: Task<Void, Never>?
     /// Monotonic id of the newest load; a superseded load must not clear the
@@ -281,6 +285,7 @@ final class TimelineViewModel {
 
     private func reset() {
         cursor = nil
+        pinnedID = nil
         exhaustion.reset()
         hasLoadedOnce = false
         readIDs.removeAll()
@@ -617,6 +622,14 @@ final class TimelineViewModel {
             var current = reset ? [] : tweets.value
             var ids = Set(current.map(\.restID))
             var newIDs: [String] = []
+            if requestCursor == nil {
+                pinnedID = nil
+                if let pinned = page.pinned, !Self.wasDeleted(pinned.restID), ids.insert(pinned.restID).inserted {
+                    current.insert(pinned, at: 0)
+                    newIDs.append(pinned.restID)
+                    pinnedID = pinned.restID
+                }
+            }
             for tweet in page.tweets where !Self.wasDeleted(tweet.restID) && ids.insert(tweet.restID).inserted {
                 current.append(tweet)
                 newIDs.append(tweet.restID)

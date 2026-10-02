@@ -234,7 +234,7 @@ final class TweetCell: UICollectionViewCell {
         seen: Bool = false, impliedReplyHandles: Set<String>? = nil,
         focal: Bool = false, indentLevel: Int = 0,
         bodyLineLimit: Int = 0, stats: PostStatsContent? = nil,
-        viewerHandle: String? = nil
+        viewerHandle: String? = nil, pinned: Bool = false
     ) {
         tweetID = tweet.restID
         boundTweet = tweet
@@ -247,7 +247,7 @@ final class TweetCell: UICollectionViewCell {
         }
         setFlag(nil)
         verifiedBadge.isHidden = !tweet.author.verified
-        configureRepost(for: tweet, viewerHandle: viewerHandle)
+        configureRepost(for: tweet, viewerHandle: viewerHandle, pinned: pinned)
         configureReplyCaption(for: tweet, implied: impliedReplyHandles)
         handleTimeLabel.attributedText = Self.handleTime(tweet, absolute: focal)
         let body = PerfProbe.time("cfg.text") {
@@ -303,13 +303,13 @@ final class TweetCell: UICollectionViewCell {
 
     /// Shows the "reposted" line above the author of a repost, or takes it out
     /// of the column (no gap) for any other post.
-    private func configureRepost(for tweet: Tweet, viewerHandle: String?) {
-        repostText = RepostLine.text(for: tweet, viewerHandle: viewerHandle)
+    private func configureRepost(for tweet: Tweet, viewerHandle: String?, pinned: Bool) {
+        repostText = RepostLine.text(for: tweet, viewerHandle: viewerHandle) ?? (pinned ? "Pinned" : nil)
         guard let repostText else {
             repostRow.isHidden = true
             return
         }
-        let line = Self.repostLineText(repostText)
+        let line = Self.repostLineText(repostText, symbol: tweet.retweetedBy == nil ? "pin.fill" : "arrow.2.squarepath")
         repostLabel.attributedText = line.text
         repostRow.directionalLayoutMargins.leading = max(
             Self.sideMargin, Self.sideMargin + Self.avatarSize + DesignSystem.Spacing.m - line.leadWidth)
@@ -326,12 +326,12 @@ final class TweetCell: UICollectionViewCell {
     /// The repost symbol and `text` in the muted caption colour, and how wide
     /// the symbol and its gap are, so the words line up with the author's name
     /// while the symbol hangs to their left.
-    private static func repostLineText(_ text: String) -> (text: NSAttributedString, leadWidth: CGFloat) {
+    private static func repostLineText(_ text: String, symbol: String) -> (text: NSAttributedString, leadWidth: CGFloat) {
         let font = repostFont()
         let color = DesignSystem.Color.secondaryLabel
         let result = NSMutableAttributedString()
         var leadWidth: CGFloat = 0
-        if let glyph = UIImage(systemName: "arrow.2.squarepath",
+        if let glyph = UIImage(systemName: symbol,
                                withConfiguration: UIImage.SymbolConfiguration(font: font, scale: .small))?
             .withTintColor(color, renderingMode: .alwaysOriginal) {
             result.append(NSAttributedString(attachment: NSTextAttachment(image: glyph)))
@@ -1029,8 +1029,9 @@ final class TweetCell: UICollectionViewCell {
 
     @objc private func authorTapped() { onTapAuthor?() }
     @objc private func reposterTapped() {
+        guard let open = onTapReposter else { return }
         Haptics.selection()
-        onTapReposter?()
+        open()
     }
     @objc private func quotedTapped() { onTapQuoted?() }
     @objc private func showMoreTapped() {

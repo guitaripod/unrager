@@ -81,7 +81,8 @@ class FeedViewController: UIViewController, TweetActionHandling {
                        stats: PostStatsPolicy.content(
                            for: tweet, expanded: self.expandedStats.contains(id), isOwn: self.isOwnTweet(tweet),
                            changed: { [weak self] in self?.reconfigure(id, animated: false) }),
-                       viewerHandle: AppEnvironment.shared.currentHandle) }
+                       viewerHandle: AppEnvironment.shared.currentHandle,
+                       pinned: self.viewModel.pinnedID == id) }
         self.applyFlag(to: cell, author: tweet.author)
         cell.onTapAuthor = { [weak self] in self?.handleProfile(tweet.author.handle) }
         if let reposter = tweet.retweetedBy {

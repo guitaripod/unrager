@@ -184,7 +184,11 @@ class Handler(BaseHTTPRequestHandler):
             keys = [k for k in w.user_keys(handle) if w.ids[k] not in STATE["deleted"]]
             if tail == "replies":
                 keys = keys + [p[0] for p in dw.POSTS if p[1] == handle and p[0].startswith(("r", "q"))]
-            return self.send_json(self.page([w.tweet(k) for k in keys], q("cursor")))
+            page = self.page([w.tweet(k) for k in keys], q("cursor"))
+            pinned = dw.PINNED.get(handle)
+            if pinned and tail != "replies" and not q("cursor") and w.ids[pinned] not in STATE["deleted"]:
+                page["pinned"] = w.tweet(pinned)
+            return self.send_json(page)
         if path == "/api/sources/search":
             text = (q("q") or "").lower().lstrip("#")
             hits = [w.tweet(p[0]) for p in dw.POSTS if text and text in p[3].lower() and not p[6].get("hide")]

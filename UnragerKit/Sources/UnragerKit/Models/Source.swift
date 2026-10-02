@@ -96,9 +96,11 @@ public struct SessionState: Decodable, Sendable {
         case theme
     }
 
+    /// A source kind this client doesn't know reads as no source rather than
+    /// failing the whole session, so the other settings still arrive.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        currentSource = try c.decodeIfPresent(SourceKind.self, forKey: .currentSource)
+        currentSource = try? c.decodeIfPresent(SourceKind.self, forKey: .currentSource)
         feedMode = try c.decodeIfPresent(FeedMode.self, forKey: .feedMode) ?? .all
         filterEnabled = try c.decodeIfPresent(Bool.self, forKey: .filterEnabled) ?? false
         theme = try c.decodeIfPresent(String.self, forKey: .theme)

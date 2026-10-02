@@ -128,7 +128,7 @@ final class TweetCell: UICollectionViewCell {
     /// Feed-context body cap (v. the unlimited focal/thread rendering).
     static let feedBodyLineLimit = 10
 
-    private static let avatarSize: CGFloat = 36
+    static let avatarSize: CGFloat = 36
     private static let sideMargin = DesignSystem.Spacing.l
     private static let sideInsets = NSDirectionalEdgeInsets(
         top: 0, leading: sideMargin, bottom: 0, trailing: sideMargin)
@@ -515,7 +515,7 @@ final class TweetCell: UICollectionViewCell {
             result.append(NSAttributedString(string: " "))
         }
         result.append(NSAttributedString(string: Format.count(count), attributes: [
-            .font: DesignSystem.Typography.metric(),
+            .font: DesignSystem.Typography.actionMetric(),
             .foregroundColor: tint,
         ]))
         return result
@@ -688,7 +688,8 @@ final class TweetCell: UICollectionViewCell {
 
         nameLabel.font = DesignSystem.Typography.name()
         nameLabel.textColor = DesignSystem.Color.label
-        nameLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        nameLabel.lineBreakMode = .byTruncatingTail
+        nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         flagLabel.font = DesignSystem.Typography.name()
         flagLabel.setContentHuggingPriority(.required, for: .horizontal)
@@ -699,6 +700,7 @@ final class TweetCell: UICollectionViewCell {
         verifiedBadge.image = DesignSystem.icon("checkmark.seal.fill", pointSize: 13)
         verifiedBadge.tintColor = DesignSystem.Color.verified
         verifiedBadge.setContentHuggingPriority(.required, for: .horizontal)
+        verifiedBadge.setContentCompressionResistancePriority(.required, for: .horizontal)
         verifiedBadge.isAccessibilityElement = false
 
         replyCaption.isHidden = true
@@ -731,9 +733,10 @@ final class TweetCell: UICollectionViewCell {
 
         buildQuoted()
 
-        viewsLabel.font = DesignSystem.Typography.metric()
+        viewsLabel.font = DesignSystem.Typography.actionMetric()
         viewsLabel.textColor = DesignSystem.Color.secondaryLabel
-        viewsLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        viewsLabel.lineBreakMode = .byTruncatingTail
+        viewsLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         actionBar.axis = .horizontal
         actionBar.distribution = .equalSpacing

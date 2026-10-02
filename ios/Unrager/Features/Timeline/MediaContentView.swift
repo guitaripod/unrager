@@ -64,7 +64,7 @@ final class MediaContentView: UIView {
     /// any media was shown so the cell can collapse the slot.
     @discardableResult
     func configure(with tweet: Tweet, imagesEnabled: Bool, contentWidth: CGFloat) -> Bool {
-        guard let rich = pickRich(tweet.media) else {
+        guard let rich = Self.pickRich(tweet.media) else {
             hideAll()
             isHidden = true
             return false
@@ -104,10 +104,44 @@ final class MediaContentView: UIView {
         return true
     }
 
+    /// The images a full-size (not compact) surface asks for when configured
+    /// with `tweet`, at the very sizes it asks for them: a prefetch at any
+    /// other size is a separate decode the row can't use or join.
+    static func imageRequests(for tweet: Tweet, contentWidth: CGFloat, bleedsEdgeToEdge: Bool) -> [(url: URL, size: CGSize)] {
+        guard let rich = pickRich(tweet.media) else { return [] }
+        let pictureWidth = contentWidth - (bleedsEdgeToEdge ? 0 : 2 * DesignSystem.Spacing.l)
+        switch rich.kind {
+        case .poll:
+            return []
+        case .linkCard, .article, .broadcast, .youTube:
+            let width = contentWidth - 2 * DesignSystem.Spacing.l
+            guard let url = URL(string: rich.url) else { return [] }
+            return [(url, MediaCardView.coverSize(contentWidth: width))]
+        case .video, .animatedGif:
+            guard let url = URL(string: rich.url) else { return [] }
+            return [(url, posterSize(for: rich, width: pictureWidth))]
+        case .photo:
+            let photos = tweet.media.filter { if case .photo = $0.kind { return true } else { return false } }
+            let urls = photos.compactMap { URL(string: $0.url) }
+            let ratios = Array(photos.map(\.aspectRatio).prefix(min(urls.count, PhotoMosaic.maxPhotos)))
+            let mosaic = PhotoMosaic.make(ratios: ratios, width: pictureWidth)
+            return zip(urls, mosaic.tiles).map { ($0, $1.size) }
+        }
+    }
+
+    /// The frame an inline clip is drawn in, from its own shape.
+    private static func playerFrame(for media: Media) -> MediaShape.Frame {
+        MediaShape.frame(source: media.aspectRatio, tallest: MediaShape.tallestVideo, fallback: 16.0 / 9.0)
+    }
+
+    private static func posterSize(for media: Media, width: CGFloat) -> CGSize {
+        CGSize(width: width, height: (width / playerFrame(for: media).ratio).rounded())
+    }
+
     /// Prefers the "interesting" attachment: a poll/card/broadcast/youTube
     /// trumps a bare thumbnail, and a video/gif trumps a still photo. Falls
     /// back to the first photo otherwise.
-    private func pickRich(_ media: [Media]) -> Media? {
+    private static func pickRich(_ media: [Media]) -> Media? {
         media.first(where: { $0.isNonImageCard })
             ?? media.first(where: { $0.isVideo })
             ?? media.first
@@ -168,11 +202,11 @@ final class MediaContentView: UIView {
         let isGIF: Bool = { if case .animatedGif = media.kind { return true } else { return false } }()
         let inset = sideInset(isPicture: true)
         let width = contentWidth - 2 * inset
-        let frame = MediaShape.frame(source: media.aspectRatio, tallest: MediaShape.tallestVideo, fallback: 16.0 / 9.0)
+        let frame = Self.playerFrame(for: media)
         view.setRounded(pictureRadius(inset: inset))
         view.configure(posterURL: imagesEnabled ? URL(string: media.url) : nil,
                        videoURL: videoURL, isGIF: isGIF, aspectRatio: frame.ratio, fills: frame.fills,
-                       posterSize: CGSize(width: width, height: (width / frame.ratio).rounded()),
+                       posterSize: Self.posterSize(for: media, width: width),
                        imagesEnabled: imagesEnabled)
         swap(to: view, inset: inset)
     }

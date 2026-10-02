@@ -1083,14 +1083,15 @@ extension FeedViewController: UICollectionViewDelegate {
 extension FeedViewController: UICollectionViewDataSourcePrefetching {
     func collectionView(_ collectionView: UICollectionView, prefetchItemsAt indexPaths: [IndexPath]) {
         guard AppSettings.imagesEnabled else { return }
-        let width = collectionView.bounds.width
+        let scale = max(traitCollection.displayScale, 1)
         for indexPath in indexPaths {
             guard let id = dataSource.itemIdentifier(for: indexPath), let tweet = tweetsByID[id] else { continue }
             if let avatar = tweet.author.avatarURL.flatMap(URL.init) {
-                ImageLoader.prefetch(avatar, pointSize: CGSize(width: 44, height: 44), scale: 3)
+                let side = TweetCell.avatarSize
+                ImageLoader.prefetch(avatar, pointSize: CGSize(width: side, height: side), scale: scale)
             }
-            if let url = Self.previewURL(for: tweet) {
-                ImageLoader.prefetch(url, pointSize: CGSize(width: width, height: width * 9 / 16), scale: 2)
+            for request in mediaRequests(for: tweet) {
+                ImageLoader.prefetch(request.url, pointSize: request.size, scale: scale)
             }
             Task { await TwemojiCache.shared.prewarm(graphemesIn: tweet.text) }
         }
@@ -1099,16 +1100,14 @@ extension FeedViewController: UICollectionViewDataSourcePrefetching {
     func collectionView(_ collectionView: UICollectionView, cancelPrefetchingForItemsAt indexPaths: [IndexPath]) {
         for indexPath in indexPaths {
             guard let id = dataSource.itemIdentifier(for: indexPath), let tweet = tweetsByID[id] else { continue }
-            if let url = Self.previewURL(for: tweet) { ImageLoader.cancelPrefetch(url) }
+            for request in mediaRequests(for: tweet) { ImageLoader.cancelPrefetch(request.url) }
         }
     }
 
-    /// The first attachment that has a fetchable cover image (polls have none).
-    private static func previewURL(for tweet: Tweet) -> URL? {
-        for media in tweet.media {
-            if case .poll = media.kind { continue }
-            if !media.url.isEmpty { return URL(string: media.url) }
-        }
-        return nil
+    /// Every picture the row will load for `tweet` and the size it loads it
+    /// at, so a prefetched decode is the one the row asks for (or joins).
+    private func mediaRequests(for tweet: Tweet) -> [(url: URL, size: CGSize)] {
+        MediaContentView.imageRequests(
+            for: tweet, contentWidth: max(120, collectionView.bounds.width), bleedsEdgeToEdge: true)
     }
 }

@@ -125,6 +125,13 @@ enum DesignSystem {
         }
         static func editor() -> UIFont { scaled(.title3, size: 20, weight: .regular) }
         static func metric() -> UIFont { scaled(.footnote, size: 13, weight: .regular) }
+        /// The action bar's counts: `metric()`, but capped at 20 pt so five
+        /// buttons and the views count still fit one row at the accessibility
+        /// text sizes, where the counts matter less than reaching the buttons.
+        static func actionMetric() -> UIFont {
+            UIFontMetrics(forTextStyle: .footnote).scaledFont(
+                for: .systemFont(ofSize: 13 * scale, weight: .regular), maximumPointSize: 20)
+        }
         static func caption() -> UIFont { scaled(.caption1, size: 12, weight: .regular) }
         static func title() -> UIFont { scaled(.title2, size: 22, weight: .heavy) }
     }

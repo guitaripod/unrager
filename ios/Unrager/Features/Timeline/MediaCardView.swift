@@ -110,6 +110,11 @@ final class MediaCardView: UIView {
         let isPlayable: Bool
     }
 
+    /// The cover's size in a card `contentWidth` wide.
+    static func coverSize(contentWidth: CGFloat) -> CGSize {
+        CGSize(width: contentWidth, height: (contentWidth * 0.52).rounded())
+    }
+
     func configure(_ model: Model, contentWidth: CGFloat, imagesEnabled: Bool) {
         domainLabel.text = model.domain?.uppercased()
         domainLabel.isHidden = (model.domain ?? "").isEmpty
@@ -122,9 +127,9 @@ final class MediaCardView: UIView {
 
         if imagesEnabled, let url = model.coverURL {
             cover.isHidden = false
-            let height = (contentWidth * 0.52).rounded()
-            coverHeight?.constant = height
-            cover.load(url: url, targetSize: CGSize(width: contentWidth, height: height))
+            let size = Self.coverSize(contentWidth: contentWidth)
+            coverHeight?.constant = size.height
+            cover.load(url: url, targetSize: size)
         } else {
             cover.isHidden = true
             cover.cancel()

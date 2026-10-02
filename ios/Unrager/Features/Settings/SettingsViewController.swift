@@ -62,6 +62,9 @@ final class SettingsViewController: UIViewController {
     private var account: Whoami?
     private var filterSummary: String?
     private var checkTask: Task<Void, Never>?
+    /// Bumped on every flip of the rage-filter switch, so a late failure of an
+    /// earlier flip can't undo a newer one.
+    private var filterSwitchGeneration = 0
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -72,12 +75,27 @@ final class SettingsViewController: UIViewController {
         applySnapshot()
         NotificationCenter.default.addObserver(
             self, selector: #selector(fontScaleApplied), name: AppSettings.fontScaleDidChange, object: nil)
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (self: Self, _) in
+            self.dataSource.reconfigureAllItems()
+        }
+    }
+
+    /// At the accessibility text sizes a choice's value moves under its label
+    /// and the whole row opens the menu, since a trailing button beside the
+    /// label leaves neither room to read.
+    private var isAccessibilitySize: Bool {
+        traitCollection.preferredContentSizeCategory.isAccessibilityCategory
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         refreshConnection()
         reconfigure(Item.allSettingsRows)
+        Task { [weak self] in
+            if await NotificationSettingsViewController.refreshSystemPermission() {
+                self?.reconfigure([.notifications])
+            }
+        }
     }
 
     #if DEBUG
@@ -216,8 +234,13 @@ final class SettingsViewController: UIViewController {
             select: @escaping (Option) -> Void
         ) {
             content.text = title
-            content.secondaryText = nil
             let button = settingsMenuButton(current: current, options: options, title: label, select: select)
+            if isAccessibilitySize, let choices = button.menu {
+                content.secondaryText = label(current)
+                cell.accessories = [.popUpMenu(choices)]
+                return
+            }
+            content.secondaryText = nil
             button.accessibilityLabel = title
             cell.accessories = [.customView(configuration: .init(
                 customView: button, placement: .trailing(), maintainsFixedSize: true))]
@@ -248,9 +271,8 @@ final class SettingsViewController: UIViewController {
             content.secondaryTextProperties.numberOfLines = 2
         case .rageFilter:
             tile("line.3.horizontal.decrease", .systemRed)
-            toggle("Rage filter", isOn: AppSettings.filterEnabled) { isOn in
-                AppSettings.filterEnabled = isOn
-                SessionSync.patchFilterEnabled(isOn)
+            toggle("Rage filter", isOn: AppSettings.filterEnabled) { [weak self] isOn in
+                self?.setFilterEnabled(isOn)
             }
         case .filterRules:
             tile("slider.horizontal.3", .systemOrange)
@@ -260,19 +282,27 @@ final class SettingsViewController: UIViewController {
         case .postStats:
             tile("chart.bar.xaxis", .systemPurple)
             menu("Post stats", current: AppSettings.postStatsMode, options: PostStatsMode.allCases,
-                 label: \.title) { AppSettings.postStatsMode = $0 }
+                 label: \.title) { [weak self] mode in
+                AppSettings.postStatsMode = mode
+                NotificationCenter.default.post(name: AppSettings.displayDidChange, object: nil)
+                self?.reconfigure([.postStats])
+            }
         case .markSeen:
             tile("eye", .systemTeal)
             toggle("Dim posts you've read", isOn: ClientSettings.markSeenEnabled) { ClientSettings.markSeenEnabled = $0 }
         case .images:
             tile("photo", .systemYellow)
-            toggle("Load images", isOn: AppSettings.imagesEnabled) { AppSettings.imagesEnabled = $0 }
+            toggle("Load images", isOn: AppSettings.imagesEnabled) { isOn in
+                AppSettings.imagesEnabled = isOn
+                NotificationCenter.default.post(name: AppSettings.displayDidChange, object: nil)
+            }
         case .theme:
             tile("circle.lefthalf.filled", .systemIndigo)
             menu("Theme", current: AppSettings.appearance, options: AppearanceMode.allCases,
                  label: \.title) { [weak self] mode in
                 AppSettings.appearance = mode
                 self?.view.window?.overrideUserInterfaceStyle = UIUserInterfaceStyle(rawValue: mode.rawValue) ?? .unspecified
+                self?.reconfigure([.theme])
             }
         case .textSize:
             cell.contentConfiguration = SettingsTextSizeConfiguration(scale: AppSettings.fontScale) { scale in
@@ -380,13 +410,13 @@ final class SettingsViewController: UIViewController {
         return text.isEmpty ? "Can't reach the server" : text
     }
 
-    private func editServerAddress() {
+    private func editServerAddress(prefill: String = AppSettings.serverURLString) {
         let alert = UIAlertController(
             title: "Server address",
-            message: "The address of your unrager server, such as http://100.64.0.1:7777.",
+            message: "The address of your unrager server, such as 100.64.0.1:7777.",
             preferredStyle: .alert)
         alert.addTextField { field in
-            field.text = AppSettings.serverURLString
+            field.text = prefill
             field.placeholder = "http://192.168.1.10:7777"
             field.keyboardType = .URL
             field.autocapitalizationType = .none
@@ -400,23 +430,76 @@ final class SettingsViewController: UIViewController {
         present(alert, animated: true)
     }
 
-    /// Applies an address typed in the alert: a valid http(s) address replaces
-    /// the current one and is checked at once, anything else is refused with a
-    /// reason and the old address stays.
+    /// Checks an address typed in the alert before it replaces the current one:
+    /// a server that answers is saved at once, one that doesn't asks whether to
+    /// save it anyway, and text that isn't an http(s) address is refused with a
+    /// reason while the old address stays.
     private func commitServerAddress(_ text: String) {
-        let candidate = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard candidate != AppSettings.serverURLString else { return }
-        guard let url = URL(string: candidate), let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https", url.host != nil else {
+        let typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = SettingsFormat.serverAddress(typed) else {
             Haptics.error()
             present(AlertFactory.error(
-                SettingsError.invalidAddress(candidate), title: "Not a server address"), animated: true)
+                SettingsError.invalidAddress(typed), title: "Not a server address"), animated: true)
             return
         }
+        let candidate = url.absoluteString
+        guard candidate != AppSettings.serverURLString else { return }
+        checkTask?.cancel()
+        connection = .checking
+        reconfigure([.serverStatus])
+        checkTask = Task { [weak self] in
+            let result = await Self.probe(url)
+            guard !Task.isCancelled, let self else { return }
+            switch result {
+            case .success:
+                self.applyServerAddress(candidate)
+            case let .failure(error):
+                self.refreshConnection()
+                self.offerUnreachable(candidate, error: error)
+            }
+        }
+    }
+
+    /// Asks a candidate server for its health on a short-lived session with a
+    /// short timeout, so a wrong address answers in seconds rather than the
+    /// client's usual twenty.
+    private nonisolated static func probe(_ url: URL) async -> Result<ServerHealth, Error> {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 6
+        configuration.timeoutIntervalForResource = 10
+        configuration.waitsForConnectivity = false
+        let session = URLSession(configuration: configuration)
+        defer { session.finishTasksAndInvalidate() }
+        let client = APIClient(transport: URLSessionTransport(session: session), baseURL: { url })
+        return await result { try await client.health() }
+    }
+
+    private func offerUnreachable(_ candidate: String, error: Error) {
+        Haptics.error()
+        let alert = UIAlertController(
+            title: "Can't reach \(SettingsFormat.host(of: candidate))",
+            message: "\(Self.describe(error))\n\nSave it anyway, or keep \(SettingsFormat.host(of: AppSettings.serverURLString))?",
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Save Anyway", style: .default) { [weak self] _ in
+            self?.applyServerAddress(candidate)
+        })
+        alert.addAction(UIAlertAction(title: "Edit", style: .default) { [weak self] _ in
+            self?.editServerAddress(prefill: candidate)
+        })
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        present(alert, animated: true)
+    }
+
+    /// Stores the new address and tells the app, which starts over against
+    /// that server: its session, saved timelines and signed-in account.
+    private func applyServerAddress(_ candidate: String) {
         AppSettings.serverURLString = candidate
         AppLogger.shared.info("server URL changed to \(candidate)", category: .app)
         Haptics.success()
-        reconfigure([.serverAddress])
+        account = nil
+        filterSummary = nil
+        NotificationCenter.default.post(name: AppSettings.serverURLDidChange, object: nil)
+        reconfigure([.serverAddress, .savedTimelines, .rageFilter])
         refreshConnection()
     }
 
@@ -427,6 +510,26 @@ final class SettingsViewController: UIViewController {
             switch self {
             case let .invalidAddress(text):
                 return "\"\(text)\" isn't an http or https address. The server stays as it was."
+            }
+        }
+    }
+
+    /// Flips the rage filter here and on the server together: when the server
+    /// refuses, the switch goes back and says so, rather than looking changed
+    /// until the next launch restores the server's setting.
+    private func setFilterEnabled(_ isOn: Bool) {
+        AppSettings.filterEnabled = isOn
+        filterSwitchGeneration += 1
+        let generation = filterSwitchGeneration
+        Task { [weak self] in
+            do {
+                try await SessionSync.patchFilterEnabled(isOn)
+            } catch {
+                guard let self, generation == self.filterSwitchGeneration else { return }
+                AppSettings.filterEnabled = !isOn
+                Haptics.error()
+                self.reconfigure([.rageFilter])
+                self.present(AlertFactory.error(error, title: "Couldn't change the filter"), animated: true)
             }
         }
     }
@@ -457,27 +560,51 @@ final class SettingsViewController: UIViewController {
     private func confirmReset() {
         let sheet = UIAlertController(
             title: "Reset settings?",
-            message: "Text size, theme, tabs and every switch go back to how they started. Your server address stays.",
+            message: "Text size, theme, tabs, post stats, images, notification alerts and the other switches go back to "
+                + "how they started. Your server, the rage filter, what you've already read in Notifications and "
+                + "recent searches stay.",
             preferredStyle: .actionSheet)
         sheet.addAction(UIAlertAction(title: "Reset", style: .destructive) { [weak self] _ in self?.resetSettings() })
         sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         present(sheet, animated: true)
     }
 
-    /// Forgets every preference the app keeps except where its server is, and
-    /// lets the screen and the app's window catch up.
+    /// Forgets every preference the app keeps except the state listed in
+    /// `SettingsReset`, and lets the screen, the tab bar and the app's window
+    /// catch up.
     private func resetSettings() {
         let defaults = UserDefaults.standard
-        let keep = "unrager.serverURL"
-        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("unrager.") && key != keep {
+        for key in defaults.dictionaryRepresentation().keys where SettingsReset.clears(key) {
             defaults.removeObject(forKey: key)
         }
         view.window?.overrideUserInterfaceStyle = .unspecified
+        (view.window?.rootViewController as? RootViewController)?.rebuildTabs()
         NotificationCenter.default.post(name: AppSettings.fontScaleDidChange, object: nil)
+        NotificationCenter.default.post(name: AppSettings.displayDidChange, object: nil)
         Haptics.success()
         var snapshot = dataSource.snapshot()
         snapshot.reconfigureItems(snapshot.itemIdentifiers)
         dataSource.apply(snapshot, animatingDifferences: false)
+    }
+}
+
+/// What "Reset settings" forgets: every `unrager.` preference except state
+/// that isn't a setting (where the server is, what was already read or alerted,
+/// recent searches, the one-time appearance cleanup) and the rage filter, which
+/// mirrors the server's own setting and would otherwise switch off on this
+/// device only.
+enum SettingsReset {
+    static let keptKeys: Set<String> = [
+        "unrager.serverURL",
+        "unrager.filterEnabled",
+        "unrager.appearanceMigratedToLocal.v1",
+        "unrager.ios.recentSearches",
+        "unrager.notifications.deliveredBannerIDs",
+    ]
+    static let keptPrefixes = ["unrager.notifications.lastSeen"]
+
+    static func clears(_ key: String) -> Bool {
+        key.hasPrefix("unrager.") && !keptKeys.contains(key) && !keptPrefixes.contains { key.hasPrefix($0) }
     }
 }
 
@@ -525,7 +652,9 @@ extension SettingsViewController: UICollectionViewDelegate {
 
     func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
         switch dataSource.itemIdentifier(for: indexPath) {
-        case .rageFilter?, .postStats?, .markSeen?, .images?, .theme?, .textSize?, .officialCompose?, .version?:
+        case .postStats?, .theme?:
+            return isAccessibilitySize
+        case .rageFilter?, .markSeen?, .images?, .textSize?, .officialCompose?, .version?:
             return false
         default:
             return true

@@ -57,8 +57,12 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                 }
             case "notifsettings":
                 root.selectedIndex = 3
+                let notificationSettings = NotificationSettingsViewController()
                 (root.viewControllers?[3] as? UINavigationController)?
-                    .pushViewController(NotificationSettingsViewController(), animated: false)
+                    .pushViewController(notificationSettings, animated: false)
+                if parts.count > 1, let points = Double(parts[1]) {
+                    notificationSettings.debugScroll(by: CGFloat(points))
+                }
             case "settings":
                 root.selectedIndex = 3
                 if parts.count > 1, let points = Double(parts[1]),
@@ -76,8 +80,10 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                     .pushViewController(EditTabsViewController(), animated: false)
             case "changelog":
                 root.selectedIndex = 3
+                let changelog = ChangelogViewController()
                 (root.viewControllers?[3] as? UINavigationController)?
-                    .pushViewController(ChangelogViewController(), animated: false)
+                    .pushViewController(changelog, animated: false)
+                if parts.count > 1, parts[1] == "end" { changelog.debugScrollToEnd() }
             case "userlist" where parts.count > 2:
                 let mode: UserListViewController.Mode = parts[2] == "following" ? .following : .followers
                 homeNav()?.pushViewController(UserListViewController(userID: parts[1], mode: mode), animated: false)

@@ -35,6 +35,18 @@ enum SettingsFormat {
         return url.port.map { "\(host):\($0)" } ?? host
     }
 
+    /// The server a typed address means: `http://` is assumed when no scheme is
+    /// given (`100.64.0.1:7777`), and anything that isn't an http or https
+    /// address with a host is nil.
+    static func serverAddress(_ text: String) -> URL? {
+        let typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !typed.isEmpty, !typed.contains(where: \.isWhitespace) else { return nil }
+        let full = typed.contains("://") ? typed : "http://" + typed
+        guard let url = URL(string: full), let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https", let host = url.host, !host.isEmpty else { return nil }
+        return url
+    }
+
     static func bytes(_ count: Int) -> String {
         count <= 0 ? "Empty" : ByteCountFormatter.string(fromByteCount: Int64(count), countStyle: .file)
     }
@@ -90,6 +102,7 @@ final class SettingsHeroView: UIView, UIContentView {
     private let handleLabel = UILabel()
     private let statusDot = UIView()
     private let statusLabel = UILabel()
+    private let row = UIStackView()
 
     var configuration: UIContentConfiguration {
         didSet { apply() }
@@ -103,12 +116,12 @@ final class SettingsHeroView: UIView, UIContentView {
         avatar.textAlignment = .center
         avatar.layer.cornerRadius = 30
         avatar.layer.masksToBounds = true
-        nameLabel.font = DesignSystem.Typography.system(20, weight: .semibold)
         nameLabel.textColor = DesignSystem.Color.label
-        handleLabel.font = DesignSystem.Typography.handle()
         handleLabel.textColor = DesignSystem.Color.secondaryLabel
-        statusLabel.font = DesignSystem.Typography.metric()
         statusLabel.textColor = DesignSystem.Color.secondaryLabel
+        for label in [nameLabel, handleLabel, statusLabel] {
+            label.numberOfLines = 0
+        }
         statusDot.layer.cornerRadius = 4
         statusDot.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -123,9 +136,9 @@ final class SettingsHeroView: UIView, UIContentView {
         text.axis = .vertical
         text.spacing = 2
         text.setCustomSpacing(6, after: handleLabel)
-        let row = UIStackView(arrangedSubviews: [avatar, text])
+        row.addArrangedSubview(avatar)
+        row.addArrangedSubview(text)
         row.spacing = DesignSystem.Spacing.l
-        row.alignment = .center
         avatar.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             avatar.widthAnchor.constraint(equalToConstant: 60),
@@ -133,7 +146,21 @@ final class SettingsHeroView: UIView, UIContentView {
         ])
         addManaged(row)
         row.pinEdges(to: self, insets: UIEdgeInsets(top: 14, left: 20, bottom: 14, right: 20))
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (view: Self, _) in view.applyFonts() }
         apply()
+    }
+
+    /// The name follows Dynamic Type like the rest of the card, and at the
+    /// accessibility sizes the avatar sits above the text so the name, handle
+    /// and status get the card's full width to wrap in.
+    private func applyFonts() {
+        nameLabel.font = UIFontMetrics(forTextStyle: .title3)
+            .scaledFont(for: DesignSystem.Typography.system(20, weight: .semibold))
+        handleLabel.font = DesignSystem.Typography.handle()
+        statusLabel.font = DesignSystem.Typography.metric()
+        let stacked = traitCollection.preferredContentSizeCategory.isAccessibilityCategory
+        row.axis = stacked ? .vertical : .horizontal
+        row.alignment = stacked ? .leading : .center
     }
 
     @available(*, unavailable)
@@ -141,6 +168,7 @@ final class SettingsHeroView: UIView, UIContentView {
 
     private func apply() {
         guard let configuration = configuration as? SettingsHeroConfiguration else { return }
+        applyFonts()
         if let account = configuration.account {
             avatar.text = String(account.name.first(where: { $0.isLetter || $0.isNumber }) ?? "@").uppercased()
             avatar.backgroundColor = DesignSystem.handleColor(account.handle)

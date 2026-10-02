@@ -307,6 +307,44 @@ final class NotificationCenterService: NSObject {
         return info
     }
 
+    // MARK: - Diagnostics
+
+    /// What the foreground poller last did, for Notification settings to
+    /// answer "why didn't a banner arrive?".
+    struct Diagnostics {
+        let lastPollAt: Date?
+        let lastPollError: String?
+        let seenSync: NotificationPoller.SeenSyncState
+    }
+
+    var diagnostics: Diagnostics {
+        Diagnostics(lastPollAt: poller.lastPollAt, lastPollError: poller.lastPollError,
+                    seenSync: poller.seenSyncState)
+    }
+
+    /// Posts a sample banner five seconds from now, so the user can leave the
+    /// app and see one arrive. Returns false when iOS doesn't allow banners.
+    func sendTestBanner() async -> Bool {
+        let center = UNUserNotificationCenter.current()
+        let status = await center.notificationSettings().authorizationStatus
+        guard status == .authorized || status == .provisional || status == .ephemeral else { return false }
+        let content = UNMutableNotificationContent()
+        content.title = "Test banner"
+        content.body = "Banners from Unrager reach this device."
+        content.sound = NotificationPrefs.bannerSoundEnabled ? .default : nil
+        content.userInfo = ["kind": "test"]
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 5, repeats: false)
+        do {
+            try await center.add(UNNotificationRequest(
+                identifier: "unrager.test.\(UUID().uuidString)", content: content, trigger: trigger))
+            AppLogger.shared.info("test banner scheduled", category: .app)
+            return true
+        } catch {
+            AppLogger.shared.warn("test banner failed: \(error)", category: .app)
+            return false
+        }
+    }
+
     // MARK: - Deep linking
 
     private struct BannerRoute {
@@ -365,6 +403,7 @@ final class NotificationCenterService: NSObject {
     /// sleep, no baseline reset that would swallow the diff. Re-arms the next
     /// refresh. Deliberately minimal — a best-effort top-up, not a guarantee.
     private func runBackgroundRefresh(_ task: BGAppRefreshTask) {
+        NotificationPrefs.lastBackgroundRefreshAt = Date()
         scheduleBackgroundRefresh()
         let work = Task { @MainActor in
             let fetched = await poller.poll()

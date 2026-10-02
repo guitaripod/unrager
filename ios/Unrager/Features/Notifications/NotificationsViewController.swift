@@ -35,7 +35,8 @@ final class NotificationsViewController: UIViewController {
     private var lastLoaded: Date?
     private static let staleAfter: TimeInterval = 120
     private let footer = PagingFooter()
-    private var fontScaleObserver: NSObjectProtocol?
+    private var displayObservers: [NSObjectProtocol] = []
+    private var clock: Timer?
 
     // MARK: - Filter (All / Mentions)
 
@@ -340,8 +341,8 @@ final class NotificationsViewController: UIViewController {
         }
     }
 
-    /// Whether a row stands for more people than its avatars show, or for a
-    /// tweet the row's tap opens instead of the people.
+    /// Whether a row stands for more than one person: the list names every
+    /// actor X sent and its footer says how many more X left out.
     private func hasPeopleList(_ notif: XNotification) -> Bool {
         notif.actors.count > 1 || (notif.othersCount ?? 0) > 0
     }
@@ -361,7 +362,8 @@ final class NotificationsViewController: UIViewController {
     private func showPeople(of notif: XNotification) {
         let verb = Self.style(for: notif.type).verb
         let list = NotificationActorsViewController(
-            title: verb.prefix(1).uppercased() + verb.dropFirst(), actors: notif.actors)
+            title: verb.prefix(1).uppercased() + verb.dropFirst(), actors: notif.actors,
+            othersCount: notif.othersCount)
         navigationController?.pushViewController(list, animated: true)
     }
 
@@ -399,9 +401,10 @@ final class NotificationsViewController: UIViewController {
         dataSource = UICollectionViewDiffableDataSource(collectionView: collectionView) { cv, ip, id in
             cv.dequeueConfiguredReusableCell(using: reg, for: ip, item: id)
         }
-        fontScaleObserver = NotificationCenter.default.addObserver(
-            forName: AppSettings.fontScaleDidChange, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.dataSource.reconfigureAllItems() }
+        displayObservers = [AppSettings.fontScaleDidChange, AppSettings.displayDidChange].map { name in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.dataSource.reconfigureAllItems() }
+            }
         }
         footer.attach(to: collectionView)
         footer.onRetry = { [weak self] in self?.retryFailedLoad() }
@@ -425,6 +428,22 @@ final class NotificationsViewController: UIViewController {
         service.onVisibleFresh = { [weak self] fresh in self?.mergeFresh(fresh) }
         service.onResumeWhileVisible = { [weak self] in self?.refreshIfStale(after: 0) }
         refreshIfStale(after: Self.staleAfter)
+        startClock()
+    }
+
+    /// Keeps the "5m" on each row true while the list stays open: once a
+    /// minute the rows on screen draw again with the current time.
+    private func startClock() {
+        clock?.invalidate()
+        let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.collectionView.isHidden else { return }
+                self.dataSource.reconfigureVisibleItems(of: self.collectionView)
+            }
+        }
+        timer.tolerance = 5
+        RunLoop.main.add(timer, forMode: .common)
+        clock = timer
     }
 
     /// Reloads the list when it has never loaded or is older than `age`
@@ -443,6 +462,8 @@ final class NotificationsViewController: UIViewController {
         service.onVisibleFresh = nil
         service.onResumeWhileVisible = nil
         service.setViewingNotifications(false)
+        clock?.invalidate()
+        clock = nil
     }
 
     /// Marks everything fetched as read: the displayed rows, the poller's
@@ -476,23 +497,46 @@ final class NotificationsViewController: UIViewController {
             if fresh.contains(where: { Self.isMention($0) }) { mentionsController?.viewModel.refresh() }
             return
         }
-        let incoming = fresh
-            .filter { items[$0.id] == nil }
-            .sorted { $0.timestamp < $1.timestamp }
-        guard !incoming.isEmpty else { return }
-        for notif in incoming {
+        let merge = Self.merge(fresh, into: order, items: items)
+        guard !merge.incoming.isEmpty else { return }
+        order = merge.order
+        for notif in merge.incoming {
             items[notif.id] = notif
-            order.insert(notif.id, at: 0)
+            locallyRead.remove(notif.id)
         }
-        if resetLoadInFlight { mergedDuringResetLoad.append(contentsOf: incoming) }
+        if resetLoadInFlight { mergedDuringResetLoad.append(contentsOf: merge.incoming) }
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
         snapshot.appendSections([0])
         snapshot.appendItems(order)
+        snapshot.reconfigureItems(merge.grown)
         dataSource.applyKeepingPosition(snapshot, in: collectionView)
         emptyState.isHidden = true
         if view.window != nil {
-            NotificationCenterService.shared.notificationsDisplayed(incoming)
+            NotificationCenterService.shared.notificationsDisplayed(merge.incoming)
         }
+    }
+
+    /// Where fresh poller items go: a new one joins the top, and one already
+    /// listed that has grown since ("Alice liked" → "Alice, Bob and 3 others
+    /// liked") replaces its old row and moves to the top. Items identical to
+    /// the listed row change nothing. Oldest are placed first, so the newest
+    /// ends up on top.
+    static func merge(
+        _ fresh: [XNotification], into order: [String], items: [String: XNotification]
+    ) -> (order: [String], incoming: [XNotification], grown: [String]) {
+        let incoming = fresh
+            .filter { items[$0.id] != $0 }
+            .sorted { $0.timestamp < $1.timestamp }
+        var order = order
+        var grown: [String] = []
+        for notif in incoming {
+            if let index = order.firstIndex(of: notif.id) {
+                order.remove(at: index)
+                grown.append(notif.id)
+            }
+            order.insert(notif.id, at: 0)
+        }
+        return (order, incoming, grown)
     }
 
     private static func isMention(_ notif: XNotification) -> Bool {

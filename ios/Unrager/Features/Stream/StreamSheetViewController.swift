@@ -9,6 +9,10 @@ final class StreamSheetViewController: UIViewController {
     private let textView = UITextView()
     private let spinner = UIActivityIndicatorView(style: .medium)
     private var task: Task<Void, Never>?
+    private var raw = ""
+    private var failure: String?
+    private var finished = false
+    private var follower: StreamingTextFollower!
 
     init(title: String, stream: @escaping @Sendable () -> AsyncThrowingStream<TokenEvent, Error>) {
         self.streamTitle = title
@@ -33,6 +37,9 @@ final class StreamSheetViewController: UIViewController {
         textView.textColor = DesignSystem.Color.label
         textView.textContainerInset = .init(top: 16, left: 16, bottom: 16, right: 16)
         view.addManaged(textView)
+        follower = StreamingTextFollower(textView: textView) { [weak self] in
+            self?.shownText() ?? NSAttributedString()
+        }
         textView.pinEdges(toSafeAreaOf: view)
 
         spinner.startAnimating()
@@ -44,13 +51,12 @@ final class StreamSheetViewController: UIViewController {
         start()
     }
 
-    private var raw = ""
-
     /// The stream task captures `self` weakly: a strong capture would keep the
     /// sheet (and the live SSE connection, and the server's Ollama generation)
     /// alive until the stream ran to completion, making the deinit cancel
     /// unreachable mid-stream.
     private func start() {
+        follower.resumeFollowing()
         let stream = makeStream()
         task = Task { [weak self] in
             do {
@@ -59,13 +65,12 @@ final class StreamSheetViewController: UIViewController {
                     if !event.token.isEmpty {
                         self.spinner.stopAnimating()
                         self.raw.append(event.token)
-                        self.textView.attributedText = Self.renderMarkdown(self.raw)
+                        self.follower.scheduleRender()
                     }
                     if event.done { break }
                 }
-                guard let self else { return }
-                self.spinner.stopAnimating()
-                if self.raw.isEmpty { self.textView.text = "(no response)" }
+                guard let self, !Task.isCancelled else { return }
+                self.finish()
             } catch {
                 guard let self, !Task.isCancelled else { return }
                 self.showFailure(error)
@@ -73,15 +78,35 @@ final class StreamSheetViewController: UIViewController {
         }
     }
 
+    private func finish() {
+        spinner.stopAnimating()
+        finished = true
+        follower.renderNow()
+        guard !raw.isEmpty else { return }
+        UIAccessibility.post(notification: .announcement, argument: "Answer ready")
+    }
+
+    /// The answer so far, then what went wrong when the stream failed, or a
+    /// note when it ended without a word.
+    private func shownText() -> NSAttributedString {
+        let shown = NSMutableAttributedString(attributedString: raw.isEmpty ? NSAttributedString() : Self.renderMarkdown(raw))
+        if let failure {
+            if shown.length > 0 { shown.append(NSAttributedString(string: "\n\n")) }
+            shown.append(NSAttributedString(string: failure, attributes: [
+                .font: DesignSystem.Typography.body(), .foregroundColor: UIColor.systemRed]))
+        } else if finished, raw.isEmpty {
+            shown.append(NSAttributedString(string: "(no response)", attributes: [
+                .font: DesignSystem.Typography.body(), .foregroundColor: DesignSystem.Color.secondaryLabel]))
+        }
+        return shown
+    }
+
     /// Keeps whatever streamed before the failure and says what went wrong
     /// under it, with a Retry in the bar that starts the request over.
     private func showFailure(_ error: any Error) {
         spinner.stopAnimating()
-        let shown = NSMutableAttributedString(attributedString: raw.isEmpty ? NSAttributedString() : Self.renderMarkdown(raw))
-        if shown.length > 0 { shown.append(NSAttributedString(string: "\n\n")) }
-        shown.append(NSAttributedString(string: error.localizedDescription, attributes: [
-            .font: DesignSystem.Typography.body(), .foregroundColor: UIColor.systemRed]))
-        textView.attributedText = shown
+        failure = error.localizedDescription
+        follower.renderNow()
         navigationItem.leftBarButtonItem = UIBarButtonItem(
             image: DesignSystem.icon("arrow.clockwise"),
             primaryAction: UIAction { [weak self] _ in self?.retry() })
@@ -91,7 +116,9 @@ final class StreamSheetViewController: UIViewController {
     private func retry() {
         navigationItem.leftBarButtonItem = nil
         raw = ""
-        textView.text = nil
+        failure = nil
+        finished = false
+        follower.renderNow()
         spinner.startAnimating()
         start()
     }

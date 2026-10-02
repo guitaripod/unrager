@@ -54,8 +54,7 @@ final class AskConversationViewController: UIViewController {
     private var failure: String?
     private var streamTask: Task<Void, Never>?
     private var renderedTurns: [Int: NSAttributedString] = [:]
-    private var followTail = true
-    private var renderScheduled = false
+    private var follower: StreamingTextFollower!
 
     private let textView = UITextView()
     private let inputBar = UIView()
@@ -86,7 +85,9 @@ final class AskConversationViewController: UIViewController {
         textView.textColor = DesignSystem.Color.label
         textView.textContainerInset = .init(top: 16, left: 16, bottom: 16, right: 16)
         textView.alwaysBounceVertical = true
-        textView.delegate = self
+        follower = StreamingTextFollower(textView: textView) { [weak self] in
+            self?.transcript() ?? NSAttributedString()
+        }
         view.addManaged(textView)
 
         configureInputBar()
@@ -218,7 +219,7 @@ final class AskConversationViewController: UIViewController {
         pendingPrompt = prompt
         failure = nil
         streamingAnswer = ""
-        followTail = true
+        follower.resumeFollowing()
         retryButton.isHidden = true
         setStreaming(true)
         render()
@@ -238,7 +239,7 @@ final class AskConversationViewController: UIViewController {
                     guard !Task.isCancelled else { return }
                     if !event.token.isEmpty {
                         self.streamingAnswer = (self.streamingAnswer ?? "") + event.token
-                        self.scheduleRender()
+                        self.follower.scheduleRender()
                     }
                     if event.done { break }
                 }
@@ -281,24 +282,15 @@ final class AskConversationViewController: UIViewController {
         applySendButtonState(streaming: streaming)
     }
 
-    /// Coalesces a burst of tokens into one transcript rebuild every ~100 ms:
-    /// re-parsing the markdown per token costs more than the answer takes to
-    /// stream, and the text would reflow faster than it can be read.
-    private func scheduleRender() {
-        guard !renderScheduled else { return }
-        renderScheduled = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            guard let self else { return }
-            self.renderScheduled = false
-            self.render()
-        }
+    private func render() {
+        follower.renderNow()
     }
 
     /// Rebuilds the transcript: each user question as a bold accent line, each
     /// answer rendered as markdown (finished answers are rendered once and
     /// kept); the in-flight answer streams at the bottom, followed by any
     /// failure.
-    private func render() {
+    private func transcript() -> NSAttributedString {
         let transcript = NSMutableAttributedString()
         func separate() { if transcript.length > 0 { transcript.append(NSAttributedString(string: "\n\n")) } }
         for (index, turn) in turns.enumerated() {
@@ -318,8 +310,7 @@ final class AskConversationViewController: UIViewController {
             transcript.append(NSAttributedString(string: failure, attributes: [
                 .font: DesignSystem.Typography.body(), .foregroundColor: UIColor.systemRed]))
         }
-        textView.attributedText = transcript
-        if followTail { scrollToBottom() }
+        return transcript
     }
 
     private func renderedTurn(_ turn: AskTurn, at index: Int) -> NSAttributedString {
@@ -344,12 +335,6 @@ final class AskConversationViewController: UIViewController {
             .font: DesignSystem.Typography.body(), .foregroundColor: DesignSystem.Color.secondaryLabel])
     }
 
-    private func scrollToBottom() {
-        let length = textView.attributedText?.length ?? 0
-        guard length > 0 else { return }
-        textView.scrollRangeToVisible(NSRange(location: length - 1, length: 1))
-    }
-
     /// Stops generation the moment the sheet goes away, matching the plain
     /// stream sheet's teardown contract.
     override func viewDidDisappear(_ animated: Bool) {
@@ -361,21 +346,6 @@ final class AskConversationViewController: UIViewController {
     }
 
     deinit { streamTask?.cancel() }
-}
-
-extension AskConversationViewController: UITextViewDelegate {
-    /// Reading back through the answer while it streams must not be undone by
-    /// the next token pulling the view to the bottom; reaching the bottom again
-    /// resumes following.
-    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
-        followTail = false
-    }
-
-    func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        guard scrollView.isTracking || scrollView.isDecelerating else { return }
-        let bottom = scrollView.contentOffset.y + scrollView.bounds.height - scrollView.adjustedContentInset.bottom
-        followTail = bottom >= scrollView.contentSize.height - 40
-    }
 }
 
 extension AskConversationViewController: UITextFieldDelegate {

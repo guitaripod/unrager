@@ -3,10 +3,11 @@ import UIKit
 import UnragerKit
 
 /// The shared plumbing behind every paginated list of people (followers,
-/// following, likers): an initial spinner, infinite scroll on the page cursor,
-/// a footer that shows "Loading more…" or a retry when a later page fails, and
-/// an empty or error state when the first page does. Subclasses supply the
-/// fetch and the copy.
+/// following, likers): placeholder rows before the first page, infinite scroll
+/// on the page cursor, a Follow button on each row the list can say it for, an
+/// optional heading row, a footer that shows "Loading more…" or a retry when a
+/// later page fails, and an empty or error state when the first page does.
+/// Subclasses supply the fetch and the copy.
 class PagedUserListViewController: UIViewController {
     struct Page {
         let users: [User]
@@ -22,12 +23,16 @@ class PagedUserListViewController: UIViewController {
         let subtitle: String
     }
 
+    private static let headerID = "list-header"
+
     private var collectionView: UICollectionView!
     private var dataSource: UICollectionViewDiffableDataSource<Int, String>!
     private var rowsByID: [String: UserRow] = [:]
     private(set) var order: [String] = []
     private let emptyState = EmptyStateView()
-    private let loadingIndicator = UIActivityIndicatorView(style: .medium)
+    private let skeleton = UserListSkeletonView()
+    private let social = SocialAPI(baseURL: { AppSettings.serverURL })
+    private var followsInFlight = Set<String>()
     private var cursor: String?
     private var exhausted = false
     private var loading = false
@@ -48,7 +53,16 @@ class PagedUserListViewController: UIViewController {
         [weak self] cell, _, id in
         guard let row = self?.rowsByID[id] else { return }
         cell.configure(with: row)
+        cell.onToggleFollow = { [weak self] in self?.toggleFollow(id) }
     }
+
+    private lazy var headerRegistration = UICollectionView.CellRegistration<UserListHeaderCell, UserListHeader> {
+        cell, _, header in cell.configure(with: header)
+    }
+
+    /// A heading row above the people, for a list that is about something (the
+    /// likes on a post). Read once, when the list loads.
+    var listHeader: UserListHeader? { nil }
 
     func fetchPage(cursor: String?) async throws -> Page {
         fatalError("PagedUserListViewController.fetchPage(cursor:) must be overridden")
@@ -84,14 +98,11 @@ class PagedUserListViewController: UIViewController {
         view.addManaged(emptyState)
         emptyState.pinEdges(toSafeAreaOf: view)
 
-        loadingIndicator.hidesWhenStopped = true
-        view.addManaged(loadingIndicator)
-        NSLayoutConstraint.activate([
-            loadingIndicator.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            loadingIndicator.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-        ])
+        skeleton.isHidden = true
+        collectionView.addSubview(skeleton)
 
         configureDataSource()
+        applySnapshot(animated: false)
         redrawObserver = NotificationCenter.default.publisher(for: TwemojiCache.imagesDidLoad)
             .merge(with: NotificationCenter.default.publisher(for: AppSettings.displayDidChange))
             .receive(on: DispatchQueue.main)
@@ -102,10 +113,21 @@ class PagedUserListViewController: UIViewController {
         load(reset: true)
     }
 
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        positionSkeleton()
+    }
+
     private func makeLayout() -> UICollectionViewCompositionalLayout {
-        UICollectionViewCompositionalLayout { _, environment in
+        let hasHeader = listHeader != nil
+        return UICollectionViewCompositionalLayout { _, environment in
             var config = UICollectionLayoutListConfiguration(appearance: .plain)
             config.backgroundColor = .clear
+            config.itemSeparatorHandler = { indexPath, configuration in
+                var configuration = configuration
+                if hasHeader, indexPath.item == 0 { configuration.bottomSeparatorVisibility = .hidden }
+                return configuration
+            }
             let section = NSCollectionLayoutSection.list(using: config, layoutEnvironment: environment)
             section.boundarySupplementaryItems = [PagingFooter.boundaryItem()]
             return section
@@ -114,10 +136,81 @@ class PagedUserListViewController: UIViewController {
 
     private func configureDataSource() {
         let registration = registration
+        let headerRegistration = headerRegistration
+        let header = listHeader
         dataSource = UICollectionViewDiffableDataSource(collectionView: collectionView) { cv, indexPath, id in
-            cv.dequeueConfiguredReusableCell(using: registration, for: indexPath, item: id)
+            if id == Self.headerID, let header {
+                return cv.dequeueConfiguredReusableCell(using: headerRegistration, for: indexPath, item: header)
+            }
+            return cv.dequeueConfiguredReusableCell(using: registration, for: indexPath, item: id)
         }
         footer.install(on: dataSource)
+    }
+
+    /// Shows the placeholder rows where the people will land, under the heading
+    /// row when there is one.
+    private func showSkeleton() {
+        guard skeleton.isHidden else { return }
+        positionSkeleton()
+        skeleton.alpha = 0
+        skeleton.isHidden = false
+        UIView.animate(withDuration: 0.25) { self.skeleton.alpha = 1 }
+    }
+
+    private func hideSkeleton() {
+        guard !skeleton.isHidden else { return }
+        skeleton.layer.removeAllAnimations()
+        skeleton.isHidden = true
+    }
+
+    private func positionSkeleton() {
+        guard isViewLoaded, collectionView != nil else { return }
+        let width = collectionView.bounds.width
+        guard width > 0 else { return }
+        let top = listHeader == nil ? 0 : collectionView.layoutAttributesForItem(at: IndexPath(item: 0, section: 0))?.frame.maxY ?? 0
+        let frame = CGRect(x: 0, y: top, width: width, height: skeleton.fittingHeight(width: width))
+        if skeleton.frame != frame { skeleton.frame = frame }
+    }
+
+    /// Follows or unfollows `id` from its row. Unfollowing asks first.
+    private func toggleFollow(_ id: String) {
+        guard let row = rowsByID[id], let following = row.following, !followsInFlight.contains(id) else { return }
+        guard following else { return setFollowing(true, for: row) }
+        let alert = UIAlertController(title: "Unfollow @\(row.handle)?", message: nil, preferredStyle: .actionSheet)
+        alert.addAction(UIAlertAction(title: "Unfollow", style: .destructive) { [weak self] _ in
+            self?.setFollowing(false, for: row)
+        })
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        present(alert, animated: true)
+    }
+
+    /// Changes the row at once and tells the server; a refusal puts it back.
+    private func setFollowing(_ following: Bool, for row: UserRow) {
+        let id = row.id
+        followsInFlight.insert(id)
+        setRowFollowing(following, id: id)
+        Haptics.selection()
+        Task {
+            defer { followsInFlight.remove(id) }
+            do {
+                let result = following ? try await social.follow(userID: id) : try await social.unfollow(userID: id)
+                setRowFollowing(result.following, id: id)
+            } catch {
+                AppLogger.shared.warn("follow change failed: \(error)", category: logCategory)
+                Haptics.error()
+                setRowFollowing(!following, id: id)
+            }
+        }
+    }
+
+    private func setRowFollowing(_ following: Bool, id: String) {
+        guard var row = rowsByID[id], row.following != following else { return }
+        row.following = following
+        rowsByID[id] = row
+        var snapshot = dataSource.snapshot()
+        guard snapshot.indexOfItem(id) != nil else { return }
+        snapshot.reconfigureItems([id])
+        dataSource.apply(snapshot, animatingDifferences: false)
     }
 
     /// "Loading more…" while a later page is in flight, a retry when it failed,
@@ -155,7 +248,7 @@ class PagedUserListViewController: UIViewController {
         rowsByID.removeAll()
         pagingFailed = false
         refreshFailed = false
-        dataSource.apply(NSDiffableDataSourceSnapshot<Int, String>(), animatingDifferences: false)
+        applySnapshot(animated: false)
         load(reset: true)
     }
 
@@ -177,14 +270,14 @@ class PagedUserListViewController: UIViewController {
         generation += 1
         let current = generation
         let requestCursor = reset ? nil : cursor
-        if order.isEmpty { emptyState.isHidden = true; loadingIndicator.startAnimating() }
+        if order.isEmpty { emptyState.isHidden = true; showSkeleton() }
         updateFooter()
         loadTask = Task {
             defer {
                 if current == generation {
                     loading = false
                     loadTask = nil
-                    loadingIndicator.stopAnimating()
+                    hideSkeleton()
                     collectionView.refreshControl?.endRefreshing()
                     updateFooter()
                 }
@@ -221,11 +314,16 @@ class PagedUserListViewController: UIViewController {
         }
     }
 
-    private func apply() {
+    private func applySnapshot(animated: Bool) {
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
         snapshot.appendSections([0])
+        if listHeader != nil { snapshot.appendItems([Self.headerID], toSection: 0) }
         snapshot.appendItems(order, toSection: 0)
-        dataSource.apply(snapshot, animatingDifferences: true)
+        dataSource.apply(snapshot, animatingDifferences: animated)
+    }
+
+    private func apply() {
+        applySnapshot(animated: true)
         guard order.isEmpty else { emptyState.isHidden = true; return }
         let copy = emptyCopy
         emptyState.isHidden = false
@@ -244,6 +342,14 @@ extension PagedUserListViewController {
 #endif
 
 extension PagedUserListViewController: UICollectionViewDelegate {
+    func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
+        dataSource.itemIdentifier(for: indexPath) != Self.headerID
+    }
+
+    func collectionView(_ collectionView: UICollectionView, shouldHighlightItemAt indexPath: IndexPath) -> Bool {
+        dataSource.itemIdentifier(for: indexPath) != Self.headerID
+    }
+
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         collectionView.deselectItem(at: indexPath, animated: true)
         guard let id = dataSource.itemIdentifier(for: indexPath), let row = rowsByID[id] else { return }
@@ -251,7 +357,7 @@ extension PagedUserListViewController: UICollectionViewDelegate {
     }
 
     func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
-        guard !pagingFailed, indexPath.item >= order.count - 4 else { return }
+        guard !pagingFailed, indexPath.item >= dataSource.snapshot().numberOfItems - 4 else { return }
         load(reset: false)
     }
 }

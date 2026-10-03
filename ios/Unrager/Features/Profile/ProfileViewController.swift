@@ -528,6 +528,8 @@ final class ProfileViewController: FeedViewController {
         collectionView.isHidden = newSection != .posts
         repliesController?.view.isHidden = newSection != .replies
         mediaController?.view.isHidden = newSection != .media
+        settleVideoPlayback()
+        repliesController?.settleVideoPlayback()
         applyHeaderState()
         navigationHost.setContentScrollView(activeScrollView, for: .top)
         updateBanner(for: activeScrollView)

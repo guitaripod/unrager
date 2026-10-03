@@ -131,7 +131,7 @@ struct ProfileFieldsTests {
         let json = """
         {"rest_id":"7","handle":"ada","name":"Ada","verified":false,"followers":1,"following":2,
          "description":"Counting engines","location":"London","website":"https://ada.example",
-         "joined_at":"2018-10-10T20:19:24Z","protected":true,"muting":false,"blocking":true}
+         "joined_at":"2018-10-10T20:19:24Z","protected":true,"muting":false,"blocking":true,"followed_by_me":true}
         """
         let user = try UnragerJSON.decode(User.self, from: Data(json.utf8))
         #expect(user.bio == "Counting engines")
@@ -141,12 +141,13 @@ struct ProfileFieldsTests {
         #expect(user.isProtected)
         #expect(user.isMuting == false)
         #expect(user.isBlocking == true)
+        #expect(user.followedByMe == true)
         #expect(try UnragerJSON.decode(User.self, from: UnragerJSON.encoder.encode(user)) == user)
 
         let bare = try UnragerJSON.decode(User.self, from: Data(userJSON.utf8))
         #expect(bare.bio == nil && bare.joinedAt == nil && bare.website == nil)
         #expect(!bare.isProtected)
-        #expect(bare.isMuting == nil && bare.isBlocking == nil)
+        #expect(bare.isMuting == nil && bare.isBlocking == nil && bare.followedByMe == nil)
         let encoded = try #require(String(data: UnragerJSON.encoder.encode(bare), encoding: .utf8))
         #expect(!encoded.contains("protected"))
     }

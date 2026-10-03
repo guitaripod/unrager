@@ -41,6 +41,13 @@ class SkeletonView: UIView {
         return view
     }
 
+    /// How tall the rows stand at `width`, for placing the view by frame.
+    func fittingHeight(width: CGFloat) -> CGFloat {
+        systemLayoutSizeFitting(CGSize(width: width, height: UIView.layoutFittingCompressedSize.height),
+                                withHorizontalFittingPriority: .required,
+                                verticalFittingPriority: .fittingSizeLevel).height
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         sweep.frame = bounds

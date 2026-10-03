@@ -119,7 +119,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
         }
         if self.isOwnTweet(tweet) {
             cell.enableLikers { [weak self] in
-                self?.navigationController?.pushViewController(LikersViewController(tweetID: tweet.restID), animated: true)
+                self?.navigationController?.pushViewController(LikersViewController(tweetID: tweet.restID, tweet: tweet), animated: true)
             }
         }
     }
@@ -711,44 +711,21 @@ class FeedViewController: UIViewController, TweetActionHandling {
 
     // MARK: - Inline video playback (scroll-aware)
 
-    /// Whether clips may start on their own: not with the system's video
-    /// autoplay switched off, Reduce Motion on, or images switched off in the
-    /// app, where a clip would pull its poster and stream regardless.
-    private static var autoplaysVideo: Bool {
-        UIAccessibility.isVideoAutoplayEnabled && !UIAccessibility.isReduceMotionEnabled && AppSettings.imagesEnabled
+    func pauseAllVideos() {
+        InlineVideoPlayback.pauseAll(in: collectionView)
     }
 
-    private func pauseAllVideos() {
-        for case let cell as TweetCell in collectionView.visibleCells { cell.pauseVideo() }
-    }
-
-    /// Plays only the on-screen video cell with the greatest overlap with the
-    /// viewport and pauses the rest — the "one video at a time, only at rest"
-    /// rule. Called when the feed settles; never while scrolling.
+    /// Plays only the most visible clip and pauses the rest — the "one video at
+    /// a time, only at rest" rule. Called when the feed settles; never while
+    /// scrolling.
     func settleVideoPlayback() {
         PerfProbe.time("settle") { settleVideoPlaybackNow() }
     }
 
     private func settleVideoPlaybackNow() {
         isScrolling = false
-        guard Self.autoplaysVideo, isViewLoaded, view.window != nil else {
-            pauseAllVideos()
-            return
-        }
-        let visible = CGRect(origin: collectionView.contentOffset, size: collectionView.bounds.size)
-        var best: TweetCell?
-        var bestOverlap: CGFloat = 0
-        for case let cell as TweetCell in collectionView.visibleCells where cell.hasVideo {
-            guard let indexPath = collectionView.indexPath(for: cell),
-                  let frame = collectionView.collectionViewLayout.layoutAttributesForItem(at: indexPath)?.frame
-            else { continue }
-            let intersection = frame.intersection(visible)
-            let overlap = intersection.isNull ? 0 : intersection.height
-            if overlap > bestOverlap { bestOverlap = overlap; best = cell }
-        }
-        for case let cell as TweetCell in collectionView.visibleCells where cell.hasVideo {
-            if cell === best { cell.playVideo() } else { cell.pauseVideo() }
-        }
+        InlineVideoPlayback.settle(
+            in: collectionView, isShowing: isViewLoaded && view.window != nil && !view.isHidden && !collectionView.isHidden)
     }
 
     /// Centralizes empty/loading/error chrome: a subtle centered spinner while a

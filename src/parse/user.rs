@@ -8,8 +8,8 @@ pub struct UserListPage {
 }
 
 /// Walk a user-list timeline's instructions (`Favoriters`, `Followers`,
-/// `Following` all share the shape) and collect the users plus the
-/// bottom-cursor for pagination.
+/// `Following` all share the shape) and collect the users, each with the bio
+/// the row shows under the name, plus the bottom-cursor for pagination.
 pub fn parse_user_list_instructions(instructions: &[Value]) -> UserListPage {
     let mut page = UserListPage::default();
     for instr in instructions {
@@ -37,7 +37,7 @@ pub fn parse_user_list_instructions(instructions: &[Value]) -> UserListPage {
             let Some(user_result) = user_result else {
                 continue;
             };
-            if let Some(u) = parse_user_result(user_result) {
+            if let Some(u) = parse_profile_result(user_result) {
                 page.users.push(u);
             }
         }
@@ -246,6 +246,23 @@ mod tests {
         assert_eq!(page.users[0].handle, "alice");
         assert_eq!(page.users[1].rest_id, "2");
         assert_eq!(page.next_cursor.as_deref(), Some("BOTTOM"));
+    }
+
+    #[test]
+    fn user_list_rows_carry_the_bio_with_links_expanded() {
+        let mut entry = user_entry("user-1", "1", "alice");
+        entry["content"]["itemContent"]["user_results"]["result"]["legacy"] = json!({
+            "description": "builds things https://t.co/abc",
+            "entities": { "description": { "urls": [
+                { "url": "https://t.co/abc", "expanded_url": "https://example.com" }
+            ] } }
+        });
+        let instructions = vec![json!({ "type": "TimelineAddEntries", "entries": [entry] })];
+        let page = parse_user_list_instructions(&instructions);
+        assert_eq!(
+            page.users[0].description.as_deref(),
+            Some("builds things https://example.com")
+        );
     }
 
     #[test]

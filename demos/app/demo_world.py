@@ -151,6 +151,8 @@ POSTS = [
      None, (0, 0, 19, 0, 620, 1), {"quote": "f2", "hidden_from_feed": True}),
     ("x3", "junocooks", 33, "This is how I feel choosing between two bread recipes.",
      None, (1, 0, 27, 0, 880, 0), {"quote": "f2", "hidden_from_feed": True}),
+    ("f4q", "kitwren", 40, "This is exactly why I drive four hours for dark skies.",
+     None, (3, 8, 211, 0, 6400, 14), {"quote": "f4", "hidden_from_feed": True}),
 ]
 
 REPOSTS = {"f2": "kitwren", "f14": "noralind"}

@@ -203,17 +203,22 @@ final class TweetCell: UICollectionViewCell {
         repostRow.isHidden = true
     }
 
-    /// Inline-video playback control, driven by the feed so only the most-visible
-    /// clip plays while at rest (and nothing plays mid-scroll).
-    var hasVideo: Bool { mediaContent.hasVideo }
+    /// The clips this row is showing, the post's own and its quoted post's, for
+    /// the list to choose between: the most visible one plays while at rest.
+    var videoSurfaces: [MediaContentView] {
+        let surfaces = quotedWrap.isHidden ? [mediaContent] : [mediaContent, quotedMedia]
+        return surfaces.filter { $0.hasVideo && !$0.isHidden }
+    }
     /// The media surface, used as the source for the App Store–style zoom into
     /// the full-screen viewer.
     var mediaSourceView: UIView { mediaContent }
     /// The exact tapped photo tile, so the zoom grows from that image (not the
     /// whole grid) when a tweet has several pictures.
     func mediaSourceView(at index: Int) -> UIView? { mediaContent.photoSourceView(at: index) }
-    func playVideo() { mediaContent.playVideo() }
-    func pauseVideo() { mediaContent.pauseVideo() }
+    func pauseVideo() {
+        mediaContent.pauseVideo()
+        quotedMedia.pauseVideo()
+    }
     func releaseVideo() {
         mediaContent.releaseVideo()
         quotedMedia.releaseVideo()

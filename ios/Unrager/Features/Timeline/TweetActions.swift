@@ -52,7 +52,7 @@ extension TweetActionHandling {
             self?.toggleBookmark(tweet, cell: self?.tweetCell(for: tweet))
         }
         let likers = UIAction(title: "Liked by", image: DesignSystem.icon("heart.text.square")) { [weak self] _ in
-            self?.navigationController?.pushViewController(LikersViewController(tweetID: tweet.restID), animated: true)
+            self?.navigationController?.pushViewController(LikersViewController(tweetID: tweet.restID, tweet: tweet), animated: true)
         }
         let share = UIAction(title: "Share…", image: DesignSystem.icon("square.and.arrow.up")) { [weak self] _ in
             self?.shareTweet(tweet)

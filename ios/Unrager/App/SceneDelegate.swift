@@ -150,7 +150,11 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             case "quotes" where parts.count > 1:
                 homeNav()?.pushViewController(QuotesViewController(tweetID: parts[1]), animated: false)
             case "likers" where parts.count > 1:
-                homeNav()?.pushViewController(LikersViewController(tweetID: parts[1]), animated: false)
+                let id = parts[1]
+                Task {
+                    let tweet = try? await api.tweet(id: id)
+                    homeNav()?.pushViewController(LikersViewController(tweetID: id, tweet: tweet), animated: false)
+                }
             case "me":
                 Task {
                     if let me = try? await api.whoami() {

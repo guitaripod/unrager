@@ -47,6 +47,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
 
     private let footer = PagingFooter()
     private var cancellables = Set<AnyCancellable>()
+    private var videoSettle: DispatchWorkItem?
 
     /// Reply orderings offered by the sort control — the TUI's `s` cycle
     /// (newest / most liked / most replies / most reposts / most views) plus
@@ -98,7 +99,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
             cell.onDelete = { [weak self] in self?.confirmDelete(tweet) }
         }
         if ownTweet {
-            cell.enableLikers { [weak self] in self?.push(LikersViewController(tweetID: tweet.restID)) }
+            cell.enableLikers { [weak self] in self?.push(LikersViewController(tweetID: tweet.restID, tweet: tweet)) }
         }
         cell.onTapPhoto = { [weak self] index in self?.openMedia(tweet, at: index) }
         cell.onTapCard = { [weak self] url in self?.openLink(url) }
@@ -214,6 +215,17 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
                     ($0 as? TweetCell)?.awaitsLoadedEmoji ?? true
                 }
             }
+            .store(in: &cancellables)
+        NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                InlineVideoPlayback.pauseAll(in: self.collectionView)
+            }
+            .store(in: &cancellables)
+        NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.settleVideoPlayback() }
             .store(in: &cancellables)
         NotificationCenter.default.publisher(for: OwnPost.didDelete)
             .compactMap { $0.userInfo?[OwnPost.idKey] as? String }
@@ -545,6 +557,34 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         if focalPin.isHeld { scrollFocalToTop() }
+        scheduleVideoSettle()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        settleVideoPlayback()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        videoSettle?.cancel()
+        InlineVideoPlayback.pauseAll(in: collectionView)
+    }
+
+    /// Lets the clips on screen start once the layout has stopped moving: the
+    /// rows grow as pictures and ancestors land and the focal post is held in
+    /// place, so a clip is judged only after a quiet moment, and never while
+    /// the reader's finger or momentum is moving the list.
+    private func scheduleVideoSettle() {
+        videoSettle?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.settleVideoPlayback() }
+        videoSettle = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
+
+    private func settleVideoPlayback() {
+        guard isViewLoaded, !collectionView.isDragging, !collectionView.isDecelerating else { return }
+        InlineVideoPlayback.settle(in: collectionView, isShowing: view.window != nil)
     }
 
     /// Brings the focal tweet to the top of the viewport (used when a thread is
@@ -724,7 +764,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
         if let video = tweet.media.enumerated().first(where: { $0.element.isVideo }) {
             let url = video.element.videoURL.flatMap(URL.init)
                 ?? AppEnvironment.shared.api.mediaURL(tweetID: tweet.restID, index: video.offset)
-            for case let cell as TweetCell in collectionView.visibleCells { cell.pauseVideo() }
+            InlineVideoPlayback.pauseAll(in: collectionView)
             presentFullScreenVideo(url)
             return
         }
@@ -859,6 +899,19 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
 extension ThreadViewController: UICollectionViewDelegate {
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         releaseFocalPin(settling: false)
+        InlineVideoPlayback.pauseAll(in: collectionView)
+    }
+
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        if !decelerate { settleVideoPlayback() }
+    }
+
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { settleVideoPlayback() }
+    func scrollViewDidScrollToTop(_ scrollView: UIScrollView) { settleVideoPlayback() }
+    func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) { settleVideoPlayback() }
+
+    func collectionView(_ collectionView: UICollectionView, didEndDisplaying cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
+        (cell as? TweetCell)?.releaseVideo()
     }
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {

@@ -21,6 +21,9 @@ public struct User: Codable, Sendable, Hashable, Identifiable {
     /// doesn't know.
     public let isMuting: Bool?
     public let isBlocking: Bool?
+    /// Whether the viewer follows this account, where a list or profile
+    /// payload says so; nil when the server doesn't know.
+    public let followedByMe: Bool?
 
     public var id: String { restID }
 
@@ -40,13 +43,14 @@ public struct User: Codable, Sendable, Hashable, Identifiable {
         case isProtected = "protected"
         case isMuting = "muting"
         case isBlocking = "blocking"
+        case followedByMe = "followed_by_me"
     }
 
     public init(restID: String, handle: String, name: String, verified: Bool,
                 followers: Int, following: Int, avatarURL: String?, bannerURL: String? = nil,
                 bio: String? = nil, location: String? = nil, website: String? = nil,
                 joinedAt: Date? = nil, isProtected: Bool = false,
-                isMuting: Bool? = nil, isBlocking: Bool? = nil) {
+                isMuting: Bool? = nil, isBlocking: Bool? = nil, followedByMe: Bool? = nil) {
         self.restID = restID
         self.handle = handle
         self.name = name
@@ -62,6 +66,7 @@ public struct User: Codable, Sendable, Hashable, Identifiable {
         self.isProtected = isProtected
         self.isMuting = isMuting
         self.isBlocking = isBlocking
+        self.followedByMe = followedByMe
     }
 
     /// The profile extras decode leniently: a malformed bio or join date
@@ -83,6 +88,7 @@ public struct User: Codable, Sendable, Hashable, Identifiable {
         isProtected = (try? c.decodeIfPresent(Bool.self, forKey: .isProtected)) ?? false
         isMuting = try? c.decodeIfPresent(Bool.self, forKey: .isMuting)
         isBlocking = try? c.decodeIfPresent(Bool.self, forKey: .isBlocking)
+        followedByMe = try? c.decodeIfPresent(Bool.self, forKey: .followedByMe)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -102,5 +108,6 @@ public struct User: Codable, Sendable, Hashable, Identifiable {
         if isProtected { try c.encode(isProtected, forKey: .isProtected) }
         try c.encodeIfPresent(isMuting, forKey: .isMuting)
         try c.encodeIfPresent(isBlocking, forKey: .isBlocking)
+        try c.encodeIfPresent(followedByMe, forKey: .followedByMe)
     }
 }

@@ -34,13 +34,6 @@ final class FeedSkeletonView: SkeletonView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    /// How tall the rows stand at `width`, for placing the view by frame.
-    func fittingHeight(width: CGFloat) -> CGFloat {
-        systemLayoutSizeFitting(CGSize(width: width, height: UIView.layoutFittingCompressedSize.height),
-                                withHorizontalFittingPriority: .required,
-                                verticalFittingPriority: .fittingSizeLevel).height
-    }
-
     private func makeRow(lines: [CGFloat], picture: Bool) -> UIView {
         let row = UIView()
         let avatar = shape(radius: Self.avatarSide / 2)

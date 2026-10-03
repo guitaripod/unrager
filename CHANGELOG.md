@@ -7,7 +7,7 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 ## [Unreleased]
 
 - **Videos now start by themselves everywhere a post is shown in the iPhone app.** A thread opened from a notification, a link or a tap on a post never started its clips, and a quoted post's video never played anywhere; both now play like a clip in the feed: the one with most of itself on screen, once the list is at rest, paused while you scroll or leave the screen. A clip needs 40% of itself in view to start, and switching between a profile's Posts and Replies tabs pauses the one you left.
-- **The Liked by list is rebuilt.** It opens under a heading with the post's like count and what the post said, shows a bio under each name, and puts a Follow / Following button on every person X says whether you follow (unfollowing asks first). People load as grey placeholder rows in their real shapes instead of a spinner, and when X lists fewer people than the post has likes, the list says how many it shows. Followers, Following and people search get the same rows.
+- **The Liked by list is rebuilt.** It opens under a heading with the post's like count and what the post said, shows a bio under each name, and puts a Follow / Following button on every person X says whether you follow (unfollowing asks first). People load as grey placeholder rows in their real shapes instead of a spinner, and when X lists fewer people than the post has likes, the list says how many it shows. Each name carries its country flag, like a post's author, and Followers, Following and people search get the same rows.
 
 ## [0.29.0] — 2026-10-02
 

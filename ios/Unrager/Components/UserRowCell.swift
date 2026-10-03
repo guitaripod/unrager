@@ -52,6 +52,7 @@ final class UserRowCell: UICollectionViewListCell {
 
     private let avatar = UIImageView()
     private let nameLabel = UILabel()
+    private let flagLabel = UILabel()
     private let seal = UIImageView(image: DesignSystem.icon("checkmark.seal.fill", pointSize: 14))
     private let handleLabel = UILabel()
     private let bioLabel = UILabel()
@@ -82,12 +83,17 @@ final class UserRowCell: UICollectionViewListCell {
         nameLabel.font = DesignSystem.Typography.system(16, weight: .semibold)
         nameLabel.textColor = DesignSystem.Color.label
         nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        flagLabel.font = DesignSystem.Typography.system(16, weight: .semibold)
+        flagLabel.setContentHuggingPriority(.required, for: .horizontal)
+        flagLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        flagLabel.isHidden = true
+        flagLabel.isAccessibilityElement = false
         seal.tintColor = DesignSystem.Color.verified
         seal.setContentHuggingPriority(.required, for: .horizontal)
         seal.setContentCompressionResistancePriority(.required, for: .horizontal)
         let spacer = UIView()
         spacer.setContentHuggingPriority(UILayoutPriority(1), for: .horizontal)
-        let nameRow = UIStackView(arrangedSubviews: [nameLabel, seal, spacer])
+        let nameRow = UIStackView(arrangedSubviews: [nameLabel, flagLabel, seal, spacer])
         nameRow.spacing = DesignSystem.Spacing.xs
         nameRow.alignment = .center
 
@@ -144,6 +150,7 @@ final class UserRowCell: UICollectionViewListCell {
         bioLabel.isHidden = row.bio == nil
         showFollow(row.isViewer ? nil : row.following)
         loadAvatar(row)
+        applyFlag(for: row)
 
         isAccessibilityElement = true
         accessibilityTraits = .button
@@ -155,6 +162,26 @@ final class UserRowCell: UICollectionViewListCell {
                 return true
             }]
         }
+    }
+
+    /// Puts the person's country flag after the name: at once when it resolved
+    /// already this session, otherwise when the lookup lands, if the row still
+    /// shows that person.
+    private func applyFlag(for row: UserRow) {
+        let flags = AppEnvironment.shared.flags
+        setFlag(flags.cached(restID: row.id)?.flag)
+        guard flags.cached(restID: row.id) == nil else { return }
+        flags.resolve(restID: row.id, screenName: row.handle) { [weak self] resolved in
+            guard let self, self.boundID == row.id else { return }
+            self.setFlag(resolved.flag)
+        }
+    }
+
+    private func setFlag(_ flag: String?) {
+        let text = flag ?? ""
+        flagLabel.attributedText = text.isEmpty ? nil : TwemojiText.attributed(
+            text, font: flagLabel.font, color: DesignSystem.Color.label)
+        flagLabel.isHidden = text.isEmpty
     }
 
     private func loadAvatar(_ row: UserRow) {
@@ -200,5 +227,6 @@ final class UserRowCell: UICollectionViewListCell {
         avatarTask = nil
         boundID = nil
         onToggleFollow = nil
+        flagLabel.isHidden = true
     }
 }

@@ -189,8 +189,15 @@ struct DecodingTests {
         #expect(notif.actors.first?.handle == "a")
         #expect(notif.actors.first?.avatarURL == "https://pbs.twimg.com/a.jpg")
         #expect(notif.targetTweetLikeCount == 5)
+        #expect(!notif.targetTweetFavorited)
         #expect(notif.targetMedia.first?.kind == .photo)
         #expect(notif.thumbnailURL?.absoluteString == "https://pbs.twimg.com/media/x.jpg?name=small")
+    }
+
+    @Test("A notification says whether its post is already liked")
+    func notificationFavorited() throws {
+        let json = #"{"id":"n1","type":"reply","target_tweet_id":"1","target_tweet_favorited":true,"timestamp":"2026-06-19T12:30:00Z"}"#
+        #expect(try decode(XNotification.self, json).targetTweetFavorited)
     }
 
     @Test("Compact count formatting")

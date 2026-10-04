@@ -20,6 +20,7 @@ pub mod external;
 pub mod filter;
 pub mod focus;
 pub mod media;
+pub mod notif_sync;
 pub mod screenshot;
 pub mod seen;
 pub mod session;

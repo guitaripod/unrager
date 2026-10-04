@@ -135,6 +135,61 @@ struct NotificationsLogicTests {
         #expect(NotificationPresentation.destination(of: try notif("a", type: "Poll", actors: [], at: 1, tweet: nil)) == nil)
     }
 
+    @Test("Only what someone wrote to the user about a post can be liked back")
+    func likeEligibility() throws {
+        #expect(NotificationPresentation.canLike(try notif("r", type: "Reply", actors: ["a"], at: 1)))
+        #expect(NotificationPresentation.canLike(try notif("m", type: "Mention", actors: ["a"], at: 1)))
+        #expect(NotificationPresentation.canLike(try notif("q", type: "Quote", actors: ["a"], at: 1)))
+        #expect(!NotificationPresentation.canLike(try notif("l", type: "Like", actors: ["a"], at: 1)))
+        #expect(!NotificationPresentation.canLike(try notif("p", type: "Retweet", actors: ["a"], at: 1)))
+        #expect(!NotificationPresentation.canLike(try notif("f", type: "Follow", actors: ["a"], at: 1, tweet: nil)))
+        #expect(!NotificationPresentation.canLike(try notif("r", type: "Reply", actors: ["a"], at: 1, tweet: nil)))
+    }
+
+    @Test("A liked-your-post row opens the post's own list of likes, one liker or many")
+    func likedPostList() throws {
+        #expect(NotificationPresentation.likedPostID(of: try notif("l", type: "Like", actors: ["a"], at: 1)) == "9")
+        #expect(NotificationPresentation.likedPostID(of: try notif("l", type: "Like", actors: ["a", "b"], others: 8, at: 1)) == "9")
+        #expect(NotificationPresentation.likedPostID(of: try notif("l", type: "Like", actors: ["a"], at: 1, tweet: nil)) == nil)
+        #expect(NotificationPresentation.likedPostID(of: try notif("p", type: "Retweet", actors: ["a"], at: 1)) == nil)
+    }
+
+    @Test("A heart flips at once, goes out once, and comes back when the server refuses")
+    func likeToggle() async throws {
+        let original = Engagement.send
+        defer { Engagement.send = original }
+        let sent = Box<[Bool]>([])
+        Engagement.send = { _, on, _ in
+            sent.value.append(on)
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        let reply = try notif("r", type: "Reply", actors: ["a"], at: 1)
+        let likes = NotificationLikes()
+        let changes = Box<[String]>([])
+        likes.onChange = { changes.value.append($0) }
+        #expect(likes.isLiked(reply) == false)
+        #expect(likes.isLiked(try notif("l", type: "Like", actors: ["a"], at: 1)) == nil)
+        likes.toggle(reply) { _ in }
+        likes.toggle(reply) { _ in }
+        #expect(likes.isLiked(reply) == true)
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(sent.value == [true])
+
+        Engagement.send = { _, _, _ in throw URLError(.notConnectedToInternet) }
+        let failures = Box<Int>(0)
+        likes.toggle(reply) { _ in failures.value += 1 }
+        #expect(likes.isLiked(reply) == false)
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(likes.isLiked(reply) == true)
+        #expect(failures.value == 1)
+        #expect(changes.value == ["9", "9", "9"])
+    }
+
+    private final class Box<Value> {
+        var value: Value
+        init(_ value: Value) { self.value = value }
+    }
+
     @Test("Banner copy names the people, falls back to X's message, and never says Someone Poll")
     func bannerCopy() throws {
         let like = try notif("l", type: "Like", actors: ["ann", "bo"], others: 3, at: 1)

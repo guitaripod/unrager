@@ -29,6 +29,21 @@ pub struct NotificationPage {
     pub notifications: Vec<RawNotification>,
     pub next_cursor: Option<String>,
     pub top_cursor: Option<String>,
+    /// X's own read marker for the account (`TimelineMarkEntriesUnreadGreaterThanSortIndex`),
+    /// in milliseconds: a notification whose sort index is above it is unread
+    /// on x.com. Only a first page carries it.
+    pub unread_after_ms: Option<i64>,
+}
+
+impl NotificationPage {
+    /// The newest notification time on the page, which a client that has shown
+    /// the whole page has read up to.
+    pub fn newest_ms(&self) -> Option<i64> {
+        self.notifications
+            .iter()
+            .map(|n| n.timestamp.timestamp_millis())
+            .max()
+    }
 }
 
 pub fn parse_notifications_timeline(response: &Value) -> Result<NotificationPage> {
@@ -45,6 +60,13 @@ pub fn parse_notifications_timeline(response: &Value) -> Result<NotificationPage
 
     for instr in instructions {
         let itype = instr.get("type").and_then(Value::as_str).unwrap_or("");
+        if itype == "TimelineMarkEntriesUnreadGreaterThanSortIndex" {
+            page.unread_after_ms = instr
+                .get("sort_index")
+                .and_then(Value::as_str)
+                .and_then(|s| s.parse().ok());
+            continue;
+        }
         if itype != "TimelineAddEntries" {
             continue;
         }
@@ -533,6 +555,24 @@ mod tests {
         let page = parse_notifications_timeline(&response).unwrap();
         assert_eq!(page.top_cursor.as_deref(), Some("TOP_CUR"));
         assert_eq!(page.next_cursor.as_deref(), Some("BOT_CUR"));
+        assert_eq!(page.unread_after_ms, None);
+    }
+
+    #[test]
+    fn reads_xs_unread_marker() {
+        let response = json!({
+            "data": { "viewer_v2": { "user_results": { "result": {
+                "notification_timeline": { "timeline": { "instructions": [
+                    { "type": "TimelineClearEntriesUnreadState" },
+                    {
+                        "type": "TimelineMarkEntriesUnreadGreaterThanSortIndex",
+                        "sort_index": "1791121401034"
+                    }
+                ] } }
+            } } } }
+        });
+        let page = parse_notifications_timeline(&response).unwrap();
+        assert_eq!(page.unread_after_ms, Some(1_791_121_401_034));
     }
 
     #[test]

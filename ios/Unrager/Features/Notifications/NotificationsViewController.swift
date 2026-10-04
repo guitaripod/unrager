@@ -17,6 +17,7 @@ final class NotificationsViewController: UIViewController {
     private let chipBar: NotificationChipBar
     private let newPill = UIButton(configuration: .prominentGlass())
     private let followLoader = FollowStateLoader()
+    private let likes = NotificationLikes()
     private var cursor: String?
     private var exhausted = false
     private var loading = false
@@ -156,7 +157,7 @@ final class NotificationsViewController: UIViewController {
         }
         cell.configure(notification: notification, unread: self.isUnread(notification),
                        glow: self.glowIDs.remove(id) != nil, follow: follow,
-                       actions: self.rowActions(for: notification))
+                       liked: self.likes.isLiked(notification), actions: self.rowActions(for: notification))
     }
 
     private lazy var headerRegistration = UICollectionView.SupplementaryRegistration<NotificationSectionHeaderView>(
@@ -190,7 +191,21 @@ final class NotificationsViewController: UIViewController {
             followBack: { [weak self] in
                 guard let actor = notification.actors.first else { return }
                 self?.followLoader.follow(restID: actor.restID, handle: actor.handle)
-            })
+            },
+            toggleLike: { [weak self] in self?.toggleLike(notification) })
+    }
+
+    private func toggleLike(_ notification: XNotification) {
+        likes.toggle(notification) { [weak self] error in
+            guard let self, self.view.window != nil else { return }
+            self.showToast(error.localizedDescription)
+        }
+    }
+
+    private func likeStateChanged(_ tweetID: String) {
+        let affected = order.filter { items[$0]?.targetTweetID == tweetID }
+        guard !affected.isEmpty else { return }
+        applySnapshot(animated: false, reconfigure: affected)
     }
 
     /// Whether the notification arrived since the user's last visit.
@@ -204,10 +219,21 @@ final class NotificationsViewController: UIViewController {
     }
 
     private func showPeople(of notification: XNotification) {
+        if let tweetID = NotificationPresentation.likedPostID(of: notification) {
+            showLikes(of: notification, tweetID: tweetID)
+            return
+        }
         let verb = NotificationType(raw: notification.type).style.verb
         let list = NotificationActorsViewController(
             title: verb.prefix(1).uppercased() + verb.dropFirst(), actors: notification.actors,
             othersCount: notification.othersCount)
+        navigationController?.pushViewController(list, animated: true)
+    }
+
+    /// Everyone who liked the post, not only the people the row names.
+    private func showLikes(of notification: XNotification, tweetID: String) {
+        let list = LikersViewController(
+            tweetID: tweetID, likeCount: notification.targetTweetLikeCount, snippet: notification.targetTweetSnippet)
         navigationController?.pushViewController(list, animated: true)
     }
 
@@ -233,31 +259,48 @@ final class NotificationsViewController: UIViewController {
         }
     }
 
-    /// A trailing swipe that lists every person behind a grouped row.
+    /// A trailing swipe that lists everyone behind a row: all the likes of a
+    /// liked post, or every person in another grouped row.
     private func trailingSwipe(at indexPath: IndexPath) -> UISwipeActionsConfiguration? {
-        guard let id = dataSource.itemIdentifier(for: indexPath), let notification = items[id],
-              NotificationPresentation.hasPeopleList(notification) else { return nil }
-        let people = UIContextualAction(style: .normal, title: "People") { [weak self] _, _, done in
+        guard let id = dataSource.itemIdentifier(for: indexPath), let notification = items[id] else { return nil }
+        let isLikes = NotificationPresentation.likedPostID(of: notification) != nil
+        guard isLikes || NotificationPresentation.hasPeopleList(notification) else { return nil }
+        let people = UIContextualAction(style: .normal, title: isLikes ? "Likes" : "People") { [weak self] _, _, done in
             self?.showPeople(of: notification)
             done(true)
         }
-        people.image = DesignSystem.icon("person.2.fill", pointSize: 18)
-        people.backgroundColor = DesignSystem.Color.accent
+        people.image = DesignSystem.icon(isLikes ? "heart.fill" : "person.2.fill", pointSize: 18)
+        people.backgroundColor = isLikes ? DesignSystem.Color.like : DesignSystem.Color.accent
         return UISwipeActionsConfiguration(actions: [people])
     }
 
-    /// A leading swipe that reads one unread row.
+    /// A leading swipe that reads one unread row and, on a reply, mention or
+    /// quote, likes the post. A full swipe only ever reads: liking by accident
+    /// is not worth one long swipe.
     private func leadingSwipe(at indexPath: IndexPath) -> UISwipeActionsConfiguration? {
-        guard let id = dataSource.itemIdentifier(for: indexPath), let notification = items[id],
-              isUnread(notification) else { return nil }
-        let read = UIContextualAction(style: .normal, title: "Read") { [weak self] _, _, done in
-            self?.markRead(notification)
-            done(true)
+        guard let id = dataSource.itemIdentifier(for: indexPath), let notification = items[id] else { return nil }
+        var actions: [UIContextualAction] = []
+        if isUnread(notification) {
+            let read = UIContextualAction(style: .normal, title: "Read") { [weak self] _, _, done in
+                self?.markRead(notification)
+                done(true)
+            }
+            read.image = DesignSystem.icon("checkmark.circle.fill", pointSize: 18)
+            read.backgroundColor = DesignSystem.Color.badge
+            actions.append(read)
         }
-        read.image = DesignSystem.icon("checkmark.circle.fill", pointSize: 18)
-        read.backgroundColor = DesignSystem.Color.badge
-        let configuration = UISwipeActionsConfiguration(actions: [read])
-        configuration.performsFirstActionWithFullSwipe = true
+        if let liked = likes.isLiked(notification) {
+            let like = UIContextualAction(style: .normal, title: liked ? "Unlike" : "Like") { [weak self] _, _, done in
+                self?.toggleLike(notification)
+                done(true)
+            }
+            like.image = DesignSystem.icon(liked ? "heart.slash.fill" : "heart.fill", pointSize: 18)
+            like.backgroundColor = DesignSystem.Color.like
+            actions.append(like)
+        }
+        guard !actions.isEmpty else { return nil }
+        let configuration = UISwipeActionsConfiguration(actions: actions)
+        configuration.performsFirstActionWithFullSwipe = isUnread(notification)
         return configuration
     }
 
@@ -328,6 +371,7 @@ final class NotificationsViewController: UIViewController {
         }
 
         followLoader.onChange = { [weak self] restID in self?.followStateChanged(restID) }
+        likes.onChange = { [weak self] tweetID in self?.likeStateChanged(tweetID) }
         observeDisplayChanges()
         if category == .mentions {
             applyCategory()
@@ -674,6 +718,7 @@ final class NotificationsViewController: UIViewController {
             do {
                 let page = try await AppEnvironment.shared.api.notifications(cursor: reset ? nil : cursor)
                 if reset {
+                    await NotificationCenterService.shared.syncSeenMarker()
                     unreadCutoff = NotificationPrefs.lastSeenTimestamp
                     locallyRead.removeAll()
                     glowIDs.removeAll()

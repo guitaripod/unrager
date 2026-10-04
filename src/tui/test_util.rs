@@ -97,6 +97,7 @@ pub fn dummy_app() -> (App, mpsc::UnboundedReceiver<Event>, TempDir) {
         whisper: WhisperState::new(),
         notif_seen,
         notif_unread_badge: 0,
+        notif_sync: crate::tui::notif_sync::NotificationSync::default(),
         client,
         tx,
         pending_open: None,

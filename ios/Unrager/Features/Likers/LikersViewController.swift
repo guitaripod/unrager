@@ -17,6 +17,15 @@ final class LikersViewController: PagedUserListViewController {
         title = "Liked by"
     }
 
+    /// The likes of a post known only by what a notification says about it.
+    init(tweetID: String, likeCount: Int?, snippet: String?) {
+        self.tweetID = tweetID
+        self.likeCount = likeCount
+        self.heading = likeCount.map { Self.heading(likeCount: $0, post: snippet.flatMap(Self.post(from:))) }
+        super.init(nibName: nil, bundle: nil)
+        title = "Liked by"
+    }
+
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
@@ -37,12 +46,21 @@ final class LikersViewController: PagedUserListViewController {
 
     /// "1,284 likes", and the post they are on in a line under it.
     static func heading(for tweet: Tweet) -> UserListHeader {
-        let count = tweet.likeCount
-        let words = tweet.text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        let post = words.isEmpty ? "A post by @\(tweet.author.handle)" : "@\(tweet.author.handle): \(words)"
-        return UserListHeader(
+        let line = post(from: tweet.text).map { "@\(tweet.author.handle): \($0)" }
+            ?? "A post by @\(tweet.author.handle)"
+        return heading(likeCount: tweet.likeCount, post: line)
+    }
+
+    static func heading(likeCount count: Int, post: String?) -> UserListHeader {
+        UserListHeader(
             symbol: "heart.fill", tint: DesignSystem.Color.like,
             title: count == 1 ? "1 like" : "\(count.formatted()) likes", subtitle: post)
+    }
+
+    /// `text` on one line, or nil when there is none.
+    static func post(from text: String) -> String? {
+        let words = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return words.isEmpty ? nil : words
     }
 
     /// Said under the last row when X lists fewer people than the post has

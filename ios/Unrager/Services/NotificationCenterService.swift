@@ -187,6 +187,12 @@ final class NotificationCenterService: NSObject {
         mirrorIconBadge(0)
     }
 
+    /// Adopts the marker the server keeps in step with x.com, so a list that has
+    /// just loaded draws its unread block against what the browser has read.
+    func syncSeenMarker() async {
+        await poller.syncSeenMarker()
+    }
+
     /// Marks a single notification read when the user taps it, advancing the
     /// seen marker to that row and refreshing the badge.
     func markSeen(_ notification: XNotification) {

@@ -40,6 +40,9 @@ public struct XNotification: Decodable, Sendable, Hashable, Identifiable {
     public let targetTweetID: String?
     public let targetTweetSnippet: String?
     public let targetTweetLikeCount: Int?
+    /// Whether the signed-in user has liked the target post. Absent on servers
+    /// that predate the field — treat as not liked.
+    public let targetTweetFavorited: Bool
     public let targetMedia: [Media]
     public let timestamp: Date
 
@@ -49,6 +52,7 @@ public struct XNotification: Decodable, Sendable, Hashable, Identifiable {
         case targetTweetID = "target_tweet_id"
         case targetTweetSnippet = "target_tweet_snippet"
         case targetTweetLikeCount = "target_tweet_like_count"
+        case targetTweetFavorited = "target_tweet_favorited"
         case targetMedia = "target_media"
         case timestamp
     }
@@ -63,6 +67,7 @@ public struct XNotification: Decodable, Sendable, Hashable, Identifiable {
         targetTweetID = try c.decodeIfPresent(String.self, forKey: .targetTweetID)
         targetTweetSnippet = try c.decodeIfPresent(String.self, forKey: .targetTweetSnippet)
         targetTweetLikeCount = try c.decodeIfPresent(Int.self, forKey: .targetTweetLikeCount)
+        targetTweetFavorited = try c.decodeIfPresent(Bool.self, forKey: .targetTweetFavorited) ?? false
         targetMedia = try c.decodeLossy(Media.self, forKey: .targetMedia)
         timestamp = try c.decode(Date.self, forKey: .timestamp)
     }

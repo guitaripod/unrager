@@ -7,6 +7,7 @@ struct NotificationRowActions {
     var openProfile: (String) -> Void
     var openPeople: () -> Void
     var followBack: () -> Void
+    var toggleLike: () -> Void
 }
 
 /// One notification: the faces and action chip, who did what and when, the post
@@ -15,6 +16,7 @@ struct NotificationRowActions {
 /// arrived glows once and fades.
 final class NotificationCell: UICollectionViewListCell {
     private static let followSlotWidth: CGFloat = 120
+    private static let likeSide: CGFloat = 36
 
     private let avatars = NotificationAvatarStackView()
     private let unreadDot = UIView()
@@ -24,10 +26,12 @@ final class NotificationCell: UICollectionViewListCell {
     private let postView = NotificationPostView()
     private let followSlot = UIView()
     private let followButton = UIButton(type: .system)
+    private let likeButton = UIButton(type: .system)
     private let flashView = UIView()
     private let textColumn = UIStackView()
     private var unread = false
-    private var applied: (notification: XNotification, follow: FollowStateLoader.State?, actions: NotificationRowActions)?
+    private var applied: (notification: XNotification, follow: FollowStateLoader.State?, liked: Bool?,
+                          actions: NotificationRowActions)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -89,6 +93,13 @@ final class NotificationCell: UICollectionViewListCell {
             followSlot.widthAnchor.constraint(equalToConstant: Self.followSlotWidth),
         ])
 
+        likeButton.addAction(UIAction { [weak self] _ in self?.applied?.actions.toggleLike() }, for: .touchUpInside)
+        likeButton.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            likeButton.widthAnchor.constraint(equalToConstant: Self.likeSide),
+            likeButton.heightAnchor.constraint(equalToConstant: Self.likeSide),
+        ])
+
         avatars.addAction(UIAction { [weak self] _ in
             Haptics.selection()
             self?.avatarTapped()
@@ -103,7 +114,7 @@ final class NotificationCell: UICollectionViewListCell {
             avatars.heightAnchor.constraint(equalToConstant: NotificationAvatarStackView.side),
         ])
 
-        let row = UIStackView(arrangedSubviews: [avatars, textColumn, followSlot])
+        let row = UIStackView(arrangedSubviews: [avatars, textColumn, followSlot, likeButton])
         row.alignment = .top
         row.spacing = DesignSystem.Spacing.m
         row.translatesAutoresizingMaskIntoConstraints = false
@@ -141,9 +152,9 @@ final class NotificationCell: UICollectionViewListCell {
     }
 
     func configure(notification: XNotification, unread: Bool, glow: Bool, follow: FollowStateLoader.State?,
-                   actions: NotificationRowActions) {
+                   liked: Bool?, actions: NotificationRowActions) {
         self.unread = unread
-        applied = (notification, follow, actions)
+        applied = (notification, follow, liked, actions)
         let type = NotificationType(raw: notification.type)
         let style = type.style
         setNeedsUpdateConfiguration()
@@ -157,6 +168,7 @@ final class NotificationCell: UICollectionViewListCell {
 
         configureBody(for: notification, type: type, style: style)
         configureFollow(for: notification, state: follow)
+        configureLike(liked)
         configureAccessibility(for: notification, unread: unread)
         if glow { playGlow() }
     }
@@ -227,6 +239,23 @@ final class NotificationCell: UICollectionViewListCell {
         followButton.isUserInteractionEnabled = state == .notFollowing
     }
 
+    /// A heart for a post the user can like back; hidden for the rest. The
+    /// heart fills in the like colour once liked.
+    private func configureLike(_ liked: Bool?) {
+        guard let liked else {
+            likeButton.isHidden = true
+            return
+        }
+        likeButton.isHidden = false
+        var config = UIButton.Configuration.plain()
+        config.image = DesignSystem.icon(liked ? "heart.fill" : "heart", pointSize: 17)
+        config.baseForegroundColor = liked ? DesignSystem.Color.like : DesignSystem.Color.tertiaryLabel
+        config.contentInsets = .zero
+        likeButton.configuration = config
+        likeButton.accessibilityLabel = liked ? "Unlike" : "Like"
+        likeButton.accessibilityTraits = liked ? [.button, .selected] : .button
+    }
+
     private func configureAccessibility(for notification: XNotification, unread: Bool) {
         let copy = NotificationPresentation.bannerCopy(for: notification)
         isAccessibilityElement = true
@@ -241,6 +270,12 @@ final class NotificationCell: UICollectionViewListCell {
         if NotificationPresentation.hasPeopleList(notification) {
             custom.append(UIAccessibilityCustomAction(name: "See everyone") { [weak self] _ in
                 self?.applied?.actions.openPeople()
+                return true
+            })
+        }
+        if let liked = applied?.liked {
+            custom.append(UIAccessibilityCustomAction(name: liked ? "Unlike" : "Like") { [weak self] _ in
+                self?.applied?.actions.toggleLike()
                 return true
             })
         }
@@ -276,7 +311,7 @@ final class NotificationCell: UICollectionViewListCell {
         guard let applied else { return }
         avatars.prepareForReuse()
         configure(notification: applied.notification, unread: unread, glow: false, follow: applied.follow,
-                  actions: applied.actions)
+                  liked: applied.liked, actions: applied.actions)
     }
 
     override func prepareForReuse() {

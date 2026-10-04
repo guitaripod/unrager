@@ -7,6 +7,7 @@ use crate::gql::{GqlClient, QueryIdStore};
 use crate::model::{Tweet, User};
 use crate::parse::tweet as parse_tweet;
 use crate::parse::user as parse_user;
+use crate::server::notif_sync::NotificationSync;
 use crate::store::about::{self, AboutFetcher, AboutStore};
 use crate::store::community::{self, CommunityCache};
 use crate::store::feed::FeedStore;
@@ -43,6 +44,9 @@ pub struct AppState {
     /// clone a handle out of it on every request.
     pub classifier_handle: crate::tui::filter::ClassifierHandle,
     pub seen: Mutex<SeenStore>,
+    /// What X's last first page of notifications said, for keeping the shared
+    /// seen marker in step with x.com's own.
+    pub notification_sync: Mutex<NotificationSync>,
     pub session: Mutex<SessionState>,
     /// Read handle on the materialized Home buffer (`feed.db`). The ingest
     /// worker holds a separate write handle behind the single-writer lock.
@@ -135,6 +139,7 @@ impl AppState {
             classifier: Mutex::new(classifier),
             classifier_handle,
             seen: Mutex::new(seen),
+            notification_sync: Mutex::new(NotificationSync::default()),
             session: Mutex::new(state),
             feed: Mutex::new(feed),
             activity: Arc::new(Activity::idle()),

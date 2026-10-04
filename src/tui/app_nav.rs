@@ -137,6 +137,34 @@ impl App {
         if let Some(n) = view.notifications.get(view.selected()) {
             self.notif_seen.mark_seen(&n.id);
         }
+        self.push_notifications_read_to_x();
+    }
+
+    /// Takes in a first page of notifications: what x.com's read marker covers
+    /// counts as read here too.
+    pub(super) fn sync_notifications_with_x(
+        &mut self,
+        page: &crate::parse::notification::NotificationPage,
+    ) {
+        let read_on_x = self.notif_sync.observe(page);
+        self.notif_seen.mark_all(read_on_x);
+        self.push_notifications_read_to_x();
+    }
+
+    /// Tells X the notifications are read once every one on the first page is,
+    /// so the badge clears in the browser and on the phone.
+    pub(super) fn push_notifications_read_to_x(&mut self) {
+        let seen = &self.notif_seen;
+        let Some(cursor) = self.notif_sync.take_cursor_to_push(|id| seen.is_seen(id)) else {
+            return;
+        };
+        let client = self.client.clone();
+        tokio::spawn(async move {
+            match crate::tui::whisper::mark_notifications_seen(&client, &cursor).await {
+                Ok(()) => tracing::info!("notifications marked read on X"),
+                Err(e) => tracing::warn!("could not mark notifications read on X: {e}"),
+            }
+        });
     }
 
     pub(super) fn jump_next_unread(&mut self) {
@@ -187,6 +215,7 @@ impl App {
             let ids: Vec<String> = view.notifications.iter().map(|n| n.id.clone()).collect();
             let n = ids.len();
             self.notif_seen.mark_all(ids);
+            self.push_notifications_read_to_x();
             self.set_status(format!("marked {n} notifications as read"));
             return;
         }

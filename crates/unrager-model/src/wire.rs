@@ -247,6 +247,10 @@ pub struct Notification {
     pub target_tweet_snippet: Option<String>,
     #[serde(default)]
     pub target_tweet_like_count: Option<u64>,
+    /// Whether the signed-in user has liked the target tweet, so a client
+    /// offering to like a reply, mention or quote starts from the right state.
+    #[serde(default)]
+    pub target_tweet_favorited: bool,
     /// Media on the target tweet (when the notification is about a post with
     /// attachments), so clients can show a thumbnail. Empty otherwise.
     #[serde(default)]
@@ -475,6 +479,17 @@ mod tests {
         let notif: Notification = serde_json::from_str(json).unwrap();
         assert_eq!(notif.others_count, None);
         assert_eq!(notif.message, None);
+        assert!(!notif.target_tweet_favorited);
+    }
+
+    #[test]
+    fn notification_carries_whether_its_post_is_liked() {
+        let json = r#"
+        {"id":"n1","type":"Reply","target_tweet_id":"1","target_tweet_favorited":true,
+         "timestamp":"2026-06-19T12:30:00Z"}
+        "#;
+        let notif: Notification = serde_json::from_str(json).unwrap();
+        assert!(notif.target_tweet_favorited);
     }
 
     #[test]

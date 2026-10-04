@@ -1,4 +1,5 @@
 use crate::server::error::ApiError;
+use crate::server::notif_sync;
 use crate::server::state::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
@@ -51,6 +52,7 @@ pub async fn check(
 pub async fn notifications_seen_get(
     State(state): State<Arc<AppState>>,
 ) -> std::result::Result<Json<unrager_model::NotificationsSeenMarker>, ApiError> {
+    notif_sync::refresh_if_stale(&state, notif_sync::READ_FRESH_FOR).await;
     let store = state.seen.lock().await;
     Ok(Json(unrager_model::NotificationsSeenMarker {
         marker: store.notifications_marker(),
@@ -67,9 +69,9 @@ pub async fn notifications_seen_put(
         .map(str::trim)
         .filter(|m| !m.is_empty())
         .ok_or_else(|| ApiError::bad_request("marker required"))?;
-    let mut store = state.seen.lock().await;
-    store.set_notifications_marker(marker);
+    state.seen.lock().await.set_notifications_marker(marker);
+    notif_sync::push_seen(&state, marker).await;
     Ok(Json(unrager_model::NotificationsSeenMarker {
-        marker: store.notifications_marker(),
+        marker: state.seen.lock().await.notifications_marker(),
     }))
 }

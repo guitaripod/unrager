@@ -203,6 +203,7 @@ pub struct App {
     pub whisper: WhisperState,
     pub notif_seen: SeenStore,
     pub notif_unread_badge: usize,
+    pub(super) notif_sync: crate::tui::notif_sync::NotificationSync,
     pub(super) client: Arc<GqlClient>,
     pub(super) tx: EventTx,
     pub(super) pending_open: Option<crate::tui::event::RequestId>,
@@ -494,6 +495,7 @@ impl App {
             whisper: whisper_state,
             notif_seen,
             notif_unread_badge: 0,
+            notif_sync: crate::tui::notif_sync::NotificationSync::default(),
             client,
             tx,
             pending_open: None,
@@ -851,11 +853,8 @@ impl App {
                 self.handle_likers_page_loaded(tweet_id, result, append);
             }
             Event::WhisperPollTick => self.handle_whisper_poll_tick(),
-            Event::NotificationsLoaded {
-                notifications,
-                top_cursor,
-            } => {
-                self.handle_notifications_loaded(notifications, top_cursor);
+            Event::NotificationsLoaded { page } => {
+                self.handle_notifications_loaded(page);
             }
             Event::NotificationsFailed { err } => {
                 self.whisper.poll_inflight = false;

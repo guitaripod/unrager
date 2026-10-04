@@ -471,6 +471,23 @@ pub async fn fetch_notifications_raw(
         .await
 }
 
+/// Tells X the account has read its notifications up to `top_cursor` (the
+/// `Top` cursor of a page the reader has seen), the call x.com makes when its
+/// Notifications tab opens. X keeps one marker per account, so this clears the
+/// unread badge in the browser and every other client at once.
+pub async fn mark_notifications_seen(client: &GqlClient, top_cursor: &str) -> Result<()> {
+    if crate::tui::demo::is_demo_mode() {
+        return Ok(());
+    }
+    client
+        .post_form_1_1(
+            "/i/api/2/notifications/all/last_seen_cursor.json",
+            &[("cursor", top_cursor)],
+        )
+        .await
+        .map(|_| ())
+}
+
 pub fn start_poll_loop(tx: EventTx) {
     tokio::spawn(async move {
         tokio::time::sleep(INITIAL_DELAY).await;

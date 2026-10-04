@@ -6,6 +6,10 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **What you've read in notifications now matches x.com, in both directions.** Opening Notifications in the browser clears the unread badge and dots on the iPhone and in the terminal, and reading your notifications in either one clears the badge on x.com. unrager follows X's own read marker for the account, which the notifications it fetches already carry, and tells X once everything on the first page has been read (X can only be told "read up to the top", so reading part of a page stays local until the rest is read). The iPhone app also adopts the marker the moment its list loads, so the New block no longer lingers for a poll after the browser has read it.
+- **Replies, mentions and quotes in the iPhone app's Notifications can be liked.** A heart at the row's edge likes the post (and takes it back), and swiping a row right offers Like or Unlike next to Read. Likes and reposts of your own posts, and new followers, have no heart, since there is nothing to like back.
+- **Swiping a "liked your post" row shows every like, not just the ones the row names.** X lists a few people and folds the rest into "and 47 others"; the Likes swipe, and tapping the faces, now open the post's own Liked by list, with its like count and what the post said, so everyone is reachable. It also works on a row with a single like.
+
 ## [0.30.0] — 2026-10-03
 
 - **Videos now start by themselves everywhere a post is shown in the iPhone app.** A thread opened from a notification, a link or a tap on a post never started its clips, and a quoted post's video never played anywhere; both now play like a clip in the feed: the one with most of itself on screen, once the list is at rest, paused while you scroll or leave the screen. A clip needs 40% of itself in view to start, and switching between a profile's Posts and Replies tabs pauses the one you left.

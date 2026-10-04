@@ -253,6 +253,13 @@ public final class NotificationPoller {
         AppLogger.shared.info("notification baseline established (fresh install)", category: .api)
     }
 
+    /// Adopts the server's seen marker now, ahead of the next poll — for a list
+    /// that has just loaded a page and wants to draw its unread block against
+    /// what the browser has read.
+    public func syncSeenMarker() async {
+        await adoptServerSeenMarker()
+    }
+
     /// Reads the server-side seen marker and advances the local one if the
     /// server's is newer (monotonic — a lagging server can't re-light cleared
     /// badges). A 404 marks the endpoint unsupported for the session.

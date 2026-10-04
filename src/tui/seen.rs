@@ -124,7 +124,7 @@ impl SeenStore {
 /// A marker's instant in milliseconds. Clients write either `<timestamp_ms>-<id>`
 /// or an ISO 8601 timestamp (the iPhone app); an ISO string would otherwise be
 /// split at its first dash and compared by year alone.
-fn marker_millis(marker: &str) -> i64 {
+pub(crate) fn marker_millis(marker: &str) -> i64 {
     if let Ok(instant) = chrono::DateTime::parse_from_rfc3339(marker) {
         return instant.timestamp_millis();
     }

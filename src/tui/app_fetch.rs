@@ -469,6 +469,9 @@ impl App {
         result: Result<crate::parse::notification::NotificationPage>,
         append: bool,
     ) {
+        if !append && let Ok(page) = &result {
+            self.sync_notifications_with_x(page);
+        }
         let Some(FocusEntry::Notifications(view)) = self.focus_stack.last_mut() else {
             tracing::debug!("notification page arrived but pane no longer active, discarding");
             return;
@@ -706,6 +709,7 @@ impl App {
         };
         let actor_idx = view.actor_cursor.unwrap_or(0);
         self.notif_seen.mark_seen(&notif.id);
+        self.push_notifications_read_to_x();
 
         match notif.notification_type.as_str() {
             "Like" | "Reply" | "Quote" | "Mention" | "Retweet" => {
@@ -976,10 +980,7 @@ impl App {
             tokio::spawn(async move {
                 match whisper::fetch_notifications(&client, None, 40).await {
                     Ok(page) => {
-                        let _ = tx.send(Event::NotificationsLoaded {
-                            notifications: page.notifications,
-                            top_cursor: page.top_cursor,
-                        });
+                        let _ = tx.send(Event::NotificationsLoaded { page });
                     }
                     Err(e) => {
                         let _ = tx.send(Event::NotificationsFailed { err: e.to_string() });
@@ -991,10 +992,11 @@ impl App {
 
     pub(super) fn handle_notifications_loaded(
         &mut self,
-        raw_notifs: Vec<crate::parse::notification::RawNotification>,
-        _top_cursor: Option<String>,
+        page: crate::parse::notification::NotificationPage,
     ) {
         self.whisper.poll_inflight = false;
+        self.sync_notifications_with_x(&page);
+        let raw_notifs = page.notifications;
 
         self.notif_unread_badge = raw_notifs
             .iter()

@@ -190,6 +190,20 @@ enum NotificationPresentation {
         peopleCount(notification) > 1
     }
 
+    /// The post whose full list of likes a "liked your post" row opens. The
+    /// row names only some of the people (X folds the rest into "and N
+    /// others"), the post's own list has them all.
+    static func likedPostID(of notification: XNotification) -> String? {
+        NotificationType(raw: notification.type) == .like ? notification.targetTweetID : nil
+    }
+
+    /// Whether a row is something a person wrote to the user, about a post the
+    /// user can like back: a reply, a mention or a quote. Likes and reposts are
+    /// about the user's own post, and a follow has none.
+    static func canLike(_ notification: XNotification) -> Bool {
+        NotificationType(raw: notification.type).isConversation && notification.targetTweetID != nil
+    }
+
     /// The names a title leads with (at most two) and how many more people the
     /// row stands for; nil when the notification carries no actors.
     static func who(for notification: XNotification) -> (names: [String], remaining: Int)? {

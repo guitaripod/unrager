@@ -2,6 +2,7 @@ use crate::gql::endpoints;
 use crate::gql::query_ids::Operation;
 use crate::parse::timeline;
 use crate::server::error::ApiError;
+use crate::server::notif_sync;
 use crate::server::state::AppState;
 use crate::store::feed::FeedVariant;
 use crate::tui::whisper;
@@ -373,6 +374,9 @@ pub async fn notifications(
 ) -> std::result::Result<Json<unrager_model::NotificationsPage>, ApiError> {
     let count = page_count(q.count, 40);
     let page = whisper::fetch_notifications(&state.gql, q.cursor.as_deref(), count).await?;
+    if q.cursor.is_none() {
+        notif_sync::observe(&state, &page).await;
+    }
     let notifications: Vec<unrager_model::Notification> = page
         .notifications
         .into_iter()
@@ -393,6 +397,7 @@ pub async fn notifications(
             target_tweet_id: n.target_tweet_id,
             target_tweet_snippet: n.target_tweet_snippet,
             target_tweet_like_count: n.target_tweet_like_count,
+            target_tweet_favorited: n.target_tweet_favorited,
             target_media: n.target_media,
             others_count: n.others_count,
             message: n.message,

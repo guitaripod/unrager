@@ -103,9 +103,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
         }
         cell.onTapPhoto = { [weak self] index in self?.openMedia(tweet, at: index) }
         cell.onTapCard = { [weak self] url in self?.openLink(url) }
-        cell.onTapQuoted = { [weak self] in
-            if let q = tweet.quotedTweet { self?.push(ThreadViewController(tweet: q)) }
-        }
+        cell.onTapQuoted = { [weak self] quoted in self?.push(ThreadViewController(tweet: quoted)) }
         cell.onTapMention = { [weak self] handle in self?.push(ProfileViewController(handle: handle)) }
         cell.onTapHashtag = { [weak self] query in
             self?.push(SearchResultsViewController(query: query, product: .top))

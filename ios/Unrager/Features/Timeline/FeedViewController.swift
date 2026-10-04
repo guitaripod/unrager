@@ -97,9 +97,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
         cell.onTapPhoto = { [weak self] index in self?.openMedia(tweet, at: index) }
         cell.onTapCard = { [weak self] url in self?.openLink(url) }
         cell.onReply = { [weak self] in self?.presentReply(tweet) }
-        cell.onTapQuoted = { [weak self] in
-            if let quoted = tweet.quotedTweet { self?.handleSelect(quoted) }
-        }
+        cell.onTapQuoted = { [weak self] quoted in self?.handleSelect(quoted) }
         cell.onLike = { [weak self, weak cell] in self?.toggleLike(tweet, cell: cell) }
         cell.onToggleRetweet = { [weak self, weak cell] in self?.toggleRetweet(tweet, cell: cell) }
         cell.onQuote = { [weak self] in self?.presentQuote(tweet) }

@@ -223,6 +223,8 @@ struct DecodingTests {
              .linkCard(title: "T", description: "D", domain: "e.com", targetURL: "https://e.com")),
             (#"{"kind":{"broadcast":{"broadcast_id":"b1","title":"Live","broadcaster_name":"X","is_live":true}},"url":"b.jpg"}"#,
              .broadcast(broadcastID: "b1", title: "Live", broadcasterName: "X", isLive: true)),
+            (#"{"kind":{"space":{"space_id":"1OxwbnaOppPJB"}},"url":""}"#,
+             .space(spaceID: "1OxwbnaOppPJB")),
             (#"{"kind":{"poll":{"options":[{"label":"A","count":10}],"ends_at":"2026-06-20T00:00:00Z","counts_final":false}},"url":""}"#,
              .poll(options: [PollOption(label: "A", count: 10)],
                    endsAt: try? Date.ISO8601FormatStyle().parse("2026-06-20T00:00:00Z"),

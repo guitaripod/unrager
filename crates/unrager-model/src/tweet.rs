@@ -74,6 +74,12 @@ pub struct Tweet {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub in_reply_to_handle: Option<String>,
     pub quoted_tweet: Option<Box<Tweet>>,
+    /// The post this one quotes when X sent only a reference to it, which is
+    /// how a quote inside a quote arrives: `quoted_tweet` stays empty until
+    /// the server fetches the post and fills it. Omitted when unset or once
+    /// `quoted_tweet` is there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quoted_tweet_id: Option<String>,
     pub media: Vec<Media>,
     pub url: String,
     #[serde(default)]
@@ -144,6 +150,11 @@ pub enum MediaKind {
         title: String,
         broadcaster_name: String,
         is_live: bool,
+    },
+    /// An X Space the post links to (`x.com/i/spaces/<id>`). X sends no card
+    /// for it, so the id is all there is.
+    Space {
+        space_id: String,
     },
     Poll {
         options: Vec<PollOption>,

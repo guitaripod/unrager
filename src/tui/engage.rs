@@ -120,6 +120,7 @@ mod tests {
             in_reply_to_tweet_id: None,
             in_reply_to_handle: None,
             quoted_tweet: None,
+            quoted_tweet_id: None,
             media: vec![],
             url: "https://x.com/alice/status/1".into(),
             urls: vec![],

@@ -54,14 +54,19 @@ fn render_into(out: &mut String, t: &Tweet, indent_level: usize) {
                 MediaKind::Article { .. } => "article",
                 MediaKind::LinkCard { .. } => "link",
                 MediaKind::Broadcast { .. } => "broadcast",
+                MediaKind::Space { .. } => "space",
                 MediaKind::Poll { .. } => "poll",
+            };
+            let url = match &m.kind {
+                MediaKind::Space { space_id } => format!("https://x.com/i/spaces/{space_id}"),
+                _ => m.url.clone(),
             };
             let alt = m
                 .alt_text
                 .as_deref()
                 .map(|a| format!(" — {a}"))
                 .unwrap_or_default();
-            let _ = writeln!(out, "{indent}[{kind}] {url}{alt}", url = m.url);
+            let _ = writeln!(out, "{indent}[{kind}] {url}{alt}");
         }
         let _ = writeln!(out);
     }

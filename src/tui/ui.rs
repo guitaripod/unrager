@@ -2916,6 +2916,9 @@ pub(super) fn tweet_lines(
                         &indent,
                     ));
                 }
+                crate::model::MediaKind::Space { space_id } => {
+                    lines.push(render_space_line(space_id, &indent));
+                }
                 crate::model::MediaKind::Poll {
                     options,
                     ends_at,
@@ -3042,6 +3045,7 @@ fn media_kind_badge(kind: &crate::model::MediaKind, t: &Theme) -> (&'static str,
             };
             (GLYPH_BROADCAST, color)
         }
+        crate::model::MediaKind::Space { .. } => (GLYPH_BROADCAST, t.media_link),
         crate::model::MediaKind::Poll { .. } => (GLYPH_POLL, t.media_poll),
     }
 }
@@ -3198,6 +3202,25 @@ fn render_youtube_card(
     ]));
 
     lines
+}
+
+/// The one line a linked X Space gets: the terminal has nothing but the link
+/// to show, and `M` opens it.
+fn render_space_line(space_id: &str, indent: &Span<'static>) -> Line<'static> {
+    let t = th();
+    Line::from(vec![
+        indent.clone(),
+        Span::styled(
+            format!("{GLYPH_BROADCAST} Space "),
+            Style::default()
+                .fg(t.card_title)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("x.com/i/spaces/{space_id}"),
+            Style::default().fg(t.card_meta),
+        ),
+    ])
 }
 
 /// Broadcast embed card. Visually mirrors the YouTube card (top border with

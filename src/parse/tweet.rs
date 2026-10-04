@@ -107,6 +107,7 @@ fn parse_tweet_node(node: &Value) -> Result<Tweet> {
         .pointer("/quoted_status_result/result")
         .and_then(|q| parse_tweet_result(q).ok())
         .map(Box::new);
+    let quoted_tweet_id = quoted_reference(node, legacy);
 
     let mut media = parse_media(legacy);
     let (youtube_media, youtube_tcos) = parse_youtube_embeds(legacy);
@@ -115,11 +116,14 @@ fn parse_tweet_node(node: &Value) -> Result<Tweet> {
     media.extend(article_media);
     let (broadcast_media, broadcast_tcos) = parse_broadcast_embed(node, legacy);
     media.extend(broadcast_media);
+    let (space_media, space_tcos) = parse_space_embeds(legacy);
+    media.extend(space_media);
     let (card_media, card_tcos) = parse_card_embed(node, legacy);
     media.extend(card_media);
     let text = strip_tco_urls(&text, &youtube_tcos);
     let text = strip_tco_urls(&text, &article_tcos);
     let text = strip_tco_urls(&text, &broadcast_tcos);
+    let text = strip_tco_urls(&text, &space_tcos);
     let text = strip_tco_urls(&text, &card_tcos);
 
     let urls = collect_open_urls(
@@ -127,6 +131,7 @@ fn parse_tweet_node(node: &Value) -> Result<Tweet> {
         &youtube_tcos,
         &article_tcos,
         &broadcast_tcos,
+        &space_tcos,
         &card_tcos,
     );
 
@@ -150,11 +155,27 @@ fn parse_tweet_node(node: &Value) -> Result<Tweet> {
         in_reply_to_tweet_id,
         in_reply_to_handle,
         quoted_tweet,
+        quoted_tweet_id,
         media,
         url,
         urls,
         retweeted_by: None,
     })
+}
+
+/// The id of the post `node` quotes when X named it without sending it: a
+/// quote that is itself quoted carries only `quotedRefResult` and
+/// `legacy.quoted_status_id_str`. A quote whose post X did send, even as a
+/// tombstone, has `quoted_status_result` and needs nothing fetched.
+fn quoted_reference(node: &Value, legacy: &Value) -> Option<String> {
+    if node.get("quoted_status_result").is_some() {
+        return None;
+    }
+    legacy
+        .get("quoted_status_id_str")
+        .and_then(Value::as_str)
+        .filter(|id| is_numeric_id(id))
+        .map(str::to_string)
 }
 
 /// A repost arrives as the reposter's own tweet (`RT @alice: …`, cut short,
@@ -179,6 +200,7 @@ fn collect_open_urls(
     youtube_tcos: &[String],
     article_tcos: &[String],
     broadcast_tcos: &[String],
+    space_tcos: &[String],
     card_tcos: &[String],
 ) -> Vec<TweetUrl> {
     let Some(arr) = legacy.pointer("/entities/urls").and_then(Value::as_array) else {
@@ -194,6 +216,7 @@ fn collect_open_urls(
         if youtube_tcos.iter().any(|d| d == display)
             || article_tcos.iter().any(|d| d == display)
             || broadcast_tcos.iter().any(|d| d == display)
+            || space_tcos.iter().any(|d| d == display)
             || card_tcos.iter().any(|d| d == display)
         {
             continue;
@@ -432,6 +455,66 @@ fn parse_article_embed(node: &Value, legacy: &Value) -> (Vec<Media>, Vec<String>
     }
 
     (embeds, display_urls)
+}
+
+/// Scans `entities.urls` for X Space links (`x.com/i/spaces/<id>`) and
+/// returns one `MediaKind::Space` per link plus the `display_url` tokens to
+/// strip from the body. X attaches no card to these posts, so the link is the
+/// only thing to build from.
+fn parse_space_embeds(legacy: &Value) -> (Vec<Media>, Vec<String>) {
+    let mut embeds = Vec::new();
+    let mut display_urls = Vec::new();
+    let Some(arr) = legacy.pointer("/entities/urls").and_then(Value::as_array) else {
+        return (embeds, display_urls);
+    };
+    for u in arr {
+        let expanded = u.get("expanded_url").and_then(Value::as_str).unwrap_or("");
+        let Some(space_id) = extract_space_id(expanded) else {
+            continue;
+        };
+        if embeds.iter().any(
+            |m: &Media| matches!(&m.kind, MediaKind::Space { space_id: seen } if *seen == space_id),
+        ) {
+            continue;
+        }
+        embeds.push(Media {
+            kind: MediaKind::Space { space_id },
+            url: String::new(),
+            video_url: None,
+            alt_text: None,
+            width: None,
+            height: None,
+        });
+        if let Some(display) = u.get("display_url").and_then(Value::as_str) {
+            display_urls.push(display.to_string());
+        }
+    }
+    (embeds, display_urls)
+}
+
+/// The Space id in an `x.com/i/spaces/<id>` link (also `twitter.com`, `www.`,
+/// `m.`, a query string or a trailing `/peek`), or `None` for any other url.
+pub fn extract_space_id(url: &str) -> Option<String> {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    let rest = rest
+        .strip_prefix("www.")
+        .or_else(|| rest.strip_prefix("m."))
+        .unwrap_or(rest);
+    let (host, path_query) = rest.split_once('/')?;
+    if host != "x.com" && host != "twitter.com" {
+        return None;
+    }
+    let path = path_query.split(['?', '#']).next().unwrap_or("");
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    match segments.as_slice() {
+        ["i", "spaces", id, ..] if id.chars().all(|c| c.is_ascii_alphanumeric()) => {
+            Some((*id).to_string())
+        }
+        _ => None,
+    }
 }
 
 /// Detects an X (formerly Periscope) broadcast card. The card's `name` ends
@@ -1120,6 +1203,76 @@ mod tests {
         let qt = tweet.quoted_tweet.unwrap();
         assert_eq!(qt.rest_id, "444");
         assert_eq!(qt.text, "the original");
+    }
+
+    #[test]
+    fn a_quote_inside_a_quote_is_named_but_not_sent() {
+        let mut v = minimal_tweet_json("333", "look at this");
+        let mut quoted = minimal_tweet_json("444", "the middle one");
+        quoted["legacy"]["is_quote_status"] = json!(true);
+        quoted["legacy"]["quoted_status_id_str"] = json!("555");
+        quoted["quotedRefResult"] =
+            json!({ "result": { "__typename": "Tweet", "rest_id": "555" } });
+        v["quoted_status_result"] = json!({ "result": quoted });
+        v["legacy"]["quoted_status_id_str"] = json!("444");
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert!(tweet.quoted_tweet_id.is_none());
+        let middle = tweet.quoted_tweet.unwrap();
+        assert!(middle.quoted_tweet.is_none());
+        assert_eq!(middle.quoted_tweet_id.as_deref(), Some("555"));
+    }
+
+    #[test]
+    fn a_quote_whose_post_was_sent_needs_nothing_fetched() {
+        let mut v = minimal_tweet_json("333", "look at this");
+        v["quoted_status_result"] = json!({
+            "result": { "__typename": "TweetTombstone", "tombstone": { "text": { "text": "gone" } } }
+        });
+        v["legacy"]["quoted_status_id_str"] = json!("444");
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert!(tweet.quoted_tweet.is_none());
+        assert!(tweet.quoted_tweet_id.is_none());
+    }
+
+    #[test]
+    fn a_space_link_becomes_a_space_and_leaves_the_text() {
+        let mut v = minimal_tweet_json("700", "x.com/i/spaces/1OxwbnaOppPJB");
+        v["legacy"]["full_text"] = json!("https://t.co/abc123");
+        v["legacy"]["entities"] = json!({
+            "urls": [{
+                "url": "https://t.co/abc123",
+                "expanded_url": "https://x.com/i/spaces/1OxwbnaOppPJB",
+                "display_url": "x.com/i/spaces/1Oxwb…"
+            }]
+        });
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(tweet.text, "");
+        assert!(tweet.urls.is_empty());
+        assert_eq!(tweet.media.len(), 1);
+        assert!(matches!(
+            &tweet.media[0].kind,
+            MediaKind::Space { space_id } if space_id == "1OxwbnaOppPJB"
+        ));
+    }
+
+    #[test]
+    fn space_ids_come_from_x_and_twitter_links_only() {
+        let id = |url| extract_space_id(url);
+        assert_eq!(
+            id("https://x.com/i/spaces/1OxwbnaOppPJB").as_deref(),
+            Some("1OxwbnaOppPJB")
+        );
+        assert_eq!(
+            id("https://twitter.com/i/spaces/1OxwbnaOppPJB?s=20").as_deref(),
+            Some("1OxwbnaOppPJB")
+        );
+        assert_eq!(
+            id("http://www.x.com/i/spaces/abc/peek").as_deref(),
+            Some("abc")
+        );
+        assert_eq!(id("https://example.com/i/spaces/abc"), None);
+        assert_eq!(id("https://x.com/someone/status/123"), None);
+        assert_eq!(id("https://x.com/i/spaces/"), None);
     }
 
     #[test]

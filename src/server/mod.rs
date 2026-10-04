@@ -1,6 +1,7 @@
 pub mod error;
 pub mod llm;
 pub mod notif_sync;
+pub mod quotes;
 pub mod routes;
 pub mod sse;
 pub mod state;

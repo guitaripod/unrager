@@ -64,7 +64,8 @@ final class TweetCell: UICollectionViewCell {
     /// `enableLikers(_:)` — only where the viewer can actually see the likers
     /// (their own tweets), so a long-hold elsewhere leaves the tap-to-like intact.
     var onShowLikers: (() -> Void)?
-    var onTapQuoted: (() -> Void)?
+    /// Fired with the post of whichever quoted card was tapped.
+    var onTapQuoted: ((Tweet) -> Void)?
     /// Routes a tapped `@mention` to a profile, or `#hashtag` to search.
     var onTapMention: ((String) -> Void)?
     var onTapHashtag: ((String) -> Void)?
@@ -97,12 +98,8 @@ final class TweetCell: UICollectionViewCell {
     private let handleTimeLabel = UILabel()
     private let bodyView = LinkLabel()
     private let mediaContent = MediaContentView(compact: false)
-    private let quotedContainer = UIView()
     private let quotedWrap = UIView()
-    private let quotedAvatar = AsyncImageView(frame: .zero)
-    private let quotedAuthorLabel = UILabel()
-    private let quotedBodyLabel = UILabel()
-    private let quotedMedia = MediaContentView(compact: true)
+    private let quotedPost = QuotedPostView()
     private let actionBar = UIStackView()
     private let separator = HairlineView()
     private let threadRail = ThreadRailView()
@@ -171,9 +168,8 @@ final class TweetCell: UICollectionViewCell {
         tweetID = nil
         boundTweet = nil
         avatar.cancel()
-        quotedAvatar.cancel()
         mediaContent.prepareForReuse()
-        quotedMedia.prepareForReuse()
+        quotedPost.prepareForReuse()
         contentView.alpha = 1
         setIndent(0)
         onTapAuthor = nil
@@ -203,10 +199,11 @@ final class TweetCell: UICollectionViewCell {
         repostRow.isHidden = true
     }
 
-    /// The clips this row is showing, the post's own and its quoted post's, for
-    /// the list to choose between: the most visible one plays while at rest.
+    /// The clips this row is showing, the post's own and those of the posts it
+    /// quotes, for the list to choose between: the most visible one plays while
+    /// at rest.
     var videoSurfaces: [MediaContentView] {
-        let surfaces = quotedWrap.isHidden ? [mediaContent] : [mediaContent, quotedMedia]
+        let surfaces = quotedWrap.isHidden ? [mediaContent] : [mediaContent] + quotedPost.videoSurfaces
         return surfaces.filter { $0.hasVideo && !$0.isHidden }
     }
     /// The media surface, used as the source for the App Store–style zoom into
@@ -217,11 +214,11 @@ final class TweetCell: UICollectionViewCell {
     func mediaSourceView(at index: Int) -> UIView? { mediaContent.photoSourceView(at: index) }
     func pauseVideo() {
         mediaContent.pauseVideo()
-        quotedMedia.pauseVideo()
+        quotedPost.pauseVideo()
     }
     func releaseVideo() {
         mediaContent.releaseVideo()
-        quotedMedia.releaseVideo()
+        quotedPost.releaseVideo()
     }
 
     /// A reply's leading `@mentions` are taken out of its text and summed up in
@@ -282,13 +279,12 @@ final class TweetCell: UICollectionViewCell {
 
         PerfProbe.time("cfg.quote") {
             configureQuoted(tweet.quotedTweet, imagesEnabled: imagesEnabled,
-                            contentWidth: contentWidth - 2 * Self.sideMargin - 22)
+                            contentWidth: contentWidth - 2 * Self.sideMargin - QuotedPostView.nestingInset)
         }
         PerfProbe.time("cfg.actions") { configureActions(tweet) }
         configureStats(tweet, content: stats)
-        pendingEmoji = TwemojiText.uncachedEmoji(in: [
-            tweet.author.name, body.string, tweet.quotedTweet?.author.name ?? "", tweet.quotedTweet?.text ?? "",
-        ])
+        pendingEmoji = TwemojiText.uncachedEmoji(
+            in: [tweet.author.name, body.string] + tweet.quoteChain.flatMap { [$0.author.name, $0.text] })
         boundSeen = seen
         isAccessibilityElement = true
     }
@@ -381,7 +377,7 @@ final class TweetCell: UICollectionViewCell {
     /// the app's text size reaches the name, flag and quote on rows that were
     /// already built rather than waiting for a relaunch.
     private func applyFonts() {
-        quotedBodyLabel.font = DesignSystem.Typography.metric()
+        quotedPost.refreshFonts()
         [replyButton, retweetButton, likeButton, bookmarkButton].forEach { $0.refreshFont() }
     }
 
@@ -526,38 +522,12 @@ final class TweetCell: UICollectionViewCell {
     private func configureQuoted(_ quoted: Tweet?, imagesEnabled: Bool, contentWidth: CGFloat) {
         guard let quoted else {
             quotedWrap.isHidden = true
-            quotedMedia.prepareForReuse()
-            quotedMedia.isHidden = true
+            quotedPost.prepareForReuse()
             return
         }
         quotedWrap.isHidden = false
-        quotedAuthorLabel.attributedText = Self.quotedHeader(quoted)
-        let quotedBody = TweetText.attributed(for: quoted, seen: false, font: DesignSystem.Typography.metric())
-        quotedBodyLabel.attributedText = quotedBody
-        quotedBodyLabel.isHidden = quotedBody.length == 0
-        loadAvatar(into: quotedAvatar, url: quoted.author.avatarURL, size: 18, fallbackPoint: 16, enabled: imagesEnabled)
-        quotedMedia.onTapPhoto = { [weak self] _ in self?.onTapQuoted?() }
-        quotedMedia.onTapCard = { [weak self] _ in self?.onTapQuoted?() }
-        quotedMedia.configure(with: quoted, imagesEnabled: imagesEnabled, contentWidth: max(120, contentWidth))
-    }
-
-    /// `Name` + a color-hashed `@handle` + a relative timestamp — the same fields
-    /// the TUI's inline quote header shows.
-    private static func quotedHeader(_ quoted: Tweet) -> NSAttributedString {
-        let result = NSMutableAttributedString(string: quoted.author.name, attributes: [
-            .font: DesignSystem.Typography.handle(),
-            .foregroundColor: DesignSystem.Color.label,
-        ])
-        result.append(NSAttributedString(string: " @\(quoted.author.handle)", attributes: [
-            .font: DesignSystem.Typography.handle(),
-            .foregroundColor: DesignSystem.handleColor(quoted.author.handle),
-        ]))
-        result.append(NSAttributedString(string: " · \(Format.relativeTime(quoted.createdAt))", attributes: [
-            .font: DesignSystem.Typography.handle(),
-            .foregroundColor: DesignSystem.Color.secondaryLabel,
-        ]))
-        TwemojiText.substituteCachedEmoji(in: result, font: DesignSystem.Typography.handle())
-        return result
+        quotedPost.onTap = { [weak self] tapped in self?.onTapQuoted?(tapped) }
+        quotedPost.configure(with: quoted, imagesEnabled: imagesEnabled, contentWidth: contentWidth)
     }
 
     private func configureActions(_ tweet: Tweet) {
@@ -693,8 +663,9 @@ final class TweetCell: UICollectionViewCell {
         let body = ReplyContext.body(of: tweet)
         if !body.isEmpty { parts.append(body) }
         if let media = Self.mediaSummary(tweet.media) { parts.append(media) }
-        if let quoted = tweet.quotedTweet {
-            parts.append("Quoting \(quoted.author.name): \(ReplyContext.body(of: quoted))")
+        for (layer, quoted) in tweet.quoteChain.enumerated() {
+            let lead = layer == 0 ? "Quoting" : "Which quotes"
+            parts.append("\(lead) \(quoted.author.name): \(ReplyContext.body(of: quoted))")
         }
         var counts = ["\(tweet.replyCount) replies", "\(shownRetweetCount) reposts", "\(shownLikeCount) likes"]
         if let views = tweet.viewCount, views > 0 { counts.append("\(Format.count(views)) views") }
@@ -725,6 +696,7 @@ final class TweetCell: UICollectionViewCell {
         case .linkCard(let title, _, let domain, _): return "Link from \(domain): \(title)"
         case .article(_, let title, _): return "Article: \(title)"
         case .broadcast(_, let title, _, _): return "Broadcast: \(title)"
+        case .space: return "X Space"
         case .youTube: return "YouTube video"
         case .photo: return nil
         }
@@ -758,8 +730,9 @@ final class TweetCell: UICollectionViewCell {
         if onViewQuotes != nil, tweet.quoteCount > 0 {
             actions.append(action("View quotes") { [weak self] in self?.onViewQuotes?() })
         }
-        if tweet.quotedTweet != nil {
-            actions.append(action("Open quoted post") { [weak self] in self?.onTapQuoted?() })
+        for (layer, quoted) in tweet.quoteChain.enumerated() {
+            let name = layer == 0 ? "Open quoted post" : "Open post quoted by \(tweet.quoteChain[layer - 1].author.name)"
+            actions.append(action(name) { [weak self] in self?.onTapQuoted?(quoted) })
         }
         if !showMoreButton.isHidden {
             actions.append(action("Show more") { [weak self] in self?.onShowMore?() })
@@ -842,8 +815,6 @@ final class TweetCell: UICollectionViewCell {
 
         mediaContent.translatesAutoresizingMaskIntoConstraints = false
 
-        buildQuoted()
-
         viewsLabel.font = DesignSystem.Typography.actionMetric()
         viewsLabel.textColor = DesignSystem.Color.secondaryLabel
         viewsLabel.lineBreakMode = .byTruncatingTail
@@ -875,8 +846,8 @@ final class TweetCell: UICollectionViewCell {
         bodyView.textInsets = UIEdgeInsets(top: 0, left: Self.sideMargin, bottom: 0, right: Self.sideMargin)
         showMoreButton.configuration?.contentInsets = NSDirectionalEdgeInsets(
             top: 2, leading: Self.sideMargin, bottom: 2, trailing: Self.sideMargin)
-        quotedWrap.addManaged(quotedContainer)
-        quotedContainer.pinEdges(to: quotedWrap, insets: UIEdgeInsets(
+        quotedWrap.addManaged(quotedPost)
+        quotedPost.pinEdges(to: quotedWrap, insets: UIEdgeInsets(
             top: 0, left: Self.sideMargin, bottom: 0, right: Self.sideMargin))
         quotedWrap.isHidden = true
 
@@ -921,45 +892,6 @@ final class TweetCell: UICollectionViewCell {
             separator.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             separator.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             separator.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-        ])
-    }
-
-    private func buildQuoted() {
-        quotedContainer.layer.cornerRadius = DesignSystem.Radius.control
-        quotedContainer.layer.cornerCurve = .continuous
-        quotedContainer.layer.borderWidth = 1
-        quotedContainer.layer.borderColor = DesignSystem.Color.separator.cgColor
-        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (cell: TweetCell, _) in
-            cell.quotedContainer.layer.borderColor = DesignSystem.Color.separator.cgColor
-        }
-        quotedContainer.isUserInteractionEnabled = true
-        quotedContainer.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(quotedTapped)))
-
-        quotedAvatar.translatesAutoresizingMaskIntoConstraints = false
-        quotedAvatar.setRounded(9)
-
-        quotedAuthorLabel.font = DesignSystem.Typography.handle()
-        quotedAuthorLabel.textColor = DesignSystem.Color.secondaryLabel
-        quotedAuthorLabel.numberOfLines = 1
-        quotedBodyLabel.font = DesignSystem.Typography.metric()
-        quotedBodyLabel.textColor = DesignSystem.Color.label
-        quotedBodyLabel.numberOfLines = 4
-
-        let authorRow = UIStackView(arrangedSubviews: [quotedAvatar, quotedAuthorLabel, UIView()])
-        authorRow.axis = .horizontal
-        authorRow.spacing = 6
-        authorRow.alignment = .center
-
-        quotedMedia.translatesAutoresizingMaskIntoConstraints = false
-
-        let stack = UIStackView(arrangedSubviews: [authorRow, quotedBodyLabel, quotedMedia])
-        stack.axis = .vertical
-        stack.spacing = 6
-        quotedContainer.addManaged(stack)
-        stack.pinEdges(to: quotedContainer, insets: UIEdgeInsets(top: 8, left: 10, bottom: 8, right: 10))
-        NSLayoutConstraint.activate([
-            quotedAvatar.widthAnchor.constraint(equalToConstant: 18),
-            quotedAvatar.heightAnchor.constraint(equalToConstant: 18),
         ])
     }
 
@@ -1038,7 +970,6 @@ final class TweetCell: UICollectionViewCell {
         Haptics.selection()
         open()
     }
-    @objc private func quotedTapped() { onTapQuoted?() }
     @objc private func showMoreTapped() {
         Haptics.tap()
         onShowMore?()

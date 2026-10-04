@@ -8,6 +8,7 @@ use crate::model::{Tweet, User};
 use crate::parse::tweet as parse_tweet;
 use crate::parse::user as parse_user;
 use crate::server::notif_sync::NotificationSync;
+use crate::server::quotes::{self, QuoteHydrator};
 use crate::store::about::{self, AboutFetcher, AboutStore};
 use crate::store::community::{self, CommunityCache};
 use crate::store::feed::FeedStore;
@@ -65,6 +66,8 @@ pub struct AppState {
     /// them (its filter verdict, ask, translate) is answered without another
     /// throttled GraphQL round trip to X.
     pub recent_tweets: std::sync::Mutex<lru::LruCache<String, Tweet>>,
+    /// The posts quoted two layers down, which X names but doesn't send.
+    quotes: QuoteHydrator,
     /// Lowercased handle → (numeric id, when it was looked up).
     user_ids: std::sync::Mutex<lru::LruCache<String, (String, Instant)>>,
     /// The signed-in account's (id, handle), so Mentions doesn't ask X who
@@ -147,6 +150,7 @@ impl AppState {
             about_fetcher,
             followers_op_dead_since: std::sync::Mutex::new(None),
             recent_tweets: std::sync::Mutex::new(lru::LruCache::new(RECENT_TWEETS)),
+            quotes: QuoteHydrator::new(),
             user_ids: std::sync::Mutex::new(lru::LruCache::new(USER_IDS)),
             viewer: std::sync::Mutex::new(None),
             feed_cfg: app_config.feed.clone(),
@@ -169,6 +173,18 @@ impl AppState {
         for tweet in tweets {
             recent.put(tweet.rest_id.clone(), tweet.clone());
         }
+    }
+
+    /// Fills in the quotes under each of `tweets`, down to three layers, from
+    /// X where it only named them. Posts whose quotes can't be fetched go out
+    /// with the layers they have.
+    pub async fn hydrate_quotes(&self, tweets: &mut [Tweet]) {
+        self.quotes
+            .hydrate(tweets, &|id| {
+                let gql = self.gql.clone();
+                Box::pin(async move { quotes::fetch_quoted(&gql, id).await })
+            })
+            .await;
     }
 
     /// Whether `id` is a post the signed-in user wrote, going by what this

@@ -73,7 +73,7 @@ pub async fn home(
         }
         None => home_live(&state, q.following, count, cursor, q.mode.as_deref()).await?,
     };
-    Ok(serve(&state, page))
+    Ok(serve(&state, page).await)
 }
 
 /// Live fetch used when the materialized buffer is still cold (e.g. the very
@@ -192,7 +192,8 @@ async fn user_timeline(
             cursor: page.next_cursor,
             pinned: page.pinned,
         },
-    ))
+    )
+    .await)
 }
 
 #[derive(Debug, Deserialize)]
@@ -239,7 +240,8 @@ pub async fn search(
             cursor: page.next_cursor,
             pinned: None,
         },
-    ))
+    )
+    .await)
 }
 
 /// `GET /api/sources/search/people` — the People tab of X search. Its results
@@ -311,7 +313,8 @@ pub async fn mentions(
             cursor: page.next_cursor,
             pinned: None,
         },
-    ))
+    )
+    .await)
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -365,7 +368,8 @@ pub async fn bookmarks(
             cursor: page.next_cursor,
             pinned: None,
         },
-    ))
+    )
+    .await)
 }
 
 pub async fn notifications(
@@ -412,7 +416,11 @@ pub async fn notifications(
 
 /// Hands a page to the client, keeping its tweets for follow-up requests
 /// about them (filter verdicts, ask, translate).
-fn serve(state: &AppState, page: TimelinePage) -> Json<TimelinePage> {
+async fn serve(state: &AppState, mut page: TimelinePage) -> Json<TimelinePage> {
+    state.hydrate_quotes(&mut page.tweets).await;
+    if let Some(pinned) = page.pinned.as_mut() {
+        state.hydrate_quotes(std::slice::from_mut(pinned)).await;
+    }
     state.remember(&page.tweets);
     Json(page)
 }

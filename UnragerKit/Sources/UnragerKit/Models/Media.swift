@@ -27,6 +27,7 @@ public enum MediaKind: Sendable, Hashable {
     case article(articleID: String, title: String, previewText: String)
     case linkCard(title: String, description: String, domain: String, targetURL: String)
     case broadcast(broadcastID: String, title: String, broadcasterName: String, isLive: Bool)
+    case space(spaceID: String)
     case poll(options: [PollOption], endsAt: Date?, countsFinal: Bool)
 }
 
@@ -36,6 +37,7 @@ extension MediaKind: Codable {
         case article
         case linkCard = "link_card"
         case broadcast
+        case space
         case poll
     }
 
@@ -55,6 +57,7 @@ extension MediaKind: Codable {
         case broadcasterName = "broadcaster_name"
         case isLive = "is_live"
     }
+    private enum SpaceKeys: String, CodingKey { case spaceID = "space_id" }
     private enum PollKeys: String, CodingKey {
         case options
         case endsAt = "ends_at"
@@ -94,6 +97,8 @@ extension MediaKind: Codable {
                 title: try bc.decode(String.self, forKey: .title),
                 broadcasterName: try bc.decode(String.self, forKey: .broadcasterName),
                 isLive: try bc.decode(Bool.self, forKey: .isLive))
+        } else if let space = try? container.nestedContainer(keyedBy: SpaceKeys.self, forKey: .space) {
+            self = .space(spaceID: try space.decode(String.self, forKey: .spaceID))
         } else if let poll = try? container.nestedContainer(keyedBy: PollKeys.self, forKey: .poll) {
             self = .poll(
                 options: try poll.decode([PollOption].self, forKey: .options),
@@ -136,6 +141,10 @@ extension MediaKind: Codable {
             try bc.encode(title, forKey: .title)
             try bc.encode(broadcasterName, forKey: .broadcasterName)
             try bc.encode(isLive, forKey: .isLive)
+        case let .space(spaceID):
+            var container = encoder.container(keyedBy: Tag.self)
+            var space = container.nestedContainer(keyedBy: SpaceKeys.self, forKey: .space)
+            try space.encode(spaceID, forKey: .spaceID)
         case let .poll(options, endsAt, countsFinal):
             var container = encoder.container(keyedBy: Tag.self)
             var poll = container.nestedContainer(keyedBy: PollKeys.self, forKey: .poll)

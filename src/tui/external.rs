@@ -97,6 +97,7 @@ pub fn collect_open_targets(tweet: &Tweet, tweet_dir: &Path) -> Vec<OpenTarget> 
             | MediaKind::Article { .. }
             | MediaKind::LinkCard { .. }
             | MediaKind::Broadcast { .. }
+            | MediaKind::Space { .. }
             | MediaKind::Poll { .. } => continue,
         };
         let path = tweet_dir.join(file_name_for(i, &url));
@@ -124,6 +125,7 @@ pub fn collect_remote_urls(tweet: &Tweet) -> Vec<String> {
             MediaKind::Broadcast { broadcast_id, .. } => {
                 Some(format!("https://x.com/i/broadcasts/{broadcast_id}"))
             }
+            MediaKind::Space { space_id } => Some(format!("https://x.com/i/spaces/{space_id}")),
             _ => None,
         })
         .collect()
@@ -425,6 +427,7 @@ mod tests {
             in_reply_to_tweet_id: None,
             in_reply_to_handle: None,
             quoted_tweet: None,
+            quoted_tweet_id: None,
             media,
             url: "https://x.com/u/status/1".into(),
             urls: vec![],

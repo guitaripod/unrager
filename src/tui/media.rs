@@ -475,7 +475,7 @@ impl MediaRegistry {
                         });
                     }
                 }
-                MediaKind::Poll { .. } => {}
+                MediaKind::Poll { .. } | MediaKind::Space { .. } => {}
             }
         }
     }

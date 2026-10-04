@@ -86,7 +86,8 @@ pub async fn quotes(
         &response,
         "/data/search_by_raw_query/search_timeline/timeline/instructions",
     )?;
-    let page = timeline::walk(instructions);
+    let mut page = timeline::walk(instructions);
+    state.hydrate_quotes(&mut page.tweets).await;
     state.remember(&page.tweets);
     Ok(Json(TimelinePage {
         tweets: page.tweets,

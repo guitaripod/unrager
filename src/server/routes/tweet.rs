@@ -15,7 +15,8 @@ pub async fn single(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> std::result::Result<Json<Tweet>, ApiError> {
-    let tweet = crate::server::state::fetch_tweet(&state.gql, &id).await?;
+    let mut tweet = crate::server::state::fetch_tweet(&state.gql, &id).await?;
+    state.hydrate_quotes(std::slice::from_mut(&mut tweet)).await;
     state.remember([&tweet]);
     Ok(Json(tweet))
 }
@@ -78,12 +79,17 @@ pub async fn thread(
     )?;
     let page = timeline::walk(instructions);
     let continuation = q.cursor.is_some();
-    let (focal, ancestors, replies) = split_thread(page.tweets, &id, continuation);
+    let (mut focal, mut ancestors, mut replies) = split_thread(page.tweets, &id, continuation);
 
     if focal.is_none() && !continuation {
         return Err(ApiError::not_found("focal tweet not in thread"));
     }
 
+    tokio::join!(
+        state.hydrate_quotes(focal.as_mut().map_or(&mut [], std::slice::from_mut)),
+        state.hydrate_quotes(&mut ancestors),
+        state.hydrate_quotes(&mut replies),
+    );
     state.remember(focal.iter().chain(&ancestors).chain(&replies));
     Ok(Json(ThreadView {
         focal,

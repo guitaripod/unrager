@@ -44,7 +44,7 @@ pub async fn profile(
     }
     let user = state.user(screen).await?;
 
-    let page = if q.tweets {
+    let mut page = if q.tweets {
         recent_posts(&state, &user.rest_id, q.include_replies)
             .await
             .unwrap_or_else(|e| {
@@ -54,6 +54,10 @@ pub async fn profile(
     } else {
         timeline::TimelinePage::default()
     };
+    tokio::join!(
+        state.hydrate_quotes(page.pinned.as_mut().map_or(&mut [], std::slice::from_mut)),
+        state.hydrate_quotes(&mut page.tweets),
+    );
     state.remember(page.pinned.iter().chain(&page.tweets));
 
     Ok(Json(ProfileView {

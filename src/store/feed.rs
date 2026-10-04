@@ -607,6 +607,7 @@ mod tests {
             in_reply_to_tweet_id: None,
             in_reply_to_handle: None,
             quoted_tweet: None,
+            quoted_tweet_id: None,
             media: Vec::new(),
             url: format!("https://x.com/alice/status/{rest_id}"),
             urls: Vec::new(),

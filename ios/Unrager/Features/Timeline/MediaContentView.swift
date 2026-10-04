@@ -3,7 +3,7 @@ import UnragerKit
 
 /// The single attachment surface for a tweet. Inspects the tweet's `media` and
 /// renders exactly one of: a photo grid, an inline video/GIF player, a poll, or
-/// a preview card (link / article / broadcast / YouTube). Subviews are created
+/// a preview card (link / article / broadcast / YouTube / Space). Subviews are created
 /// lazily and toggled on reuse so a recycled cell never shows the wrong kind.
 /// `compact` shrinks everything for quoted-tweet contexts. Photos and video run
 /// edge to edge when `bleedsEdgeToEdge` is set; cards and polls always keep the
@@ -23,6 +23,7 @@ final class MediaContentView: UIView {
     private var player: MediaPlayerView?
     private var poll: PollView?
     private var card: MediaCardView?
+    private var space: SpaceCardView?
     private var activeView: UIView?
 
     init(compact: Bool = false) {
@@ -39,6 +40,7 @@ final class MediaContentView: UIView {
         player?.tearDown()
         grid?.prepareForReuse()
         card?.prepareForReuse()
+        space?.prepareForReuse()
         onTapPhoto = nil
         onTapCard = nil
     }
@@ -90,6 +92,8 @@ final class MediaContentView: UIView {
                            isLive: isLive, isPlayable: !isLive, coverRatio: MediaShape.videoCover),
                      target: URL(string: "https://x.com/i/broadcasts/\(broadcastID)"),
                      contentWidth: contentWidth, imagesEnabled: imagesEnabled)
+        case .space(let spaceID):
+            showSpace(spaceID: spaceID)
         case .youTube(let videoID):
             showCard(.init(domain: "YouTube", title: "Watch on YouTube",
                            detail: nil, coverURL: imagesEnabled ? URL(string: rich.url) : nil,
@@ -112,7 +116,7 @@ final class MediaContentView: UIView {
         guard let rich = pickRich(tweet.media) else { return [] }
         let pictureWidth = contentWidth - (bleedsEdgeToEdge ? 0 : 2 * DesignSystem.Spacing.l)
         switch rich.kind {
-        case .poll:
+        case .poll, .space:
             return []
         case .linkCard, .article, .broadcast, .youTube:
             let width = contentWidth - 2 * DesignSystem.Spacing.l
@@ -232,6 +236,14 @@ final class MediaContentView: UIView {
         swap(to: view, inset: inset)
     }
 
+    private func showSpace(spaceID: String) {
+        let view = space ?? { let made = SpaceCardView(frame: .zero); space = made; return made }()
+        view.configure(spaceID: spaceID)
+        let target = URL(string: "https://x.com/i/spaces/\(spaceID)")
+        view.onTap = { [weak self] in if let target { self?.onTapCard?(target) } }
+        swap(to: view, inset: sideInset(isPicture: false))
+    }
+
     // MARK: - View swapping
 
     /// Shows `view` and takes the previous surface out of the hierarchy. A
@@ -262,7 +274,7 @@ final class MediaContentView: UIView {
 
     private func hideAll() {
         player?.tearDown()
-        [grid, player, poll, card].compactMap { $0 }.forEach { $0.removeFromSuperview() }
+        [grid, player, poll, card, space].compactMap { $0 }.forEach { $0.removeFromSuperview() }
         activeView = nil
     }
 

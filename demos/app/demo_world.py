@@ -196,7 +196,8 @@ def lab_dims(name: str) -> tuple[int, int]:
 
 def lab_posts() -> list:
     """One post per case in the media lab: every aspect ratio alone, photo groups
-    of two to five, clips, a link card and a quote of a tall photo."""
+    of two to five, clips, a link card, a Space link, a quote of a tall photo and
+    a chain of quotes three layers deep."""
     def photos(*sizes):
         seen: dict[str, int] = {}
         names = []
@@ -236,6 +237,12 @@ def lab_posts() -> list:
     for i, (title, media) in enumerate(cases):
         posts.append((f"m{i:02d}", "medialab", 5 + i * 2, f"{title}", media, counts, {}))
     posts.append(("m90", "medialab", 90, "quoting a 1:3 long screenshot", None, counts, {"quote": "m12"}))
+    posts.append(("m91", "medialab", 3, "", ("space", "1OxwbnaOppPJB"), counts, {}))
+    posts.append(("m92", "medialab", 120, "the quote at the bottom, with a photo", photos("1600x1200"), counts, {}))
+    posts.append(("m93", "medialab", 110, "a quote of it", None, counts, {"quote": "m92"}))
+    posts.append(("m94", "medialab", 100, "a quote of that quote, with a long text that runs onto several lines "
+                  "so the shorter limit of a deeper layer shows itself", None, counts, {"quote": "m93"}))
+    posts.append(("m95", "medialab", 1, "quoting a quote of a quote: three layers show", None, counts, {"quote": "m94"}))
     return posts
 
 
@@ -311,6 +318,8 @@ class World:
                 w, h = (9, 16) if vertical else (16, 9)
             return [{"kind": "video" if kind == "video" else "animated_gif", "url": self.asset("videos", value),
                      "video_url": self.asset("videos", value, "mp4"), "alt_text": None, "width": w, "height": h}]
+        if kind == "space":
+            return [{"kind": {"space": {"space_id": value}}, "url": "", "video_url": None, "alt_text": None}]
         if kind == "card":
             return [{"kind": {"link_card": {"title": value["title"], "description": value["description"],
                                             "domain": value["domain"], "target_url": value["target"]}},
@@ -341,12 +350,13 @@ class World:
             tweet["in_reply_to_handle"] = extra["reply_handle"]
         return tweet
 
-    def tweet(self, key: str) -> dict:
+    def tweet(self, key: str, layers: int = 3) -> dict:
+        """The post with the posts it quotes nested under it, as many layers as the app shows."""
         tweet = dict(self.by_key[key])
         spec = next(p for p in POSTS if p[0] == key)
         quote = spec[6].get("quote")
-        if quote:
-            tweet["quoted_tweet"] = dict(self.by_key[quote])
+        if quote and layers > 0:
+            tweet["quoted_tweet"] = self.tweet(quote, layers - 1)
         return tweet
 
     def home_tweet(self, key: str) -> dict:

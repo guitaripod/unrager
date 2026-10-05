@@ -198,7 +198,8 @@ pub const DEFAULT_OLLAMA_MODEL: &str = "hf.co/guitaripod/unrager-4b:Q4_K_M";
 /// Installed Ollama models the filter falls back to, in order, when the
 /// configured one isn't pulled: the default (any of its quantizations), then
 /// the default before it.
-const FALLBACK_MODEL_PREFIXES: [&str; 3] = ["hf.co/guitaripod/unrager-4b", "qwen3:4b-instruct", "gemma4"];
+const FALLBACK_MODEL_PREFIXES: [&str; 3] =
+    ["hf.co/guitaripod/unrager-4b", "qwen3:4b-instruct", "gemma4"];
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct LlmConfig {

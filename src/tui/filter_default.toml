@@ -32,12 +32,13 @@ strictness = "balanced"
 # anywhere else.
 [llm]
 # Ollama, the default: install it from https://ollama.com, then run
-# `ollama pull qwen3:4b-instruct`. It's 2.5 GB and fast, and in unrager's
-# tests it hid fewer good posts than models many times its size;
-# `unrager eval` checks any other model you try.
+# `ollama pull hf.co/guitaripod/unrager-4b:Q4_K_M`. That is unrager-4b, a
+# 2.7 GB model tuned for this filter; in unrager's tests it hid fewer good
+# posts than the 27B models it was compared with. `unrager eval` checks any
+# other model you try.
 backend = "ollama"
 host = "http://localhost:11434"
-model = "qwen3:4b-instruct"
+model = "hf.co/guitaripod/unrager-4b:Q4_K_M"
 timeout_seconds = 20
 # How long Ollama keeps the model loaded after the last post it checked, so
 # new posts are judged at once. "30m" keeps it through a browsing session;
@@ -47,7 +48,7 @@ keep_alive = "30m"
 # Ask, brief and translate in the terminal client use `model` too. To give
 # them a bigger model while the filter keeps the small one, set `model` to
 # the big one and uncomment this:
-# filter_model = "qwen3:4b-instruct"
+# filter_model = "hf.co/guitaripod/unrager-4b:Q4_K_M"
 
 # Any other server that speaks the OpenAI chat API works too: LM Studio,
 # vLLM, llama.cpp's llama-server, SGLang, llama-swap. Replace the lines above

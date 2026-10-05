@@ -110,7 +110,7 @@
             </div>
             <div class="tab-panel" role="tabpanel" id="panel-ollama" aria-labelledby="tab-ollama">
               <p>Install <a href="https://ollama.com">Ollama</a>, then pull the default model:</p>
-              <div class="code"><code>ollama pull qwen3:4b-instruct</code><button class="copy" type="button" data-copy="ollama pull qwen3:4b-instruct">Copy</button></div>
+              <div class="code"><code>ollama pull hf.co/guitaripod/unrager-4b:Q4_K_M</code><button class="copy" type="button" data-copy="ollama pull hf.co/guitaripod/unrager-4b:Q4_K_M">Copy</button></div>
               <p class="note">That's all: unrager finds Ollama on its usual port.</p>
             </div>
             <div class="tab-panel" role="tabpanel" id="panel-other" aria-labelledby="tab-other" hidden>
@@ -200,7 +200,7 @@ timeout_seconds = 120</code></pre>
         </details>
         <details>
           <summary>Which models work?</summary>
-          <p>The default is Qwen3 4B on Ollama, 2.5 GB: small models judge posts well, answer fast and stay loaded. Any instruction-tuned model that can answer HIDE or KEEP will do, served by Ollama or by anything that speaks the OpenAI chat API: LM Studio, vLLM, llama.cpp's llama-server, SGLang, llama-swap. <code>unrager eval</code> tells you how well yours filters.</p>
+          <p>The default is unrager-4b on Ollama, 2.7 GB, a Qwen3.5-4B fine-tuned for this filter: small models judge posts well, answer fast and stay loaded. Any instruction-tuned model that can answer HIDE or KEEP will do, served by Ollama or by anything that speaks the OpenAI chat API: LM Studio, vLLM, llama.cpp's llama-server, SGLang, llama-swap. <code>unrager eval</code> tells you how well yours filters.</p>
         </details>
         <details>
           <summary>Can the model run on a different computer?</summary>

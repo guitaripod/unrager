@@ -193,11 +193,12 @@ impl LlmBackend {
 
 /// The model a fresh `filter.toml` points Ollama at, and the one `doctor`
 /// and `setup` tell people to pull.
-pub const DEFAULT_OLLAMA_MODEL: &str = "qwen3:4b-instruct";
+pub const DEFAULT_OLLAMA_MODEL: &str = "hf.co/guitaripod/unrager-4b:Q4_K_M";
 
 /// Installed Ollama models the filter falls back to, in order, when the
-/// configured one isn't pulled: the default, then the default before it.
-const FALLBACK_MODEL_PREFIXES: [&str; 2] = ["qwen3:4b-instruct", "gemma4"];
+/// configured one isn't pulled: the default (any of its quantizations), then
+/// the default before it.
+const FALLBACK_MODEL_PREFIXES: [&str; 3] = ["hf.co/guitaripod/unrager-4b", "qwen3:4b-instruct", "gemma4"];
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
@@ -2797,7 +2798,19 @@ mod tests {
     }
 
     #[test]
-    fn fallback_prefers_the_default_model() {
+    fn fallback_prefers_unrager_4b_over_the_previous_default() {
+        let available = vec![
+            "qwen3:4b-instruct-2507-q4_K_M".to_string(),
+            "hf.co/guitaripod/unrager-4b:Q8_0".to_string(),
+        ];
+        assert_eq!(
+            pick_fallback_model(&available),
+            Some("hf.co/guitaripod/unrager-4b:Q8_0".into())
+        );
+    }
+
+    #[test]
+    fn fallback_still_finds_the_previous_default() {
         let available = vec![
             "gemma4:e4b".to_string(),
             "qwen3:4b-instruct-2507-q4_K_M".to_string(),

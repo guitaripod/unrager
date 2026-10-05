@@ -18,7 +18,7 @@
 
 unrager is a browser extension for the x.com you already use. As X loads your Home timeline, a language model running on your computer reads each post and hides the ones that match your rules: the outrage, the ratio bait, the doom and the engagement farming. You keep X's own app, your account and every feature; you lose the posts that exist to make you angry.
 
-It isn't perfect, and it shows its work. Tested on 1,000 real posts from one person's feed, against their own rules, the default model took out about two in three rage posts and hid about one good post in twenty. Every post it hides is one switch away, labelled with the rule that caught it, and one click brings it back for good. The model is small on purpose: 2.5 GB, it runs on an ordinary laptop, and bigger ones hide more of what you wanted to see (a 27B model hid one good post in four).
+It isn't perfect, and it shows its work. Tested on 1,049 real posts from one person's feed, against the default rules, the default model, unrager-4b, took out about three in four rage posts and hid about one good post in 31. Every post it hides is one switch away, labelled with the rule that caught it, and one click brings it back for good. The model is small on purpose: 2.7 GB, it runs on an ordinary laptop, and bigger ones hide more of what you wanted to see (a 26B model hid one good post in 15).
 
 Nothing leaves your computer. The extension talks to unrager on `localhost`, unrager talks to your model, and the model never sees anything but the post it's judging. It works with [Ollama](https://ollama.com) out of the box, or with any server that speaks the OpenAI chat API: LM Studio, vLLM, llama.cpp, SGLang, llama-swap.
 
@@ -29,8 +29,10 @@ You need a Chromium browser (Chrome, Brave, Edge, Vivaldi or Arc) on macOS or Li
 **1. Get a model.** The simplest is [Ollama](https://ollama.com): install it, then
 
 ```sh
-ollama pull qwen3:4b-instruct
+ollama pull hf.co/guitaripod/unrager-4b:Q4_K_M
 ```
+
+That is unrager-4b, a 2.7 GB model tuned for this filter (see [the model](#the-default-model)). Ollama 0.34.2 fails to pull any model from `hf.co` with "blocked redirect to a different host"; update Ollama if you see it.
 
 Already running LM Studio, vLLM, llama.cpp or SGLang? Skip this; step 2 finds it. See [Using another model server](#using-another-model-server).
 
@@ -175,7 +177,7 @@ timeout_seconds = 120            # a model that has to load first is slow to ans
 
 If the model you configured isn't reachable, `unrager setup` and `unrager doctor` look for servers on those usual ports and print the lines to paste. Both also send the model one real request, since a server can list a model it can't actually run.
 
-The filter can run on its own model. A small one judges posts as well as a big one (on unrager's tests Qwen3 4B hid fewer good posts than a 27B model), loads in a couple of seconds and can stay loaded, so new posts never wait on a model that's still starting. To keep a bigger model for ask, brief and translate in the terminal client, name both:
+The filter can run on its own model. A small one judges posts as well as a big one (on unrager's tests unrager-4b hid half as many good posts as a 26B model), loads in a couple of seconds and can stay loaded, so new posts never wait on a model that's still starting. To keep a bigger model for ask, brief and translate in the terminal client, name both:
 
 ```toml
 [llm]
@@ -183,7 +185,9 @@ model = "qwen3-27b"          # ask, brief, translate
 filter_model = "qwen3-4b"    # judging posts
 ```
 
-A model tuned for unrager exists: [unrager-4b](https://huggingface.co/guitaripod/unrager-4b), Qwen3.5-4B fine-tuned on about 7,000 posts from the author's feed. On the same 1,000 real posts it hid about one good post in 27 (the 26B model it replaced hid one in 14) and caught about four in five rage posts, with the GGUFs at 2.7 GB (Q4_K_M) and 4.5 GB (Q8_0). It is tuned to the author's own rules, the default topics plus Finnish political commentary, so it works best with those rules and its system prompt is published next to the weights. The same files are on [Pirate Face](https://pirateface.co/guitaripod/unrager-4b) as a torrent.
+### The default model
+
+[unrager-4b](https://huggingface.co/guitaripod/unrager-4b) is Qwen3.5-4B fine-tuned for this filter on about 7,400 posts from one real feed, labelled against the default rules by a 26B model and a second model that had to agree. On 1,049 real posts it hid about one good post in 31 and caught about three in four rage posts, where the Qwen3 4B it replaced hid one in 24 and caught three in five, and a 26B model hid one in 15 and caught five in six. The files are 2.7 GB (Q4_K_M, the default) and 4.5 GB (Q8_0), under Apache 2.0, with the system prompt next to the weights, and the same files are on [Pirate Face](https://pirateface.co/guitaripod/unrager-4b) as a torrent. It is tuned to the default rules; with rules of your own it still follows them, but check with `unrager eval --posts`.
 
 Any instruction-tuned model that can answer HIDE or KEEP will do; small ones (2â€“12B) are plenty, and faster is better, since new posts wait for their verdict. For Ollama, the default is:
 
@@ -191,7 +195,7 @@ Any instruction-tuned model that can answer HIDE or KEEP will do; small ones (2â
 [llm]
 backend = "ollama"
 host = "http://localhost:11434"
-model = "qwen3:4b-instruct"
+model = "hf.co/guitaripod/unrager-4b:Q4_K_M"
 timeout_seconds = 20
 keep_alive = "30m"   # how long Ollama keeps the model loaded; "10s" frees the GPU soon after you stop scrolling
 ```

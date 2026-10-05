@@ -183,6 +183,8 @@ model = "qwen3-27b"          # ask, brief, translate
 filter_model = "qwen3-4b"    # judging posts
 ```
 
+A model tuned for unrager exists: [unrager-4b](https://huggingface.co/guitaripod/unrager-4b), Qwen3.5-4B fine-tuned on about 7,000 posts from the author's feed. On the same 1,000 real posts it hid about one good post in 27 (the 26B model it replaced hid one in 14) and caught about four in five rage posts, with the GGUFs at 2.7 GB (Q4_K_M) and 4.5 GB (Q8_0). It is tuned to the author's own rules, the default topics plus Finnish political commentary, so it works best with those rules and its system prompt is published next to the weights. The same files are on [Pirate Face](https://pirateface.co/guitaripod/unrager-4b) as a torrent.
+
 Any instruction-tuned model that can answer HIDE or KEEP will do; small ones (2–12B) are plenty, and faster is better, since new posts wait for their verdict. For Ollama, the default is:
 
 ```toml

@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+## [0.31.0] — 2026-10-05
+
 - **unrager-4b is the new default model.** `unrager setup`, `unrager doctor` and a fresh `filter.toml` now point Ollama at `hf.co/guitaripod/unrager-4b:Q4_K_M` (2.7 GB), Qwen3.5-4B fine-tuned for this filter, instead of `qwen3:4b-instruct`. On 1,049 real posts against the default rules it hid 3.2% of good posts and caught 74% of rage, where the previous default hid 4.1% and caught 60%; on the 196 made-up posts `unrager eval` bundles it hid none of 108 good posts and caught 52 of 60 rage posts, against 49 of 60. Existing `filter.toml` files keep their model: to switch, set `model = "hf.co/guitaripod/unrager-4b:Q4_K_M"` and run `ollama pull hf.co/guitaripod/unrager-4b:Q4_K_M` (Ollama 0.34.2 can't pull from `hf.co`; update Ollama). A machine that has only `qwen3:4b-instruct` installed keeps using it.
 
 - **Posts that link an X Space show a Space card instead of a bare `x.com/i/spaces/…` link.** In the iPhone app the link is replaced by a purple card with a microphone and a waveform that is the same for the same Space, and a tap opens the Space in X. The terminal shows a `◉ Space` line (`m` opens it) and `unrager read` lists it. X sends no title, host or live state with these posts, so the card says only that it is a Space.
@@ -376,7 +378,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.30.0...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.31.0...HEAD
+[0.31.0]: https://github.com/guitaripod/unrager/releases/tag/0.31.0
 [0.30.0]: https://github.com/guitaripod/unrager/releases/tag/0.30.0
 [0.29.0]: https://github.com/guitaripod/unrager/releases/tag/0.29.0
 [0.28.0]: https://github.com/guitaripod/unrager/releases/tag/0.28.0

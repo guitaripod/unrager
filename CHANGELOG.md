@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+## [0.31.1] — 2026-10-13
+
 - **The iPhone app no longer offers Retry on a post that may already have gone out, and says why a profile or refresh failed.** When a post or reply timed out or the connection dropped, Retry could publish it twice; the alert now asks you to check your profile instead. A profile that can't load names the cause (server unreachable, X logged out) instead of a generic line, a failed Home refresh over saved posts reads "Couldn't refresh · saved posts" rather than always claiming to be offline, and a thread that fails to load no longer keeps "Loading replies…" under its error.
 - **GIFs opened full screen in the iPhone app loop and no longer quieten your music.** They played once and stopped, and opening one lowered Spotify or a podcast even though a GIF has no sound. Notification hearts also got a 44 pt touch target, and a profile's name is announced as a heading by VoiceOver.
 - **Photos in the iPhone app open, zoom, share and save at the quality they were uploaded in.** The full-screen viewer was limited to X's default rendition (at most 1200 px on the long side), so a 4000 px photo looked soft when zoomed. The viewer now loads the original (decoded up to 4,096 px, zoom up to 6x), Share sends the original file instead of a re-encoded copy, and Save to Photos stores the original. `GET /api/media/{tweet_id}/{index}` takes `?size=orig` for photos; feeds and grids keep the lighter default.
@@ -382,7 +384,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.31.0...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.31.1...HEAD
+[0.31.1]: https://github.com/guitaripod/unrager/releases/tag/0.31.1
 [0.31.0]: https://github.com/guitaripod/unrager/releases/tag/0.31.0
 [0.30.0]: https://github.com/guitaripod/unrager/releases/tag/0.30.0
 [0.29.0]: https://github.com/guitaripod/unrager/releases/tag/0.29.0

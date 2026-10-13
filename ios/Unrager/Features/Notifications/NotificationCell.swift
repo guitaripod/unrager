@@ -16,7 +16,7 @@ struct NotificationRowActions {
 /// arrived glows once and fades.
 final class NotificationCell: UICollectionViewListCell {
     private static let followSlotWidth: CGFloat = 120
-    private static let likeSide: CGFloat = 36
+    private static let likeSide: CGFloat = 44
 
     private let avatars = NotificationAvatarStackView()
     private let unreadDot = UIView()

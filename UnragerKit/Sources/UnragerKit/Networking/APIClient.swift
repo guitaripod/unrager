@@ -215,9 +215,12 @@ public final class APIClient: Sendable {
 
     /// The proxy URL for a tweet's media at `index`; stream bytes from here to
     /// display an image/video (the server forwards X CDN bytes with a real
-    /// content-type and a 7-day cache header).
-    public func mediaURL(tweetID: String, index: Int) -> URL {
-        url("api/media/\(pathSegment(tweetID))/\(index)")
+    /// content-type and a 7-day cache header). `original` asks for a photo as
+    /// uploaded instead of X's default rendition (at most 1200 px); videos and
+    /// GIFs ignore it.
+    public func mediaURL(tweetID: String, index: Int, original: Bool = false) -> URL {
+        url("api/media/\(pathSegment(tweetID))/\(index)",
+            query: original ? [URLQueryItem(name: "size", value: "orig")] : [])
     }
 
     // MARK: - SSE / LLM streams

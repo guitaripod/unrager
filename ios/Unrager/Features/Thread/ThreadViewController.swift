@@ -488,6 +488,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
                     return
                 }
                 hideLoading()
+                footer.set(.hidden)
                 emptyState.isHidden = false
                 emptyState.show(symbol: "exclamationmark.triangle", title: "Couldn't load thread",
                                 subtitle: error.localizedDescription, showRetry: true)
@@ -763,7 +764,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
             let url = video.element.videoURL.flatMap(URL.init)
                 ?? AppEnvironment.shared.api.mediaURL(tweetID: tweet.restID, index: video.offset)
             InlineVideoPlayback.pauseAll(in: collectionView)
-            presentFullScreenVideo(url)
+            presentFullScreenVideo(url, isGIF: video.element.kind == .animatedGif)
             return
         }
         let photoIndices = tweet.media.enumerated().compactMap { index, media -> Int? in

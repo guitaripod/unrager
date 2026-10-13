@@ -36,9 +36,14 @@ struct ProfileLoadStateTests {
 
     @Test("Any other failure keeps the generic message and Retry")
     func otherFailuresRetry() {
-        for error in [APIError.timeout, .offline("down"), .server(status: 500, message: "boom")] as [Error] {
+        for error in [APIError.timeout, .server(status: 500, message: "boom")] as [Error] {
             let state = ProfileLoadState.failure(error)
             #expect(state == .failed(message: "Couldn't load this profile."))
+            #expect(state.offersRetry)
+        }
+        for error in [APIError.offline("down"), .network("x"), .unauthorized("no")] as [Error] {
+            let state = ProfileLoadState.failure(error)
+            #expect(state == .failed(message: error.localizedDescription))
             #expect(state.offersRetry)
         }
         #expect(ProfileLoadState.failure(URLError(.notConnectedToInternet)).offersRetry)

@@ -3,9 +3,10 @@ use crate::server::error::ApiError;
 use crate::server::state::AppState;
 use axum::Json;
 use axum::body::{Body, Bytes};
-use axum::extract::{FromRequest, Multipart, Path, Request, State};
+use axum::extract::{FromRequest, Multipart, Path, Query, Request, State};
 use axum::http::{StatusCode, header};
 use axum::response::Response;
+use serde::Deserialize;
 use std::io::Write;
 use std::sync::Arc;
 use unrager_model::{MediaKind, MediaUploadResult};
@@ -18,17 +19,50 @@ fn cdn_client() -> &'static reqwest::Client {
         reqwest::Client::builder()
             .user_agent(crate::gql::client::USER_AGENT)
             .connect_timeout(std::time::Duration::from_secs(10))
+            .read_timeout(std::time::Duration::from_secs(30))
             .build()
             .unwrap_or_default()
     })
 }
 
-/// `GET /api/media/{tweet_id}/{index}` — streams a post's photo or video
-/// from X's CDN. The post usually comes from what the server just sent the
-/// app, so opening media costs no extra request to X's API.
+/// Query of `GET /api/media/{tweet_id}/{index}`.
+#[derive(Deserialize)]
+pub struct MediaParams {
+    /// `orig` asks for a photo's uploaded file instead of X's default
+    /// rendition (at most 1200 px on the long side); anything else is ignored.
+    size: Option<String>,
+}
+
+/// The address of a photo's original upload: X's image host serves the
+/// default rendition for a bare address and the file as uploaded for
+/// `name=orig`. Other hosts, and unparseable addresses, come back unchanged.
+fn original_photo_url(url: &str) -> String {
+    let Ok(mut parsed) = url::Url::parse(url) else {
+        return url.to_string();
+    };
+    if parsed.host_str() != Some("pbs.twimg.com") {
+        return url.to_string();
+    }
+    let kept: Vec<(String, String)> = parsed
+        .query_pairs()
+        .filter(|(k, _)| k != "name")
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect();
+    parsed
+        .query_pairs_mut()
+        .clear()
+        .extend_pairs(kept)
+        .append_pair("name", "orig");
+    parsed.into()
+}
+
+/// `GET /api/media/{tweet_id}/{index}[?size=orig]` — streams a post's photo
+/// or video from X's CDN. The post usually comes from what the server just
+/// sent the app, so opening media costs no extra request to X's API.
 pub async fn proxy(
     State(state): State<Arc<AppState>>,
     Path((tweet_id, index)): Path<(String, usize)>,
+    Query(params): Query<MediaParams>,
 ) -> std::result::Result<Response, ApiError> {
     let tweet = state.tweet(&tweet_id).await?;
     let media = tweet
@@ -38,10 +72,14 @@ pub async fn proxy(
 
     let url = match &media.kind {
         MediaKind::Video | MediaKind::AnimatedGif => {
-            media.video_url.as_deref().unwrap_or(&media.url)
+            media.video_url.as_deref().unwrap_or(&media.url).to_string()
         }
-        _ => media.url.as_str(),
+        MediaKind::Photo if params.size.as_deref() == Some("orig") => {
+            original_photo_url(&media.url)
+        }
+        _ => media.url.clone(),
     };
+    let url = url.as_str();
 
     let upstream = cdn_client()
         .get(url)
@@ -226,5 +264,35 @@ fn guess_mime(url: &str) -> &'static str {
         "application/vnd.apple.mpegurl"
     } else {
         "application/octet-stream"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::original_photo_url;
+
+    #[test]
+    fn bare_photo_address_asks_for_the_original() {
+        assert_eq!(
+            original_photo_url("https://pbs.twimg.com/media/A.jpg"),
+            "https://pbs.twimg.com/media/A.jpg?name=orig"
+        );
+    }
+
+    #[test]
+    fn existing_rendition_is_replaced_and_other_parameters_kept() {
+        assert_eq!(
+            original_photo_url("https://pbs.twimg.com/media/A?format=jpg&name=small"),
+            "https://pbs.twimg.com/media/A?format=jpg&name=orig"
+        );
+    }
+
+    #[test]
+    fn other_hosts_and_garbage_are_left_alone() {
+        assert_eq!(
+            original_photo_url("https://example.com/a.jpg"),
+            "https://example.com/a.jpg"
+        );
+        assert_eq!(original_photo_url("not a url"), "not a url");
     }
 }

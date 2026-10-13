@@ -351,7 +351,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
             let url = video.element.videoURL.flatMap(URL.init)
                 ?? AppEnvironment.shared.api.mediaURL(tweetID: tweet.restID, index: video.offset)
             pauseAllVideos()
-            presentFullScreenVideo(url)
+            presentFullScreenVideo(url, isGIF: video.element.kind == .animatedGif)
             return
         }
         let photoIndices = tweet.media.enumerated().compactMap { index, media -> Int? in
@@ -858,7 +858,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
     /// otherwise pass for live ones: the saved posts stay, with a note on top.
     private func showStaleNotice() {
         freshnessDismissed = false
-        presentFreshness("Offline · saved posts")
+        presentFreshness("Couldn't refresh · saved posts")
         UIAccessibility.post(notification: .announcement, argument: freshnessLabel.text)
     }
 

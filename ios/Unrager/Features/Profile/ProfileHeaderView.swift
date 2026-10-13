@@ -80,6 +80,7 @@ final class ProfileHeaderView: UIView {
 
         nameLabel.textColor = DesignSystem.Color.label
         nameLabel.numberOfLines = 0
+        nameLabel.accessibilityTraits = .header
         handleLabel.textColor = DesignSystem.Color.secondaryLabel
         basedInLabel.textColor = DesignSystem.Color.secondaryLabel
         basedInLabel.numberOfLines = 0

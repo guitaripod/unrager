@@ -3,7 +3,7 @@ import UIKit
 import UnragerKit
 
 /// Full-screen, swipeable, zoomable photo gallery. Loads each photo at up to
-/// 2,560 px through the media proxy and the shared image pipeline (so a page
+/// 4,096 px through the media proxy and the shared image pipeline (so a page
 /// seen once opens instantly again and the neighbours are fetched ahead), not
 /// the feed's downsampled thumbnail. Supports pinch + double-tap zoom,
 /// swipe-between, swipe-down-to-dismiss, and share. Videos/GIFs are handled
@@ -28,7 +28,7 @@ final class MediaViewerViewController: UIViewController {
     private let captionLabel = UILabel()
     private var chromeVisible = true
     private var captionExpanded = false
-    private static let maxPixel: CGFloat = 2560
+    private static let maxPixel: CGFloat = 4096
 
     var page: Int { currentPage }
 
@@ -116,7 +116,7 @@ final class MediaViewerViewController: UIViewController {
     }
 
     private func photoURL(at page: Int) -> URL {
-        AppEnvironment.shared.api.mediaURL(tweetID: tweetID, index: indices[page])
+        AppEnvironment.shared.api.mediaURL(tweetID: tweetID, index: indices[page], original: true)
     }
 
     /// Starts fetching the photos either side of `page`, so swiping to them
@@ -290,32 +290,54 @@ final class MediaViewerViewController: UIViewController {
         }
     }
 
-    /// Shares the full-resolution image — never the feed-snapshot placeholder,
-    /// and never the tailnet-only proxy URL (useless to any recipient outside
-    /// the tailnet). If the full-res load hasn't landed yet it's fetched here,
-    /// with the button disabled meanwhile; a failed fetch says so explicitly.
+    /// Shares the photo as uploaded, as a file: never the decoded copy on
+    /// screen (re-encoding it would lose quality), the feed-snapshot
+    /// placeholder, or the tailnet-only proxy URL (useless to any recipient
+    /// outside the tailnet). The button stays disabled while the file is
+    /// fetched; a failed fetch says so explicitly.
     private func shareCurrent() {
-        if let visible = currentCell, visible.hasFullRes, let image = visible.image {
-            presentShare(image)
-            return
-        }
         shareButton.isEnabled = false
         let url = photoURL(at: currentPage)
         Task { [weak self] in
             defer { self?.shareButton.isEnabled = true }
-            guard let data = try? await URLSession.shared.data(from: url).0,
-                  let image = UIImage(data: data) else {
+            guard let file = try? await Self.downloadOriginal(from: url) else {
                 AppLogger.shared.warn("share full-res fetch failed: \(url)", category: .media)
                 self?.presentShareFailure()
                 return
             }
-            self?.presentShare(image)
+            self?.presentShare(file)
         }
     }
 
-    private func presentShare(_ image: UIImage) {
-        let activity = UIActivityViewController(activityItems: [image], applicationActivities: nil)
+    /// The photo at `url` saved to a temporary file named for its type, so
+    /// the share sheet offers it as a picture with its original bytes.
+    private static func downloadOriginal(from url: URL) async throws -> URL {
+        let (downloaded, response) = try await URLSession.shared.download(from: url)
+        defer { try? FileManager.default.removeItem(at: downloaded) }
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension(fileExtension(forMIMEType: response.mimeType))
+        try FileManager.default.moveItem(at: downloaded, to: file)
+        return file
+    }
+
+    private static func fileExtension(forMIMEType mime: String?) -> String {
+        switch mime {
+        case "image/png": return "png"
+        case "image/gif": return "gif"
+        case "image/webp": return "webp"
+        case "image/heic": return "heic"
+        default: return "jpg"
+        }
+    }
+
+    private func presentShare(_ file: URL) {
+        let activity = UIActivityViewController(activityItems: [file], applicationActivities: nil)
         activity.popoverPresentationController?.sourceView = shareButton
+        activity.completionWithItemsHandler = { _, _, _, _ in try? FileManager.default.removeItem(at: file) }
         present(activity, animated: true)
     }
 
@@ -415,7 +437,7 @@ private final class ZoomablePhotoCell: UICollectionViewCell, UIScrollViewDelegat
         super.init(frame: frame)
         scrollView.delegate = self
         scrollView.minimumZoomScale = 1
-        scrollView.maximumZoomScale = 4
+        scrollView.maximumZoomScale = 6
         scrollView.showsVerticalScrollIndicator = false
         scrollView.showsHorizontalScrollIndicator = false
         scrollView.contentInsetAdjustmentBehavior = .never

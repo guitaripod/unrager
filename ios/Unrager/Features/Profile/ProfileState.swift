@@ -18,7 +18,7 @@ enum ProfileLoadState: Equatable {
             return .gone(message: "This account doesn't exist.")
         case let .unavailable(reason, _):
             return .gone(message: goneMessage(reason: reason))
-        case .rateLimited:
+        case .rateLimited, .offline, .network, .connectionLost, .unauthorized, .credits:
             return .failed(message: error.localizedDescription)
         default:
             return .failed(message: "Couldn't load this profile.")

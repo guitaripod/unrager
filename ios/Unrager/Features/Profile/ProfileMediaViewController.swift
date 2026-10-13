@@ -416,7 +416,7 @@ final class ProfileMediaViewController: UIViewController {
         if item.isVideo {
             let url = tweet.media[item.mediaIndex].videoURL.flatMap(URL.init)
                 ?? AppEnvironment.shared.api.mediaURL(tweetID: tweet.restID, index: item.mediaIndex)
-            presentFullScreenVideo(url)
+            presentFullScreenVideo(url, isGIF: tweet.media[item.mediaIndex].kind == .animatedGif)
             return
         }
         let photoIndices = tweet.media.enumerated().compactMap { index, media -> Int? in

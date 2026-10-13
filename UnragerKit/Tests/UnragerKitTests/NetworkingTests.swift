@@ -38,6 +38,14 @@ struct TransportConfigurationTests {
 
 @Suite("APIClient URL construction")
 struct QueryEncodingTests {
+    @Test("Media URLs ask for the original only when told to")
+    func mediaURLOriginal() {
+        let client = APIClient(transport: URLSessionTransport(), baseURL: { URL(string: "http://server:7777")! })
+        #expect(client.mediaURL(tweetID: "1", index: 2).absoluteString == "http://server:7777/api/media/1/2")
+        #expect(client.mediaURL(tweetID: "1", index: 2, original: true).absoluteString
+                == "http://server:7777/api/media/1/2?size=orig")
+    }
+
     private actor RecordingTransport: HTTPTransport {
         private(set) var urls: [URL] = []
 

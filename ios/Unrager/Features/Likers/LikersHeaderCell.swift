@@ -75,20 +75,40 @@ final class LikersHeaderCell: UICollectionViewListCell {
     }
 
     /// Draws `post` and `summary` for a row `width` wide. `offersLenses` makes
-    /// the follow-back row a button.
-    func configure(post: LikedPost, summary: LikersSummary, width: CGFloat, offersLenses: Bool) {
+    /// the follow-back row a button. `reveal` is for the first time the people
+    /// are known: the ring sweeps in and the counts climb to their figures.
+    /// While the first page loads the legend holds its place with bars, so
+    /// nothing moves when the figures arrive.
+    func configure(post: LikedPost, summary: LikersSummary, width: CGFloat, offersLenses: Bool, reveal: Bool) {
         card.isHidden = post.isEmpty
         card.configure(post: post, contentWidth: LikedPostCardView.contentWidth(rowWidth: width))
 
         let tally = summary.tally
-        ring.configure(likeCount: summary.likeCount, tally: tally, spoken: summary.spokenLegend)
-        scopeLabel.text = summary.scope
+        let placeholder = summary.isPlaceholder
+        ring.configure(likeCount: summary.likeCount, tally: tally, loading: placeholder, reveal: reveal,
+                       spoken: summary.spokenLegend)
+        setScope(summary.scope)
         titleLabel.text = summary.likeCount.map(LikersSummary.likesTitle)
-        titleLabel.isHidden = tally.hasStandings || summary.likeCount == nil
-        legend.isHidden = !tally.hasStandings
-        for (standing, row) in rows {
-            row.configure(count: tally.count(of: standing), faces: standing == .followsYou ? summary.followBackFaces : [],
-                          isButton: standing == .followsYou && offersLenses && tally.followsYou > 0)
+        titleLabel.isHidden = tally.hasStandings || placeholder || summary.likeCount == nil
+        legend.isHidden = !(tally.hasStandings || placeholder)
+        for (index, standing) in [Standing.mutual, .followsYou, .youFollow, .stranger].enumerated() {
+            rows[standing]?.configure(
+                count: placeholder ? nil : tally.count(of: standing),
+                faces: standing == .followsYou ? summary.followBackFaces : [],
+                isButton: standing == .followsYou && offersLenses && tally.followsYou > 0,
+                reveal: reveal, delay: 0.12 + Double(index) * 0.07)
+        }
+    }
+
+    /// Swaps the scope line with a quick dissolve once the cell is on screen.
+    private func setScope(_ text: String) {
+        guard scopeLabel.text != text else { return }
+        guard window != nil, !UIAccessibility.isReduceMotionEnabled else {
+            scopeLabel.text = text
+            return
+        }
+        UIView.transition(with: scopeLabel, duration: 0.22, options: [.transitionCrossDissolve, .allowUserInteraction]) {
+            self.scopeLabel.text = text
         }
     }
 }
@@ -98,7 +118,8 @@ final class LikersHeaderCell: UICollectionViewListCell {
 /// is ever a button.
 private final class LegendRow: UIControl {
     private let dot = UIView()
-    private let countLabel = UILabel()
+    private let countLabel = CountingLabel()
+    private let placeholder = UIView()
     private let titleLabel = UILabel()
     private let faces = FacePileView()
     private let chevron = UIImageView(image: DesignSystem.icon("chevron.right", pointSize: 10, weight: .bold))
@@ -116,6 +137,10 @@ private final class LegendRow: UIControl {
         countLabel.textColor = emphasised ? standing.tint : DesignSystem.Color.label
         countLabel.setContentHuggingPriority(.required, for: .horizontal)
         countLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        placeholder.backgroundColor = .secondarySystemFill
+        placeholder.layer.cornerRadius = 5
+        placeholder.layer.cornerCurve = .continuous
+        placeholder.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.text = Self.title(for: standing)
         titleLabel.font = DesignSystem.Typography.system(14, weight: emphasised ? .semibold : .regular)
         titleLabel.textColor = emphasised ? DesignSystem.Color.label : DesignSystem.Color.secondaryLabel
@@ -134,11 +159,18 @@ private final class LegendRow: UIControl {
         stack.setCustomSpacing(DesignSystem.Spacing.xs, after: faces)
         addManaged(stack)
         stack.pinEdges(to: self)
+        addSubview(placeholder)
         NSLayoutConstraint.activate([
             dot.widthAnchor.constraint(equalToConstant: 10),
             dot.heightAnchor.constraint(equalToConstant: 10),
             heightAnchor.constraint(greaterThanOrEqualToConstant: 28),
+            countLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 24),
+            placeholder.leadingAnchor.constraint(equalTo: countLabel.leadingAnchor),
+            placeholder.centerYAnchor.constraint(equalTo: countLabel.centerYAnchor),
+            placeholder.widthAnchor.constraint(equalToConstant: 18),
+            placeholder.heightAnchor.constraint(equalToConstant: 10),
         ])
+        placeholder.isHidden = true
         isAccessibilityElement = true
     }
 
@@ -158,15 +190,81 @@ private final class LegendRow: UIControl {
         }
     }
 
-    func configure(count: Int, faces people: [UserRow], isButton: Bool) {
-        countLabel.text = count.formatted()
-        faces.configure(people: people, tint: standing.tint)
-        faces.isHidden = people.isEmpty
+    private var isPlaceholder = false
+
+    /// Shows `count`, or a pulsing bar where it will be when it is nil. `reveal`
+    /// climbs the figure from zero, `delay` after the row appears.
+    func configure(count: Int?, faces people: [UserRow], isButton: Bool, reveal: Bool, delay: TimeInterval) {
+        setPlaceholder(count == nil)
+        if let count {
+            if reveal {
+                countLabel.setValue(count, from: 0, delay: delay)
+            } else {
+                countLabel.setValue(count)
+            }
+        }
+        setFaces(people, delay: reveal ? delay : 0)
         chevron.isHidden = !isButton
         isEnabled = isButton
         isUserInteractionEnabled = isButton
-        accessibilityLabel = "\(count.formatted()) \(Self.title(for: standing).lowercased())"
+        let spokenCount = count.map { $0.formatted() } ?? "Loading"
+        accessibilityLabel = "\(spokenCount) \(Self.title(for: standing).lowercased())"
         accessibilityTraits = isButton ? .button : .staticText
         accessibilityHint = isButton ? "Shows only these people" : nil
+    }
+
+    /// A bar that breathes in place of the count while the people load; when
+    /// they land it dissolves into the figure.
+    private func setPlaceholder(_ on: Bool) {
+        guard on != isPlaceholder || (on && placeholder.isHidden) else { return }
+        isPlaceholder = on
+        let animated = window != nil && !UIAccessibility.isReduceMotionEnabled
+        placeholder.layer.removeAnimation(forKey: "breathe")
+        if on {
+            countLabel.alpha = 0
+            placeholder.isHidden = false
+            placeholder.alpha = 1
+            if animated {
+                let breathe = CABasicAnimation(keyPath: "opacity")
+                breathe.fromValue = 0.4
+                breathe.toValue = 1
+                breathe.duration = 0.8
+                breathe.autoreverses = true
+                breathe.repeatCount = .infinity
+                breathe.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                placeholder.layer.add(breathe, forKey: "breathe")
+            }
+            return
+        }
+        let finish = {
+            self.placeholder.alpha = 0
+            self.countLabel.alpha = 1
+        }
+        guard animated else {
+            finish()
+            placeholder.isHidden = true
+            return
+        }
+        UIView.animate(withDuration: 0.2, delay: 0, options: [.allowUserInteraction], animations: finish) { _ in
+            if !self.isPlaceholder { self.placeholder.isHidden = true }
+        }
+    }
+
+    /// Fades the faces in when they first appear.
+    private func setFaces(_ people: [UserRow], delay: TimeInterval) {
+        let appearing = faces.isHidden && !people.isEmpty
+        faces.configure(people: people, tint: standing.tint)
+        faces.isHidden = people.isEmpty
+        guard appearing, window != nil, !UIAccessibility.isReduceMotionEnabled else {
+            faces.alpha = 1
+            return
+        }
+        faces.alpha = 0
+        faces.transform = CGAffineTransform(translationX: 10, y: 0)
+        UIView.animate(withDuration: 0.4, delay: delay, usingSpringWithDamping: 0.85, initialSpringVelocity: 0,
+                       options: [.allowUserInteraction]) {
+            self.faces.alpha = 1
+            self.faces.transform = .identity
+        }
     }
 }

@@ -67,6 +67,12 @@ class PagedUserListViewController: UIViewController {
     private var lensChipsShown: [LensChip] = []
     private var lensAutoPages = 0
 
+    /// Until this moment, rows that come on screen glide up into place a beat
+    /// after the one above, as they do when an empty list first fills.
+    private var entranceUntil: CFTimeInterval = 0
+    private var firstFill = false
+    private var skeletonFade = 0
+
     private lazy var registration = UICollectionView.CellRegistration<UserRowCell, String> {
         [weak self] cell, _, id in
         guard let self, let row = self.rowsByID[id] else { return }
@@ -128,13 +134,14 @@ class PagedUserListViewController: UIViewController {
     /// Whether the first page is still on its way.
     var isLoadingFirstPage: Bool { loading && order.isEmpty }
 
-    /// Draws the heading again from the subclass's model.
+    /// Draws the heading again from the subclass's model, letting its height
+    /// settle with the rest of the list when it is on screen.
     func reloadHeader() {
         guard hasHeader, isViewLoaded, dataSource != nil else { return }
         var snapshot = dataSource.snapshot()
         guard snapshot.indexOfItem(Self.headerID) != nil else { return }
         snapshot.reconfigureItems([Self.headerID])
-        dataSource.apply(snapshot, animatingDifferences: false)
+        dataSource.apply(snapshot, animatingDifferences: view.window != nil)
     }
 
     /// Narrows the list to the people `id` lets in; the first chip shows all.
@@ -248,17 +255,36 @@ class PagedUserListViewController: UIViewController {
     /// Shows the placeholder rows where the people will land, under the heading
     /// when there is one.
     private func showSkeleton() {
-        guard skeleton.isHidden else { return }
+        skeletonFade += 1
+        guard skeleton.isHidden else {
+            skeleton.layer.removeAllAnimations()
+            skeleton.alpha = 1
+            return
+        }
         positionBelowHeader()
         skeleton.alpha = 0
         skeleton.isHidden = false
         UIView.animate(withDuration: 0.25) { self.skeleton.alpha = 1 }
     }
 
+    /// Lets the placeholder dissolve while the first people glide in over it,
+    /// unless a newer load asked for it again in the meantime.
     private func hideSkeleton() {
         guard !skeleton.isHidden else { return }
-        skeleton.layer.removeAllAnimations()
-        skeleton.isHidden = true
+        skeletonFade += 1
+        let fade = skeletonFade
+        guard !UIAccessibility.isReduceMotionEnabled, !order.isEmpty else {
+            skeleton.layer.removeAllAnimations()
+            skeleton.isHidden = true
+            return
+        }
+        UIView.animate(withDuration: 0.24, delay: 0, options: [.curveEaseIn, .beginFromCurrentState]) {
+            self.skeleton.alpha = 0
+        } completion: { _ in
+            guard fade == self.skeletonFade else { return }
+            self.skeleton.isHidden = true
+            self.skeleton.alpha = 1
+        }
     }
 
     /// Lays the skeleton and the empty state out in the space under the
@@ -405,6 +431,7 @@ class PagedUserListViewController: UIViewController {
             do {
                 let page = try await fetchPage(cursor: requestCursor)
                 guard current == generation else { return }
+                firstFill = order.isEmpty
                 if reset {
                     rowsByID.removeAll()
                     order.removeAll()
@@ -517,7 +544,9 @@ class PagedUserListViewController: UIViewController {
 
     private func apply() {
         refreshPeople()
-        applySnapshot(animated: true)
+        if firstFill, !order.isEmpty { entranceUntil = CACurrentMediaTime() + 0.9 }
+        applySnapshot(animated: !firstFill)
+        firstFill = false
         updateFooter()
         loadMoreIfSparse()
         guard order.isEmpty else { emptyState.isHidden = true; return }
@@ -561,8 +590,25 @@ extension PagedUserListViewController: UICollectionViewDelegate {
     }
 
     func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
+        glideIn(cell, at: indexPath)
         guard !pagingFailed, dataSource.sectionIdentifier(for: indexPath.section) == .people,
               indexPath.item >= dataSource.snapshot().numberOfItems(inSection: .people) - 4 else { return }
         load(reset: false)
+    }
+}
+
+extension PagedUserListViewController {
+    /// While the first people of an empty list arrive, each row fades up into
+    /// place a beat after the one above it.
+    fileprivate func glideIn(_ cell: UICollectionViewCell, at indexPath: IndexPath) {
+        guard cell is UserRowCell, CACurrentMediaTime() < entranceUntil,
+              !UIAccessibility.isReduceMotionEnabled else { return }
+        cell.alpha = 0
+        cell.transform = CGAffineTransform(translationX: 0, y: 16)
+        UIView.animate(withDuration: 0.5, delay: Double(min(indexPath.item, 8)) * 0.04,
+                       usingSpringWithDamping: 0.9, initialSpringVelocity: 0, options: [.allowUserInteraction]) {
+            cell.alpha = 1
+            cell.transform = .identity
+        }
     }
 }

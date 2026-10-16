@@ -185,6 +185,10 @@ struct LikersSummary: Equatable {
         count == 1 ? "1 like" : "\(count.formatted()) likes"
     }
 
+    /// Whether the first page is still on its way, so the header holds the
+    /// places of the figures it will show.
+    var isPlaceholder: Bool { loading && tally.listed == 0 }
+
     /// What the legend is counting, so a partial list isn't taken for all of it.
     var scope: String {
         if loading, tally.listed == 0 { return "Loading the people who liked this…" }

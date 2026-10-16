@@ -255,7 +255,21 @@ final class UserRowCell: UICollectionViewListCell {
         flags.resolve(restID: row.id, screenName: row.handle) { [weak self] resolved in
             guard let self, self.boundID == row.id else { return }
             self.setFlag(resolved.flag)
+            guard resolved.flag != nil, !UIAccessibility.isReduceMotionEnabled else { return }
+            self.flagLabel.alpha = 0
+            UIView.animate(withDuration: 0.25, delay: 0, options: [.allowUserInteraction]) { self.flagLabel.alpha = 1 }
         }
+    }
+
+    /// Runs `change` on `view` with a quick dissolve, or at once under Reduce
+    /// Motion.
+    private func dissolve(_ view: UIView, duration: TimeInterval, _ change: @escaping () -> Void) {
+        guard !UIAccessibility.isReduceMotionEnabled else {
+            change()
+            return
+        }
+        UIView.transition(with: view, duration: duration, options: [.transitionCrossDissolve, .allowUserInteraction],
+                          animations: change)
     }
 
     private func setFlag(_ flag: String?) {
@@ -277,7 +291,7 @@ final class UserRowCell: UICollectionViewListCell {
             let image = await ImageLoader.image(for: url, pointSize: size, scale: scale)
             guard !Task.isCancelled, let self, let image, self.boundID == row.id else { return }
             self.avatar.contentMode = .scaleAspectFill
-            self.avatar.image = image
+            self.dissolve(self.avatar, duration: 0.2) { self.avatar.image = image }
         }
     }
 
@@ -309,6 +323,7 @@ final class UserRowCell: UICollectionViewListCell {
         boundID = nil
         onToggleFollow = nil
         flagLabel.isHidden = true
+        flagLabel.alpha = 1
         ringTint = nil
         paintRing()
     }

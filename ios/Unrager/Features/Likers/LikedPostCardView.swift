@@ -36,6 +36,16 @@ final class LikedPostCardView: UIView {
     private let statsColumn = UIStackView()
     private let mediaRow = UIStackView()
     private let authorRow = UIStackView()
+    private var showsTweet = false
+    private var drawn: Drawn?
+
+    /// What the card was last drawn for, so a header redrawn for the sake of
+    /// the figures under it leaves the post alone.
+    private struct Drawn: Equatable {
+        let tweetID: String?
+        let snippet: String?
+        let width: CGFloat
+    }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -163,8 +173,25 @@ final class LikedPostCardView: UIView {
         media.prepareForReuse()
     }
 
-    /// Shows `post`, with media sized for a card `contentWidth` wide inside.
+    /// Shows `post`, with media sized for a card `contentWidth` wide inside. A
+    /// card that already shows a quoted line and now learns the whole post
+    /// dissolves into it.
     func configure(post: LikedPost, contentWidth: CGFloat) {
+        let signature = Drawn(tweetID: post.tweet?.restID, snippet: post.snippet, width: contentWidth)
+        guard signature != drawn else { return }
+        drawn = signature
+        let learnsPost = post.tweet != nil && !showsTweet && window != nil
+        showsTweet = post.tweet != nil
+        guard learnsPost, !UIAccessibility.isReduceMotionEnabled else {
+            apply(post, contentWidth: contentWidth)
+            return
+        }
+        UIView.transition(with: self, duration: 0.3, options: [.transitionCrossDissolve, .allowUserInteraction]) {
+            self.apply(post, contentWidth: contentWidth)
+        }
+    }
+
+    private func apply(_ post: LikedPost, contentWidth: CGFloat) {
         guard let tweet = post.tweet else {
             showSnippet(post.snippet ?? "")
             return

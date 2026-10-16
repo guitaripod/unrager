@@ -11,14 +11,17 @@ final class LikersViewController: PagedUserListViewController {
     private var post: LikedPost
     private var likeCount: Int?
     private var summary: LikersSummary
+    private var ringRevealed = false
 
     private lazy var headerRegistration = UICollectionView.CellRegistration<LikersHeaderCell, String> {
         [weak self] cell, _, _ in
         guard let self else { return }
         cell.onOpenPost = { [weak self] in self?.openPost() }
         cell.onShowFollowBack = { [weak self] in self?.selectLens(LikerLens.followBack.rawValue) }
+        let reveal = !self.ringRevealed && self.summary.tally.hasStandings
+        if reveal { self.ringRevealed = true }
         cell.configure(post: self.post, summary: self.summary, width: self.view.bounds.width,
-                       offersLenses: self.summary.offersLenses)
+                       offersLenses: self.summary.offersLenses, reveal: reveal)
     }
 
     init(tweetID: String, tweet: Tweet? = nil) {
@@ -87,6 +90,7 @@ final class LikersViewController: PagedUserListViewController {
     /// standings only once the list says them. Shown once there are people
     /// enough to narrow, or while a lens is chosen.
     override var lensChips: [LensChip] {
+        if summary.isPlaceholder, (likeCount ?? 0) >= LikersSummary.minimumForLenses { return LensChip.placeholders }
         guard summary.offersLenses || lens != nil else { return [] }
         let tally = summary.tally
         let candidates = tally.hasStandings ? LikerLens.allCases : [.everyone, .verified]

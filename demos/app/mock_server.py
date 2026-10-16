@@ -174,7 +174,7 @@ class Handler(BaseHTTPRequestHandler):
             if LATENCY["assets"]:
                 time.sleep(LATENCY["assets"])
             return self.serve_asset(path)
-        if LATENCY["api"] and path.startswith(("/api/sources", "/api/profile", "/api/whoami")):
+        if LATENCY["api"] and path.startswith(("/api/sources", "/api/profile", "/api/whoami", "/api/likers")):
             time.sleep(LATENCY["api"])
         if path == "/api/health":
             return self.send_json({"ok": True, "name": "unrager", "version": "0.24.0"})

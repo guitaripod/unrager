@@ -158,4 +158,40 @@ struct LikerRelationshipTests {
         #expect(LikedPostCardView.statsFitBeside(mediaWidth: 150, contentWidth: 330))
         #expect(!LikedPostCardView.statsFitBeside(mediaWidth: 330, contentWidth: 330))
     }
+
+    @Test("The header holds its figures' places only until the first page lands")
+    func placeholderUntilFirstPage() throws {
+        #expect(LikersSummary(likeCount: 40, rows: [], loading: true).isPlaceholder)
+        #expect(!LikersSummary(likeCount: 40, rows: [], loading: false).isPlaceholder)
+        let crowd = try Self.crowd()
+        #expect(!LikersSummary(likeCount: 40, rows: crowd, loading: true).isPlaceholder)
+    }
+
+    @Test("A count eases out: quick at first, landing exactly, and never overshooting")
+    func countingEases() {
+        #expect(CountingLabel.eased(from: 0, to: 100, progress: 0) == 0)
+        #expect(CountingLabel.eased(from: 0, to: 100, progress: 1) == 100)
+        #expect(CountingLabel.eased(from: 0, to: 100, progress: 0.5) > 50)
+        #expect(CountingLabel.eased(from: 0, to: 100, progress: 7) == 100)
+        #expect(CountingLabel.eased(from: 40, to: 10, progress: 0.5) < 25)
+        #expect(CountingLabel.eased(from: 40, to: 10, progress: 0.5) > 10)
+    }
+
+    @Test("A label off screen takes its value at once")
+    func countingOffScreen() {
+        let label = CountingLabel()
+        label.setValue(42, from: 0)
+        #expect(label.text == "42")
+        #expect(label.value == 42)
+    }
+
+    @Test("The lens bar's stand-ins are four chips that take no touches")
+    func lensPlaceholders() {
+        let chips = LensChip.placeholders
+        let allStandIns = chips.allSatisfy { $0.isPlaceholder }
+        let ids = Set(chips.map { $0.id })
+        #expect(chips.count == 4)
+        #expect(allStandIns)
+        #expect(ids.count == 4)
+    }
 }

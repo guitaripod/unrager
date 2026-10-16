@@ -227,6 +227,7 @@ final class TweetCell: UICollectionViewCell {
         onShowMore = nil
         onToggleStats = nil
         statsView.isHidden = true
+        statsView.reset()
         statsShown = false
         onTapReplyCaption = nil
         replyCaption.capturesPlainTaps = false
@@ -276,6 +277,7 @@ final class TweetCell: UICollectionViewCell {
         bodyLineLimit: Int = 0, stats: PostStatsContent? = nil,
         viewerHandle: String? = nil, pinned: Bool = false, showsStanding: Bool = true
     ) {
+        let sameTweet = boundTweet?.restID == tweet.restID
         tweetID = tweet.restID
         boundTweet = tweet
         statsShown = stats != nil
@@ -321,7 +323,7 @@ final class TweetCell: UICollectionViewCell {
                             contentWidth: contentWidth - 2 * Self.sideMargin - QuotedPostView.nestingInset)
         }
         PerfProbe.time("cfg.actions") { configureActions(tweet) }
-        configureStats(tweet, content: stats)
+        configureStats(tweet, content: stats, animate: sameTweet)
         pendingEmoji = TwemojiText.uncachedEmoji(
             in: [tweet.author.name, body.string] + tweet.quoteChain.flatMap { [$0.author.name, $0.text] })
         boundSeen = seen
@@ -330,13 +332,14 @@ final class TweetCell: UICollectionViewCell {
 
     /// Shows or hides the stats strip under the action bar, and makes the views
     /// count tappable when a tap is how the strip opens.
-    private func configureStats(_ tweet: Tweet, content: PostStatsContent?) {
+    private func configureStats(_ tweet: Tweet, content: PostStatsContent?, animate: Bool) {
         if let content {
-            statsView.configure(tweet: tweet, content: content)
+            statsView.configure(tweet: tweet, content: content, animate: animate)
             statsView.isHidden = false
         } else {
             statsView.isHidden = true
-            }
+            statsView.reset()
+        }
         viewsTap.isEnabled = AppSettings.postStatsMode == .onTap && (tweet.viewCount ?? 0) > 0
         viewsLabel.isUserInteractionEnabled = viewsTap.isEnabled
     }

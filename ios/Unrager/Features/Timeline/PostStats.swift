@@ -155,60 +155,191 @@ final class PostStatsStore {
     }
 }
 
-/// The compact strip under a post's action bar: a row of figures, and for an
-/// own post a small bar chart of its first 48 hours of impressions.
+/// The strip under a post's action bar, as one card: the big figure (impressions
+/// on your own post, views on anyone's) with the share that engaged, a chart
+/// under it (a post's first hours, with the reach building up, for your own;
+/// how its engagement splits between likes, reposts and the rest for anyone's),
+/// a line saying what the chart shows, and the smaller figures. The first time
+/// it opens the card rises, the figure counts up and the chart draws itself; a
+/// chart that was a pulsing outline while X's numbers loaded fills in when they
+/// arrive.
 final class PostStatsView: UIStackView {
+    /// What the card last showed, so a redraw of the same thing stays still.
+    private enum Presented: Equatable {
+        case loading(String)
+        case analytics(String)
+        case publicCounts(String)
+    }
+
+    private let card = UIView()
+    private let content = UIStackView()
+    private let headline = UIStackView()
+    private let figure = CountingLabel()
+    private let figureCaption = UILabel()
+    private let engaged = EngagedPill()
+    private let chart = EngagementChartView()
+    private let mix = EngagementMixView()
+    private let insight = UILabel()
+    private let divider = HairlineView()
     private let figures = UIStackView()
-    private let chart = SparklineView()
-    private let chartCaption = UILabel()
-    private let chartRow = UIStackView()
+    private var presented: Presented?
     /// Fired by a tap on the "Quotes" figure when the post has any.
     var onTapQuotes: (() -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         axis = .vertical
-        spacing = DesignSystem.Spacing.xs
         isLayoutMarginsRelativeArrangement = true
-        directionalLayoutMargins = NSDirectionalEdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16)
+        directionalLayoutMargins = NSDirectionalEdgeInsets(top: 0, leading: 16, bottom: 4, trailing: 16)
+
+        card.backgroundColor = DesignSystem.Color.surface
+        card.layer.cornerRadius = DesignSystem.Radius.card
+        card.layer.cornerCurve = .continuous
+
+        figure.font = DesignSystem.Typography.system(26, weight: .bold)
+        figure.textColor = DesignSystem.Color.label
+        figure.format = { Format.count($0) }
+        figure.setContentHuggingPriority(.required, for: .horizontal)
+        figureCaption.font = DesignSystem.Typography.system(13, weight: .medium)
+        figureCaption.textColor = DesignSystem.Color.secondaryLabel
+        let headlineSpacer = UIView()
+        headlineSpacer.setContentHuggingPriority(UILayoutPriority(1), for: .horizontal)
+        [figure, figureCaption, headlineSpacer, engaged].forEach(headline.addArrangedSubview)
+        headline.alignment = .firstBaseline
+        headline.spacing = DesignSystem.Spacing.xs + 2
+
+        insight.font = DesignSystem.Typography.system(12, weight: .regular)
+        insight.textColor = DesignSystem.Color.secondaryLabel
+        insight.numberOfLines = 2
+
         figures.axis = .horizontal
-        figures.distribution = .fillProportionally
-        figures.spacing = DesignSystem.Spacing.m
-        chartCaption.font = DesignSystem.Typography.system(10, weight: .regular)
-        chartCaption.textColor = DesignSystem.Color.tertiaryLabel
-        chartCaption.text = "First 48 hours"
-        chartCaption.setContentHuggingPriority(.required, for: .horizontal)
-        chart.heightAnchor.constraint(equalToConstant: 18).isActive = true
-        chartRow.axis = .horizontal
-        chartRow.spacing = DesignSystem.Spacing.s
-        chartRow.alignment = .bottom
-        chartRow.addArrangedSubview(chart)
-        chartRow.addArrangedSubview(chartCaption)
-        addArrangedSubview(figures)
-        addArrangedSubview(chartRow)
+        figures.distribution = .equalSpacing
+        figures.alignment = .top
+
+        [headline, chart, mix, insight, divider, figures].forEach(content.addArrangedSubview)
+        content.axis = .vertical
+        content.spacing = DesignSystem.Spacing.s + 2
+        content.setCustomSpacing(DesignSystem.Spacing.m, after: insight)
+        content.translatesAutoresizingMaskIntoConstraints = false
+        card.addSubview(content)
+        addArrangedSubview(card)
+        NSLayoutConstraint.activate([
+            content.topAnchor.constraint(equalTo: card.topAnchor, constant: 14),
+            content.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -14),
+            content.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14),
+            content.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -14),
+        ])
         isAccessibilityElement = false
     }
 
     @available(*, unavailable)
     required init(coder: NSCoder) { fatalError() }
 
-    func configure(tweet: Tweet, content: PostStatsContent) {
-        let cells = PostStatsModel.cells(for: tweet, content: content)
+    /// Forgets what the card showed, for a row about to show another post.
+    func reset() {
+        presented = nil
+    }
+
+    /// Shows `content` for `tweet`. With `animate`, a card that is new on this
+    /// post rises and draws itself, and one that changed (X's numbers arriving)
+    /// fills in; without it the card is simply there.
+    func configure(tweet: Tweet, content: PostStatsContent, animate: Bool = false) {
+        let now: Presented
+        switch content {
+        case .loading: now = .loading(tweet.restID)
+        case .analytics: now = .analytics(tweet.restID)
+        case .publicCounts: now = .publicCounts(tweet.restID)
+        }
+        let first = presented == nil
+        let changed = presented != now
+        presented = now
+        let reveal = animate && changed && window != nil && !UIAccessibility.isReduceMotionEnabled
+
+        configureHeadline(tweet: tweet, content: content, countFrom: reveal && first ? 0 : nil, animated: reveal)
+        let curve: EngagementCurve?
+        if case let .analytics(analytics) = content { curve = EngagementCurve(hourly: analytics.hourlyImpressions) } else { curve = nil }
+        switch content {
+        case .loading:
+            chart.show(nil)
+            chart.isHidden = false
+            mix.isHidden = true
+        case .analytics where curve != nil:
+            chart.show(curve)
+            chart.isHidden = false
+            mix.isHidden = true
+        case .analytics, .publicCounts:
+            chart.isHidden = true
+            mix.show(EngagementMix(tweet: tweet))
+        }
+        insight.text = curve?.insight
+        insight.isHidden = curve == nil
+        divider.isHidden = false
+        configureFigures(tweet: tweet, content: content)
+        if reveal { play(first: first, curve: curve != nil) }
+    }
+
+    private func configureHeadline(tweet: Tweet, content: PostStatsContent, countFrom: Int?, animated: Bool) {
+        guard let model = PostStatsHeadline.make(for: tweet, content: content) else {
+            headline.isHidden = true
+            return
+        }
+        headline.isHidden = false
+        figureCaption.text = model.caption
+        if let countFrom {
+            figure.setValue(model.figure, from: countFrom, delay: 0.1, duration: 0.8)
+        } else {
+            figure.setValue(model.figure, animated: animated)
+        }
+        engaged.set(model.engaged)
+    }
+
+    private func configureFigures(tweet: Tweet, content: PostStatsContent) {
+        var cells = PostStatsModel.cells(for: tweet, content: content)
+        switch content {
+        case .analytics:
+            cells = cells.dropFirst().map {
+                PostStatCell(value: $0.value.components(separatedBy: " · ").first ?? $0.value,
+                             caption: $0.caption, opensQuotes: $0.opensQuotes)
+            }
+        case .publicCounts, .loading:
+            if PostStatsHeadline.make(for: tweet, content: content)?.engaged != nil {
+                cells.removeAll { $0.caption == "Engagement" }
+            }
+        }
         figures.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for cell in cells { figures.addArrangedSubview(makeCell(cell, dimmed: content == .loading)) }
-        figures.addArrangedSubview(UIView())
-        if case let .analytics(analytics) = content, analytics.hourlyImpressions.count >= 6 {
-            chart.values = analytics.hourlyImpressions
-            chartRow.isHidden = false
-        } else {
-            chartRow.isHidden = true
+        figures.isHidden = cells.isEmpty
+        divider.isHidden = cells.isEmpty
+    }
+
+    /// The card settles in, and what is on it follows.
+    private func play(first: Bool, curve: Bool) {
+        if first {
+            card.alpha = 0
+            card.transform = CGAffineTransform(translationX: 0, y: 10)
+            UIView.animate(withDuration: 0.5, delay: 0, usingSpringWithDamping: 0.86, initialSpringVelocity: 0,
+                           options: [.allowUserInteraction]) {
+                self.card.alpha = 1
+                self.card.transform = .identity
+            }
+            for (index, tile) in figures.arrangedSubviews.enumerated() {
+                tile.alpha = 0
+                UIView.animate(withDuration: 0.4, delay: 0.35 + Double(index) * 0.05, options: [.allowUserInteraction]) {
+                    tile.alpha = 1
+                }
+            }
         }
+        if !chart.isHidden, chart.curve != nil { chart.play() }
+        if !mix.isHidden { mix.play() }
+        guard curve else { return }
+        insight.alpha = 0
+        UIView.animate(withDuration: 0.4, delay: 1.0, options: [.allowUserInteraction]) { self.insight.alpha = 1 }
     }
 
     private func makeCell(_ cell: PostStatCell, dimmed: Bool) -> UIView {
         let value = UILabel()
         value.text = cell.value
-        value.font = DesignSystem.Typography.system(14, weight: .semibold)
+        value.font = DesignSystem.Typography.system(15, weight: .semibold)
         value.textColor = dimmed ? DesignSystem.Color.tertiaryLabel
             : cell.opensQuotes ? DesignSystem.Color.accent : DesignSystem.Color.label
         let caption = UILabel()
@@ -218,8 +349,11 @@ final class PostStatsView: UIStackView {
         let column = UIStackView(arrangedSubviews: [value, caption])
         column.axis = .vertical
         column.spacing = 0
+        column.isAccessibilityElement = true
+        column.accessibilityLabel = "\(cell.caption): \(cell.value)"
         if cell.opensQuotes {
             column.isUserInteractionEnabled = true
+            column.accessibilityTraits = .button
             column.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(quotesTapped)))
         }
         return column
@@ -231,34 +365,39 @@ final class PostStatsView: UIStackView {
     }
 }
 
-/// A row of thin bars, one per value, tallest for the largest.
-final class SparklineView: UIView {
-    var values: [Int] = [] {
-        didSet { setNeedsDisplay() }
-    }
+/// The "6.5% engaged" capsule beside the big figure.
+private final class EngagedPill: UIView {
+    private let label = UILabel()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        backgroundColor = .clear
-        isOpaque = false
-        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: SparklineView, _) in
-            view.setNeedsDisplay()
-        }
+        label.font = DesignSystem.Typography.system(12, weight: .semibold)
+        label.textColor = DesignSystem.Color.accent
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.topAnchor.constraint(equalTo: topAnchor, constant: 3),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -3),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 9),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -9),
+        ])
+        backgroundColor = DesignSystem.Color.accent.withAlphaComponent(0.13)
+        layer.cornerCurve = .continuous
+        setContentHuggingPriority(.required, for: .horizontal)
+        setContentCompressionResistancePriority(.required, for: .horizontal)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    override func draw(_ rect: CGRect) {
-        guard let peak = values.max(), peak > 0, !values.isEmpty else { return }
-        let gap: CGFloat = 1.5
-        let width = min(5, max(1, (rect.width - gap * CGFloat(values.count - 1)) / CGFloat(values.count)))
-        DesignSystem.Color.accent.withAlphaComponent(0.55).setFill()
-        for (index, value) in values.enumerated() {
-            let height = max(1.5, rect.height * CGFloat(value) / CGFloat(peak))
-            let bar = CGRect(x: CGFloat(index) * (width + gap), y: rect.height - height, width: width, height: height)
-            UIBezierPath(roundedRect: bar, cornerRadius: min(width / 2, 1.5)).fill()
-        }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        layer.cornerRadius = bounds.height / 2
+    }
+
+    func set(_ text: String?) {
+        label.text = text
+        isHidden = text == nil
     }
 }
 

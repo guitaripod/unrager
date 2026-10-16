@@ -80,7 +80,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
                        focal: isFocal, indentLevel: indent,
                        stats: PostStatsPolicy.content(
                            for: tweet, expanded: self.expandedStats.contains(id), isOwn: ownTweet,
-                           changed: { [weak self] in self?.reconfigure(id, animated: false) }),
+                           changed: { [weak self] in self?.reconfigure(id, animated: true) }),
                        viewerHandle: self.selfHandle ?? AppEnvironment.shared.currentHandle)
         self.applyFlag(to: cell, author: tweet.author)
         cell.onTapAuthor = { [weak self] in self?.push(ProfileViewController(handle: tweet.author.handle)) }
@@ -157,6 +157,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
         view.backgroundColor = DesignSystem.Color.background
 
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: makeLayout())
+        collectionView.selfSizingInvalidation = .enabled
         collectionView.backgroundColor = .clear
         collectionView.delegate = self
         view.addManaged(collectionView)

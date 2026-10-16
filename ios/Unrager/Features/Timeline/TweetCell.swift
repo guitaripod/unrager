@@ -165,7 +165,22 @@ final class TweetCell: UICollectionViewCell {
     override func preferredLayoutAttributesFitting(
         _ layoutAttributes: UICollectionViewLayoutAttributes
     ) -> UICollectionViewLayoutAttributes {
-        PerfProbe.time("sizing") { super.preferredLayoutAttributesFitting(layoutAttributes) }
+        PerfProbe.time("sizing") {
+            let attributes = super.preferredLayoutAttributesFitting(layoutAttributes)
+            attributes.size.height = fittedHeight(forWidth: attributes.size.width)
+            return attributes
+        }
+    }
+
+    /// The height the content needs at `width`, measured from the content view
+    /// alone. The cell's own answer is pinned to the height it already has, so a
+    /// row whose content got shorter (a stats card whose chart gave way to a
+    /// bar, a strip closing) would keep its old height with the slack stretched
+    /// into the content.
+    private func fittedHeight(forWidth width: CGFloat) -> CGFloat {
+        let target = CGSize(width: width, height: UIView.layoutFittingCompressedSize.height)
+        return ceil(contentView.systemLayoutSizeFitting(
+            target, withHorizontalFittingPriority: .required, verticalFittingPriority: .fittingSizeLevel).height)
     }
 
     override func layoutSubviews() {
@@ -334,8 +349,9 @@ final class TweetCell: UICollectionViewCell {
     /// count tappable when a tap is how the strip opens.
     private func configureStats(_ tweet: Tweet, content: PostStatsContent?, animate: Bool) {
         if let content {
-            statsView.configure(tweet: tweet, content: content, animate: animate)
+            let reshaped = statsView.configure(tweet: tweet, content: content, animate: animate)
             statsView.isHidden = false
+            if reshaped { invalidateIntrinsicContentSize() }
         } else {
             statsView.isHidden = true
             statsView.reset()

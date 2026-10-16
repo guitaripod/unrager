@@ -431,7 +431,6 @@ final class EngagementMixView: UIView {
         for slice in (newMix?.slices ?? []).prefix(4) {
             legend.addArrangedSubview(legendItem(slice))
         }
-        isHidden = newMix == nil
         isAccessibilityElement = newMix != nil
         accessibilityLabel = newMix.map { mix in
             "Engagement: " + mix.slices.map { "\($0.kind.title) \(EngagementMix.percent($0.share))" }.joined(separator: ", ")

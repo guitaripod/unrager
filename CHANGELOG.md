@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **A post's stats card in the iPhone app always takes the height of what it shows.** A card that got shorter once X's numbers arrived (the loading outline of a chart giving way to the engagement bar, for a post X had no hours for, no analytics for, or whose request failed) stayed as tall as the outline with the slack opening above the figure, and the same happened when a strip closed. Rows now measure themselves from their content, so they close up and open out to fit whatever the post has; a post with nothing to chart or split shows just its figures, with no empty bar or stray divider.
+
 ## [0.31.2] — 2026-10-17
 
 - **The iPhone app's tab bar collapses to the selected tab on scroll again, whatever tab you are on.** It had been pinned open whenever a Notifications badge was showing, which is most of the time; the badge now simply waits on the tab until the bar expands. The Profile tab, whose list sits inside a container, now hands that list to the tab bar too, so it collapses there as well.

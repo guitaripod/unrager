@@ -93,7 +93,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
                        bodyLineLimit: self.expandedBodies.contains(id) ? 0 : TweetCell.feedBodyLineLimit,
                        stats: PostStatsPolicy.content(
                            for: tweet, expanded: self.expandedStats.contains(id), isOwn: self.isOwnTweet(tweet),
-                           changed: { [weak self] in self?.reconfigure(id, animated: false) }),
+                           changed: { [weak self] in self?.reconfigure(id, animated: true) }),
                        viewerHandle: AppEnvironment.shared.currentHandle,
                        pinned: self.viewModel.pinnedID == id,
                        showsStanding: self.showsAuthorStanding) }
@@ -285,6 +285,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
 
     private func configureCollectionView() {
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: makeLayout())
+        collectionView.selfSizingInvalidation = .enabled
         collectionView.backgroundColor = .clear
         collectionView.alwaysBounceVertical = true
         collectionView.delegate = self

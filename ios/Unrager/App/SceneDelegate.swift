@@ -56,6 +56,10 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             func homeNav() -> UINavigationController? { root.viewControllers?.first as? UINavigationController }
             switch parts.first {
+            case "home":
+                root.selectedIndex = 0
+                let home = homeNav()?.viewControllers.first as? HomeViewController
+                if parts.count > 1, let points = Double(parts[1]) { home?.debugScroll(by: CGFloat(points)) }
             case "following":
                 root.selectedIndex = 0
                 let home = homeNav()?.viewControllers.first as? HomeViewController

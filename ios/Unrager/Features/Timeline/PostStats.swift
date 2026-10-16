@@ -155,6 +155,65 @@ final class PostStatsStore {
     }
 }
 
+/// Which parts of a post's stats card are on show, and with what: decided in
+/// one place so the card's height never depends on what a previous post or a
+/// previous state left visible, and testable without a view.
+struct PostStatsLayout: Equatable {
+    /// What fills the space under the headline.
+    enum Plot: Equatable {
+        /// Nothing the post has data for.
+        case none
+        /// The pulsing outline that holds the chart's place while X's numbers load.
+        case outline
+        case curve(EngagementCurve)
+        case mix(EngagementMix)
+    }
+
+    let headline: PostStatsHeadline?
+    let plot: Plot
+    let figures: [PostStatCell]
+    /// Whether the figures are placeholders until X's numbers arrive.
+    let dimmed: Bool
+
+    init(tweet: Tweet, content: PostStatsContent) {
+        headline = PostStatsHeadline.make(for: tweet, content: content)
+        var cells = PostStatsModel.cells(for: tweet, content: content)
+        let pillShowsEngagement = headline?.engaged != nil
+        switch content {
+        case .loading:
+            plot = .outline
+            if pillShowsEngagement { cells.removeAll { $0.caption == "Engagement" } }
+        case let .analytics(analytics):
+            if let curve = EngagementCurve(hourly: analytics.hourlyImpressions) {
+                plot = .curve(curve)
+            } else {
+                plot = EngagementMix(tweet: tweet).map(Plot.mix) ?? .none
+            }
+            cells = cells.dropFirst().map {
+                PostStatCell(value: $0.value.components(separatedBy: " · ").first ?? $0.value,
+                             caption: $0.caption, opensQuotes: $0.opensQuotes)
+            }
+        case .publicCounts:
+            plot = EngagementMix(tweet: tweet).map(Plot.mix) ?? .none
+            if pillShowsEngagement { cells.removeAll { $0.caption == "Engagement" } }
+        }
+        figures = cells
+        dimmed = content == .loading
+    }
+
+    /// The sentence under a chart of the post's hours.
+    var insight: String? {
+        if case let .curve(curve) = plot { return curve.insight }
+        return nil
+    }
+
+    /// The hairline between the plot and the figures, only when there is
+    /// something above it to divide them from.
+    var showsDivider: Bool {
+        !figures.isEmpty && (headline != nil || plot != .none)
+    }
+}
+
 /// The strip under a post's action bar, as one card: the big figure (impressions
 /// on your own post, views on anyone's) with the share that engaged, a chart
 /// under it (a post's first hours, with the reach building up, for your own;
@@ -183,6 +242,7 @@ final class PostStatsView: UIStackView {
     private let divider = HairlineView()
     private let figures = UIStackView()
     private var presented: Presented?
+    private var shown: PostStatsLayout?
     /// Fired by a tap on the "Quotes" figure when the post has any.
     var onTapQuotes: (() -> Void)?
 
@@ -238,12 +298,15 @@ final class PostStatsView: UIStackView {
     /// Forgets what the card showed, for a row about to show another post.
     func reset() {
         presented = nil
+        shown = nil
     }
 
     /// Shows `content` for `tweet`. With `animate`, a card that is new on this
     /// post rises and draws itself, and one that changed (X's numbers arriving)
-    /// fills in; without it the card is simply there.
-    func configure(tweet: Tweet, content: PostStatsContent, animate: Bool = false) {
+    /// fills in; without it the card is simply there. Returns whether a card
+    /// already on screen changed shape, so its row can be measured again.
+    @discardableResult
+    func configure(tweet: Tweet, content: PostStatsContent, animate: Bool = false) -> Bool {
         let now: Presented
         switch content {
         case .loading: now = .loading(tweet.restID)
@@ -255,31 +318,40 @@ final class PostStatsView: UIStackView {
         presented = now
         let reveal = animate && changed && window != nil && !UIAccessibility.isReduceMotionEnabled
 
-        configureHeadline(tweet: tweet, content: content, countFrom: reveal && first ? 0 : nil, animated: reveal)
-        let curve: EngagementCurve?
-        if case let .analytics(analytics) = content { curve = EngagementCurve(hourly: analytics.hourlyImpressions) } else { curve = nil }
-        switch content {
-        case .loading:
+        let layout = PostStatsLayout(tweet: tweet, content: content)
+        let reshaped = shown != nil && shown != layout
+        shown = layout
+        configureHeadline(layout.headline, countFrom: reveal && first ? 0 : nil, animated: reveal)
+        configurePlot(layout.plot)
+        insight.text = layout.insight
+        insight.isHidden = layout.insight == nil
+        configureFigures(layout)
+        if reveal { play(first: first, curve: layout.insight != nil) }
+        return reshaped
+    }
+
+    private func configurePlot(_ plot: PostStatsLayout.Plot) {
+        switch plot {
+        case .none:
+            chart.isHidden = true
+            mix.isHidden = true
+        case .outline:
             chart.show(nil)
             chart.isHidden = false
             mix.isHidden = true
-        case .analytics where curve != nil:
+        case let .curve(curve):
             chart.show(curve)
             chart.isHidden = false
             mix.isHidden = true
-        case .analytics, .publicCounts:
+        case let .mix(breakdown):
             chart.isHidden = true
-            mix.show(EngagementMix(tweet: tweet))
+            mix.show(breakdown)
+            mix.isHidden = false
         }
-        insight.text = curve?.insight
-        insight.isHidden = curve == nil
-        divider.isHidden = false
-        configureFigures(tweet: tweet, content: content)
-        if reveal { play(first: first, curve: curve != nil) }
     }
 
-    private func configureHeadline(tweet: Tweet, content: PostStatsContent, countFrom: Int?, animated: Bool) {
-        guard let model = PostStatsHeadline.make(for: tweet, content: content) else {
+    private func configureHeadline(_ model: PostStatsHeadline?, countFrom: Int?, animated: Bool) {
+        guard let model else {
             headline.isHidden = true
             return
         }
@@ -293,23 +365,11 @@ final class PostStatsView: UIStackView {
         engaged.set(model.engaged)
     }
 
-    private func configureFigures(tweet: Tweet, content: PostStatsContent) {
-        var cells = PostStatsModel.cells(for: tweet, content: content)
-        switch content {
-        case .analytics:
-            cells = cells.dropFirst().map {
-                PostStatCell(value: $0.value.components(separatedBy: " · ").first ?? $0.value,
-                             caption: $0.caption, opensQuotes: $0.opensQuotes)
-            }
-        case .publicCounts, .loading:
-            if PostStatsHeadline.make(for: tweet, content: content)?.engaged != nil {
-                cells.removeAll { $0.caption == "Engagement" }
-            }
-        }
+    private func configureFigures(_ layout: PostStatsLayout) {
         figures.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        for cell in cells { figures.addArrangedSubview(makeCell(cell, dimmed: content == .loading)) }
-        figures.isHidden = cells.isEmpty
-        divider.isHidden = cells.isEmpty
+        for cell in layout.figures { figures.addArrangedSubview(makeCell(cell, dimmed: layout.dimmed)) }
+        figures.isHidden = layout.figures.isEmpty
+        divider.isHidden = !layout.showsDivider
     }
 
     /// The card settles in, and what is on it follows.

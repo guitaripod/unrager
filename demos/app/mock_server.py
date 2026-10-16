@@ -27,7 +27,7 @@ import demo_world as dw  # noqa: E402
 
 PAGE = 8
 LIKERS_PAGE = 10
-LATENCY = {"api": 0.0, "assets": 0.0}
+LATENCY = {"api": 0.0, "assets": 0.0, "likers": 0.0}
 MANY = False
 STATE = {"injected": [], "seen": dw.ago(minutes=100), "filter_enabled": True, "likes": set(), "bookmarks": set(), "retweets": set(), "overrides": {},
          "deleted": set(), "muting": {"hottakeshourly"}, "blocking": set(), "replies": []}
@@ -174,8 +174,13 @@ class Handler(BaseHTTPRequestHandler):
             if LATENCY["assets"]:
                 time.sleep(LATENCY["assets"])
             return self.serve_asset(path)
-        if LATENCY["api"] and path.startswith(("/api/sources", "/api/profile", "/api/whoami", "/api/likers")):
+        if LATENCY["api"] and path.startswith(("/api/sources", "/api/profile", "/api/whoami")):
             time.sleep(LATENCY["api"])
+        if LATENCY["likers"] and path.startswith("/api/likers"):
+            time.sleep(LATENCY["likers"])
+        if path == "/__likers_latency":
+            LATENCY["likers"] = float(q("seconds", "0"))
+            return self.send_json({"likers_latency": LATENCY["likers"]})
         if path == "/api/health":
             return self.send_json({"ok": True, "name": "unrager", "version": "0.24.0"})
         if path == "/api/whoami":
@@ -435,11 +440,14 @@ def main():
                         help="seconds every timeline, profile and whoami request waits, to see the loading states")
     parser.add_argument("--asset-latency", type=float, default=0.0,
                         help="seconds every picture waits")
+    parser.add_argument("--likers-latency", type=float, default=0.0,
+                        help="seconds the Liked by list waits (also set at run time by GET /__likers_latency?seconds=)")
     args = parser.parse_args()
     global MANY
     MANY = args.many_notifications
     LATENCY["api"] = args.latency
     LATENCY["assets"] = args.asset_latency
+    LATENCY["likers"] = args.likers_latency
     if args.lab:
         dw.enable_lab()
         global PAGE

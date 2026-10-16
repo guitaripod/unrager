@@ -119,7 +119,7 @@ POSTS = [
     ("a1", "anyavoss", 700, "Why does a wine glass sing when you rub its rim? Friction makes the glass vibrate at its natural frequency — and the glass amplifies its own note. Resonance, up close.",
      ("photos", ["sq_03"]), (21, 133, 2200, 11, 41000, 800), {"hidden_from_feed": True}),
     ("o1", "noralind", 300, "Tried the new tab bar minimize on a real device and it's lovely. The small details really are the whole thing.",
-     None, (4, 2, 61, 1, 1873, 9), {}),
+     ("photos", ["land_06"]), (4, 2, 61, 1, 1873, 9), {}),
     ("o2", "noralind", 1500, "Quiet Sunday. Coffee, a long walk and the first chapter of a book I've been saving.",
      ("photos", ["land_04"]), (6, 3, 144, 0, 2900, 14), {}),
     ("o3", "noralind", 2900, "Spent the morning on a loading state that doesn't flash. The trick is mostly not showing it at all.",
@@ -280,6 +280,9 @@ class World:
             "followers": followers, "following": following,
             "avatar_url": self.asset("avatars", avatar),
         }
+        if handle != ME:
+            user["followed_by_me"] = handle in ME_FOLLOWS
+            user["follows_me"] = handle in FOLLOWS_ME
         if banner:
             user["banner_url"] = self.asset("banners", banner_name)
         return user

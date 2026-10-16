@@ -32,6 +32,9 @@ TRIMS: dict[str, tuple[float, float]] = {
     "10NotifChips": (5.0, 29.6),
     "11NotifActions": (6.6, 31.2),
     "12NotifLive": (3.6, 29.6),
+    "13LikersLoad": (15.5, 40.0),
+    "14LikersFollowBack": (27.0, 46.0),
+    "15LikersChips": (26.0, 42.5),
 }
 
 

@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+## [0.31.2] — 2026-10-17
+
 - **The iPhone app's tab bar collapses to the selected tab on scroll again, whatever tab you are on.** It had been pinned open whenever a Notifications badge was showing, which is most of the time; the badge now simply waits on the tab until the bar expands. The Profile tab, whose list sits inside a container, now hands that list to the tab bar too, so it collapses there as well.
 - **A post's stats in the iPhone app are one card with a chart you can read.** Tapping a post's views raises it: the big figure (impressions on your own post, views on anyone's) counts up beside the share that engaged. Under it, on your own post, X's first hours of impressions are gradient bars that rise in left to right with the peak named, a thin line of how the reach built up with a dot where half of it had arrived, hour marks, and a line saying how fast it came ("Half of the impressions arrived in the first 8 hours"); press and drag along it to read any hour's impressions and share of the total. On anyone's post one bar cut into likes, reposts, replies, quotes and saves shows how its engagement splits. While X's numbers load the chart is a pulsing outline that fills in when they land, and the row eases down as the card opens.
 
@@ -393,7 +395,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.31.1...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.31.2...HEAD
+[0.31.2]: https://github.com/guitaripod/unrager/releases/tag/0.31.2
 [0.31.1]: https://github.com/guitaripod/unrager/releases/tag/0.31.1
 [0.31.0]: https://github.com/guitaripod/unrager/releases/tag/0.31.0
 [0.30.0]: https://github.com/guitaripod/unrager/releases/tag/0.30.0

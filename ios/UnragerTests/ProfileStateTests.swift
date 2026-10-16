@@ -184,15 +184,42 @@ struct ProfileTextTests {
         #expect(finnish.contains("maaliskuu"))
     }
 
-    @Test("The meta line links the website and is absent when there's nothing to say")
-    func metaLine() throws {
-        #expect(ProfileText.meta(location: " ", website: nil, joinedAt: nil, font: font) == nil)
-        let line = try #require(ProfileText.meta(location: "Berlin", website: "https://example.com/notes",
-                                                 joinedAt: nil, font: font))
-        #expect(line.string.contains("Berlin"))
-        #expect(line.string.contains("example.com/notes"))
-        #expect(ProfileText.links(in: line).map(\.url.absoluteString) == ["https://example.com/notes"])
-        #expect(ProfileText.metaAccessibilityLabel(location: "Berlin", website: "https://example.com/notes", joinedAt: nil)
-            == "Location: Berlin. Website: example.com/notes")
+    @Test("The facts put the website in as a link, skip a country the location already names, and are empty when there's nothing to say")
+    func facts() throws {
+        #expect(ProfileText.facts(location: " ", website: nil, joinedAt: nil, basedIn: nil).isEmpty)
+        let facts = ProfileText.facts(location: "Berlin", website: "https://example.com/notes", joinedAt: nil,
+                                      basedIn: (flag: "🇩🇪", country: "Germany"))
+        #expect(facts.map { $0.symbol } == ["mappin.and.ellipse", "globe.europe.africa.fill", "link"])
+        #expect(facts[1].text == "Based in 🇩🇪 Germany")
+        #expect(facts[2].text == "example.com/notes")
+        #expect(facts[2].url?.absoluteString == "https://example.com/notes")
+        #expect(facts.map { $0.spoken } == ["Location: Berlin", "Based in Germany", "Website: example.com/notes"])
+        let named = ProfileText.facts(location: "Turku, Finland", website: nil, joinedAt: nil,
+                                      basedIn: (flag: "🇫🇮", country: "Finland"))
+        #expect(named.map { $0.symbol } == ["mappin.and.ellipse"])
+    }
+
+    @Test("The joined fact is short on screen and full for VoiceOver")
+    func joinedFact() throws {
+        let date = try #require(ISO8601DateFormatter().date(from: "2011-09-15T12:00:00Z"))
+        let utc = try #require(TimeZone(identifier: "UTC"))
+        let fact = try #require(ProfileText.facts(location: nil, website: nil, joinedAt: date, basedIn: nil,
+                                                  locale: Locale(identifier: "en_US"), timeZone: utc).first)
+        #expect(fact.text == "Joined Sep 2011")
+        #expect(fact.spoken == "Joined September 2011")
+    }
+
+    @Test("Account age is a short figure in years, then months, then New")
+    func accountAge() throws {
+        let now = try #require(ISO8601DateFormatter().date(from: "2026-10-16T12:00:00Z"))
+        func age(_ iso: String) throws -> (figure: String, spoken: String)? {
+            ProfileText.accountAge(since: try #require(ISO8601DateFormatter().date(from: iso)), now: now,
+                                   calendar: Calendar(identifier: .gregorian))
+        }
+        #expect(try age("2011-09-03T12:00:00Z")?.figure == "15y")
+        #expect(try age("2025-09-03T12:00:00Z")?.spoken == "On X for 1 year")
+        #expect(try age("2026-02-03T12:00:00Z")?.figure == "8mo")
+        #expect(try age("2026-10-10T12:00:00Z")?.figure == "New")
+        #expect(try age("2027-01-01T12:00:00Z") == nil)
     }
 }

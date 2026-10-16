@@ -13,6 +13,9 @@ class FeedViewController: UIViewController, TweetActionHandling {
     private var tweetsByID: [String: Tweet] = [:]
     private var cancellables = Set<AnyCancellable>()
     private let emptyState = EmptyStateView()
+    /// With a header on the feed (a profile), the empty and error state sits
+    /// under it, so a header that grows moves it down.
+    private var headerSizeObserver: NSKeyValueObservation?
     private let loadingIndicator = UIActivityIndicatorView(style: .medium)
     private let skeleton = FeedSkeletonView()
     private var contentSizeObservation: NSKeyValueObservation?
@@ -70,6 +73,10 @@ class FeedViewController: UIViewController, TweetActionHandling {
     /// Optional scrolling header (e.g. a profile header) shown above the feed.
     var headerView: UIView?
 
+    /// Whether each post's author is ringed for how they stand with the viewer.
+    /// A profile's own posts are all one author, whose header already says it.
+    var showsAuthorStanding: Bool { headerView == nil }
+
     /// Keeps an empty feed blank (no spinner, empty or error state) for a
     /// screen whose header already says why there are no posts.
     var hidesEmptyState = false {
@@ -88,7 +95,8 @@ class FeedViewController: UIViewController, TweetActionHandling {
                            for: tweet, expanded: self.expandedStats.contains(id), isOwn: self.isOwnTweet(tweet),
                            changed: { [weak self] in self?.reconfigure(id, animated: false) }),
                        viewerHandle: AppEnvironment.shared.currentHandle,
-                       pinned: self.viewModel.pinnedID == id) }
+                       pinned: self.viewModel.pinnedID == id,
+                       showsStanding: self.showsAuthorStanding) }
         self.applyFlag(to: cell, author: tweet.author)
         cell.onTapAuthor = { [weak self] in self?.handleProfile(tweet.author.handle) }
         if let reposter = tweet.retweetedBy {
@@ -292,8 +300,15 @@ class FeedViewController: UIViewController, TweetActionHandling {
 
         emptyState.isHidden = true
         emptyState.onRetry = { [weak self] in self?.viewModel.refresh() }
-        view.addManaged(emptyState)
-        emptyState.pinEdges(toSafeAreaOf: view)
+        if headerView == nil {
+            view.addManaged(emptyState)
+            emptyState.pinEdges(toSafeAreaOf: view)
+        } else {
+            collectionView.addSubview(emptyState)
+            headerSizeObserver = collectionView.observe(\.contentSize) { [weak self] _, _ in
+                MainActor.assumeIsolated { self?.positionSkeleton() }
+            }
+        }
 
         loadingIndicator.hidesWhenStopped = true
         view.addManaged(loadingIndicator)
@@ -804,6 +819,11 @@ class FeedViewController: UIViewController, TweetActionHandling {
             ofKind: Self.headerKind, at: IndexPath(item: 0, section: 0))?.frame.maxY ?? 0
         let frame = CGRect(x: 0, y: headerBottom, width: width, height: skeleton.fittingHeight(width: width))
         if skeleton.frame != frame { skeleton.frame = frame }
+        guard headerView != nil else { return }
+        let inset = collectionView.adjustedContentInset
+        let room = collectionView.bounds.height - inset.top - inset.bottom - headerBottom
+        let emptyFrame = CGRect(x: 0, y: headerBottom, width: width, height: max(room, 260))
+        if emptyState.frame != emptyFrame { emptyState.frame = emptyFrame }
     }
 
     /// Reveals the full-screen Metal collecting state, driving the latest

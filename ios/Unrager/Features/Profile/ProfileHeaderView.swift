@@ -1,44 +1,48 @@
 import UIKit
 import UnragerKit
 
-/// The scrolling profile header, shared (as independent copies) by the Posts
-/// and Replies tabs. Every line that an account may not have (bio, location
-/// line, "based in", the Muted/Blocked capsules) is hidden rather than left
-/// empty, so it takes no space.
+/// The scrolling profile header, shared (as independent copies) by the Posts,
+/// Replies and Media tabs: the picture ringed in how the person stands with the
+/// viewer, the name and handle with a "Follows you" or "Mutual" capsule, the bio,
+/// the account's facts as capsules, the followers, following and account-age
+/// figures as tiles, and the tab strip. Every line an account may not have is
+/// hidden rather than left empty, so it takes no space. The first time an
+/// account appears on screen its pieces rise in one after another.
 final class ProfileHeaderView: UIView {
     /// How much of the header image shows below the navigation bar at rest.
-    static let bannerHeight: CGFloat = 96
-    private static let avatarSize: CGFloat = 76
-    private static let avatarRing: CGFloat = 4
+    static let bannerHeight: CGFloat = 112
+    /// How far the panel rides up over the header image.
+    private static let sheetOverlap: CGFloat = 26
+    private static let sheetRadius: CGFloat = 28
 
-    private let avatar = AsyncImageView(frame: .zero)
+    private let avatar = ProfileAvatarView()
     private let panel = UIView()
     private let column = UIStackView()
     private let topRow = UIStackView()
     private let actions = UIStackView()
     private let nameLabel = UILabel()
+    private let handleRow = UIStackView()
     private let handleLabel = UILabel()
-    private let basedInLabel = UILabel()
+    private let standingCapsule = StandingCapsule()
     private let badges = UIStackView()
     private let mutedBadge = ProfileBadge(text: "Muted", symbol: "speaker.slash.fill")
     private let blockedBadge = ProfileBadge(text: "Blocked", symbol: "hand.raised.fill")
     private let bioLabel = LinkLabel(frame: .zero)
-    private let metaLabel = LinkLabel(frame: .zero)
+    private let factsView = ProfileFactsView()
     private let statusLabel = UILabel()
     private let lockedNotice = ProfileLockedNotice()
-    private let followingButton = UIButton(configuration: .plain())
-    private let followersButton = UIButton(configuration: .plain())
     private let followButton = UIButton(configuration: .filled())
     private let briefButton = UIButton(configuration: .tinted())
-    private let segment = UISegmentedControl(items: ["Posts", "Replies", "Media"])
+    private let strip = ProfileTabStrip(titles: ["Posts", "Replies", "Media"])
+    private let tiles = ProfileStatTiles()
     private let separator = HairlineView()
-    private let counts = UIStackView()
     private let retryButton = UIButton(configuration: .tinted())
     private let retryRow = UIStackView()
     private let insightsView = ProfileInsightsView()
     private let nameSkeleton = BarsSkeletonView(bars: [(0.5, 24)])
     private let detailSkeleton = BarsSkeletonView(
         bars: [(0.92, 14), (0.7, 14), (0.52, 14)], spacing: 8)
+    private let tilesSkeleton = BarsSkeletonView(bars: [(1, 64)])
 
     var onBrief: (() -> Void)?
     var onFollowToggle: (() -> Void)?
@@ -54,9 +58,12 @@ final class ProfileHeaderView: UIView {
     private var user: User?
     private var state = ProfileLoadState.loading
     private var basedIn: (flag: String?, country: String?)?
+    private var followingState: Bool?
+    private var ownProfile = false
+    private var hasShownAccount = false
 
     /// Where the Follow and Brief buttons sit: beside the avatar while they
-    /// fit there, otherwise in a row of their own under the counts, one above
+    /// fit there, otherwise in a row of their own under the tiles, one above
     /// the other when even a full row is too narrow.
     private enum ActionsPlacement {
         case beside
@@ -70,38 +77,40 @@ final class ProfileHeaderView: UIView {
         super.init(frame: frame)
         backgroundColor = .clear
         panel.backgroundColor = DesignSystem.Color.background
+        panel.layer.cornerRadius = Self.sheetRadius
+        panel.layer.cornerCurve = .continuous
+        panel.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
+        panel.layer.shadowColor = UIColor.black.cgColor
+        panel.layer.shadowOpacity = 0.08
+        panel.layer.shadowRadius = 9
+        panel.layer.shadowOffset = CGSize(width: 0, height: -2)
         avatar.translatesAutoresizingMaskIntoConstraints = false
-        avatar.setRounded(Self.avatarSize / 2)
-        avatar.layer.borderWidth = Self.avatarRing
-        avatar.layer.borderColor = DesignSystem.Color.background.cgColor
-        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: ProfileHeaderView, _) in
-            view.avatar.layer.borderColor = DesignSystem.Color.background.cgColor
-        }
 
         nameLabel.textColor = DesignSystem.Color.label
         nameLabel.numberOfLines = 0
         nameLabel.accessibilityTraits = .header
         handleLabel.textColor = DesignSystem.Color.secondaryLabel
-        basedInLabel.textColor = DesignSystem.Color.secondaryLabel
-        basedInLabel.numberOfLines = 0
-        basedInLabel.isHidden = true
+        standingCapsule.isHidden = true
+        let handleSpacer = UIView()
+        handleSpacer.setContentHuggingPriority(UILayoutPriority(1), for: .horizontal)
+        [handleLabel, standingCapsule, handleSpacer].forEach(handleRow.addArrangedSubview)
+        handleRow.spacing = DesignSystem.Spacing.s
+        handleRow.alignment = .center
 
         configureBadges()
         configureTextLinks()
+        factsView.isHidden = true
+        factsView.onTapURL = { [weak self] url in self?.onTapURL?(url) }
 
         statusLabel.textColor = DesignSystem.Color.label
         statusLabel.numberOfLines = 0
         statusLabel.isHidden = true
         lockedNotice.isHidden = true
 
-        for button in [followingButton, followersButton] {
-            button.configuration?.contentInsets = .zero
-            button.configuration?.baseForegroundColor = DesignSystem.Color.secondaryLabel
-        }
-        followingButton.addAction(UIAction { [weak self] _ in self?.onTapFollowing?() }, for: .touchUpInside)
-        followersButton.addAction(UIAction { [weak self] _ in self?.onTapFollowers?() }, for: .touchUpInside)
-        followingButton.accessibilityHint = "Shows the accounts this user follows"
-        followersButton.accessibilityHint = "Shows this user's followers"
+        tiles.isHidden = true
+        tiles.onTapFollowers = { [weak self] in self?.onTapFollowers?() }
+        tiles.onTapFollowing = { [weak self] in self?.onTapFollowing?() }
+        tilesSkeleton.isHidden = true
 
         followButton.isHidden = true
         followButton.configuration?.cornerStyle = .capsule
@@ -117,21 +126,13 @@ final class ProfileHeaderView: UIView {
         briefButton.configuration = config
         briefButton.addAction(UIAction { [weak self] _ in self?.onBrief?() }, for: .touchUpInside)
 
-        segment.selectedSegmentIndex = 0
-        segment.addAction(UIAction { [weak self] _ in
-            guard let self else { return }
-            self.onSegmentChange?(self.segment.selectedSegmentIndex)
-        }, for: .valueChanged)
-        segment.accessibilityLabel = "Timeline mode"
+        strip.onChange = { [weak self] index in self?.onSegmentChange?(index) }
+        strip.accessibilityLabel = "Timeline mode"
 
-        let text = UIStackView(arrangedSubviews: [nameLabel, handleLabel, basedInLabel, badges])
+        let text = UIStackView(arrangedSubviews: [nameLabel, handleRow, badges])
         text.axis = .vertical
         text.spacing = 2
-        text.setCustomSpacing(DesignSystem.Spacing.s, after: basedInLabel)
-        text.setCustomSpacing(DesignSystem.Spacing.s, after: handleLabel)
-
-        [followingButton, followersButton, UIView()].forEach(counts.addArrangedSubview)
-        counts.spacing = DesignSystem.Spacing.l
+        text.setCustomSpacing(DesignSystem.Spacing.s, after: handleRow)
 
         actions.axis = .horizontal
         actions.spacing = DesignSystem.Spacing.s
@@ -152,18 +153,19 @@ final class ProfileHeaderView: UIView {
         retryButton.addAction(UIAction { [weak self] _ in self?.onRetry?() }, for: .touchUpInside)
         [retryButton, UIView()].forEach(retryRow.addArrangedSubview)
 
-        for button in [followingButton, followersButton, followButton, briefButton, retryButton] {
+        for button in [followButton, briefButton, retryButton] {
             button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
         }
-        topRow.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+        topRow.heightAnchor.constraint(greaterThanOrEqualToConstant: ProfileAvatarView.total / 2 + 8).isActive = true
 
-        [topRow, nameSkeleton, text, detailSkeleton, statusLabel, retryRow, bioLabel, metaLabel, counts, insightsView,
-         segment, lockedNotice].forEach(column.addArrangedSubview)
+        [topRow, nameSkeleton, text, detailSkeleton, statusLabel, retryRow, bioLabel, factsView, tiles, tilesSkeleton,
+         insightsView, strip, lockedNotice].forEach(column.addArrangedSubview)
         column.axis = .vertical
         column.spacing = DesignSystem.Spacing.m
         column.alignment = .fill
-        column.setCustomSpacing(DesignSystem.Spacing.s, after: topRow)
-        column.setCustomSpacing(DesignSystem.Spacing.s, after: bioLabel)
+        column.setCustomSpacing(DesignSystem.Spacing.xs, after: topRow)
+        column.setCustomSpacing(DesignSystem.Spacing.m + 2, after: bioLabel)
+        column.setCustomSpacing(DesignSystem.Spacing.m + 2, after: factsView)
         retryRow.isHidden = true
         insightsView.isHidden = true
         insightsView.onTapTop = { [weak self] id in self?.onTapTopPost?(id) }
@@ -172,11 +174,9 @@ final class ProfileHeaderView: UIView {
         panel.addManaged(column)
         panel.addManaged(separator)
         addManaged(avatar)
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(emojiLoaded), name: TwemojiCache.imagesDidLoad, object: nil)
         applyFonts()
         NSLayoutConstraint.activate([
-            panel.topAnchor.constraint(equalTo: topAnchor, constant: Self.bannerHeight),
+            panel.topAnchor.constraint(equalTo: topAnchor, constant: Self.bannerHeight - Self.sheetOverlap),
             panel.leadingAnchor.constraint(equalTo: leadingAnchor),
             panel.trailingAnchor.constraint(equalTo: trailingAnchor),
             panel.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -184,10 +184,8 @@ final class ProfileHeaderView: UIView {
             column.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 16),
             column.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -16),
             column.bottomAnchor.constraint(equalTo: panel.bottomAnchor, constant: -12),
-            avatar.widthAnchor.constraint(equalToConstant: Self.avatarSize),
-            avatar.heightAnchor.constraint(equalToConstant: Self.avatarSize),
-            avatar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            avatar.centerYAnchor.constraint(equalTo: panel.topAnchor),
+            avatar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            avatar.centerYAnchor.constraint(equalTo: panel.topAnchor, constant: 8),
             separator.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
             separator.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
             separator.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
@@ -196,6 +194,13 @@ final class ProfileHeaderView: UIView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        panel.layer.shadowPath = UIBezierPath(
+            roundedRect: panel.bounds, byRoundingCorners: [.topLeft, .topRight],
+            cornerRadii: CGSize(width: Self.sheetRadius, height: Self.sheetRadius)).cgPath
+    }
 
     private func configureBadges() {
         badges.axis = .horizontal
@@ -207,15 +212,13 @@ final class ProfileHeaderView: UIView {
         badges.isHidden = true
     }
 
-    /// The bio and the website line hand their taps to the screen.
+    /// The bio hands its taps to the screen.
     private func configureTextLinks() {
-        for label in [bioLabel, metaLabel] {
-            label.numberOfLines = 0
-            label.isHidden = true
-            label.onTapMention = { [weak self] handle in self?.onTapMention?(handle) }
-            label.onTapHashtag = { [weak self] query in self?.onTapHashtag?(query) }
-            label.onTapURL = { [weak self] url in self?.onTapURL?(url) }
-        }
+        bioLabel.numberOfLines = 0
+        bioLabel.isHidden = true
+        bioLabel.onTapMention = { [weak self] handle in self?.onTapMention?(handle) }
+        bioLabel.onTapHashtag = { [weak self] query in self?.onTapHashtag?(query) }
+        bioLabel.onTapURL = { [weak self] url in self?.onTapURL?(url) }
     }
 
     /// Re-resolves every font from the current text size; the caller then
@@ -223,17 +226,16 @@ final class ProfileHeaderView: UIView {
     func applyFonts() {
         nameLabel.font = DesignSystem.Typography.title()
         handleLabel.font = DesignSystem.Typography.handle()
-        basedInLabel.font = DesignSystem.Typography.metric()
         statusLabel.font = DesignSystem.Typography.body()
         mutedBadge.applyFonts()
         blockedBadge.applyFonts()
         lockedNotice.applyFonts()
-        let stacked = traitCollection.preferredContentSizeCategory.isAccessibilityCategory
-        counts.axis = stacked ? .vertical : .horizontal
-        counts.alignment = stacked ? .leading : .fill
-        counts.spacing = stacked ? 0 : DesignSystem.Spacing.l
-        if let basedIn { setBasedIn(flag: basedIn.flag, country: basedIn.country) }
-        if let user { configure(with: user) }
+        tiles.applyFonts()
+        strip.applyFonts()
+        if let user {
+            configure(with: user)
+            factsView.configure(facts(for: user), force: true)
+        }
     }
 
     /// Where the name ends, measured from the top of the header: the scroll
@@ -246,7 +248,7 @@ final class ProfileHeaderView: UIView {
     /// Shrinks the avatar toward its bottom-left as the profile scrolls, so it
     /// settles into the header instead of sliding under the bar at full size.
     func setAvatar(scale: CGFloat, alpha: CGFloat) {
-        let half = Self.avatarSize / 2
+        let half = ProfileAvatarView.total / 2
         avatar.transform = CGAffineTransform(scaleX: scale, y: scale)
             .concatenating(CGAffineTransform(translationX: -half * (1 - scale), y: half * (1 - scale)))
         avatar.alpha = alpha
@@ -258,9 +260,8 @@ final class ProfileHeaderView: UIView {
     }
 
     /// Shows the account, or in its place why it can't be shown: a final
-    /// state hides everything that belongs to an account (counts, bio,
-    /// buttons, the Posts/Replies control); a failure that may clear adds a
-    /// Retry.
+    /// state hides everything that belongs to an account (tiles, bio, buttons,
+    /// the tab strip); a failure that may clear adds a Retry.
     func setState(_ state: ProfileLoadState) {
         self.state = state
         let loaded = state == .loaded
@@ -268,37 +269,75 @@ final class ProfileHeaderView: UIView {
             user = nil
             nameLabel.attributedText = nil
             nameLabel.accessibilityLabel = nil
-            avatar.load(url: nil, targetSize: CGSize(width: Self.avatarSize, height: Self.avatarSize))
+            avatar.load(url: nil)
+            avatar.setStanding(nil)
+            standingCapsule.configure(nil)
         }
         nameLabel.isHidden = !loaded
         nameSkeleton.isHidden = state != .loading
         detailSkeleton.isHidden = state != .loading
+        tilesSkeleton.isHidden = state != .loading
         statusLabel.text = state.message
         statusLabel.isHidden = state.message == nil
         retryRow.isHidden = !state.offersRetry
         retryButton.isHidden = !state.offersRetry
-        counts.isHidden = !loaded
+        tiles.isHidden = !loaded
         briefButton.isHidden = state.isFinal
-        segment.isHidden = state.isFinal
+        strip.isHidden = state.isFinal
         if !loaded {
             bioLabel.isHidden = true
-            metaLabel.isHidden = true
+            factsView.configure([])
         }
     }
 
     func configure(with user: User) {
+        let revealing = !hasShownAccount && window != nil && !UIAccessibility.isReduceMotionEnabled
+        hasShownAccount = true
         self.user = user
         nameLabel.attributedText = Self.nameText(for: user)
         nameLabel.accessibilityLabel = [user.name, user.verified ? "verified" : nil,
                                         user.isProtected ? "protected account" : nil]
             .compactMap { $0 }.joined(separator: ", ")
         handleLabel.text = "@\(user.handle)"
-        setCount(followingButton, count: user.following, label: "following")
-        setCount(followersButton, count: user.followers, label: "followers")
+        tiles.configure(followers: user.followers, following: user.following, joinedAt: user.joinedAt,
+                        reveal: revealing)
         let url = AppSettings.imagesEnabled ? user.avatarURL.flatMap(URL.init) : nil
-        avatar.load(url: url, targetSize: CGSize(width: Self.avatarSize, height: Self.avatarSize))
+        avatar.load(url: url)
         configureBio(user.bio)
-        configureMeta(for: user)
+        factsView.configure(facts(for: user))
+        refreshStanding()
+        if revealing { playReveal() }
+    }
+
+    /// The account's facts with where X says it is based.
+    private func facts(for user: User) -> [ProfileFact] {
+        ProfileText.facts(location: user.location, website: user.website, joinedAt: user.joinedAt, basedIn: basedIn)
+    }
+
+    /// The avatar's ring and the capsule after the handle, from how this
+    /// person and the viewer follow each other.
+    private func refreshStanding() {
+        let standing = ownProfile || state != .loaded ? nil : Standing(following: followingState, followsMe: user?.followsMe)
+        avatar.setStanding(standing)
+        standingCapsule.configure(standing)
+    }
+
+    /// The first time an account is on screen: the picture settles in with its
+    /// ring drawing round it, and each piece under it rises a beat after the
+    /// one above.
+    private func playReveal() {
+        avatar.reveal()
+        let pieces: [UIView] = [nameLabel, handleRow, bioLabel, factsView, tiles, insightsView, strip]
+            .filter { !$0.isHidden }
+        for (index, piece) in pieces.enumerated() {
+            piece.alpha = 0
+            piece.transform = CGAffineTransform(translationX: 0, y: 12)
+            UIView.animate(withDuration: 0.5, delay: 0.08 + Double(index) * 0.05, usingSpringWithDamping: 0.88,
+                           initialSpringVelocity: 0, options: [.allowUserInteraction]) {
+                piece.alpha = 1
+                piece.transform = .identity
+            }
+        }
     }
 
     /// The bio at the body text size, every line of it, with its mentions,
@@ -320,25 +359,6 @@ final class ProfileHeaderView: UIView {
             }
         }
         bioLabel.isHidden = false
-    }
-
-    private func configureMeta(for user: User) {
-        guard let meta = ProfileText.meta(location: user.location, website: user.website,
-                                          joinedAt: user.joinedAt, font: DesignSystem.Typography.metric()) else {
-            metaLabel.isHidden = true
-            metaLabel.attributedText = nil
-            return
-        }
-        metaLabel.attributedText = meta
-        metaLabel.accessibilityLabel = ProfileText.metaAccessibilityLabel(
-            location: user.location, website: user.website, joinedAt: user.joinedAt)
-        metaLabel.accessibilityCustomActions = user.website.flatMap(ProfileText.websiteURL).map { url in
-            [UIAccessibilityCustomAction(name: "Open website") { [weak self] _ in
-                self?.onTapURL?(url)
-                return true
-            }]
-        } ?? []
-        metaLabel.isHidden = false
     }
 
     /// Sends a tapped link's target to the matching handler, as a tap would.
@@ -374,39 +394,30 @@ final class ProfileHeaderView: UIView {
         return text
     }
 
-    /// A "1.2M followers" button: bold count, dim label — visibly one tap
-    /// target, matching X's header grammar.
-    private func setCount(_ button: UIButton, count: Int, label: String) {
-        var text = AttributedString("\(Format.count(count)) ")
-        text.font = DesignSystem.Typography.metric().withWeight(.bold)
-        text.foregroundColor = DesignSystem.Color.label
-        var suffix = AttributedString(label)
-        suffix.font = DesignSystem.Typography.metric()
-        suffix.foregroundColor = DesignSystem.Color.secondaryLabel
-        text.append(suffix)
-        button.configuration?.attributedTitle = text
-        button.accessibilityLabel = "\(Format.count(count)) \(label)"
-    }
-
-    /// Shows the Follow/Following button once the relationship is known.
-    /// Hidden on the viewer's own profile, on servers that don't report the
+    /// Shows the Follow/Following button once the relationship is known: a
+    /// follower the viewer hasn't followed back is offered Follow back. Hidden
+    /// on the viewer's own profile, on servers that don't report the
     /// relationship (never guess) and on an account that can't be shown.
     func setFollowState(following: Bool?, isOwnProfile: Bool) {
+        followingState = following
+        ownProfile = isOwnProfile
+        refreshStanding()
         guard !isOwnProfile, state == .loaded, let following else {
             followButton.isHidden = true
             return
         }
         followButton.isHidden = false
+        let title = following ? "Following" : (user?.followsMe == true ? "Follow back" : "Follow")
         var config = followButton.configuration ?? .filled()
         config.cornerStyle = .capsule
         config.titleLineBreakMode = .byTruncatingTail
-        config.title = following ? "Following" : "Follow"
+        config.title = title
         config.baseBackgroundColor = following
             ? DesignSystem.Color.elevatedBackground
             : DesignSystem.Color.accent
         config.baseForegroundColor = following ? DesignSystem.Color.label : .white
         followButton.configuration = config
-        followButton.accessibilityLabel = following ? "Following, tap to unfollow" : "Follow"
+        followButton.accessibilityLabel = following ? "Following, tap to unfollow" : title
     }
 
     /// The small "Muted" / "Blocked" capsules under the handle, while true.
@@ -423,24 +434,26 @@ final class ProfileHeaderView: UIView {
         nameLabel.accessibilityCustomActions = actions
     }
 
-    /// Says a protected account's posts are out of reach in place of the
-    /// Posts/Replies control, which would only lead to nothing.
+    /// Says a protected account's posts are out of reach in place of the tab
+    /// strip, which would only lead to nothing.
     func setPostsLocked(_ locked: Bool, handle: String) {
         let shown = locked && state == .loaded
         lockedNotice.isHidden = !shown
         if shown {
             lockedNotice.configure(handle: handle)
-            segment.isHidden = true
+            strip.isHidden = true
         } else if !state.isFinal {
-            segment.isHidden = false
+            strip.isHidden = false
         }
     }
 
     /// Puts the Follow and Brief buttons beside the avatar while they fit in
-    /// the room it leaves at `width`, else under the counts, so a large text
-    /// size never squeezes a title into hyphenated lines.
+    /// the room it leaves at `width`, else under the tiles, so a large text
+    /// size never squeezes a title into hyphenated lines. Also tells the facts
+    /// how wide a line is.
     func placeActions(width: CGFloat) {
         guard width > 0 else { return }
+        factsView.preferredWidth = width - 32
         let placement = Self.placement(neededWidth: actionsWidth(), headerWidth: width)
         guard placement != actionsPlacement else { return }
         actionsPlacement = placement
@@ -453,7 +466,7 @@ final class ProfileHeaderView: UIView {
         case .belowInRow, .belowStacked:
             actions.axis = placement == .belowInRow ? .horizontal : .vertical
             actions.alignment = placement == .belowInRow ? .center : .leading
-            let index = column.arrangedSubviews.firstIndex(of: counts).map { $0 + 1 } ?? column.arrangedSubviews.count
+            let index = column.arrangedSubviews.firstIndex(of: tiles).map { $0 + 1 } ?? column.arrangedSubviews.count
             column.insertArrangedSubview(actions, at: index)
         }
     }
@@ -468,19 +481,26 @@ final class ProfileHeaderView: UIView {
 
     private static func placement(neededWidth: CGFloat, headerWidth: CGFloat) -> ActionsPlacement {
         let row = headerWidth - 32
-        let besideAvatar = row - avatarSize - DesignSystem.Spacing.m
+        let besideAvatar = row - ProfileAvatarView.total - DesignSystem.Spacing.m
         if neededWidth <= besideAvatar { return .beside }
         return neededWidth <= row ? .belowInRow : .belowStacked
     }
 
-    /// The height of the Posts/Replies control and the margin under it: the
-    /// part of the header that stays visible when switching tabs.
-    var segmentHeight: CGFloat {
-        segment.bounds.height + 12
+    /// The tab strip's frame in `view`'s coordinates, or nil while it isn't
+    /// shown.
+    func stripFrame(in view: UIView) -> CGRect? {
+        guard !strip.isHidden, strip.window != nil else { return nil }
+        return strip.convert(strip.bounds, to: view)
     }
 
-    /// Shows the Recent posts card, or takes it away when there is nothing
-    /// to say or the account isn't the viewer's own.
+    /// The height of the tab strip and the margin under it: the part of the
+    /// header that stays visible when switching tabs.
+    var segmentHeight: CGFloat {
+        strip.bounds.height + 12
+    }
+
+    /// Shows the Recent posts card, or takes it away when there is nothing to
+    /// say or the account isn't the viewer's own.
     func setInsights(_ insights: ProfileInsights?) {
         guard let insights else {
             insightsView.isHidden = true
@@ -491,29 +511,16 @@ final class ProfileHeaderView: UIView {
     }
 
     func setSegment(_ index: Int) {
-        guard segment.selectedSegmentIndex != index else { return }
-        segment.selectedSegmentIndex = index
+        strip.select(index, animated: true)
     }
 
-    /// Twemoji art for the flag landed after the line was first drawn.
-    @objc private func emojiLoaded() {
-        guard let basedIn else { return }
-        setBasedIn(flag: basedIn.flag, country: basedIn.country)
-    }
-
-    /// Shows "based in <flag> <country>" (the TUI's profile line) once the
-    /// about-account lookup resolves; hidden when X carries no country.
+    /// Records where X says the account is based, as a fact beside its
+    /// location, once the about-account lookup resolves; none when X carries
+    /// no country.
     func setBasedIn(flag: String?, country: String?) {
         basedIn = (flag, country)
-        guard state == .loaded, let country, !country.isEmpty else {
-            basedInLabel.isHidden = true
-            return
-        }
-        let flagPrefix = flag.map { "\($0) " } ?? ""
-        basedInLabel.attributedText = TwemojiText.attributed(
-            "based in \(flagPrefix)\(country)", font: DesignSystem.Typography.metric(),
-            color: DesignSystem.Color.secondaryLabel)
-        basedInLabel.isHidden = false
+        guard state == .loaded, let user else { return }
+        factsView.configure(facts(for: user))
     }
 }
 

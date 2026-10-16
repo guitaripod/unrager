@@ -91,6 +91,8 @@ final class TweetCell: UICollectionViewCell {
     /// that isn't a repost; VoiceOver reads it first.
     private var repostText: String?
     private let avatar = AsyncImageView(frame: .zero)
+    private let avatarRing = CAShapeLayer()
+    private var standing: Standing?
     private let nameLabel = UILabel()
     private let flagLabel = UILabel()
     private let verifiedBadge = UIImageView()
@@ -148,6 +150,13 @@ final class TweetCell: UICollectionViewCell {
         contentView.backgroundColor = DesignSystem.Color.background
         contentView.isOpaque = true
         buildHierarchy()
+        avatarRing.fillColor = nil
+        avatarRing.lineWidth = Self.ringWidth
+        avatarRing.isHidden = true
+        contentView.layer.addSublayer(avatarRing)
+        registerForTraitChanges([UITraitUserInterfaceStyle.self, UITraitAccessibilityContrast.self]) {
+            (cell: TweetCell, _) in cell.paintRing()
+        }
     }
 
     @available(*, unavailable)
@@ -161,6 +170,34 @@ final class TweetCell: UICollectionViewCell {
 
     override func layoutSubviews() {
         PerfProbe.time("layout") { super.layoutSubviews() }
+        guard !avatarRing.isHidden else { return }
+        let picture = avatar.convert(avatar.bounds, to: contentView)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        avatarRing.frame = contentView.bounds
+        avatarRing.path = UIBezierPath(ovalIn: picture.insetBy(dx: -Self.ringGap, dy: -Self.ringGap)).cgPath
+        CATransaction.commit()
+    }
+
+    private static let ringWidth: CGFloat = 2
+    private static let ringGap: CGFloat = 3
+
+    /// Rings the author's picture for how they stand with the viewer, when that
+    /// is worth a mark: amber for someone who follows you and you don't follow
+    /// back, teal for a mutual. Nothing for anyone else, or where the list is
+    /// all one author.
+    private func applyStanding(_ newStanding: Standing?) {
+        standing = newStanding?.drawsRing == true ? newStanding : nil
+        paintRing()
+        setNeedsLayout()
+    }
+
+    private func paintRing() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        avatarRing.isHidden = standing == nil
+        avatarRing.strokeColor = standing?.tint.resolvedColor(with: traitCollection).cgColor
+        CATransaction.commit()
     }
 
     override func prepareForReuse() {
@@ -168,6 +205,7 @@ final class TweetCell: UICollectionViewCell {
         tweetID = nil
         boundTweet = nil
         avatar.cancel()
+        applyStanding(nil)
         mediaContent.prepareForReuse()
         quotedPost.prepareForReuse()
         contentView.alpha = 1
@@ -236,7 +274,7 @@ final class TweetCell: UICollectionViewCell {
         seen: Bool = false, impliedReplyHandles: Set<String>? = nil,
         focal: Bool = false, indentLevel: Int = 0,
         bodyLineLimit: Int = 0, stats: PostStatsContent? = nil,
-        viewerHandle: String? = nil, pinned: Bool = false
+        viewerHandle: String? = nil, pinned: Bool = false, showsStanding: Bool = true
     ) {
         tweetID = tweet.restID
         boundTweet = tweet
@@ -269,6 +307,7 @@ final class TweetCell: UICollectionViewCell {
             loadAvatar(into: avatar, url: tweet.author.avatarURL, size: Self.avatarSize, fallbackPoint: 30,
                        enabled: imagesEnabled)
         }
+        applyStanding(showsStanding ? tweet.author.standing(viewerHandle: viewerHandle) : nil)
 
         mediaContent.onTapPhoto = { [weak self] index in self?.onTapPhoto?(index) }
         mediaContent.onTapCard = { [weak self] url in self?.onTapCard?(url) }
@@ -297,7 +336,7 @@ final class TweetCell: UICollectionViewCell {
             statsView.isHidden = false
         } else {
             statsView.isHidden = true
-        }
+            }
         viewsTap.isEnabled = AppSettings.postStatsMode == .onTap && (tweet.viewCount ?? 0) > 0
         viewsLabel.isUserInteractionEnabled = viewsTap.isEnabled
     }
@@ -659,7 +698,8 @@ final class TweetCell: UICollectionViewCell {
         let replying = spokenReply(for: tweet)
         let when = Self.spokenTime.localizedString(for: tweet.createdAt, relativeTo: Date())
         var parts = repostText.map { [$0] } ?? []
-        parts.append("\(tweet.author.name)\(verified), @\(tweet.author.handle)\(replying), \(when)")
+        let relation = standing?.phrase.map { ", \($0.lowercased())" } ?? ""
+        parts.append("\(tweet.author.name)\(verified), @\(tweet.author.handle)\(relation)\(replying), \(when)")
         let body = ReplyContext.body(of: tweet)
         if !body.isEmpty { parts.append(body) }
         if let media = Self.mediaSummary(tweet.media) { parts.append(media) }

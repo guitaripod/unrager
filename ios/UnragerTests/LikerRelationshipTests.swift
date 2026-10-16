@@ -194,4 +194,13 @@ struct LikerRelationshipTests {
         #expect(allStandIns)
         #expect(ids.count == 4)
     }
+
+    @Test("An account's standing needs both directions and is never the viewer's own")
+    func userStanding() throws {
+        let follower = try Self.user("1", following: false, followsMe: true)
+        #expect(follower.standing(viewerHandle: "someoneelse") == .followsYou)
+        #expect(follower.standing(viewerHandle: "U1") == nil)
+        let half = try Self.user("2", following: true, followsMe: nil)
+        #expect(half.standing(viewerHandle: nil) == nil)
+    }
 }

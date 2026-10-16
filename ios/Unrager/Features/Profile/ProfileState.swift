@@ -199,43 +199,47 @@ enum ProfileText {
         return links
     }
 
-    /// The location, website and join date as one wrapping line, each after
-    /// its symbol; the website is a link. Nil when the account gives none.
-    @MainActor
-    static func meta(location: String?, website: String?, joinedAt: Date?, font: UIFont) -> NSAttributedString? {
-        let color = DesignSystem.Color.secondaryLabel
-        var items: [NSAttributedString] = []
-        if let location = location?.trimmingCharacters(in: .whitespacesAndNewlines), !location.isEmpty {
-            items.append(item("mappin.and.ellipse", location, font: font, color: color))
+    /// The account's facts as capsules, in the order a reader looks for them:
+    /// where it is (its own words, then where X says it is based, unless the
+    /// location already names that country), its website (a link) and when it
+    /// joined. Empty when the account gives none.
+    static func facts(location: String?, website: String?, joinedAt: Date?, basedIn: (flag: String?, country: String?)?,
+                      locale: Locale = .current, timeZone: TimeZone = .current) -> [ProfileFact] {
+        var facts: [ProfileFact] = []
+        let place = location?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !place.isEmpty {
+            facts.append(ProfileFact(symbol: "mappin.and.ellipse", text: place, spoken: "Location: \(place)"))
+        }
+        if let country = basedIn?.country, !country.isEmpty,
+           !place.localizedCaseInsensitiveContains(country) {
+            let flag = basedIn?.flag.map { "\($0) " } ?? ""
+            facts.append(ProfileFact(symbol: "globe.europe.africa.fill", text: "Based in \(flag)\(country)",
+                                     spoken: "Based in \(country)"))
         }
         if let website, let url = websiteURL(website) {
-            let link = NSMutableAttributedString(attributedString: item(
-                "link", websiteLabel(website), font: font, color: DesignSystem.Color.accent))
-            link.addAttribute(TweetText.linkKey, value: url, range: NSRange(location: 0, length: link.length))
-            items.append(link)
+            let label = websiteLabel(website)
+            facts.append(ProfileFact(symbol: "link", text: label, url: url, spoken: "Website: \(label)"))
         }
         if let joinedAt {
-            items.append(item("calendar", joined(joinedAt), font: font, color: color))
+            let style = Date.FormatStyle(locale: locale, calendar: locale.calendar, timeZone: timeZone)
+                .month(.abbreviated).year()
+            facts.append(ProfileFact(symbol: "calendar", text: "Joined \(joinedAt.formatted(style))",
+                                     spoken: joined(joinedAt, locale: locale, timeZone: timeZone)))
         }
-        guard !items.isEmpty else { return nil }
-        let line = NSMutableAttributedString()
-        for (index, item) in items.enumerated() {
-            if index > 0 { line.append(NSAttributedString(string: "   ", attributes: [.font: font])) }
-            line.append(item)
-        }
-        unhyphenated(line)
-        return line
+        return facts
     }
 
-    /// What VoiceOver reads for the meta line, which its symbols can't say.
-    static func metaAccessibilityLabel(location: String?, website: String?, joinedAt: Date?) -> String {
-        var parts: [String] = []
-        if let location = location?.trimmingCharacters(in: .whitespacesAndNewlines), !location.isEmpty {
-            parts.append("Location: \(location)")
-        }
-        if let website, websiteURL(website) != nil { parts.append("Website: \(websiteLabel(website))") }
-        if let joinedAt { parts.append(joined(joinedAt)) }
-        return parts.joined(separator: ". ")
+    /// How long the account has been on X as a short figure ("15y", "8mo",
+    /// "New") and what VoiceOver says for it. Nil for a date in the future.
+    static func accountAge(since joined: Date, now: Date = Date(), calendar: Calendar = .current)
+        -> (figure: String, spoken: String)? {
+        guard joined <= now else { return nil }
+        let parts = calendar.dateComponents([.year, .month], from: joined, to: now)
+        let years = parts.year ?? 0
+        let months = parts.month ?? 0
+        if years > 0 { return ("\(years)y", years == 1 ? "On X for 1 year" : "On X for \(years) years") }
+        if months > 0 { return ("\(months)mo", months == 1 ? "On X for 1 month" : "On X for \(months) months") }
+        return ("New", "New on X")
     }
 
     /// Wraps at word boundaries only: at large text sizes a label would
@@ -247,18 +251,20 @@ enum ProfileText {
         style.lineBreakMode = .byWordWrapping
         text.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: text.length))
     }
+}
 
-    /// One symbol and its text, held together so a wrap never parts them.
-    private static func item(_ symbol: String, _ text: String, font: UIFont, color: UIColor) -> NSAttributedString {
-        let out = NSMutableAttributedString()
-        let config = UIImage.SymbolConfiguration(font: font, scale: .small)
-        if let image = UIImage(systemName: symbol, withConfiguration: config)?
-            .withTintColor(color, renderingMode: .alwaysOriginal) {
-            out.append(NSAttributedString(attachment: NSTextAttachment(image: image)))
-            out.append(NSAttributedString(string: "\u{00A0}"))
-        }
-        out.append(NSAttributedString(string: text))
-        out.addAttributes([.font: font, .foregroundColor: color], range: NSRange(location: 0, length: out.length))
-        return out
+/// One thing worth knowing about an account, shown as a capsule: a symbol and
+/// a few words, a link when `url` is set.
+struct ProfileFact: Equatable {
+    let symbol: String
+    let text: String
+    var url: URL?
+    let spoken: String
+
+    init(symbol: String, text: String, url: URL? = nil, spoken: String) {
+        self.symbol = symbol
+        self.text = text
+        self.url = url
+        self.spoken = spoken
     }
 }

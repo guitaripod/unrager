@@ -46,6 +46,15 @@ enum Standing: Equatable {
     var drawsRing: Bool { phrase != nil }
 }
 
+extension User {
+    /// How this account stands with the viewer, when the payload says it both
+    /// ways; nil for the viewer's own account.
+    func standing(viewerHandle: String?) -> Standing? {
+        if let viewerHandle, handle.caseInsensitiveCompare(viewerHandle) == .orderedSame { return nil }
+        return Standing(following: followedByMe, followsMe: followsMe)
+    }
+}
+
 extension UserRow {
     /// This person's standing with the viewer; nil for the viewer's own row
     /// and where the list doesn't say.

@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import demo_world as dw  # noqa: E402
 
 PAGE = 8
+LIKERS_PAGE = 10
 LATENCY = {"api": 0.0, "assets": 0.0}
 MANY = False
 STATE = {"injected": [], "seen": dw.ago(minutes=100), "filter_enabled": True, "likes": set(), "bookmarks": set(), "retweets": set(), "overrides": {},
@@ -267,7 +268,12 @@ class Handler(BaseHTTPRequestHandler):
                 "is_blue_verified": cast[2], "verified": cast[2]}})
         m = re.fullmatch(r"/api/likers/(\d+)", path)
         if m:
-            return self.send_json({"users": [w.profile_user(h) for h in ("mirakoski", "anyavoss", "fieldnotes", "kitwren", "lenapark")], "cursor": None})
+            handles = [c[0] for c in dw.CAST if c[0] != dw.ME]
+            cursor = q("cursor") or ""
+            start = int(cursor[1:]) if cursor.startswith("p") and cursor[1:].isdigit() else 0
+            nxt = start + LIKERS_PAGE
+            return self.send_json({"users": [w.profile_user(h) for h in handles[start:nxt]],
+                                   "cursor": f"p{nxt}" if nxt < len(handles) else None})
         m = re.fullmatch(r"/api/users/(\d+)/(followers|following)", path)
         if m:
             handles = [c[0] for c in dw.CAST if c[0] != dw.ME][:12]

@@ -65,6 +65,9 @@ PROFILES = {
                    "https://fieldnotes.example", "2013-02-14T07:00:00Z"),
     "quietfern": ("Notes for friends. Garden, books, the odd sourdough.", "Galway", None, "2020-04-02T10:00:00Z"),
 }
+ME_FOLLOWS = {"mirakoski", "fieldnotes", "anyavoss", "kitwren", "quietfern"}
+FOLLOWS_ME = {"mirakoski", "anyavoss", "tomasbuilds", "junocooks", "maxplays", "samreyes_", "lenapark",
+              "ravimenon", "inesduarte"}
 PROTECTED = {"quietfern"}
 PINNED = {"mirakoski": "f18"}
 SUSPENDED = {"spamking"}
@@ -284,7 +287,8 @@ class World:
     def profile_user(self, handle: str) -> dict:
         c = next(c for c in CAST if c[0] == handle)
         user = self._user(c, banner=True)
-        user["followed_by_me"] = handle in ("mirakoski", "fieldnotes", "anyavoss", "kitwren", "quietfern")
+        user["followed_by_me"] = handle in ME_FOLLOWS
+        user["follows_me"] = handle in FOLLOWS_ME
         details = PROFILES.get(handle)
         if details:
             bio, location, website, joined = details

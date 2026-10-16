@@ -153,7 +153,12 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                 let id = parts[1]
                 Task {
                     let tweet = try? await api.tweet(id: id)
-                    homeNav()?.pushViewController(LikersViewController(tweetID: id, tweet: tweet), animated: false)
+                    let list = LikersViewController(tweetID: id, tweet: tweet)
+                    homeNav()?.pushViewController(list, animated: false)
+                    guard parts.count > 2 else { return }
+                    try? await Task.sleep(for: .seconds(1.5))
+                    if let lens = LikerLens(rawValue: parts[2]) { list.debugSelectLens(lens) }
+                    if let points = parts.last.flatMap(Double.init) { list.debugScroll(by: CGFloat(points)) }
                 }
             case "me":
                 Task {

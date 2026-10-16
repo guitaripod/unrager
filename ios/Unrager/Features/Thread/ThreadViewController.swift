@@ -12,7 +12,7 @@ import UnragerKit
 /// below with an animated diff, and the focal tweet's on-screen position is
 /// pinned when ancestors prepend so the view never jumps.
 final class ThreadViewController: UIViewController, TweetActionHandling {
-    private let tweetID: String
+    let tweetID: String
     private var collectionView: UICollectionView!
     private var dataSource: UICollectionViewDiffableDataSource<Section, String>!
     private var tweetsByID: [String: Tweet] = [:]

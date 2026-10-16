@@ -11,7 +11,11 @@ struct UserRow: Hashable {
     let verified: Bool
     let avatarURL: URL?
     let bio: String?
+    let followers: Int?
+    /// Whether the viewer follows the person; nil where the list can't say.
     var following: Bool?
+    /// Whether the person follows the viewer; nil where the list can't say.
+    let followsMe: Bool?
 
     init(_ user: User) {
         id = user.restID
@@ -20,7 +24,9 @@ struct UserRow: Hashable {
         verified = user.verified
         avatarURL = user.avatarURL.flatMap(URL.init)
         bio = user.bio.flatMap { $0.isEmpty ? nil : $0 }
+        followers = user.followers
         following = user.followedByMe
+        followsMe = user.followsMe
     }
 
     init(_ actor: NotificationActor) {
@@ -30,7 +36,9 @@ struct UserRow: Hashable {
         verified = actor.verified
         avatarURL = actor.avatarURL.flatMap(URL.init)
         bio = nil
+        followers = nil
         following = nil
+        followsMe = nil
     }
 
     /// Whether this row is the signed-in account, which has no one to follow.
@@ -41,12 +49,17 @@ struct UserRow: Hashable {
 }
 
 /// A person: a round avatar, the name with its verified seal, the handle, up to
-/// two lines of bio and, where the list knows, a Follow / Following button. The
-/// avatar load is tied to the row it was started for: a recycled cell drops the
-/// old load and ignores a late result, so a fast scroll can never leave one
-/// user's picture on another.
+/// two lines of bio and, where the list knows, a Follow / Following button. A
+/// detailed row (the people who liked a post) also says where the person stands
+/// with the viewer: a follower is ringed in amber (not followed back) or teal
+/// (mutual) and named so after the handle, with their follower count after it
+/// for everyone else. The avatar load is tied to the row it was started for: a
+/// recycled cell drops the old load and ignores a late result, so a fast scroll
+/// can never leave one user's picture on another.
 final class UserRowCell: UICollectionViewListCell {
     static let avatarSize: CGFloat = 48
+    private static let ringWidth: CGFloat = 2.5
+    private static let ringGap: CGFloat = 4
 
     var onToggleFollow: (() -> Void)?
 
@@ -55,7 +68,10 @@ final class UserRowCell: UICollectionViewListCell {
     private let flagLabel = UILabel()
     private let seal = UIImageView(image: DesignSystem.icon("checkmark.seal.fill", pointSize: 14))
     private let handleLabel = UILabel()
+    private let phraseLabel = UILabel()
     private let bioLabel = UILabel()
+    private let ring = CAShapeLayer()
+    private var ringTint: UIColor?
     private let followButton = UIButton(type: .system)
     private var textToButton: NSLayoutConstraint!
     private var textToEdge: NSLayoutConstraint!
@@ -99,14 +115,36 @@ final class UserRowCell: UICollectionViewListCell {
 
         handleLabel.font = DesignSystem.Typography.metric()
         handleLabel.textColor = DesignSystem.Color.secondaryLabel
+        handleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        phraseLabel.font = DesignSystem.Typography.metric()
+        phraseLabel.setContentHuggingPriority(.required, for: .horizontal)
+        phraseLabel.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+        phraseLabel.isHidden = true
+        let metaSpacer = UIView()
+        metaSpacer.setContentHuggingPriority(UILayoutPriority(1), for: .horizontal)
+        let metaRow = UIStackView(arrangedSubviews: [handleLabel, phraseLabel, metaSpacer])
+        metaRow.alignment = .firstBaseline
         bioLabel.font = DesignSystem.Typography.metric()
         bioLabel.textColor = DesignSystem.Color.label
         bioLabel.numberOfLines = 2
 
-        let texts = UIStackView(arrangedSubviews: [nameRow, handleLabel, bioLabel])
+        let texts = UIStackView(arrangedSubviews: [nameRow, metaRow, bioLabel])
         texts.axis = .vertical
         texts.spacing = 1
-        texts.setCustomSpacing(DesignSystem.Spacing.xs, after: handleLabel)
+        texts.setCustomSpacing(DesignSystem.Spacing.xs, after: metaRow)
+        let tail = UIView()
+        tail.setContentHuggingPriority(UILayoutPriority(1), for: .vertical)
+        texts.addArrangedSubview(tail)
+        texts.setCustomSpacing(0, after: bioLabel)
+
+        ring.fillColor = nil
+        ring.lineWidth = Self.ringWidth
+        ring.isHidden = true
+        contentView.layer.addSublayer(ring)
+        registerForTraitChanges([UITraitUserInterfaceStyle.self, UITraitAccessibilityContrast.self]) {
+            (cell: UserRowCell, _) in
+            cell.paintRing()
+        }
 
         followButton.setContentHuggingPriority(.required, for: .horizontal)
         followButton.setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -136,7 +174,7 @@ final class UserRowCell: UICollectionViewListCell {
         ])
     }
 
-    func configure(with row: UserRow) {
+    func configure(with row: UserRow, detailed: Bool = false) {
         avatarTask?.cancel()
         boundID = row.id
 
@@ -148,20 +186,63 @@ final class UserRowCell: UICollectionViewListCell {
             TwemojiText.attributed($0, font: DesignSystem.Typography.metric(), color: DesignSystem.Color.label)
         }
         bioLabel.isHidden = row.bio == nil
-        showFollow(row.isViewer ? nil : row.following)
+        let standing = detailed ? row.standing : nil
+        showFollow(row.isViewer ? nil : row.following, title: row.followTitle)
+        showStanding(standing, row: row, detailed: detailed)
         loadAvatar(row)
         applyFlag(for: row)
 
         isAccessibilityElement = true
         accessibilityTraits = .button
         accessibilityLabel = "\(row.name), @\(row.handle)\(row.verified ? ", verified" : "")"
+            + (standing?.phrase.map { ", \($0.lowercased())" } ?? "")
             + (row.bio.map { ". \($0)" } ?? "")
         accessibilityCustomActions = following.map { current in
-            [UIAccessibilityCustomAction(name: current ? "Unfollow" : "Follow") { [weak self] _ in
+            [UIAccessibilityCustomAction(name: current ? "Unfollow" : row.followTitle) { [weak self] _ in
                 self?.onToggleFollow?()
                 return true
             }]
         }
+    }
+
+    /// The phrase after the handle and the ring around the avatar: who follows
+    /// the viewer, or else how big the account is.
+    private func showStanding(_ standing: Standing?, row: UserRow, detailed: Bool) {
+        let phrase: NSAttributedString?
+        if let standing, let text = standing.phrase {
+            phrase = NSAttributedString(string: " · \(text)", attributes: [
+                .font: DesignSystem.Typography.system(13, weight: .semibold), .foregroundColor: standing.tint,
+            ])
+        } else if detailed, let followers = row.followers {
+            phrase = NSAttributedString(string: " · \(Format.count(followers)) followers", attributes: [
+                .font: DesignSystem.Typography.metric(), .foregroundColor: DesignSystem.Color.tertiaryLabel,
+            ])
+        } else {
+            phrase = nil
+        }
+        phraseLabel.attributedText = phrase
+        phraseLabel.isHidden = phrase == nil
+        ringTint = standing?.drawsRing == true ? standing?.tint : nil
+        paintRing()
+        setNeedsLayout()
+    }
+
+    private func paintRing() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        ring.isHidden = ringTint == nil
+        ring.strokeColor = ringTint?.resolvedColor(with: traitCollection).cgColor
+        CATransaction.commit()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard !ring.isHidden else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        ring.frame = contentView.bounds
+        ring.path = UIBezierPath(ovalIn: avatar.frame.insetBy(dx: -Self.ringGap, dy: -Self.ringGap)).cgPath
+        CATransaction.commit()
     }
 
     /// Puts the person's country flag after the name: at once when it resolved
@@ -201,7 +282,7 @@ final class UserRowCell: UICollectionViewListCell {
     }
 
     /// Shows Follow or Following, or no button when the list can't tell.
-    private func showFollow(_ state: Bool?) {
+    private func showFollow(_ state: Bool?, title: String) {
         following = state
         followButton.isHidden = state == nil
         textToButton.isActive = state != nil
@@ -209,7 +290,7 @@ final class UserRowCell: UICollectionViewListCell {
         guard let state else { return }
         var config = state ? UIButton.Configuration.gray() : UIButton.Configuration.filled()
         config.cornerStyle = .capsule
-        config.title = state ? "Following" : "Follow"
+        config.title = title
         config.baseForegroundColor = state ? DesignSystem.Color.label : .white
         config.baseBackgroundColor = state ? nil : DesignSystem.Color.accent
         config.contentInsets = NSDirectionalEdgeInsets(top: 7, leading: 14, bottom: 7, trailing: 14)
@@ -228,5 +309,7 @@ final class UserRowCell: UICollectionViewListCell {
         boundID = nil
         onToggleFollow = nil
         flagLabel.isHidden = true
+        ringTint = nil
+        paintRing()
     }
 }

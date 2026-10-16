@@ -523,6 +523,7 @@ mod tests {
                 following: 0,
                 avatar_url: None,
                 followed_by_me: None,
+                follows_me: None,
                 banner_url: None,
                 description: None,
                 location: None,
@@ -616,6 +617,27 @@ mod tests {
         assert_eq!(followed.followed_by_me, Some(true));
         let v = serde_json::to_value(&followed).unwrap();
         assert_eq!(v["followed_by_me"], json!(true));
+    }
+
+    #[test]
+    fn user_follows_me_is_optional_and_omitted_when_absent() {
+        let bare: crate::User = serde_json::from_str(
+            r#"{"rest_id":"1","handle":"a","name":"A","verified":false,
+                "followers":0,"following":0}"#,
+        )
+        .unwrap();
+        assert_eq!(bare.follows_me, None);
+        let v = serde_json::to_value(&bare).unwrap();
+        assert!(!v.as_object().unwrap().contains_key("follows_me"));
+
+        let follower: crate::User = serde_json::from_str(
+            r#"{"rest_id":"1","handle":"a","name":"A","verified":false,
+                "followers":0,"following":0,"follows_me":true}"#,
+        )
+        .unwrap();
+        assert_eq!(follower.follows_me, Some(true));
+        let v = serde_json::to_value(&follower).unwrap();
+        assert_eq!(v["follows_me"], json!(true));
     }
 
     #[test]

@@ -91,6 +91,10 @@ pub fn parse_user_result(node: &Value) -> Option<User> {
         .pointer("/relationship_perspectives/following")
         .or_else(|| node.pointer("/legacy/following"))
         .and_then(Value::as_bool);
+    let follows_me = node
+        .pointer("/relationship_perspectives/followed_by")
+        .or_else(|| node.pointer("/legacy/followed_by"))
+        .and_then(Value::as_bool);
 
     let banner_url = node
         .pointer("/banner/image_url")
@@ -108,6 +112,7 @@ pub fn parse_user_result(node: &Value) -> Option<User> {
         following,
         avatar_url,
         followed_by_me,
+        follows_me,
         banner_url,
         description: None,
         location: None,
@@ -373,6 +378,33 @@ mod tests {
             "legacy": {}
         });
         assert_eq!(parse_user_result(&bare).unwrap().followed_by_me, None);
+    }
+
+    #[test]
+    fn user_result_parses_follows_me_from_relationship_perspectives_and_legacy() {
+        let modern = json!({
+            "rest_id": "7",
+            "core": { "screen_name": "bob", "name": "Bob" },
+            "relationship_perspectives": { "following": false, "followed_by": true },
+            "legacy": {}
+        });
+        let user = parse_user_result(&modern).unwrap();
+        assert_eq!(user.follows_me, Some(true));
+        assert_eq!(user.followed_by_me, Some(false));
+        let legacy = json!({
+            "rest_id": "7",
+            "core": { "screen_name": "bob", "name": "Bob" },
+            "legacy": { "following": true, "followed_by": false }
+        });
+        let user = parse_user_result(&legacy).unwrap();
+        assert_eq!(user.follows_me, Some(false));
+        assert_eq!(user.followed_by_me, Some(true));
+        let bare = json!({
+            "rest_id": "7",
+            "core": { "screen_name": "bob", "name": "Bob" },
+            "legacy": {}
+        });
+        assert_eq!(parse_user_result(&bare).unwrap().follows_me, None);
     }
 
     #[test]

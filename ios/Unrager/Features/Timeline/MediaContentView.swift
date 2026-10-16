@@ -151,7 +151,7 @@ final class MediaContentView: UIView {
     /// Prefers the "interesting" attachment: a poll/card/broadcast/youTube
     /// trumps a bare thumbnail, and a video/gif trumps a still photo. Falls
     /// back to the first photo otherwise.
-    private static func pickRich(_ media: [Media]) -> Media? {
+    static func pickRich(_ media: [Media]) -> Media? {
         media.first(where: { $0.isNonImageCard })
             ?? media.first(where: { $0.isVideo })
             ?? media.first

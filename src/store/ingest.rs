@@ -356,6 +356,7 @@ mod tests {
                 following: 0,
                 avatar_url: None,
                 followed_by_me: None,
+                follows_me: None,
                 banner_url: None,
                 description: None,
                 location: None,

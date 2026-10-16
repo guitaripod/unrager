@@ -321,6 +321,7 @@ final class NotificationsViewController: UIViewController {
         view.addManaged(collectionView)
         collectionView.pinEdges(to: view)
         setContentScrollView(collectionView, for: .top)
+        setContentScrollView(collectionView, for: .bottom)
         let refresh = UIRefreshControl()
         refresh.addTarget(self, action: #selector(reload), for: .valueChanged)
         collectionView.refreshControl = refresh

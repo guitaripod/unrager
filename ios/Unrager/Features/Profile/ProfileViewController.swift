@@ -111,6 +111,11 @@ final class ProfileViewController: FeedViewController {
         applyHeaderState()
     }
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        publishScrollView(activeScrollView)
+    }
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         if view.bounds.width != measuredWidth {
@@ -456,7 +461,7 @@ final class ProfileViewController: FeedViewController {
         navigationItem.titleView = titleLabel
         if navigationHost !== self {
             navigationHost.navigationItem.titleView = titleLabel
-            navigationHost.setContentScrollView(collectionView, for: .top)
+            publishScrollView(collectionView)
         }
         banner.onBrightnessChange = { [weak self] in self?.setNeedsStatusBarAppearanceUpdate() }
         let follow: (UIScrollView) -> Void = { [weak self] scrollView in self?.updateBanner(for: scrollView) }
@@ -567,7 +572,7 @@ final class ProfileViewController: FeedViewController {
         settleVideoPlayback()
         repliesController?.settleVideoPlayback()
         applyHeaderState()
-        navigationHost.setContentScrollView(activeScrollView, for: .top)
+        publishScrollView(activeScrollView)
         updateBanner(for: activeScrollView)
     }
 
@@ -585,6 +590,13 @@ final class ProfileViewController: FeedViewController {
         let headerEnd = headerHeight - inset - header.segmentHeight
         let target = min(outgoing.contentOffset.y, max(-inset, headerEnd))
         incoming.setContentOffset(CGPoint(x: 0, y: target), animated: false)
+    }
+
+    /// Tells the controller on screen which list to follow, for the navigation
+    /// bar's edge effect (top) and the tab bar's minimize-on-scroll (bottom).
+    private func publishScrollView(_ scrollView: UIScrollView) {
+        navigationHost.setContentScrollView(scrollView, for: .top)
+        navigationHost.setContentScrollView(scrollView, for: .bottom)
     }
 
     /// The controller the navigation stack actually shows: this one, or the

@@ -333,7 +333,7 @@ impl App {
             return;
         }
 
-        let Some(llm) = self.filter_cfg.as_ref().map(|c| c.llm.clone()) else {
+        let Some(llm) = self.filter_cfg.as_ref().map(|c| c.llm.for_quick()) else {
             self.set_status("translate unavailable · run `unrager doctor`");
             return;
         };
@@ -604,7 +604,7 @@ impl App {
     }
 
     pub(super) fn open_brief_for_target(&mut self) {
-        let Some(llm) = self.filter_cfg.as_ref().map(|c| c.llm.clone()) else {
+        let Some(llm) = self.filter_cfg.as_ref().map(|c| c.llm.for_quick()) else {
             self.set_status("profile unavailable · run `unrager doctor`");
             return;
         };
@@ -666,7 +666,7 @@ impl App {
             }
             view.handle.clone()
         };
-        let Some(llm) = self.filter_cfg.as_ref().map(|c| c.llm.clone()) else {
+        let Some(llm) = self.filter_cfg.as_ref().map(|c| c.llm.for_quick()) else {
             return;
         };
         self.brief_cache.remove(&handle);

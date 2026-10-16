@@ -252,7 +252,7 @@ pub async fn brief_stream(
     );
 
     Ok(stream_tokens(
-        cfg.llm.clone(),
+        cfg.llm.for_quick(),
         llm::brief_system_prompt().to_string(),
         user,
         "brief",
@@ -273,7 +273,7 @@ pub async fn translate_stream(
     let cfg = state.filter_config.lock().await.clone();
 
     Ok(stream_tokens(
-        cfg.llm.clone(),
+        cfg.llm.for_quick(),
         llm::translate_system_prompt().to_string(),
         tweet.text.clone(),
         "translate",

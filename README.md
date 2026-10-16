@@ -185,6 +185,8 @@ model = "qwen3-27b"          # ask, brief, translate
 filter_model = "qwen3-4b"    # judging posts
 ```
 
+Translate and brief can use the small model too: set `quick_model = "qwen3-4b"` and only ask keeps `model`. Small models match big ones at translating and summarising a profile, and are worse at open-ended questions.
+
 ### The default model
 
 [unrager-4b](https://huggingface.co/guitaripod/unrager-4b) is Qwen3.5-4B fine-tuned for this filter on about 7,400 posts from one real feed, labelled against the default rules by a 26B model and a second model that had to agree. On 1,049 real posts it hid about one good post in 31 and caught about three in four rage posts, where the Qwen3 4B it replaced hid one in 24 and caught three in five, and a 26B model hid one in 15 and caught five in six. The files are 2.7 GB (Q4_K_M, the default) and 4.5 GB (Q8_0), under Apache 2.0, with the system prompt next to the weights, and the same files are on [Pirate Face](https://pirateface.co/guitaripod/unrager-4b) as a torrent. It is tuned to the default rules; with rules of your own it still follows them, but check with `unrager eval --posts`.

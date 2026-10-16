@@ -119,15 +119,21 @@ pub async fn llm(report: &mut Report) {
             report,
         );
     }
+    let quick = filter_cfg.llm.for_quick();
+    if quick.model != filter_cfg.llm.model && quick.model != filter.model {
+        check_model(&quick, &models, ModelRole::Quick, &path, report);
+    }
 }
 
 /// What a checked model is used for: a model only ask, brief and translate
-/// use is a warning when missing, since the filter works without it.
+/// (or just brief and translate) use is a warning when missing, since the
+/// filter works without it.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ModelRole {
     Everything,
     Filter,
     AskBriefTranslate,
+    Quick,
 }
 
 impl ModelRole {
@@ -136,12 +142,14 @@ impl ModelRole {
             ModelRole::Everything => "",
             ModelRole::Filter => " (filter)",
             ModelRole::AskBriefTranslate => " (ask, brief, translate)",
+            ModelRole::Quick => " (brief, translate)",
         }
     }
 
     fn key(self) -> &'static str {
         match self {
             ModelRole::Filter => "filter_model",
+            ModelRole::Quick => "quick_model",
             ModelRole::Everything | ModelRole::AskBriefTranslate => "model",
         }
     }
@@ -158,7 +166,7 @@ fn check_model(
     let host = llm.host.trim_end_matches('/');
     let model = &llm.model;
     let suffix = role.suffix();
-    let needed = role != ModelRole::AskBriefTranslate;
+    let needed = !matches!(role, ModelRole::AskBriefTranslate | ModelRole::Quick);
     let missing = |report: &mut Report| {
         if needed {
             report.errors += 1;
@@ -267,6 +275,7 @@ async fn suggest_local_servers(configured_host: &str) {
                 keep_alive: String::new(),
                 api_key: None,
                 filter_model: None,
+                quick_model: None,
             };
             match probe.list_models_within(Duration::from_millis(800)).await {
                 Ok(models) if !models.is_empty() => Some((host, backend, name, models)),

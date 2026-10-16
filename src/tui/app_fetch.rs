@@ -1320,6 +1320,7 @@ mod store_tests {
                 keep_alive: "10s".into(),
                 api_key: None,
                 filter_model: None,
+                quick_model: None,
             },
         }
     }

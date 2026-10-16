@@ -211,6 +211,11 @@ pub struct LlmConfig {
     /// keep a bigger one. Same server, same backend.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filter_model: Option<String>,
+    /// The model translate and brief use when it should differ from `model`:
+    /// a small one that is already loaded for the filter, while ask keeps the
+    /// bigger one. Same server, same backend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quick_model: Option<String>,
     pub host: String,
     pub timeout_seconds: u64,
     /// Ollama-only model-residency control; never written into an
@@ -230,6 +235,7 @@ impl std::fmt::Debug for LlmConfig {
             .field("backend", &self.backend)
             .field("model", &self.model)
             .field("filter_model", &self.filter_model)
+            .field("quick_model", &self.quick_model)
             .field("host", &self.host)
             .field("timeout_seconds", &self.timeout_seconds)
             .field("keep_alive", &self.keep_alive)
@@ -290,6 +296,22 @@ impl LlmConfig {
         }
         filter.filter_model = None;
         filter
+    }
+
+    /// This config pointed at the model translate and brief use:
+    /// `quick_model` when set, `model` otherwise. Ask stays on `model`.
+    pub fn for_quick(&self) -> LlmConfig {
+        let mut quick = self.clone();
+        if let Some(model) = self
+            .quick_model
+            .as_deref()
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+        {
+            quick.model = model.to_string();
+        }
+        quick.quick_model = None;
+        quick
     }
 
     /// Whether ask can attach a post's photos. Only Ollama gets images
@@ -2029,6 +2051,7 @@ mod tests {
             keep_alive: "30s".into(),
             api_key: None,
             filter_model: None,
+            quick_model: None,
         }
     }
 
@@ -2041,6 +2064,7 @@ mod tests {
             keep_alive: "30s".into(),
             api_key: None,
             filter_model: None,
+            quick_model: None,
         }
     }
 
@@ -2791,6 +2815,25 @@ mod tests {
         assert_eq!(c.llm.for_filter().model, "big-model");
         let classifier = Classifier::new(&cfg_with_filter_model());
         assert_eq!(classifier.handle().llm().model, "small");
+    }
+
+    #[test]
+    fn translate_and_brief_can_run_their_own_model() {
+        let mut c = cfg(vec!["war"], "");
+        let shared = c.rubric_hash();
+        assert_eq!(c.llm.for_quick().model, "gemma4:latest");
+        c.llm.quick_model = Some("qwen3:4b-instruct".into());
+        assert_eq!(c.llm.for_quick().model, "qwen3:4b-instruct");
+        assert_eq!(c.llm.for_quick().quick_model, None);
+        assert_eq!(c.llm.model, "gemma4:latest", "ask keeps the general model");
+        assert_eq!(c.llm.for_filter().model, "gemma4:latest");
+        assert_eq!(
+            c.rubric_hash(),
+            shared,
+            "the quick model doesn't touch cached verdicts"
+        );
+        c.llm.quick_model = Some("  ".into());
+        assert_eq!(c.llm.for_quick().model, "gemma4:latest");
     }
 
     fn cfg_with_filter_model() -> FilterConfig {

@@ -441,14 +441,27 @@ final class ComposeViewController: UIViewController {
         updateControls()
     }
 
+    /// Whether the server may already have posted what failed: a timeout or a
+    /// dropped connection says nothing about whether the request got through.
+    private static func retryCouldPostTwice(after error: any Error) -> Bool {
+        switch error as? APIError {
+        case .publishTimedOut, .connectionLost, .timeout: return true
+        default: return false
+        }
+    }
+
     private func presentPostFailure(_ error: any Error) {
         let alert = UIAlertController(
             title: "Couldn't post",
             message: error.localizedDescription,
             preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "Retry", style: .default) { [weak self] _ in
-            Task { await self?.postThroughServer() }
-        })
+        if Self.retryCouldPostTwice(after: error) {
+            alert.message = "\(error.localizedDescription)\n\nThe post may have gone out anyway. Check your profile before posting it again."
+        } else {
+            alert.addAction(UIAlertAction(title: "Retry", style: .default) { [weak self] _ in
+                Task { await self?.postThroughServer() }
+            })
+        }
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         present(alert, animated: true)
     }

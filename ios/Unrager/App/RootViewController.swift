@@ -94,16 +94,13 @@ final class RootViewController: UITabBarController {
 
     /// Sets the live unread badge on the Notifications tab item (nil clears it).
     /// No-op when the Notifications tab isn't in the user's bar — the count is
-    /// still tracked, just nowhere to show it. While there is unread activity
-    /// the bar stays put instead of minimizing on scroll, so the indicator is
-    /// never scrolled out of sight; minimizing resumes once the badge clears.
+    /// still tracked, just nowhere to show it.
     func setNotificationsBadge(_ value: String?) {
         guard let index = notificationsTabIndex,
               let item = (viewControllers?[index] as? UINavigationController)?.tabBarItem
                 ?? viewControllers?[index].tabBarItem else { return }
         item.badgeColor = DesignSystem.Color.badge
         item.badgeValue = value
-        tabBarMinimizeBehavior = value == nil ? .onScrollDown : .never
     }
 
     private weak var activeToast: NotificationToast?

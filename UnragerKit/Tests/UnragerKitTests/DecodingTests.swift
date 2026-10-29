@@ -189,8 +189,15 @@ struct DecodingTests {
         #expect(notif.actors.first?.handle == "a")
         #expect(notif.actors.first?.avatarURL == "https://pbs.twimg.com/a.jpg")
         #expect(notif.targetTweetLikeCount == 5)
+        #expect(!notif.targetTweetFavorited)
         #expect(notif.targetMedia.first?.kind == .photo)
         #expect(notif.thumbnailURL?.absoluteString == "https://pbs.twimg.com/media/x.jpg?name=small")
+    }
+
+    @Test("A notification says whether its post is already liked")
+    func notificationFavorited() throws {
+        let json = #"{"id":"n1","type":"reply","target_tweet_id":"1","target_tweet_favorited":true,"timestamp":"2026-06-19T12:30:00Z"}"#
+        #expect(try decode(XNotification.self, json).targetTweetFavorited)
     }
 
     @Test("Compact count formatting")
@@ -216,6 +223,8 @@ struct DecodingTests {
              .linkCard(title: "T", description: "D", domain: "e.com", targetURL: "https://e.com")),
             (#"{"kind":{"broadcast":{"broadcast_id":"b1","title":"Live","broadcaster_name":"X","is_live":true}},"url":"b.jpg"}"#,
              .broadcast(broadcastID: "b1", title: "Live", broadcasterName: "X", isLive: true)),
+            (#"{"kind":{"space":{"space_id":"1OxwbnaOppPJB"}},"url":""}"#,
+             .space(spaceID: "1OxwbnaOppPJB")),
             (#"{"kind":{"poll":{"options":[{"label":"A","count":10}],"ends_at":"2026-06-20T00:00:00Z","counts_final":false}},"url":""}"#,
              .poll(options: [PollOption(label: "A", count: 10)],
                    endsAt: try? Date.ISO8601FormatStyle().parse("2026-06-20T00:00:00Z"),

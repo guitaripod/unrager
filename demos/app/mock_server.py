@@ -26,7 +26,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import demo_world as dw  # noqa: E402
 
 PAGE = 8
-LATENCY = {"api": 0.0, "assets": 0.0}
+LIKERS_PAGE = 10
+LATENCY = {"api": 0.0, "assets": 0.0, "likers": 0.0, "analytics": 0.0}
 MANY = False
 STATE = {"injected": [], "seen": dw.ago(minutes=100), "filter_enabled": True, "likes": set(), "bookmarks": set(), "retweets": set(), "overrides": {},
          "deleted": set(), "muting": {"hottakeshourly"}, "blocking": set(), "replies": []}
@@ -175,6 +176,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.serve_asset(path)
         if LATENCY["api"] and path.startswith(("/api/sources", "/api/profile", "/api/whoami")):
             time.sleep(LATENCY["api"])
+        if LATENCY["likers"] and path.startswith("/api/likers"):
+            time.sleep(LATENCY["likers"])
+        if path == "/__likers_latency":
+            LATENCY["likers"] = float(q("seconds", "0"))
+            return self.send_json({"likers_latency": LATENCY["likers"]})
         if path == "/api/health":
             return self.send_json({"ok": True, "name": "unrager", "version": "0.24.0"})
         if path == "/api/whoami":
@@ -267,7 +273,12 @@ class Handler(BaseHTTPRequestHandler):
                 "is_blue_verified": cast[2], "verified": cast[2]}})
         m = re.fullmatch(r"/api/likers/(\d+)", path)
         if m:
-            return self.send_json({"users": [w.profile_user(h) for h in ("mirakoski", "anyavoss", "fieldnotes", "kitwren", "lenapark")], "cursor": None})
+            handles = [c[0] for c in dw.CAST if c[0] != dw.ME]
+            cursor = q("cursor") or ""
+            start = int(cursor[1:]) if cursor.startswith("p") and cursor[1:].isdigit() else 0
+            nxt = start + LIKERS_PAGE
+            return self.send_json({"users": [w.profile_user(h) for h in handles[start:nxt]],
+                                   "cursor": f"p{nxt}" if nxt < len(handles) else None})
         m = re.fullmatch(r"/api/users/(\d+)/(followers|following)", path)
         if m:
             handles = [c[0] for c in dw.CAST if c[0] != dw.ME][:12]
@@ -281,6 +292,9 @@ class Handler(BaseHTTPRequestHandler):
         m = re.fullmatch(r"/api/tweets/(\d+)/analytics", path)
         if m:
             key = w.tweet_by_id(m.group(1))
+            time.sleep(LATENCY["analytics"])
+            if key in dw.STATS_FAIL:
+                return self.send_error_json(500, "internal", "analytics are broken for this post")
             data = dw.ANALYTICS.get(key)
             return self.send_json(data) if data else self.send_error_json(404, "not_found", "no analytics for this post")
         m = re.fullmatch(r"/api/seen/(\d+)", path)
@@ -423,17 +437,27 @@ def main():
     parser.add_argument("--assets", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets"))
     parser.add_argument("--lab", action="store_true",
                         help="serve the media lab (python3 make_lab.py first): a feed of test charts in every aspect ratio")
+    parser.add_argument("--stats-lab", action="store_true",
+                        help="serve a feed of own and other posts in every shape of data a stats card can get")
     parser.add_argument("--many-notifications", action="store_true",
                         help="serve a long, paged notifications history, to scroll into its next pages")
     parser.add_argument("--latency", type=float, default=0.0,
                         help="seconds every timeline, profile and whoami request waits, to see the loading states")
+    parser.add_argument("--analytics-latency", type=float, default=0.0,
+                        help="seconds every post analytics request waits, to see the stats card's loading outline")
     parser.add_argument("--asset-latency", type=float, default=0.0,
                         help="seconds every picture waits")
+    parser.add_argument("--likers-latency", type=float, default=0.0,
+                        help="seconds the Liked by list waits (also set at run time by GET /__likers_latency?seconds=)")
     args = parser.parse_args()
     global MANY
     MANY = args.many_notifications
     LATENCY["api"] = args.latency
     LATENCY["assets"] = args.asset_latency
+    LATENCY["likers"] = args.likers_latency
+    LATENCY["analytics"] = args.analytics_latency
+    if args.stats_lab:
+        dw.enable_stats_lab()
     if args.lab:
         dw.enable_lab()
         global PAGE

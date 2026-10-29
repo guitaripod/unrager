@@ -65,6 +65,9 @@ PROFILES = {
                    "https://fieldnotes.example", "2013-02-14T07:00:00Z"),
     "quietfern": ("Notes for friends. Garden, books, the odd sourdough.", "Galway", None, "2020-04-02T10:00:00Z"),
 }
+ME_FOLLOWS = {"mirakoski", "fieldnotes", "anyavoss", "kitwren", "quietfern"}
+FOLLOWS_ME = {"mirakoski", "anyavoss", "tomasbuilds", "junocooks", "maxplays", "samreyes_", "lenapark",
+              "ravimenon", "inesduarte"}
 PROTECTED = {"quietfern"}
 PINNED = {"mirakoski": "f18"}
 SUSPENDED = {"spamking"}
@@ -116,7 +119,7 @@ POSTS = [
     ("a1", "anyavoss", 700, "Why does a wine glass sing when you rub its rim? Friction makes the glass vibrate at its natural frequency — and the glass amplifies its own note. Resonance, up close.",
      ("photos", ["sq_03"]), (21, 133, 2200, 11, 41000, 800), {"hidden_from_feed": True}),
     ("o1", "noralind", 300, "Tried the new tab bar minimize on a real device and it's lovely. The small details really are the whole thing.",
-     None, (4, 2, 61, 1, 1873, 9), {}),
+     ("photos", ["land_06"]), (4, 2, 61, 1, 1873, 9), {}),
     ("o2", "noralind", 1500, "Quiet Sunday. Coffee, a long walk and the first chapter of a book I've been saving.",
      ("photos", ["land_04"]), (6, 3, 144, 0, 2900, 14), {}),
     ("o3", "noralind", 2900, "Spent the morning on a loading state that doesn't flash. The trick is mostly not showing it at all.",
@@ -186,6 +189,8 @@ ANALYTICS = {
 
 
 LAB = False
+STATS_LAB = False
+STATS_FAIL: set[str] = set()
 
 
 def lab_dims(name: str) -> tuple[int, int]:
@@ -196,7 +201,8 @@ def lab_dims(name: str) -> tuple[int, int]:
 
 def lab_posts() -> list:
     """One post per case in the media lab: every aspect ratio alone, photo groups
-    of two to five, clips, a link card and a quote of a tall photo."""
+    of two to five, clips, a link card, a Space link, a quote of a tall photo and
+    a chain of quotes three layers deep."""
     def photos(*sizes):
         seen: dict[str, int] = {}
         names = []
@@ -236,7 +242,68 @@ def lab_posts() -> list:
     for i, (title, media) in enumerate(cases):
         posts.append((f"m{i:02d}", "medialab", 5 + i * 2, f"{title}", media, counts, {}))
     posts.append(("m90", "medialab", 90, "quoting a 1:3 long screenshot", None, counts, {"quote": "m12"}))
+    posts.append(("m91", "medialab", 3, "", ("space", "1OxwbnaOppPJB"), counts, {}))
+    posts.append(("m92", "medialab", 120, "the quote at the bottom, with a photo", photos("1600x1200"), counts, {}))
+    posts.append(("m93", "medialab", 110, "a quote of it", None, counts, {"quote": "m92"}))
+    posts.append(("m94", "medialab", 100, "a quote of that quote, with a long text that runs onto several lines "
+                  "so the shorter limit of a deeper layer shows itself", None, counts, {"quote": "m93"}))
+    posts.append(("m95", "medialab", 1, "quoting a quote of a quote: three layers show", None, counts, {"quote": "m94"}))
     return posts
+
+
+def stats_lab_posts() -> list:
+    """Own posts and other people's in every shape of data a stats card can get:
+    X's hourly curve long, short, too short to draw, empty and flat; analytics
+    that never arrive (404), that fail (500), and public counts with and without
+    views or engagement."""
+    own = [
+        ("s01", "full curve, link clicks and follows", (4, 2, 61, 1, 1873, 9)),
+        ("s02", "curve of exactly six hours", (4, 2, 61, 1, 1873, 9)),
+        ("s03", "three hours only: no curve, the mix instead", (4, 2, 61, 1, 1873, 9)),
+        ("s04", "no hourly data at all", (4, 2, 61, 1, 1873, 9)),
+        ("s05", "hourly data, all zeros", (4, 2, 61, 1, 1873, 9)),
+        ("s06", "X has no analytics for this one", (6, 3, 144, 0, 2900, 14)),
+        ("s07", "X's analytics request fails", (6, 3, 144, 0, 2900, 14)),
+        ("s08", "no analytics, nothing yet", (0, 0, 0, 0, 0, 0)),
+        ("s09", "no analytics, views but no engagement", (0, 0, 0, 0, 40, 0)),
+    ]
+    other = [
+        ("s10", "views and every kind of engagement", (21, 133, 2200, 11, 41000, 800)),
+        ("s11", "views and likes only", (0, 0, 52, 0, 900, 0)),
+        ("s12", "no view count, some engagement", (3, 1, 20, 2, None, 4)),
+        ("s13", "no view count, no engagement", (0, 0, 0, 0, None, 0)),
+        ("s14", "views, no engagement", (0, 0, 0, 0, 350, 0)),
+        ("s15", "one kind of engagement, quoted", (0, 0, 0, 7, 120, 0)),
+    ]
+    posts = []
+    for i, (key, text, counts) in enumerate(own):
+        posts.append((key, ME, 20 + i * 11, text, None, counts, {}))
+    for i, (key, text, counts) in enumerate(other):
+        posts.append((key, "anyavoss", 130 + i * 9, text, None, counts, {}))
+    return posts
+
+
+STATS_LAB_ANALYTICS = {
+    "s01": {"impressions": 1873, "engagements": 94, "detail_expands": 41, "profile_visits": 12, "link_clicks": 8,
+            "follows": 2, "hourly_impressions": ANALYTICS["o1"]["hourly_impressions"]},
+    "s02": {"impressions": 600, "engagements": 40, "detail_expands": 9, "profile_visits": 3, "link_clicks": 0,
+            "follows": 0, "hourly_impressions": [10, 90, 220, 160, 80, 40]},
+    "s03": {"impressions": 300, "engagements": 14, "detail_expands": 4, "profile_visits": 1, "link_clicks": 0,
+            "follows": 0, "hourly_impressions": [90, 140, 70]},
+    "s04": {"impressions": 120, "engagements": 6, "detail_expands": 2, "profile_visits": 0, "link_clicks": 0,
+            "follows": 0, "hourly_impressions": []},
+    "s05": {"impressions": 0, "engagements": 0, "detail_expands": 0, "profile_visits": 0, "link_clicks": 0,
+            "follows": 0, "hourly_impressions": [0, 0, 0, 0, 0, 0, 0, 0]},
+}
+
+
+def enable_stats_lab() -> None:
+    """Turns the mock into the stats lab: the Home feed becomes the stats lab posts."""
+    global STATS_LAB
+    STATS_LAB = True
+    ANALYTICS.update(STATS_LAB_ANALYTICS)
+    STATS_FAIL.add("s07")
+    POSTS[:] = stats_lab_posts() + POSTS
 
 
 def enable_lab() -> None:
@@ -270,6 +337,9 @@ class World:
             "followers": followers, "following": following,
             "avatar_url": self.asset("avatars", avatar),
         }
+        if handle != ME:
+            user["followed_by_me"] = handle in ME_FOLLOWS
+            user["follows_me"] = handle in FOLLOWS_ME
         if banner:
             user["banner_url"] = self.asset("banners", banner_name)
         return user
@@ -277,7 +347,8 @@ class World:
     def profile_user(self, handle: str) -> dict:
         c = next(c for c in CAST if c[0] == handle)
         user = self._user(c, banner=True)
-        user["followed_by_me"] = handle in ("mirakoski", "fieldnotes", "anyavoss", "kitwren", "quietfern")
+        user["followed_by_me"] = handle in ME_FOLLOWS
+        user["follows_me"] = handle in FOLLOWS_ME
         details = PROFILES.get(handle)
         if details:
             bio, location, website, joined = details
@@ -311,6 +382,8 @@ class World:
                 w, h = (9, 16) if vertical else (16, 9)
             return [{"kind": "video" if kind == "video" else "animated_gif", "url": self.asset("videos", value),
                      "video_url": self.asset("videos", value, "mp4"), "alt_text": None, "width": w, "height": h}]
+        if kind == "space":
+            return [{"kind": {"space": {"space_id": value}}, "url": "", "video_url": None, "alt_text": None}]
         if kind == "card":
             return [{"kind": {"link_card": {"title": value["title"], "description": value["description"],
                                             "domain": value["domain"], "target_url": value["target"]}},
@@ -341,12 +414,13 @@ class World:
             tweet["in_reply_to_handle"] = extra["reply_handle"]
         return tweet
 
-    def tweet(self, key: str) -> dict:
+    def tweet(self, key: str, layers: int = 3) -> dict:
+        """The post with the posts it quotes nested under it, as many layers as the app shows."""
         tweet = dict(self.by_key[key])
         spec = next(p for p in POSTS if p[0] == key)
         quote = spec[6].get("quote")
-        if quote:
-            tweet["quoted_tweet"] = dict(self.by_key[quote])
+        if quote and layers > 0:
+            tweet["quoted_tweet"] = self.tweet(quote, layers - 1)
         return tweet
 
     def home_tweet(self, key: str) -> dict:
@@ -368,6 +442,8 @@ class World:
 
 
     def home_keys(self) -> list[str]:
+        if STATS_LAB:
+            return [p[0] for p in POSTS if p[0].startswith("s") and p[0][1:].isdigit()]
         if LAB:
             return [p[0] for p in POSTS if p[1] == "medialab"]
         keys = []

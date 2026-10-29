@@ -56,6 +56,7 @@ final class ProfileViewController: FeedViewController {
     private var statusBarOverBanner = true
     private let banner = ProfileBannerView()
     private let titleLabel = UILabel()
+    private let pinnedTabs = PinnedTabsView()
 
     init(handle: String) {
         self.handle = handle
@@ -74,6 +75,7 @@ final class ProfileViewController: FeedViewController {
             header.setHandle(handle)
         }
         installBanner()
+        installPinnedTabs()
         installMenu()
         moderation.onChange = { [weak self] in self?.applyHeaderState() }
         seedFromCache()
@@ -95,6 +97,7 @@ final class ProfileViewController: FeedViewController {
     /// navigation title at it and re-measures both tabs' headers.
     @objc private func textSizeChanged() {
         for header in headers { header.applyFonts() }
+        pinnedTabs.applyFonts()
         titleLabel.font = DesignSystem.Typography.name()
         titleLabel.sizeToFit()
         applyHeaderState()
@@ -106,6 +109,11 @@ final class ProfileViewController: FeedViewController {
         banner.configure(url: AppSettings.imagesEnabled ? user?.bannerURL.flatMap(URL.init) : nil,
                          handle: handle, imagesEnabled: AppSettings.imagesEnabled)
         applyHeaderState()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        publishScrollView(activeScrollView)
     }
 
     override func viewDidLayoutSubviews() {
@@ -453,13 +461,30 @@ final class ProfileViewController: FeedViewController {
         navigationItem.titleView = titleLabel
         if navigationHost !== self {
             navigationHost.navigationItem.titleView = titleLabel
-            navigationHost.setContentScrollView(collectionView, for: .top)
+            publishScrollView(collectionView)
         }
         banner.onBrightnessChange = { [weak self] in self?.setNeedsStatusBarAppearanceUpdate() }
         let follow: (UIScrollView) -> Void = { [weak self] scrollView in self?.updateBanner(for: scrollView) }
         onScroll = follow
         repliesController?.onScroll = follow
         mediaController?.onScroll = follow
+    }
+
+    /// Parks the glass tab strip under the navigation bar, invisible until the
+    /// header's own strip has scrolled beneath the bar.
+    private func installPinnedTabs() {
+        pinnedTabs.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(pinnedTabs)
+        let width = pinnedTabs.widthAnchor.constraint(equalToConstant: 340)
+        width.priority = .defaultHigh
+        NSLayoutConstraint.activate([
+            pinnedTabs.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 6),
+            pinnedTabs.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            pinnedTabs.heightAnchor.constraint(equalToConstant: 44),
+            pinnedTabs.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 16),
+            width,
+        ])
+        pinnedTabs.onChange = { [weak self] index in self?.setSection(Section(rawValue: index) ?? .posts) }
     }
 
     /// Plays the banner, the avatar and the navigation title to where
@@ -478,6 +503,17 @@ final class ProfileViewController: FeedViewController {
         for header in headers { header.setAvatar(scale: motion.avatarScale, alpha: motion.avatarAlpha) }
         let nameBottom = activeHeader.nameBottom
         titleLabel.alpha = ProfileBannerMotion.titleAlpha(scroll: scroll, nameBottom: nameBottom)
+        updatePinnedTabs()
+    }
+
+    /// Shows the glass tab strip as the header's strip slips under the bar.
+    private func updatePinnedTabs() {
+        guard let frame = activeHeader.stripFrame(in: view) else {
+            pinnedTabs.setProgress(0)
+            return
+        }
+        let barBottom = view.safeAreaInsets.top
+        pinnedTabs.setProgress((barBottom + 6 - frame.minY) / 28)
     }
 
     // MARK: - Follow
@@ -525,13 +561,18 @@ final class ProfileViewController: FeedViewController {
         if newSection == .replies { embedRepliesIfNeeded() }
         if newSection == .media { embedMediaIfNeeded() }
         alignIncomingTab(with: outgoing)
-        collectionView.isHidden = newSection != .posts
-        repliesController?.view.isHidden = newSection != .replies
-        mediaController?.view.isHidden = newSection != .media
+        UIView.transition(with: view, duration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.2,
+                          options: [.transitionCrossDissolve, .allowUserInteraction]) {
+            self.collectionView.isHidden = newSection != .posts
+            self.repliesController?.view.isHidden = newSection != .replies
+            self.mediaController?.view.isHidden = newSection != .media
+        }
+        view.bringSubviewToFront(pinnedTabs)
+        pinnedTabs.select(newSection.rawValue)
         settleVideoPlayback()
         repliesController?.settleVideoPlayback()
         applyHeaderState()
-        navigationHost.setContentScrollView(activeScrollView, for: .top)
+        publishScrollView(activeScrollView)
         updateBanner(for: activeScrollView)
     }
 
@@ -549,6 +590,13 @@ final class ProfileViewController: FeedViewController {
         let headerEnd = headerHeight - inset - header.segmentHeight
         let target = min(outgoing.contentOffset.y, max(-inset, headerEnd))
         incoming.setContentOffset(CGPoint(x: 0, y: target), animated: false)
+    }
+
+    /// Tells the controller on screen which list to follow, for the navigation
+    /// bar's edge effect (top) and the tab bar's minimize-on-scroll (bottom).
+    private func publishScrollView(_ scrollView: UIScrollView) {
+        navigationHost.setContentScrollView(scrollView, for: .top)
+        navigationHost.setContentScrollView(scrollView, for: .bottom)
     }
 
     /// The controller the navigation stack actually shows: this one, or the

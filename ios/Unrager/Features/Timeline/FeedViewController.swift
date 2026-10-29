@@ -13,6 +13,9 @@ class FeedViewController: UIViewController, TweetActionHandling {
     private var tweetsByID: [String: Tweet] = [:]
     private var cancellables = Set<AnyCancellable>()
     private let emptyState = EmptyStateView()
+    /// With a header on the feed (a profile), the empty and error state sits
+    /// under it, so a header that grows moves it down.
+    private var headerSizeObserver: NSKeyValueObservation?
     private let loadingIndicator = UIActivityIndicatorView(style: .medium)
     private let skeleton = FeedSkeletonView()
     private var contentSizeObservation: NSKeyValueObservation?
@@ -70,6 +73,10 @@ class FeedViewController: UIViewController, TweetActionHandling {
     /// Optional scrolling header (e.g. a profile header) shown above the feed.
     var headerView: UIView?
 
+    /// Whether each post's author is ringed for how they stand with the viewer.
+    /// A profile's own posts are all one author, whose header already says it.
+    var showsAuthorStanding: Bool { headerView == nil }
+
     /// Keeps an empty feed blank (no spinner, empty or error state) for a
     /// screen whose header already says why there are no posts.
     var hidesEmptyState = false {
@@ -86,9 +93,10 @@ class FeedViewController: UIViewController, TweetActionHandling {
                        bodyLineLimit: self.expandedBodies.contains(id) ? 0 : TweetCell.feedBodyLineLimit,
                        stats: PostStatsPolicy.content(
                            for: tweet, expanded: self.expandedStats.contains(id), isOwn: self.isOwnTweet(tweet),
-                           changed: { [weak self] in self?.reconfigure(id, animated: false) }),
+                           changed: { [weak self] in self?.reconfigure(id, animated: true) }),
                        viewerHandle: AppEnvironment.shared.currentHandle,
-                       pinned: self.viewModel.pinnedID == id) }
+                       pinned: self.viewModel.pinnedID == id,
+                       showsStanding: self.showsAuthorStanding) }
         self.applyFlag(to: cell, author: tweet.author)
         cell.onTapAuthor = { [weak self] in self?.handleProfile(tweet.author.handle) }
         if let reposter = tweet.retweetedBy {
@@ -97,9 +105,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
         cell.onTapPhoto = { [weak self] index in self?.openMedia(tweet, at: index) }
         cell.onTapCard = { [weak self] url in self?.openLink(url) }
         cell.onReply = { [weak self] in self?.presentReply(tweet) }
-        cell.onTapQuoted = { [weak self] in
-            if let quoted = tweet.quotedTweet { self?.handleSelect(quoted) }
-        }
+        cell.onTapQuoted = { [weak self] quoted in self?.handleSelect(quoted) }
         cell.onLike = { [weak self, weak cell] in self?.toggleLike(tweet, cell: cell) }
         cell.onToggleRetweet = { [weak self, weak cell] in self?.toggleRetweet(tweet, cell: cell) }
         cell.onQuote = { [weak self] in self?.presentQuote(tweet) }
@@ -279,6 +285,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
 
     private func configureCollectionView() {
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: makeLayout())
+        collectionView.selfSizingInvalidation = .enabled
         collectionView.backgroundColor = .clear
         collectionView.alwaysBounceVertical = true
         collectionView.delegate = self
@@ -294,8 +301,15 @@ class FeedViewController: UIViewController, TweetActionHandling {
 
         emptyState.isHidden = true
         emptyState.onRetry = { [weak self] in self?.viewModel.refresh() }
-        view.addManaged(emptyState)
-        emptyState.pinEdges(toSafeAreaOf: view)
+        if headerView == nil {
+            view.addManaged(emptyState)
+            emptyState.pinEdges(toSafeAreaOf: view)
+        } else {
+            collectionView.addSubview(emptyState)
+            headerSizeObserver = collectionView.observe(\.contentSize) { [weak self] _, _ in
+                MainActor.assumeIsolated { self?.positionSkeleton() }
+            }
+        }
 
         loadingIndicator.hidesWhenStopped = true
         view.addManaged(loadingIndicator)
@@ -353,7 +367,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
             let url = video.element.videoURL.flatMap(URL.init)
                 ?? AppEnvironment.shared.api.mediaURL(tweetID: tweet.restID, index: video.offset)
             pauseAllVideos()
-            presentFullScreenVideo(url)
+            presentFullScreenVideo(url, isGIF: video.element.kind == .animatedGif)
             return
         }
         let photoIndices = tweet.media.enumerated().compactMap { index, media -> Int? in
@@ -806,6 +820,11 @@ class FeedViewController: UIViewController, TweetActionHandling {
             ofKind: Self.headerKind, at: IndexPath(item: 0, section: 0))?.frame.maxY ?? 0
         let frame = CGRect(x: 0, y: headerBottom, width: width, height: skeleton.fittingHeight(width: width))
         if skeleton.frame != frame { skeleton.frame = frame }
+        guard headerView != nil else { return }
+        let inset = collectionView.adjustedContentInset
+        let room = collectionView.bounds.height - inset.top - inset.bottom - headerBottom
+        let emptyFrame = CGRect(x: 0, y: headerBottom, width: width, height: max(room, 260))
+        if emptyState.frame != emptyFrame { emptyState.frame = emptyFrame }
     }
 
     /// Reveals the full-screen Metal collecting state, driving the latest
@@ -860,7 +879,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
     /// otherwise pass for live ones: the saved posts stay, with a note on top.
     private func showStaleNotice() {
         freshnessDismissed = false
-        presentFreshness("Offline · saved posts")
+        presentFreshness("Couldn't refresh · saved posts")
         UIAccessibility.post(notification: .announcement, argument: freshnessLabel.text)
     }
 

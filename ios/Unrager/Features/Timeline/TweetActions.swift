@@ -282,7 +282,7 @@ extension UIViewController {
     }
 
     private func saveMedia(tweetID: String, index: Int, isVideo: Bool) {
-        let url = AppEnvironment.shared.api.mediaURL(tweetID: tweetID, index: index)
+        let url = AppEnvironment.shared.api.mediaURL(tweetID: tweetID, index: index, original: !isVideo)
         guard MediaSaver.inFlight.insert(url).inserted else { return }
         showToast("Saving…")
         Task {
@@ -302,7 +302,7 @@ extension UIViewController {
     /// no parallel proxy hammering — then reports how many landed.
     private func saveAllMedia(tweetID: String, items: [(index: Int, isVideo: Bool)]) {
         let api = AppEnvironment.shared.api
-        let urls = items.map { api.mediaURL(tweetID: tweetID, index: $0.index) }
+        let urls = items.map { api.mediaURL(tweetID: tweetID, index: $0.index, original: !$0.isVideo) }
         guard urls.allSatisfy({ !MediaSaver.inFlight.contains($0) }) else { return }
         MediaSaver.inFlight.formUnion(urls)
         showToast("Saving \(items.count)…")
@@ -312,7 +312,9 @@ extension UIViewController {
             var lastError: Error?
             for item in items {
                 do {
-                    try await MediaSaver.save(from: api.mediaURL(tweetID: tweetID, index: item.index), isVideo: item.isVideo)
+                    try await MediaSaver.save(
+                        from: api.mediaURL(tweetID: tweetID, index: item.index, original: !item.isVideo),
+                        isVideo: item.isVideo)
                     saved += 1
                 } catch {
                     lastError = error

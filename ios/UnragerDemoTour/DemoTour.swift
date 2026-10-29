@@ -20,6 +20,10 @@ final class DemoTour: XCTestCase {
         ]
     }
 
+    override func tearDown() {
+        setLikersLatency(0)
+    }
+
     // MARK: - Scenes
 
     /// The feed: it opens, fills, and scrolls past a photo, a pair of portraits,
@@ -218,6 +222,75 @@ final class DemoTour: XCTestCase {
         pause(3.6)
     }
 
+    // MARK: - Liked by
+
+    /// Liked by opened from the heart of the viewer's own post with the list slow to answer, to watch
+    /// it load: the ring circling, the placeholders, then the people arriving,
+    /// and a walk down the rows.
+    func testScene13LikersLoad() {
+        setLikersLatency(1.6)
+        openLikers()
+        pause(6.4)
+        scroll(by: 460, seconds: 1.8)
+        pause(1.2)
+        scroll(by: 540, seconds: 2.0)
+        pause(1.4)
+        scroll(by: -1000, seconds: 1.0)
+        pause(1.8)
+    }
+
+    /// Following a follower back from their row, then the ring and the legend
+    /// settling on the new figures, and the Follow back row narrowing the list.
+    func testScene14LikersFollowBack() {
+        setLikersLatency(0)
+        openLikers()
+        pause(3.6)
+        scroll(by: 420, seconds: 1.4)
+        pause(1.2)
+        let followBack = app.buttons["Follow back"].firstMatch
+        if followBack.waitForExistence(timeout: 3) { followBack.tap() }
+        pause(2.2)
+        scroll(by: -520, seconds: 1.2)
+        pause(2.8)
+        let legend = app.buttons.matching(NSPredicate(format: "label ENDSWITH 'follow back'")).firstMatch
+        if legend.waitForExistence(timeout: 3) { legend.tap() }
+        pause(3.2)
+        scroll(by: 380, seconds: 1.4)
+        pause(1.8)
+    }
+
+    /// The chips pinned under the navigation bar: followers, the people you
+    /// follow, the verified, and all of them again.
+    func testScene15LikersChips() {
+        setLikersLatency(0)
+        openLikers()
+        pause(3.2)
+        scroll(by: 640, seconds: 1.6)
+        pause(1.2)
+        tapLens("Follow you")
+        pause(2.6)
+        tapLens("You follow")
+        pause(2.4)
+        tapLens("Verified")
+        pause(2.6)
+        tapLens("All")
+        pause(2.4)
+    }
+
+    // MARK: - Stats
+
+    /// The viewer's own post, with its views tapped: the card of X's numbers
+    /// rising under it, the figure counting up and the chart drawing itself.
+    func testScene16StatsCard() {
+        launchFromHomeScreen()
+        pause(2.2)
+        let mine = scrollToOwnPost()
+        mine.coordinate(withNormalizedOffset: CGVector(dx: 0.88, dy: 0.945)).tap()
+        pause(4.5)
+        scroll(by: 260, seconds: 1.2)
+        pause(2.5)
+    }
+
     // MARK: - Moves
 
     private func launch() {
@@ -242,6 +315,49 @@ final class DemoTour: XCTestCase {
         launchFromHomeScreen()
         pause(1.6)
         app.tabBars.buttons["Notifications"].tap()
+    }
+
+    /// Scrolls the feed until the viewer's own post is fully in view, and returns it.
+    private func scrollToOwnPost() -> XCUIElement {
+        let mine = app.cells.matching(NSPredicate(format: "label CONTAINS 'Nora Lind'")).firstMatch
+        let screen = app.windows.firstMatch.frame
+        var tries = 0
+        while !(mine.exists && mine.frame.minY > 130 && mine.frame.maxY < screen.height - 150) && tries < 16 {
+            scroll(by: 300, seconds: 0.9)
+            pause(0.3)
+            tries += 1
+        }
+        pause(0.8)
+        return mine
+    }
+
+    /// From the feed: touches and holds the heart of the viewer's own post (the
+    /// row is one accessibility element, so the heart is pressed by where it
+    /// sits), which opens the list of who liked it. If the list doesn't open,
+    /// the post is found and pressed again.
+    private func openLikers() {
+        launchFromHomeScreen()
+        pause(2.2)
+        for _ in 0..<3 {
+            let mine = scrollToOwnPost()
+            mine.coordinate(withNormalizedOffset: CGVector(dx: 0.41, dy: 0.945)).press(forDuration: 1.0)
+            if app.staticTexts["Liked by"].waitForExistence(timeout: 2.5) { return }
+            pause(0.6)
+        }
+    }
+
+    /// A lens chip carries its count after its title ("Follow you, 5").
+    private func tapLens(_ title: String) {
+        let chip = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
+        if chip.waitForExistence(timeout: 3) { chip.tap() }
+    }
+
+    /// Has the mock server make the Liked by list wait this long to answer.
+    private func setLikersLatency(_ seconds: Double) {
+        guard let url = URL(string: "http://127.0.0.1:8790/__likers_latency?seconds=\(seconds)") else { return }
+        let done = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: url) { _, _, _ in done.signal() }.resume()
+        _ = done.wait(timeout: .now() + 5)
     }
 
     private func tapChip(_ title: String) {

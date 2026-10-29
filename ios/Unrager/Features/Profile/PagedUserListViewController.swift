@@ -5,7 +5,8 @@ import UnragerKit
 /// The shared plumbing behind every paginated list of people (followers,
 /// following, likers): placeholder rows before the first page, infinite scroll
 /// on the page cursor, a Follow button on each row the list can say it for, an
-/// optional heading row, a footer that shows "Loading more…" or a retry when a
+/// optional heading above the people, optional lens chips pinned over them that
+/// narrow what is loaded, a footer that shows "Loading more…" or a retry when a
 /// later page fails, and an empty or error state when the first page does.
 /// Subclasses supply the fetch and the copy.
 class PagedUserListViewController: UIViewController {
@@ -23,10 +24,17 @@ class PagedUserListViewController: UIViewController {
         let subtitle: String
     }
 
+    private enum ListSection: Hashable, Sendable {
+        case header
+        case people
+    }
+
     private static let headerID = "list-header"
+    private static let sparseRows = 12
+    private static let maxAutoPages = 8
 
     private var collectionView: UICollectionView!
-    private var dataSource: UICollectionViewDiffableDataSource<Int, String>!
+    private var dataSource: UICollectionViewDiffableDataSource<ListSection, String>!
     private var rowsByID: [String: UserRow] = [:]
     private(set) var order: [String] = []
     private let emptyState = EmptyStateView()
@@ -47,22 +55,37 @@ class PagedUserListViewController: UIViewController {
     private var loadTask: Task<Void, Never>?
     private var generation = 0
     private var redrawObserver: AnyCancellable?
+    private var contentSizeObserver: NSKeyValueObservation?
     private let footer = PagingFooter()
+
+    /// The lens the reader chose, nil until they choose one, and the people it
+    /// let in. A person stays in the lens they were let into when their follow
+    /// state changes, so Follow back doesn't make the row vanish under the
+    /// finger; the next lens, refresh or page recomputes.
+    private(set) var lens: String?
+    private var lensMembers = Set<String>()
+    private var lensChipsShown: [LensChip] = []
+    private var lensAutoPages = 0
+
+    /// Until this moment, rows that come on screen glide up into place a beat
+    /// after the one above, as they do when an empty list first fills.
+    private var entranceUntil: CFTimeInterval = 0
+    private var firstFill = false
+    private var skeletonFade = 0
 
     private lazy var registration = UICollectionView.CellRegistration<UserRowCell, String> {
         [weak self] cell, _, id in
-        guard let row = self?.rowsByID[id] else { return }
-        cell.configure(with: row)
+        guard let self, let row = self.rowsByID[id] else { return }
+        cell.configure(with: row, detailed: self.showsDetail)
         cell.onToggleFollow = { [weak self] in self?.toggleFollow(id) }
     }
 
-    private lazy var headerRegistration = UICollectionView.CellRegistration<UserListHeaderCell, UserListHeader> {
-        cell, _, header in cell.configure(with: header)
+    private lazy var lensRegistration = UICollectionView.SupplementaryRegistration<LensBarView>(
+        elementKind: LensBarView.kind) { [weak self] bar, _, _ in
+        self?.configureLensBar(bar)
     }
 
-    /// A heading row above the people, for a list that is about something (the
-    /// likes on a post). Read once, when the list loads.
-    var listHeader: UserListHeader? { nil }
+    // MARK: - For subclasses
 
     func fetchPage(cursor: String?) async throws -> Page {
         fatalError("PagedUserListViewController.fetchPage(cursor:) must be overridden")
@@ -73,6 +96,68 @@ class PagedUserListViewController: UIViewController {
     }
 
     var logCategory: LogCategory { .profile }
+
+    /// Whether the list opens with a heading section above the people (the post
+    /// the likes are on). Read once, when the view loads.
+    var hasHeader: Bool { false }
+
+    /// The heading's cell, dequeued from the subclass's own registration. Asked
+    /// for whenever the heading is drawn or `reloadHeader()` is called.
+    func headerCell(in collectionView: UICollectionView, at indexPath: IndexPath) -> UICollectionViewCell {
+        fatalError("PagedUserListViewController.headerCell(in:at:) must be overridden with hasHeader")
+    }
+
+    /// Whether rows show where each person stands with the viewer and how big
+    /// their account is, not only who they are.
+    var showsDetail: Bool { false }
+
+    /// Whether lens chips are pinned over the people. Read once, when the view
+    /// loads.
+    var supportsLens: Bool { false }
+
+    /// The chips for the loaded people, the unfiltered list first. Empty hides
+    /// the bar. Asked after `peopleDidChange()`.
+    var lensChips: [LensChip] { [] }
+
+    func includes(_ row: UserRow, lens: String) -> Bool { true }
+
+    /// What to say under the list when a lens leaves nobody in it.
+    func emptyLensNote(_ lens: String) -> String { "Nobody to show." }
+
+    /// The loaded people or their follow state changed: update whatever the
+    /// heading and the chips are drawn from, then `reloadHeader()` if it moved.
+    func peopleDidChange() {}
+
+    /// Every loaded person, in the order X listed them.
+    var loadedRows: [UserRow] { order.compactMap { rowsByID[$0] } }
+
+    /// Whether the first page is still on its way.
+    var isLoadingFirstPage: Bool { loading && order.isEmpty }
+
+    /// Draws the heading again from the subclass's model, letting its height
+    /// settle with the rest of the list when it is on screen.
+    func reloadHeader() {
+        guard hasHeader, isViewLoaded, dataSource != nil else { return }
+        var snapshot = dataSource.snapshot()
+        guard snapshot.indexOfItem(Self.headerID) != nil else { return }
+        snapshot.reconfigureItems([Self.headerID])
+        dataSource.apply(snapshot, animatingDifferences: view.window != nil)
+    }
+
+    /// Narrows the list to the people `id` lets in; the first chip shows all.
+    func selectLens(_ id: String) {
+        guard id != (lens ?? lensChipsShown.first?.id) else { return }
+        lens = id
+        lensAutoPages = 0
+        lensMembers = Set(order.filter { rowsByID[$0].map { includes($0, lens: id) } ?? false })
+        applySnapshot(animated: true)
+        refreshPeople()
+        updateFooter()
+        scrollPeopleIntoView()
+        loadMoreIfSparse()
+    }
+
+    // MARK: - Lifecycle
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -85,6 +170,7 @@ class PagedUserListViewController: UIViewController {
         footer.attach(to: collectionView)
         footer.onRetry = { [weak self] in
             guard let self else { return }
+            self.lensAutoPages = 0
             self.load(reset: self.refreshFailed)
         }
         view.addManaged(collectionView)
@@ -95,14 +181,16 @@ class PagedUserListViewController: UIViewController {
 
         emptyState.isHidden = true
         emptyState.onRetry = { [weak self] in self?.reload() }
-        view.addManaged(emptyState)
-        emptyState.pinEdges(toSafeAreaOf: view)
+        collectionView.addSubview(emptyState)
 
         skeleton.isHidden = true
         collectionView.addSubview(skeleton)
 
         configureDataSource()
         applySnapshot(animated: false)
+        contentSizeObserver = collectionView.observe(\.contentSize) { [weak self] _, _ in
+            MainActor.assumeIsolated { self?.positionBelowHeader() }
+        }
         redrawObserver = NotificationCenter.default.publisher(for: TwemojiCache.imagesDidLoad)
             .merge(with: NotificationCenter.default.publisher(for: AppSettings.displayDidChange))
             .receive(on: DispatchQueue.main)
@@ -115,62 +203,106 @@ class PagedUserListViewController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        positionSkeleton()
+        positionBelowHeader()
     }
 
     private func makeLayout() -> UICollectionViewCompositionalLayout {
-        let hasHeader = listHeader != nil
-        return UICollectionViewCompositionalLayout { _, environment in
+        let hasHeader = hasHeader
+        let supportsLens = supportsLens
+        return UICollectionViewCompositionalLayout { sectionIndex, environment in
+            let isHeader = hasHeader && sectionIndex == 0
             var config = UICollectionLayoutListConfiguration(appearance: .plain)
             config.backgroundColor = .clear
-            config.itemSeparatorHandler = { indexPath, configuration in
+            config.itemSeparatorHandler = { _, configuration in
                 var configuration = configuration
-                if hasHeader, indexPath.item == 0 { configuration.bottomSeparatorVisibility = .hidden }
+                if isHeader {
+                    configuration.topSeparatorVisibility = .hidden
+                    configuration.bottomSeparatorVisibility = .hidden
+                }
                 return configuration
             }
             let section = NSCollectionLayoutSection.list(using: config, layoutEnvironment: environment)
-            section.boundarySupplementaryItems = [PagingFooter.boundaryItem()]
+            if !isHeader {
+                var edges: [NSCollectionLayoutBoundarySupplementaryItem] = []
+                if supportsLens { edges.append(LensBarView.boundaryItem()) }
+                edges.append(PagingFooter.boundaryItem())
+                section.boundarySupplementaryItems = edges
+            }
             return section
         }
     }
 
     private func configureDataSource() {
         let registration = registration
-        let headerRegistration = headerRegistration
-        let header = listHeader
-        dataSource = UICollectionViewDiffableDataSource(collectionView: collectionView) { cv, indexPath, id in
-            if id == Self.headerID, let header {
-                return cv.dequeueConfiguredReusableCell(using: headerRegistration, for: indexPath, item: header)
+        dataSource = UICollectionViewDiffableDataSource(collectionView: collectionView) { [weak self] cv, indexPath, id in
+            if id == Self.headerID, let self {
+                return self.headerCell(in: cv, at: indexPath)
             }
             return cv.dequeueConfiguredReusableCell(using: registration, for: indexPath, item: id)
         }
         footer.install(on: dataSource)
+        let footerProvider = dataSource.supplementaryViewProvider
+        let lensRegistration = lensRegistration
+        dataSource.supplementaryViewProvider = { cv, kind, indexPath in
+            kind == LensBarView.kind
+                ? cv.dequeueConfiguredReusableSupplementary(using: lensRegistration, for: indexPath)
+                : footerProvider?(cv, kind, indexPath)
+        }
     }
 
+    // MARK: - Placeholder and empty state
+
     /// Shows the placeholder rows where the people will land, under the heading
-    /// row when there is one.
+    /// when there is one.
     private func showSkeleton() {
-        guard skeleton.isHidden else { return }
-        positionSkeleton()
+        skeletonFade += 1
+        guard skeleton.isHidden else {
+            skeleton.layer.removeAllAnimations()
+            skeleton.alpha = 1
+            return
+        }
+        positionBelowHeader()
         skeleton.alpha = 0
         skeleton.isHidden = false
         UIView.animate(withDuration: 0.25) { self.skeleton.alpha = 1 }
     }
 
+    /// Lets the placeholder dissolve while the first people glide in over it,
+    /// unless a newer load asked for it again in the meantime.
     private func hideSkeleton() {
         guard !skeleton.isHidden else { return }
-        skeleton.layer.removeAllAnimations()
-        skeleton.isHidden = true
+        skeletonFade += 1
+        let fade = skeletonFade
+        guard !UIAccessibility.isReduceMotionEnabled, !order.isEmpty else {
+            skeleton.layer.removeAllAnimations()
+            skeleton.isHidden = true
+            return
+        }
+        UIView.animate(withDuration: 0.24, delay: 0, options: [.curveEaseIn, .beginFromCurrentState]) {
+            self.skeleton.alpha = 0
+        } completion: { _ in
+            guard fade == self.skeletonFade else { return }
+            self.skeleton.isHidden = true
+            self.skeleton.alpha = 1
+        }
     }
 
-    private func positionSkeleton() {
+    /// Lays the skeleton and the empty state out in the space under the
+    /// heading, so a heading that grows with its post never sits under them.
+    private func positionBelowHeader() {
         guard isViewLoaded, collectionView != nil else { return }
         let width = collectionView.bounds.width
         guard width > 0 else { return }
-        let top = listHeader == nil ? 0 : collectionView.layoutAttributesForItem(at: IndexPath(item: 0, section: 0))?.frame.maxY ?? 0
+        let top = hasHeader ? collectionView.layoutAttributesForItem(at: IndexPath(item: 0, section: 0))?.frame.maxY ?? 0 : 0
         let frame = CGRect(x: 0, y: top, width: width, height: skeleton.fittingHeight(width: width))
         if skeleton.frame != frame { skeleton.frame = frame }
+        let inset = collectionView.adjustedContentInset
+        let room = collectionView.bounds.height - inset.top - inset.bottom - top
+        let emptyFrame = CGRect(x: 0, y: top, width: width, height: max(room, 280))
+        if emptyState.frame != emptyFrame { emptyState.frame = emptyFrame }
     }
+
+    // MARK: - Following
 
     /// Follows or unfollows `id` from its row. Unfollowing asks first.
     private func toggleFollow(_ id: String) {
@@ -211,10 +343,13 @@ class PagedUserListViewController: UIViewController {
         guard snapshot.indexOfItem(id) != nil else { return }
         snapshot.reconfigureItems([id])
         dataSource.apply(snapshot, animatingDifferences: false)
+        refreshPeople()
     }
 
+    // MARK: - Footer
+
     /// "Loading more…" while a later page is in flight, a retry when it failed,
-    /// nothing otherwise.
+    /// what a lens found when it found nothing, nothing otherwise.
     private func updateFooter() {
         guard !order.isEmpty else { footer.set(.hidden); return }
         if refreshFailed {
@@ -223,12 +358,18 @@ class PagedUserListViewController: UIViewController {
             footer.set(.failed("Couldn't load more"))
         } else if loading {
             footer.set(.loading("Loading more…"))
+        } else if let lens, narrowed, visibleIDs.isEmpty {
+            footer.set(exhausted
+                ? .note(emptyLensNote(lens))
+                : .failed("Nobody yet among the \(order.count.formatted()) loaded"))
         } else if exhausted, let endNote {
             footer.set(.note(endNote))
         } else {
             footer.set(.hidden)
         }
     }
+
+    // MARK: - Loading
 
     /// Pull-to-refresh: a page still loading gives way to the fresh first
     /// page.
@@ -246,9 +387,12 @@ class PagedUserListViewController: UIViewController {
         endNote = nil
         order.removeAll()
         rowsByID.removeAll()
+        lens = nil
+        lensMembers.removeAll()
         pagingFailed = false
         refreshFailed = false
         applySnapshot(animated: false)
+        refreshPeople()
         load(reset: true)
     }
 
@@ -272,6 +416,7 @@ class PagedUserListViewController: UIViewController {
         let requestCursor = reset ? nil : cursor
         if order.isEmpty { emptyState.isHidden = true; showSkeleton() }
         updateFooter()
+        refreshPeople()
         loadTask = Task {
             defer {
                 if current == generation {
@@ -280,19 +425,24 @@ class PagedUserListViewController: UIViewController {
                     hideSkeleton()
                     collectionView.refreshControl?.endRefreshing()
                     updateFooter()
+                    refreshPeople()
                 }
             }
             do {
                 let page = try await fetchPage(cursor: requestCursor)
                 guard current == generation else { return }
+                firstFill = order.isEmpty
                 if reset {
                     rowsByID.removeAll()
                     order.removeAll()
+                    lensMembers.removeAll()
                     exhausted = false
                 }
                 for user in page.users where rowsByID[user.restID] == nil {
-                    rowsByID[user.restID] = UserRow(user)
+                    let row = UserRow(user)
+                    rowsByID[user.restID] = row
                     order.append(user.restID)
+                    if let lens, includes(row, lens: lens) { lensMembers.insert(user.restID) }
                 }
                 cursor = page.cursor
                 endNote = page.endNote
@@ -314,16 +464,91 @@ class PagedUserListViewController: UIViewController {
         }
     }
 
+    // MARK: - Lens
+
+    /// Whether a lens other than "all" is narrowing the list.
+    private var narrowed: Bool {
+        guard let lens else { return false }
+        return lens != lensChipsShown.first?.id
+    }
+
+    /// The people on screen: everyone, or those the lens let in.
+    private var visibleIDs: [String] {
+        narrowed ? order.filter(lensMembers.contains) : order
+    }
+
+    /// Updates the heading and the chips from the loaded people.
+    private func refreshPeople() {
+        peopleDidChange()
+        lensChipsShown = supportsLens ? lensChips : []
+        refreshLensBar()
+    }
+
+    private func configureLensBar(_ bar: LensBarView) {
+        bar.onSelect = { [weak self] in self?.selectLens($0) }
+        bar.configure(chips: lensChipsShown, selected: lens ?? lensChipsShown.first?.id ?? "")
+    }
+
+    private var lensBarWasShown = false
+
+    private func refreshLensBar() {
+        guard isViewLoaded, collectionView != nil else { return }
+        for indexPath in collectionView.indexPathsForVisibleSupplementaryElements(ofKind: LensBarView.kind) {
+            if let bar = collectionView.supplementaryView(forElementKind: LensBarView.kind, at: indexPath) as? LensBarView {
+                configureLensBar(bar)
+            }
+        }
+        let shown = !lensChipsShown.isEmpty
+        guard shown != lensBarWasShown else { return }
+        lensBarWasShown = shown
+        DispatchQueue.main.async { [weak self] in
+            guard let list = self?.collectionView, list.window != nil else { return }
+            list.performBatchUpdates(nil)
+        }
+    }
+
+    /// When the reader is below the start of the people, brings the first of
+    /// them back under the pinned chips, so a lens that narrows the list is
+    /// read from its top.
+    private func scrollPeopleIntoView() {
+        guard let first = visibleIDs.first, let indexPath = dataSource.indexPath(for: first),
+              let attributes = collectionView.layoutAttributesForItem(at: indexPath) else { return }
+        let bar = lensChipsShown.isEmpty ? 0 : LensBarView.height
+        let top = attributes.frame.minY - bar - collectionView.adjustedContentInset.top
+        guard collectionView.contentOffset.y > top else { return }
+        collectionView.setContentOffset(CGPoint(x: 0, y: top), animated: false)
+    }
+
+    /// A lens that leaves few people keeps fetching pages until it fills the
+    /// screen, the list ends, or a handful of pages have gone by, after which
+    /// the footer offers to carry on.
+    private func loadMoreIfSparse() {
+        guard narrowed, !exhausted, !loading, !pagingFailed,
+              visibleIDs.count < Self.sparseRows, lensAutoPages < Self.maxAutoPages else { return }
+        lensAutoPages += 1
+        load(reset: false)
+    }
+
+    // MARK: - Snapshot
+
     private func applySnapshot(animated: Bool) {
-        var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
-        snapshot.appendSections([0])
-        if listHeader != nil { snapshot.appendItems([Self.headerID], toSection: 0) }
-        snapshot.appendItems(order, toSection: 0)
+        var snapshot = NSDiffableDataSourceSnapshot<ListSection, String>()
+        if hasHeader {
+            snapshot.appendSections([.header])
+            snapshot.appendItems([Self.headerID], toSection: .header)
+        }
+        snapshot.appendSections([.people])
+        snapshot.appendItems(visibleIDs, toSection: .people)
         dataSource.apply(snapshot, animatingDifferences: animated)
     }
 
     private func apply() {
-        applySnapshot(animated: true)
+        refreshPeople()
+        if firstFill, !order.isEmpty { entranceUntil = CACurrentMediaTime() + 0.9 }
+        applySnapshot(animated: !firstFill)
+        firstFill = false
+        updateFooter()
+        loadMoreIfSparse()
         guard order.isEmpty else { emptyState.isHidden = true; return }
         let copy = emptyCopy
         emptyState.isHidden = false
@@ -338,6 +563,14 @@ extension PagedUserListViewController {
 
     /// Test hook: what scrolling to the end does.
     func loadNextPage() { load(reset: false) }
+
+    /// Test hook: the people the list shows, after any lens.
+    var shownIDs: [String] { visibleIDs }
+
+    /// Screenshot hook: scrolls by `points`.
+    func debugScroll(by points: CGFloat) {
+        collectionView.setContentOffset(CGPoint(x: 0, y: collectionView.contentOffset.y + points), animated: false)
+    }
 }
 #endif
 
@@ -357,7 +590,25 @@ extension PagedUserListViewController: UICollectionViewDelegate {
     }
 
     func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
-        guard !pagingFailed, indexPath.item >= dataSource.snapshot().numberOfItems - 4 else { return }
+        glideIn(cell, at: indexPath)
+        guard !pagingFailed, dataSource.sectionIdentifier(for: indexPath.section) == .people,
+              indexPath.item >= dataSource.snapshot().numberOfItems(inSection: .people) - 4 else { return }
         load(reset: false)
+    }
+}
+
+extension PagedUserListViewController {
+    /// While the first people of an empty list arrive, each row fades up into
+    /// place a beat after the one above it.
+    fileprivate func glideIn(_ cell: UICollectionViewCell, at indexPath: IndexPath) {
+        guard cell is UserRowCell, CACurrentMediaTime() < entranceUntil,
+              !UIAccessibility.isReduceMotionEnabled else { return }
+        cell.alpha = 0
+        cell.transform = CGAffineTransform(translationX: 0, y: 16)
+        UIView.animate(withDuration: 0.5, delay: Double(min(indexPath.item, 8)) * 0.04,
+                       usingSpringWithDamping: 0.9, initialSpringVelocity: 0, options: [.allowUserInteraction]) {
+            cell.alpha = 1
+            cell.transform = .identity
+        }
     }
 }

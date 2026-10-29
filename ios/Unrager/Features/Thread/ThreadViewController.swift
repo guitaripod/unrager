@@ -12,7 +12,7 @@ import UnragerKit
 /// below with an animated diff, and the focal tweet's on-screen position is
 /// pinned when ancestors prepend so the view never jumps.
 final class ThreadViewController: UIViewController, TweetActionHandling {
-    private let tweetID: String
+    let tweetID: String
     private var collectionView: UICollectionView!
     private var dataSource: UICollectionViewDiffableDataSource<Section, String>!
     private var tweetsByID: [String: Tweet] = [:]
@@ -80,7 +80,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
                        focal: isFocal, indentLevel: indent,
                        stats: PostStatsPolicy.content(
                            for: tweet, expanded: self.expandedStats.contains(id), isOwn: ownTweet,
-                           changed: { [weak self] in self?.reconfigure(id, animated: false) }),
+                           changed: { [weak self] in self?.reconfigure(id, animated: true) }),
                        viewerHandle: self.selfHandle ?? AppEnvironment.shared.currentHandle)
         self.applyFlag(to: cell, author: tweet.author)
         cell.onTapAuthor = { [weak self] in self?.push(ProfileViewController(handle: tweet.author.handle)) }
@@ -103,9 +103,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
         }
         cell.onTapPhoto = { [weak self] index in self?.openMedia(tweet, at: index) }
         cell.onTapCard = { [weak self] url in self?.openLink(url) }
-        cell.onTapQuoted = { [weak self] in
-            if let q = tweet.quotedTweet { self?.push(ThreadViewController(tweet: q)) }
-        }
+        cell.onTapQuoted = { [weak self] quoted in self?.push(ThreadViewController(tweet: quoted)) }
         cell.onTapMention = { [weak self] handle in self?.push(ProfileViewController(handle: handle)) }
         cell.onTapHashtag = { [weak self] query in
             self?.push(SearchResultsViewController(query: query, product: .top))
@@ -159,6 +157,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
         view.backgroundColor = DesignSystem.Color.background
 
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: makeLayout())
+        collectionView.selfSizingInvalidation = .enabled
         collectionView.backgroundColor = .clear
         collectionView.delegate = self
         view.addManaged(collectionView)
@@ -490,6 +489,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
                     return
                 }
                 hideLoading()
+                footer.set(.hidden)
                 emptyState.isHidden = false
                 emptyState.show(symbol: "exclamationmark.triangle", title: "Couldn't load thread",
                                 subtitle: error.localizedDescription, showRetry: true)
@@ -765,7 +765,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
             let url = video.element.videoURL.flatMap(URL.init)
                 ?? AppEnvironment.shared.api.mediaURL(tweetID: tweet.restID, index: video.offset)
             InlineVideoPlayback.pauseAll(in: collectionView)
-            presentFullScreenVideo(url)
+            presentFullScreenVideo(url, isGIF: video.element.kind == .animatedGif)
             return
         }
         let photoIndices = tweet.media.enumerated().compactMap { index, media -> Int? in

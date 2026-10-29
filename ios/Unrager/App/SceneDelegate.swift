@@ -56,6 +56,10 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             func homeNav() -> UINavigationController? { root.viewControllers?.first as? UINavigationController }
             switch parts.first {
+            case "home":
+                root.selectedIndex = 0
+                let home = homeNav()?.viewControllers.first as? HomeViewController
+                if parts.count > 1, let points = Double(parts[1]) { home?.debugScroll(by: CGFloat(points)) }
             case "following":
                 root.selectedIndex = 0
                 let home = homeNav()?.viewControllers.first as? HomeViewController
@@ -153,7 +157,12 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                 let id = parts[1]
                 Task {
                     let tweet = try? await api.tweet(id: id)
-                    homeNav()?.pushViewController(LikersViewController(tweetID: id, tweet: tweet), animated: false)
+                    let list = LikersViewController(tweetID: id, tweet: tweet)
+                    homeNav()?.pushViewController(list, animated: false)
+                    guard parts.count > 2 else { return }
+                    try? await Task.sleep(for: .seconds(1.5))
+                    if let lens = LikerLens(rawValue: parts[2]) { list.debugSelectLens(lens) }
+                    if let points = parts.last.flatMap(Double.init) { list.debugScroll(by: CGFloat(points)) }
                 }
             case "me":
                 Task {

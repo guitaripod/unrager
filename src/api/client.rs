@@ -170,7 +170,6 @@ fn is_credits_depleted(status: u16, body: &str) -> bool {
     (status == 402 || status == 403)
         && (body.contains("CreditsDepleted")
             || body.contains("credits to fulfill")
-            || body.contains("insufficient")
             || body.contains("\"type\":\"https://api.twitter.com/2/problems/credits\""))
 }
 

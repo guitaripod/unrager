@@ -6,6 +6,7 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **A 403 from X's posting API is only called "credits depleted" when it is about credits.** Any 403 whose body said "insufficient" (an insufficient scope, for one) sent you to top up credits at console.x.com instead of showing X's actual reason.
 - **Pinning `cookie_browser` (or setting `UNRAGER_COOKIES_PATH`) takes effect at once, and the cached X session is private to your user.** The session read from a browser is cached for a day, and that cache was used whatever browser was pinned since, so a new pin only applied the next day. The cache now remembers where its cookies came from and is read again when that changes. It is also written readable by its owner only, since it holds the session's login token.
 - **`unrager auth login` no longer fails on a stray connection or waits forever on X.** A browser preconnect to the callback port that closed without a request ended the login with an IO error, and a stalled token exchange after the browser step hung with no message; both are now handled.
 - **Posting from the iPhone app no longer asks to authorize again after two requests race an expired token.** X replaces the refresh token on every use, so two posts or uploads that found the token expired at the same moment both spent it and the second was refused, which read as a lost authorization; refreshes now take turns and the second uses the token the first saved. A refresh answer without a new refresh token also keeps the old one instead of erasing it.

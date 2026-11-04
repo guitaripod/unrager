@@ -58,25 +58,36 @@ final class AppEnvironment {
         UserDefaults.standard.set(account.handle, forKey: Self.handleKey)
     }
 
+    /// An answer from the server the address pointed at when it was asked is
+    /// kept; one that lands after the address changed belongs to the old
+    /// server and is dropped, so it can't sign the app in as that account.
     func prefetchWhoami() {
         guard cachedWhoami == nil, whoamiTask == nil else { return }
-        whoamiTask = Task { [api] in try? await api.whoami() }
+        let server = AppSettings.serverURLString
+        let task = Task { [api] in try? await api.whoami() }
+        whoamiTask = task
         Task { [weak self] in
-            let result = await self?.whoamiTask?.value
-            self?.cachedWhoami = result ?? nil
-            self?.remember(result ?? nil)
-            self?.whoamiTask = nil
+            let result = await task.value
+            guard let self, AppSettings.serverURLString == server else { return }
+            self.adopt(result)
+            if self.whoamiTask == task { self.whoamiTask = nil }
         }
     }
 
-    /// Awaits the signed-in identity, fetching once and caching.
+    /// Awaits the signed-in identity, fetching once and caching; nil when the
+    /// server changed while it was asked.
     func whoami() async -> Whoami? {
         if let cachedWhoami { return cachedWhoami }
+        let server = AppSettings.serverURLString
         let result = try? await api.whoami()
-        if let result {
-            cachedWhoami = result
-            remember(result)
-        }
+        guard AppSettings.serverURLString == server else { return nil }
+        adopt(result)
         return result
+    }
+
+    private func adopt(_ account: Whoami?) {
+        guard let account else { return }
+        cachedWhoami = account
+        remember(account)
     }
 }

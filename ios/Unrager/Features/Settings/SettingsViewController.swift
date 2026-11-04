@@ -63,6 +63,9 @@ final class SettingsViewController: UIViewController {
     private var imageCacheBytes: Int?
     private var filterSummary: String?
     private var checkTask: Task<Void, Never>?
+    /// The check of an address typed in, kept apart from `checkTask` so a
+    /// look at the current server can't cancel the save on its way.
+    private var probeTask: Task<Void, Never>?
     /// Bumped on every flip of the rage-filter switch, so a late failure of an
     /// earlier flip can't undo a newer one.
     private var filterSwitchGeneration = 0
@@ -451,9 +454,10 @@ final class SettingsViewController: UIViewController {
         let candidate = url.absoluteString
         guard candidate != AppSettings.serverURLString else { return }
         checkTask?.cancel()
+        probeTask?.cancel()
         connection = .checking
         reconfigure([.serverStatus])
-        checkTask = Task { [weak self] in
+        probeTask = Task { [weak self] in
             let result = await Self.probe(url)
             guard !Task.isCancelled, let self else { return }
             switch result {

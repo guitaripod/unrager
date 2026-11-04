@@ -6,6 +6,7 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **A slow X menu no longer pops up on screen when the extension's Not interested button can't find the item.** When X took longer than a second and a half to open the post's menu, the extension gave up without closing it and the menu appeared once the extension stopped hiding menus; it now waits for a late menu and closes it.
 - **The browser extension judges a repost by the post being reposted.** It sent the model the reposter's name and X's clipped "RT @…" text under the repost's own id, so reposts were judged on a truncated post, never shared a verdict with the terminal client or the iPhone app (which judge the original), and a repost and its original in the same timeline could undo each other's hide. It now sends the original's id, author and full text.
 - **Posting from the iPhone app checks the attachments before uploading any of them.** Five pictures, two videos, or a video with pictures uploaded every file (each upload is billed) before X refused the post; the server now refuses such a set at once, as the terminal client already did.
 - **A 403 from X's posting API is only called "credits depleted" when it is about credits.** Any 403 whose body said "insufficient" (an insufficient scope, for one) sent you to top up credits at console.x.com instead of showing X's actual reason.

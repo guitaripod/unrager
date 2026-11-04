@@ -290,8 +290,11 @@
       if (item) {
         item.click();
         picked = true;
-      } else if (dropdown) {
-        closeMenu(dropdown);
+      } else {
+        const late =
+          dropdown ||
+          (await waitFor(() => document.querySelector(`${MENU} [data-testid="Dropdown"]`), MENU_WAIT_MS));
+        if (late) closeMenu(late);
       }
       await waitFor(() => !document.querySelector(MENU), MENU_WAIT_MS);
     } finally {

@@ -32,7 +32,7 @@ pub async fn serve(addr: SocketAddr, filter_only: bool) -> crate::error::Result<
     write_lockfile(&state)?;
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     if state.x_session_loaded {
-        spawn_ingest(&state, shutdown_rx).await;
+        spawn_ingest(&state, shutdown_rx);
     }
     spawn_housekeeping(&state);
     let app = router(state.clone());
@@ -82,29 +82,48 @@ fn spawn_housekeeping(state: &Arc<AppState>) {
     });
 }
 
-/// Take the feed-writer lock and launch the background ingest worker. If
-/// another process (a second serve, or a TUI) already owns the lock, this
-/// process just serves read-only from the shared `feed.db`.
-async fn spawn_ingest(state: &Arc<AppState>, shutdown_rx: tokio::sync::watch::Receiver<bool>) {
-    match crate::store::feed::FeedStore::open_writer(&state.feed_db_path) {
-        Ok(Some(store)) => {
-            let classifier = state.classifier.lock().await.handle();
-            tokio::spawn(crate::store::ingest::run(
-                state.gql.clone(),
-                classifier,
-                state.filter_cache.clone(),
-                store,
-                state.feed_cfg.clone(),
-                state.activity.clone(),
-                shutdown_rx,
-            ));
-            tracing::info!("feed ingest worker owns the writer lock");
-        }
-        Ok(None) => {
-            tracing::info!("feed writer lock held elsewhere; serving read-only from feed.db");
-        }
-        Err(e) => tracing::warn!("failed to open feed store for writing: {e}"),
-    }
+/// How often a server that is serving read-only checks whether the process
+/// holding the feed-writer lock has let it go.
+const WRITER_LOCK_RETRY: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Take the feed-writer lock and launch the background ingest worker. While
+/// another process (a second serve, or a TUI) owns the lock, this process
+/// serves read-only from the shared `feed.db` and keeps trying, so it takes
+/// over the moment that process exits.
+fn spawn_ingest(state: &Arc<AppState>, mut shutdown_rx: tokio::sync::watch::Receiver<bool>) {
+    let state = state.clone();
+    tokio::spawn(async move {
+        let mut said_read_only = false;
+        let store = loop {
+            match crate::store::feed::FeedStore::open_writer(&state.feed_db_path) {
+                Ok(Some(store)) => break store,
+                Ok(None) if !said_read_only => {
+                    said_read_only = true;
+                    tracing::info!(
+                        "feed writer lock held elsewhere; serving read-only from feed.db until it is free"
+                    );
+                }
+                Ok(None) => {}
+                Err(e) => tracing::warn!("failed to open feed store for writing: {e}"),
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(WRITER_LOCK_RETRY) => {}
+                res = shutdown_rx.changed() => if res.is_err() || *shutdown_rx.borrow() { return; },
+            }
+        };
+        let classifier = state.classifier.lock().await.handle();
+        tracing::info!("feed ingest worker owns the writer lock");
+        crate::store::ingest::run(
+            state.gql.clone(),
+            classifier,
+            state.filter_cache.clone(),
+            store,
+            state.feed_cfg.clone(),
+            state.activity.clone(),
+            shutdown_rx,
+        )
+        .await;
+    });
 }
 
 /// Everything the browser extension needs. Always served, including under

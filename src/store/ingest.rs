@@ -116,7 +116,7 @@ pub async fn run(
             tracing::debug!("ollama unreachable; ingesting without classification this cycle");
         }
         let mut total = 0usize;
-        let mut following_new = 0usize;
+        let mut following_new: Option<usize> = None;
         for variant in [FeedVariant::ForYou, FeedVariant::Following] {
             if *shutdown.borrow() {
                 break;
@@ -135,7 +135,7 @@ pub async fn run(
                 Ok(n) => {
                     total += n;
                     if matches!(variant, FeedVariant::Following) {
-                        following_new = n;
+                        following_new = Some(n);
                     }
                 }
                 Err(e) => {
@@ -143,7 +143,9 @@ pub async fn run(
                 }
             }
         }
-        following_dry = following_new == 0;
+        if let Some(n) = following_new {
+            following_dry = n == 0;
+        }
 
         let interval = if active {
             cfg.active_poll_secs

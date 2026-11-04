@@ -6,6 +6,7 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **The ring around a follower's or a mutual's picture in the iPhone app circles the picture in Mentions and threads.** It was placed from the picture's frame before the row had laid the picture out, so on lists whose rows never laid out twice (Mentions, a thread, a run of text posts) it was drawn as a small arc at the screen's left edge and the picture went without; the ring is now pinned to the picture itself.
 - **A slow X menu no longer pops up on screen when the extension's Not interested button can't find the item.** When X took longer than a second and a half to open the post's menu, the extension gave up without closing it and the menu appeared once the extension stopped hiding menus; it now waits for a late menu and closes it.
 - **The browser extension judges a repost by the post being reposted.** It sent the model the reposter's name and X's clipped "RT @…" text under the repost's own id, so reposts were judged on a truncated post, never shared a verdict with the terminal client or the iPhone app (which judge the original), and a repost and its original in the same timeline could undo each other's hide. It now sends the original's id, author and full text.
 - **Posting from the iPhone app checks the attachments before uploading any of them.** Five pictures, two videos, or a video with pictures uploaded every file (each upload is billed) before X refused the post; the server now refuses such a set at once, as the terminal client already did.

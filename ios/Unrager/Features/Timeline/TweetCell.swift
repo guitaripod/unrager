@@ -91,7 +91,7 @@ final class TweetCell: UICollectionViewCell {
     /// that isn't a repost; VoiceOver reads it first.
     private var repostText: String?
     private let avatar = AsyncImageView(frame: .zero)
-    private let avatarRing = CAShapeLayer()
+    private let avatarRing = AvatarRingView(lineWidth: TweetCell.ringWidth)
     private var standing: Standing?
     private let nameLabel = UILabel()
     private let flagLabel = UILabel()
@@ -150,13 +150,6 @@ final class TweetCell: UICollectionViewCell {
         contentView.backgroundColor = DesignSystem.Color.background
         contentView.isOpaque = true
         buildHierarchy()
-        avatarRing.fillColor = nil
-        avatarRing.lineWidth = Self.ringWidth
-        avatarRing.isHidden = true
-        contentView.layer.addSublayer(avatarRing)
-        registerForTraitChanges([UITraitUserInterfaceStyle.self, UITraitAccessibilityContrast.self]) {
-            (cell: TweetCell, _) in cell.paintRing()
-        }
     }
 
     @available(*, unavailable)
@@ -185,13 +178,6 @@ final class TweetCell: UICollectionViewCell {
 
     override func layoutSubviews() {
         PerfProbe.time("layout") { super.layoutSubviews() }
-        guard !avatarRing.isHidden else { return }
-        let picture = avatar.convert(avatar.bounds, to: contentView)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        avatarRing.frame = contentView.bounds
-        avatarRing.path = UIBezierPath(ovalIn: picture.insetBy(dx: -Self.ringGap, dy: -Self.ringGap)).cgPath
-        CATransaction.commit()
     }
 
     private static let ringWidth: CGFloat = 2
@@ -203,16 +189,7 @@ final class TweetCell: UICollectionViewCell {
     /// all one author.
     private func applyStanding(_ newStanding: Standing?) {
         standing = newStanding?.drawsRing == true ? newStanding : nil
-        paintRing()
-        setNeedsLayout()
-    }
-
-    private func paintRing() {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        avatarRing.isHidden = standing == nil
-        avatarRing.strokeColor = standing?.tint.resolvedColor(with: traitCollection).cgColor
-        CATransaction.commit()
+        avatarRing.tint = standing?.tint
     }
 
     override func prepareForReuse() {
@@ -966,10 +943,11 @@ final class TweetCell: UICollectionViewCell {
         }
         let button = UIButton(configuration: config)
         button.contentHorizontalAlignment = .leading
+        contentView.addSubview(avatarRing)
         button.accessibilityHint = "Shows the full post text"
         return button
     }
-
+        ] + avatarRing.surrounding(avatar, gap: Self.ringGap) + [
     /// The repost affordance: a tap opens Repost / Undo repost / Quote (X's
     /// repost sheet), never fires a blind toggle. Deferred + uncached so the
     /// first item's title always reflects the current repost state, including

@@ -23,6 +23,10 @@ const SCOPES: &str = "tweet.read tweet.write users.read media.write offline.acce
 const CALLBACK_TIMEOUT: StdDuration = StdDuration::from_secs(300);
 const REFRESH_MARGIN: Duration = Duration::seconds(60);
 const REFRESH_TIMEOUT: StdDuration = StdDuration::from_secs(20);
+/// Serializes token refreshes in this process. X rotates the refresh token
+/// on every use, so two requests that both found the token expired would
+/// spend the same refresh token and the second would be refused.
+static REFRESH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tokens {
@@ -68,11 +72,9 @@ pub async fn load_or_authorize() -> Result<Tokens> {
         Ok(Some(tokens)) => {
             if let Some(refresh) = tokens.refresh_token.as_deref() {
                 tracing::debug!("access token expired, refreshing");
-                match refresh_tokens(refresh).await {
-                    Ok(fresh) => {
-                        save(&path, &fresh)?;
-                        return Ok(fresh);
-                    }
+                let _refreshing = REFRESH.lock().await;
+                match refresh_and_save(&path, refresh).await {
+                    Ok(fresh) => return Ok(fresh),
                     Err(e) => {
                         tracing::warn!("refresh failed, falling back to full authorize: {e}");
                     }
@@ -105,6 +107,7 @@ pub async fn load_or_refresh() -> Result<Tokens> {
 }
 
 async fn load_or_refresh_at(path: &std::path::Path) -> Result<Tokens> {
+    let _refreshing = REFRESH.lock().await;
     let tokens = match load(path) {
         Ok(Some(tokens)) => tokens,
         Ok(None) => return Err(not_authorized("no saved X authorization")),
@@ -119,11 +122,8 @@ async fn load_or_refresh_at(path: &std::path::Path) -> Result<Tokens> {
     let Some(refresh) = tokens.refresh_token.as_deref() else {
         return Err(not_authorized("the saved X authorization expired"));
     };
-    match refresh_tokens(refresh).await {
-        Ok(fresh) => {
-            save(path, &fresh)?;
-            Ok(fresh)
-        }
+    match refresh_and_save(path, refresh).await {
+        Ok(fresh) => Ok(fresh),
         Err(e) => {
             tracing::warn!("token refresh failed: {e}");
             Err(not_authorized(
@@ -131,6 +131,22 @@ async fn load_or_refresh_at(path: &std::path::Path) -> Result<Tokens> {
             ))
         }
     }
+}
+
+/// Spends `refresh` and saves what X answers. An answer without a refresh
+/// token keeps the one just used (RFC 6749 section 6), or the next expiry
+/// would need the browser again.
+async fn refresh_and_save(path: &std::path::Path, refresh: &str) -> Result<Tokens> {
+    let fresh = with_refresh_token(refresh_tokens(refresh).await?, refresh);
+    save(path, &fresh)?;
+    Ok(fresh)
+}
+
+fn with_refresh_token(mut fresh: Tokens, previous: &str) -> Tokens {
+    if fresh.refresh_token.is_none() {
+        fresh.refresh_token = Some(previous.to_string());
+    }
+    fresh
 }
 
 fn not_authorized(what: &str) -> Error {
@@ -501,5 +517,27 @@ mod tests {
             scope: None,
         };
         assert!(!t2.is_expired());
+    }
+
+    #[test]
+    fn a_refresh_answer_without_a_refresh_token_keeps_the_old_one() {
+        let fresh = |refresh: Option<&str>| Tokens {
+            access_token: "new".into(),
+            refresh_token: refresh.map(str::to_string),
+            expires_at: Utc::now(),
+            scope: None,
+        };
+        assert_eq!(
+            with_refresh_token(fresh(None), "old")
+                .refresh_token
+                .as_deref(),
+            Some("old")
+        );
+        assert_eq!(
+            with_refresh_token(fresh(Some("rotated")), "old")
+                .refresh_token
+                .as_deref(),
+            Some("rotated")
+        );
     }
 }

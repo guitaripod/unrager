@@ -5,7 +5,8 @@ import UnragerKit
 /// can offer Follow back only to someone not yet followed. The server answers
 /// this one account at a time, so lookups run two at a time, once per person,
 /// as rows come on screen. A person whose state can't be read stays `unknown`
-/// and gets no button rather than a guess.
+/// and gets no button rather than a guess; a lookup that failed is tried again
+/// when the row next draws, once `retryAfter` has passed.
 @MainActor
 final class FollowStateLoader {
     enum State: Equatable {
@@ -15,16 +16,25 @@ final class FollowStateLoader {
     private static let maxConcurrent = 2
 
     var onChange: ((String) -> Void)?
+    /// Told the handle when a Follow back the server refused was put back.
+    var onFollowFailed: ((String) -> Void)?
+
+    private static let retryAfter: TimeInterval = 30
 
     private let social = SocialAPI(baseURL: { AppSettings.serverURL })
     private var states: [String: State] = [:]
     private var queue: [(restID: String, handle: String)] = []
     private var inFlight = 0
+    private var failedAt: [String: Date] = [:]
 
     func state(for restID: String) -> State { states[restID] ?? .unknown }
 
     /// Starts reading `restID`'s state unless it is known or already being read.
     func request(restID: String, handle: String) {
+        if let failed = failedAt[restID], Date().timeIntervalSince(failed) > Self.retryAfter {
+            failedAt[restID] = nil
+            states[restID] = nil
+        }
         guard states[restID] == nil else { return }
         states[restID] = .loading
         queue.append((restID, handle))
@@ -45,6 +55,7 @@ final class FollowStateLoader {
                 AppLogger.shared.warn("follow back failed: \(error)", category: .timeline)
                 Haptics.error()
                 set(.notFollowing, for: restID)
+                onFollowFailed?(handle)
             }
         }
     }
@@ -64,6 +75,7 @@ final class FollowStateLoader {
                     set(state, for: next.restID)
                 } catch {
                     AppLogger.shared.warn("follow state unavailable: \(error)", category: .timeline)
+                    failedAt[next.restID] = Date()
                     set(.unknown, for: next.restID)
                 }
             }

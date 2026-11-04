@@ -19,6 +19,18 @@ struct NotificationsLogicTests {
         return try UnragerJSON.decode(XNotification.self, from: Data(json.utf8))
     }
 
+    @Test("A chip reports only the rows older than the unread ones it hides, so those stay unread")
+    func reportableUnderAChip() throws {
+        let olderLike = try notif("l1", actors: ["ann"], at: 100)
+        let newerLike = try notif("l2", actors: ["ben"], at: 300)
+        let hiddenMention = try notif("m1", type: "mention", actors: ["cy"], at: 200)
+        let shown = [newerLike, olderLike]
+        #expect(NotificationPresentation.reportable(shown: shown, hiddenUnread: []) == shown)
+        #expect(NotificationPresentation.reportable(shown: shown, hiddenUnread: [hiddenMention]) == [olderLike])
+        let sameInstant = try notif("m2", type: "mention", actors: ["dee"], at: 100)
+        #expect(NotificationPresentation.reportable(shown: shown, hiddenUnread: [sameInstant]).isEmpty)
+    }
+
     @Test("A grown group replaces its row and moves to the top; an unchanged one changes nothing")
     func mergeGrownGroup() throws {
         let old = try notif("a", actors: ["alice"], at: 100)

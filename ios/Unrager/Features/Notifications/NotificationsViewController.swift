@@ -25,6 +25,9 @@ final class NotificationsViewController: UIViewController {
     /// `mergeFresh` during that window; a completing reset must not wipe those
     /// live-merged items when it rebuilds the list from its (older) page.
     private var resetLoadInFlight = false
+    /// A refresh asked for while a page was loading, started once it lands
+    /// rather than dropped with the pull-to-refresh spinner still turning.
+    private var resetQueued = false
     /// Items the poller live-merged while a reset load was in flight, buffered
     /// so the completing reset can re-insert them instead of dropping them.
     private var mergedDuringResetLoad: [XNotification] = []
@@ -140,8 +143,19 @@ final class NotificationsViewController: UIViewController {
         let nowVisible = hiddenFresh.filter(category.includes)
         hiddenFresh.removeAll { category.includes($0) }
         if !nowVisible.isEmpty, view.window != nil {
-            NotificationCenterService.shared.notificationsDisplayed(nowVisible)
+            reportToSeenMarker(order.compactMap { items[$0] }.filter(category.includes))
         }
+    }
+
+    /// Hands the seen marker the rows on show that it can take without
+    /// marking a row the chip hides, and hasn't been read, read along with them.
+    private func reportToSeenMarker(_ shown: [XNotification]) {
+        let hiddenUnread = NotificationPrefs.lastSeenTimestamp.map { marker in
+            hiddenFresh.filter { NotificationPrefs.isNewer($0.timestamp, than: marker) }
+        } ?? []
+        let reportable = NotificationPresentation.reportable(shown: shown, hiddenUnread: hiddenUnread)
+        guard !reportable.isEmpty else { return }
+        NotificationCenterService.shared.notificationsDisplayed(reportable)
     }
 
     // MARK: - Rows
@@ -372,6 +386,7 @@ final class NotificationsViewController: UIViewController {
         }
 
         followLoader.onChange = { [weak self] restID in self?.followStateChanged(restID) }
+        followLoader.onFollowFailed = { [weak self] handle in self?.showToast("Couldn't follow @\(handle)") }
         likes.onChange = { [weak self] tweetID in self?.likeStateChanged(tweetID) }
         observeDisplayChanges()
         if category == .mentions {
@@ -544,7 +559,9 @@ final class NotificationsViewController: UIViewController {
     private func updateEmptyState() {
         guard category != .mentions else { return }
         let hasRows = dataSource.snapshot().numberOfItems > 0
-        skeleton.isHidden = hasRows || !(loading && lastLoaded == nil)
+        let firstLoad = loading && lastLoaded == nil
+        let pagingIntoEmpty = loading && !resetLoadInFlight
+        skeleton.isHidden = hasRows || !(firstLoad || pagingIntoEmpty)
         if hasRows || loading {
             emptyState.isHidden = true
             return
@@ -652,7 +669,7 @@ final class NotificationsViewController: UIViewController {
         applySnapshot(animated: true, keepingPosition: true, reconfigure: merge.grown)
         if scrolledAway { pendingNew += shown.count }
         if view.window != nil, !shown.isEmpty {
-            NotificationCenterService.shared.notificationsDisplayed(shown)
+            reportToSeenMarker(shown)
         }
     }
 
@@ -697,7 +714,11 @@ final class NotificationsViewController: UIViewController {
     @objc private func reload() { load(reset: true) }
 
     private func load(reset: Bool) {
-        guard !loading, reset || !exhausted else { return }
+        if loading {
+            if reset, !resetLoadInFlight { resetQueued = true }
+            return
+        }
+        guard reset || !exhausted else { return }
         loading = true
         if reset {
             exhausted = false
@@ -712,7 +733,12 @@ final class NotificationsViewController: UIViewController {
             defer {
                 loading = false
                 resetLoadInFlight = false
-                collectionView.refreshControl?.endRefreshing()
+                if resetQueued {
+                    resetQueued = false
+                    load(reset: true)
+                } else {
+                    collectionView.refreshControl?.endRefreshing()
+                }
                 updateEmptyState()
                 updateFooter()
             }
@@ -757,10 +783,8 @@ final class NotificationsViewController: UIViewController {
     /// Hands the seen marker the page's rows the chosen chip shows, and holds
     /// back the rest until a chip shows them.
     private func reportDisplayed(_ notifications: [XNotification]) {
-        let shown = notifications.filter(category.includes)
         hiddenFresh.append(contentsOf: notifications.filter { !category.includes($0) })
-        guard !shown.isEmpty else { return }
-        NotificationCenterService.shared.notificationsDisplayed(shown)
+        reportToSeenMarker(notifications.filter(category.includes))
     }
 
     private func updateFooter() {

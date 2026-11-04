@@ -97,10 +97,14 @@ final class NotificationToast: UIView {
         host.layoutIfNeeded()
 
         alpha = 0
-        transform = CGAffineTransform(translationX: 0, y: -(bounds.height + DesignSystem.Spacing.xl))
-        UIView.animate(withDuration: 0.5, delay: 0, usingSpringWithDamping: 0.8, initialSpringVelocity: 0.4) {
-            self.alpha = 1
-            self.transform = .identity
+        if UIAccessibility.isReduceMotionEnabled {
+            UIView.animate(withDuration: 0.25) { self.alpha = 1 }
+        } else {
+            transform = CGAffineTransform(translationX: 0, y: -(bounds.height + DesignSystem.Spacing.xl))
+            UIView.animate(withDuration: 0.5, delay: 0, usingSpringWithDamping: 0.8, initialSpringVelocity: 0.4) {
+                self.alpha = 1
+                self.transform = .identity
+            }
         }
         Haptics.selection()
         if UIAccessibility.isVoiceOverRunning {
@@ -119,9 +123,12 @@ final class NotificationToast: UIView {
 
     func dismiss() {
         dismissWork?.cancel()
+        let slides = !UIAccessibility.isReduceMotionEnabled
         UIView.animate(withDuration: 0.3, animations: {
             self.alpha = 0
-            self.transform = CGAffineTransform(translationX: 0, y: -(self.bounds.height + DesignSystem.Spacing.xl))
+            if slides {
+                self.transform = CGAffineTransform(translationX: 0, y: -(self.bounds.height + DesignSystem.Spacing.xl))
+            }
         }, completion: { _ in self.removeFromSuperview() })
     }
 

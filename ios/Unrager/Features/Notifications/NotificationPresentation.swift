@@ -324,6 +324,16 @@ enum NotificationPresentation {
     /// One line on what a stretch of activity added up to: "47 likes · 3 replies
     /// · 2 new followers". Conversation comes first, then people, then volume;
     /// at most three kinds are named.
+    /// The shown rows a narrowed list may report to the seen marker without
+    /// reading the rows it hides. The marker is one instant, "read up to
+    /// here", so a shown row newer than a hidden unread one would mark that
+    /// one read too: only the shown rows older than every hidden unread row
+    /// are reported, and the rest wait until a list shows what was hidden.
+    static func reportable(shown: [XNotification], hiddenUnread: [XNotification]) -> [XNotification] {
+        guard let oldestHidden = hiddenUnread.map(\.timestamp).min() else { return shown }
+        return shown.filter { NotificationPrefs.isNewer(oldestHidden, than: $0.timestamp) }
+    }
+
     static func digest(of notifications: [XNotification]) -> String? {
         var counts: [String: Int] = [:]
         for notification in notifications {

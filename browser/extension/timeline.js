@@ -4,13 +4,15 @@
 const unragerTimeline = (() => {
   const MAX_TEXT_CHARS = 500;
 
+  /// Undoes one level of X's HTML escaping, `&amp;` last, like
+  /// `decode_html_entities`.
   function decodeEntities(s) {
     return s
-      .replace(/&amp;/g, "&")
       .replace(/&lt;/g, "<")
       .replace(/&gt;/g, ">")
       .replace(/&quot;/g, '"')
-      .replace(/&#39;|&apos;/g, "'");
+      .replace(/&#39;|&apos;/g, "'")
+      .replace(/&amp;/g, "&");
   }
 
   function unwrap(result) {

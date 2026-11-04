@@ -253,13 +253,15 @@ fn extract_text(node: &Value, legacy: &Value) -> String {
     decode_html_entities(&raw)
 }
 
+/// Undoes one level of X's HTML escaping. `&amp;` goes last, so a post that
+/// spells out an entity (`&lt;`, sent as `&amp;lt;`) keeps it as written.
 pub fn decode_html_entities(s: &str) -> String {
-    s.replace("&amp;", "&")
-        .replace("&lt;", "<")
+    s.replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
         .replace("&#39;", "'")
         .replace("&apos;", "'")
+        .replace("&amp;", "&")
 }
 
 fn parse_created_at(legacy: &Value) -> Result<DateTime<Utc>> {
@@ -2025,5 +2027,12 @@ mod tests {
         v["legacy"]["extended_entities"] = json!({ "media": [{ "url": "" }] });
         let tweet = parse_tweet_result(&v).unwrap();
         assert_eq!(tweet.text, "a photo");
+    }
+
+    #[test]
+    fn an_entity_spelled_out_in_a_post_is_decoded_once() {
+        assert_eq!(decode_html_entities("&amp;lt;b&amp;gt;"), "&lt;b&gt;");
+        assert_eq!(decode_html_entities("&amp;amp;"), "&amp;");
+        assert_eq!(decode_html_entities("a &lt; b &amp;&amp; c &gt; d"), "a < b && c > d");
     }
 }

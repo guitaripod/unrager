@@ -391,7 +391,7 @@ fn extract_target_tweet(item: &Value) -> Option<TargetTweet> {
             id: tweet.rest_id,
             like_count: tweet.like_count,
             created_at: tweet.created_at,
-            snippet: decode_html_entities(&tweet.text),
+            snippet: tweet.text,
             favorited: tweet.favorited,
             media: tweet.media,
         });
@@ -591,6 +591,31 @@ mod tests {
             Some("Alice, Bob and 47 others liked your post")
         );
         assert_eq!(n.others_count, Some(47));
+    }
+
+    #[test]
+    fn a_liked_posts_snippet_is_decoded_once() {
+        let content = json!({
+            "clientEventInfo": { "element": "users_liked_your_tweet" },
+            "itemContent": {
+                "notification_icon": "heart_icon",
+                "timestamp_ms": "1700000000000",
+                "template": { "target_objects": [{ "tweet_results": { "result": {
+                    "__typename": "Tweet",
+                    "rest_id": "77",
+                    "core": { "user_results": { "result": {
+                        "rest_id": "100",
+                        "legacy": { "screen_name": "me", "name": "Me" }
+                    } } },
+                    "legacy": {
+                        "full_text": "write &amp;amp; for &amp;",
+                        "created_at": "Mon Jan 01 12:00:00 +0000 2024"
+                    }
+                } } }] }
+            }
+        });
+        let n = build_grouped_entry("g-2", &content).unwrap();
+        assert_eq!(n.target_tweet_snippet.as_deref(), Some("write &amp; for &"));
     }
 
     fn user(handle: &str) -> User {

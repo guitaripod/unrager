@@ -167,23 +167,26 @@ async fn reject_when_filter_only(
 ///
 /// A page can also make itself same-site by pointing its own name's DNS at
 /// this machine (DNS rebinding); its reads then carry no `Origin`, but their
-/// `Host` is that public name, so only hosts no one can register publicly
-/// are answered.
+/// `Host` is that public name. So a request without the extension's origin
+/// (an app's, or a rebound page's) is only answered at a host no one can
+/// register publicly; the extension may use any address it was given.
 async fn reject_web_origins(request: Request, next: Next) -> Response {
     let headers = request.headers();
-    let foreign_origin = headers
-        .get(header::ORIGIN)
-        .is_some_and(|origin| !is_extension_origin(origin));
-    if foreign_origin || !headers.get(header::HOST).is_none_or(is_private_host) {
-        return ApiError::new(
-            StatusCode::FORBIDDEN,
-            "forbidden_origin",
-            "unrager only answers its browser extension and apps, at localhost, an IP address \
-             or a local or Tailscale name, not web pages",
-        )
-        .into_response();
+    let refusal = match headers.get(header::ORIGIN) {
+        Some(origin) if is_extension_origin(origin) => None,
+        Some(_) => Some("unrager only answers its browser extension and apps, not web pages"),
+        None if headers.get(header::HOST).is_none_or(is_private_host) => None,
+        None => Some(
+            "unrager answers its apps at localhost, an IP address, or a local or Tailscale \
+             name (.local, .lan, .home.arpa, .ts.net), not at a public name",
+        ),
+    };
+    match refusal {
+        Some(message) => {
+            ApiError::new(StatusCode::FORBIDDEN, "forbidden_origin", message).into_response()
+        }
+        None => next.run(request).await,
     }
-    next.run(request).await
 }
 
 /// Whether a `Host` header names this machine in a way a web page can't
@@ -480,5 +483,18 @@ mod tests {
                 "{host}"
             );
         }
+        assert_eq!(
+            status_for_host(
+                Some("chrome-extension://abcdefghijklmnopabcdefghijklmnop"),
+                Some("unrager.example.com:7777")
+            )
+            .await,
+            StatusCode::OK,
+            "the extension may be pointed at any address"
+        );
+        assert_eq!(
+            status_for_host(Some("https://evil.example"), Some("localhost:7777")).await,
+            StatusCode::FORBIDDEN
+        );
     }
 }

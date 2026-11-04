@@ -664,12 +664,14 @@ class FeedViewController: UIViewController, TweetActionHandling {
     /// shove the content.
     private func applyNow(_ tweets: [Tweet]) {
         var changed: [String] = []
+        var shown: [String: Tweet] = [:]
         for tweet in tweets {
             if let existing = tweetsByID[tweet.restID], existing.displayDiffers(from: tweet) {
                 changed.append(tweet.restID)
             }
-            tweetsByID[tweet.restID] = tweet
+            shown[tweet.restID] = tweet
         }
+        tweetsByID = shown
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
         snapshot.appendSections([0])
         snapshot.appendItems(tweets.map(\.restID), toSection: 0)
@@ -890,9 +892,9 @@ class FeedViewController: UIViewController, TweetActionHandling {
     /// otherwise pass for live ones: the saved posts stay, with a note on top.
     private func showStaleNotice() {
         freshnessDismissed = false
+        staleNoticeShowing = true
         presentFreshness("Couldn't refresh · saved posts")
         UIAccessibility.post(notification: .announcement, argument: freshnessLabel.text)
-        staleNoticeShowing = true
     }
 
     @objc func pullToRefresh() { viewModel.refresh() }
@@ -916,15 +918,15 @@ class FeedViewController: UIViewController, TweetActionHandling {
         guard let text, !text.isEmpty else {
             freshnessHideWork?.cancel()
             freshnessDismissed = false
+            staleNoticeShowing = false
             freshnessPill.layer.removeAllAnimations()
             freshnessPill.isHidden = true
-            staleNoticeShowing = false
             freshnessPill.alpha = 0
             return
         }
+        guard !staleNoticeShowing else { return }
         freshnessLabel.text = text
         guard !freshnessDismissed else { return }
-        guard !staleNoticeShowing else { return }
         presentFreshness(text)
     }
 
@@ -955,8 +957,6 @@ class FeedViewController: UIViewController, TweetActionHandling {
         scheduleFreshnessHide()
     }
 
-    /// Fades the freshness pill out ~3s after it shows, so it reads as a brief
-    /// "here's how fresh this is" glance.
     /// Centres the pill in the navigation bar when the bar has no title of its
     /// own and the pill clears the bar's leading control by the same margin on
     /// both sides; otherwise (a titled screen, a large text size, the longer
@@ -977,19 +977,21 @@ class FeedViewController: UIViewController, TweetActionHandling {
         view.layoutIfNeeded()
     }
 
+    /// Fades the freshness pill out ~3s after it shows, so it reads as a brief
+    /// "here's how fresh this is" glance.
     private func scheduleFreshnessHide() {
         freshnessHideWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
+            let drifts = !UIAccessibility.isReduceMotionEnabled
             UIView.animate(withDuration: 0.35, delay: 0, options: [.curveEaseIn]) {
                 self.freshnessPill.alpha = 0
-            let drifts = !UIAccessibility.isReduceMotionEnabled
                 if drifts { self.freshnessPill.transform = CGAffineTransform(translationX: 0, y: -6) }
             } completion: { _ in
                 self.freshnessDismissed = true
+                self.staleNoticeShowing = false
                 self.freshnessPill.isHidden = true
                 self.freshnessPill.transform = .identity
-                self.staleNoticeShowing = false
             }
         }
         freshnessHideWork = work
@@ -1117,8 +1119,8 @@ class FeedViewController: UIViewController, TweetActionHandling {
     private func jumpToNextUnread() {
         let ids = dataSource.snapshot().itemIdentifiers
         guard !ids.isEmpty else { return }
-        let visible = collectionView.indexPathsForVisibleItems.map(\.item).max() ?? -1
-        let ordered = Array((visible + 1)..<ids.count) + Array(0...max(0, min(visible, ids.count - 1)))
+        let visible = min(collectionView.indexPathsForVisibleItems.map(\.item).max() ?? -1, ids.count - 1)
+        let ordered = Array((visible + 1)..<ids.count) + Array(0...max(0, visible))
         guard let next = ordered.first(where: { $0 >= 0 && $0 < ids.count && !viewModel.isSeen(ids[$0]) })
         else { return }
         Haptics.selection()

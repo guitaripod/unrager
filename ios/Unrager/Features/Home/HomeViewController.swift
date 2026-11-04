@@ -179,8 +179,8 @@ final class HomeViewController: FeedViewController {
             $0.returnKeyType = .search
         }
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Show", style: .default) { [weak self] _ in
-            let query = alert.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        alert.addAction(UIAlertAction(title: "Show", style: .default) { [weak self, weak alert] _ in
+            let query = alert?.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             self?.viewModel.updateSource(.bookmarks(query: query))
             self?.afterSwitch()
         })

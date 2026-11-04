@@ -196,7 +196,7 @@ final class ProfileViewController: FeedViewController {
                 banner.configure(url: profile.user.bannerURL.flatMap(URL.init), handle: handle,
                                  imagesEnabled: AppSettings.imagesEnabled)
                 isOwnProfile = await me?.handle.caseInsensitiveCompare(handle) == .orderedSame
-                isFollowing = profile.followedByMe
+                if !followRequestInFlight { isFollowing = profile.followedByMe }
                 title = profile.user.name
                 titleLabel.text = profile.user.name
                 titleLabel.sizeToFit()
@@ -264,9 +264,23 @@ final class ProfileViewController: FeedViewController {
         hidesEmptyState = blank
         repliesController?.hidesEmptyState = blank
         mediaController?.hidesEmptyState = blank
-        collectionView.collectionViewLayout.invalidateLayout()
-        repliesController?.collectionView.collectionViewLayout.invalidateLayout()
-        mediaController?.collectionView.collectionViewLayout.invalidateLayout()
+        Self.remeasureHeader(of: collectionView)
+        Self.remeasureHeader(of: repliesController?.collectionView)
+        Self.remeasureHeader(of: mediaController?.collectionView)
+    }
+
+    /// Lets a list measure its header again. A list on screen does it with an
+    /// empty batch update, which keeps every row's measured height:
+    /// invalidating its whole layout would throw those away and leave the rows
+    /// on screen squashed to the estimate while a page loads. A list off
+    /// screen is simply laid out afresh when it next shows.
+    private static func remeasureHeader(of list: UICollectionView?) {
+        guard let list else { return }
+        if list.window != nil {
+            UIView.performWithoutAnimation { list.performBatchUpdates(nil) }
+        } else {
+            list.collectionViewLayout.invalidateLayout()
+        }
     }
 
     /// Resolves the profiled user's country flag and shows the header's

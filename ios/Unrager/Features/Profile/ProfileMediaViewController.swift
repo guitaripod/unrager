@@ -221,6 +221,10 @@ final class ProfileMediaViewController: UIViewController {
     private var contentSizeObservation: NSKeyValueObservation?
     private var autoPages = 0
     private static let autoPageLimit = 8
+    /// What the last load failed with, until another starts: it turns the
+    /// empty grid into an error with a Retry and stops the screen-filling
+    /// pages, so a server that is down isn't asked again eight times running.
+    private var loadError: String?
 
     init(handle: String) {
         viewModel = TimelineViewModel(source: .user(handle: handle))
@@ -248,7 +252,7 @@ final class ProfileMediaViewController: UIViewController {
 
         skeleton.isHidden = true
         emptyState.isHidden = true
-        emptyState.onRetry = { [weak self] in self?.viewModel.refresh() }
+        emptyState.onRetry = { [weak self] in self?.retryAfterFailure() }
         collectionView.addSubview(skeleton)
         collectionView.addSubview(emptyState)
         contentSizeObservation = collectionView.observe(\.contentSize) { [weak self] _, _ in
@@ -303,7 +307,7 @@ final class ProfileMediaViewController: UIViewController {
             cv.dequeueConfiguredReusableCell(using: registration, for: ip, item: id)
         }
         footer.attach(to: collectionView)
-        footer.onRetry = { [weak self] in self?.loadMore() }
+        footer.onRetry = { [weak self] in self?.retryAfterFailure() }
         footer.install(on: dataSource)
         let footerProvider = dataSource.supplementaryViewProvider
         let headerRegistration = UICollectionView.SupplementaryRegistration<HostReusableView>(
@@ -324,9 +328,17 @@ final class ProfileMediaViewController: UIViewController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] tweets in self?.update(from: tweets) }
             .store(in: &cancellables)
+        viewModel.errorMessage
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] message in
+                self?.loadError = message
+                self?.updateChrome()
+            }
+            .store(in: &cancellables)
         viewModel.isLoading
             .receive(on: DispatchQueue.main)
             .sink { [weak self] loading in
+                if loading { self?.loadError = nil }
                 if !loading { self?.collectionView.refreshControl?.endRefreshing() }
                 self?.updateChrome()
                 if !loading { self?.fillScreenIfNeeded() }
@@ -360,7 +372,7 @@ final class ProfileMediaViewController: UIViewController {
     /// posts still turn up without scrolling.
     private func fillScreenIfNeeded() {
         guard isViewLoaded, view.window != nil, !viewModel.isExhausted, !viewModel.isLoading.value,
-              autoPages < Self.autoPageLimit else { return }
+              loadError == nil, autoPages < Self.autoPageLimit else { return }
         let rowsHeight = rows.reduce(0) { $0 + $1.height + ProfileMediaGrid.gutter }
         guard rowsHeight < collectionView.bounds.height else { return }
         autoPages += 1
@@ -371,6 +383,17 @@ final class ProfileMediaViewController: UIViewController {
         viewModel.loadMoreIfNeeded(currentIndex: max(0, viewModel.tweets.value.count - 1))
     }
 
+    /// Asks again for what failed: the next page under a grid already shown,
+    /// otherwise the whole timeline.
+    private func retryAfterFailure() {
+        autoPages = 0
+        if viewModel.pageLoadFailed, !viewModel.tweets.value.isEmpty {
+            loadMore()
+        } else {
+            viewModel.refresh()
+        }
+    }
+
     // MARK: - Chrome
 
     private func updateChrome() {
@@ -379,12 +402,17 @@ final class ProfileMediaViewController: UIViewController {
         skeleton.isHidden = hasRows || !loading || hidesEmptyState
         let showEmpty = !hasRows && !loading && !hidesEmptyState
         emptyState.isHidden = !showEmpty
-        if showEmpty {
+        if showEmpty, let loadError {
+            emptyState.show(symbol: "exclamationmark.triangle", title: "Couldn't load media",
+                            subtitle: loadError, showRetry: true)
+        } else if showEmpty {
             emptyState.show(symbol: "photo.on.rectangle.angled", title: "No photos or videos",
                             subtitle: "Pictures and clips from this account's posts show up here.", showRetry: false)
         }
         if viewModel.isLoading.value, hasRows {
             footer.set(.loading("Loading more…"))
+        } else if loadError != nil, hasRows {
+            footer.set(.failed("Couldn't load more"))
         } else if viewModel.isExhausted, hasRows {
             footer.set(.note("That's all of its media"))
         } else {

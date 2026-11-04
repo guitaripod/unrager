@@ -80,12 +80,13 @@ const unragerTimeline = (() => {
     const original = unwrap(
       node.legacy.retweeted_status_result && node.legacy.retweeted_status_result.result
     );
+    const subject = original && original.__typename === "Tweet" ? original : node;
     const authors = [author(node).id];
-    if (original && original.__typename === "Tweet") authors.push(author(original).id);
+    if (subject !== node) authors.push(author(subject).id);
     out.push({
-      id: node.rest_id,
+      id: subject.rest_id,
       domId: original && original.rest_id ? original.rest_id : node.rest_id,
-      text: classificationText(node),
+      text: classificationText(subject),
       authors: authors.filter(Boolean),
       own: false,
       notInterested: offer || null,
@@ -109,8 +110,10 @@ const unragerTimeline = (() => {
     });
   }
 
-  /// Collects an entry's posts. A retweet's own id never appears in the DOM:
-  /// X renders the original, whose permalink is what `domId` matches cells on.
+  /// Collects an entry's posts. A repost is judged as its original (its id,
+  /// author and full text, as `parse_tweet_node` reads it), so the verdict is
+  /// the one every other client caches; X renders the original too, whose
+  /// permalink is what `domId` matches cells on.
   function collectFromEntry(entry, out, selfId, prompts) {
     const content = entry && entry.content;
     if (!content) return;

@@ -6,6 +6,7 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **The browser extension judges a repost by the post being reposted.** It sent the model the reposter's name and X's clipped "RT @…" text under the repost's own id, so reposts were judged on a truncated post, never shared a verdict with the terminal client or the iPhone app (which judge the original), and a repost and its original in the same timeline could undo each other's hide. It now sends the original's id, author and full text.
 - **Posting from the iPhone app checks the attachments before uploading any of them.** Five pictures, two videos, or a video with pictures uploaded every file (each upload is billed) before X refused the post; the server now refuses such a set at once, as the terminal client already did.
 - **A 403 from X's posting API is only called "credits depleted" when it is about credits.** Any 403 whose body said "insufficient" (an insufficient scope, for one) sent you to top up credits at console.x.com instead of showing X's actual reason.
 - **Pinning `cookie_browser` (or setting `UNRAGER_COOKIES_PATH`) takes effect at once, and the cached X session is private to your user.** The session read from a browser is cached for a day, and that cache was used whatever browser was pinned since, so a new pin only applied the next day. The cache now remembers where its cookies came from and is read again when that changes. It is also written readable by its owner only, since it holds the session's login token.

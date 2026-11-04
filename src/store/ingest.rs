@@ -89,6 +89,7 @@ pub async fn run(
     // Whether the last Following poll surfaced anything new — a Following feed
     // that's caught up (but below the cap) still counts as "full enough" to park.
     let mut following_dry = false;
+    let mut following_failures = 0u32;
     let mut reconciled_rubric: Option<String> = None;
     loop {
         if *shutdown.borrow() {
@@ -143,9 +144,7 @@ pub async fn run(
                 }
             }
         }
-        if let Some(n) = following_new {
-            following_dry = n == 0;
-        }
+        following_dry = following_settled(following_new, &mut following_failures, following_dry);
 
         let interval = if active {
             cfg.active_poll_secs
@@ -167,6 +166,26 @@ pub async fn run(
     }
     tracing::info!("feed ingest worker stopped");
 }
+
+/// Following's "dry" flag after a cycle whose Following poll found `new`
+/// posts (`None` when it failed). A failure isn't news that Following is
+/// caught up, but one that keeps failing (offline, a changed response) is
+/// treated as dry after [`FOLLOWING_FAILURES_BEFORE_DRY`], so the worker can
+/// still park instead of polling a broken feed forever.
+fn following_settled(new: Option<usize>, failures: &mut u32, was_dry: bool) -> bool {
+    match new {
+        Some(n) => {
+            *failures = 0;
+            n == 0
+        }
+        None => {
+            *failures += 1;
+            was_dry || *failures >= FOLLOWING_FAILURES_BEFORE_DRY
+        }
+    }
+}
+
+const FOLLOWING_FAILURES_BEFORE_DRY: u32 = 3;
 
 /// True once the buffer is as full as it can usefully get, so there's no point
 /// polling X: For You at the cap, and Following at the cap or "dry" (its last
@@ -659,5 +678,18 @@ mod tests {
         assert!(a.idle_secs() > ACTIVE_WINDOW_SECS, "idle() starts parked");
         a.touch();
         assert!(a.idle_secs() < 5, "touch() marks freshly active");
+    }
+
+    #[test]
+    fn following_counts_as_dry_on_an_empty_poll_or_a_run_of_failures() {
+        let mut failures = 0;
+        assert!(following_settled(Some(0), &mut failures, false));
+        assert!(!following_settled(Some(4), &mut failures, true));
+        assert!(!following_settled(None, &mut failures, false));
+        assert!(!following_settled(None, &mut failures, false));
+        assert!(following_settled(None, &mut failures, false));
+        assert!(!following_settled(Some(2), &mut failures, true));
+        assert_eq!(failures, 0);
+        assert!(following_settled(None, &mut failures, true));
     }
 }

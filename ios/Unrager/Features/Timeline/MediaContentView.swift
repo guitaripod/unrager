@@ -36,7 +36,12 @@ final class MediaContentView: UIView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    /// Where the card or Space on show leads, so VoiceOver can offer to open
+    /// it from a row that reads as one element; nil for other surfaces.
+    private(set) var linkTarget: URL?
+
     func prepareForReuse() {
+        linkTarget = nil
         player?.tearDown()
         grid?.prepareForReuse()
         card?.prepareForReuse()
@@ -66,6 +71,7 @@ final class MediaContentView: UIView {
     /// any media was shown so the cell can collapse the slot.
     @discardableResult
     func configure(with tweet: Tweet, imagesEnabled: Bool, contentWidth: CGFloat) -> Bool {
+        linkTarget = nil
         guard let rich = Self.pickRich(tweet.media) else {
             hideAll()
             isHidden = true
@@ -230,6 +236,7 @@ final class MediaContentView: UIView {
     private func showCard(_ model: MediaCardView.Model, target: URL?, contentWidth: CGFloat, imagesEnabled: Bool) {
         let view = card ?? { let made = MediaCardView(frame: .zero); card = made; return made }()
         view.onTap = { [weak self] in if let target { self?.onTapCard?(target) } }
+        linkTarget = target
         let inset = sideInset(isPicture: false)
         view.configure(model, contentWidth: contentWidth - 2 * inset, imagesEnabled: imagesEnabled)
         view.setOpensLink(target != nil)
@@ -241,6 +248,7 @@ final class MediaContentView: UIView {
         view.configure(spaceID: spaceID)
         let target = URL(string: "https://x.com/i/spaces/\(spaceID)")
         view.onTap = { [weak self] in if let target { self?.onTapCard?(target) } }
+        linkTarget = target
         swap(to: view, inset: sideInset(isPicture: false))
     }
 

@@ -81,6 +81,19 @@ final class LinkLabel: UILabel {
         return text.attribute(TweetText.linkKey, at: index, effectiveRange: nil) as? URL
     }
 
+    /// Every link in the text once, in reading order, so a row that VoiceOver
+    /// reads as one element can still offer each of them.
+    var routes: [TweetText.Route] {
+        guard let text = attributedText, text.length > 0 else { return [] }
+        var seen = Set<URL>()
+        var found: [TweetText.Route] = []
+        text.enumerateAttribute(TweetText.linkKey, in: NSRange(location: 0, length: text.length)) { value, _, _ in
+            guard let url = value as? URL, seen.insert(url).inserted, let route = TweetText.Route.from(url) else { return }
+            found.append(route)
+        }
+        return found
+    }
+
     @objc private func tapped(_ gesture: UITapGestureRecognizer) {
         guard let url = link(at: gesture.location(in: self)) else {
             if capturesPlainTaps { onTapPlain?() }

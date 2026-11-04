@@ -754,6 +754,10 @@ final class TweetCell: UICollectionViewCell {
         if let reposter = tweet.retweetedBy {
             actions.append(action("Open \(reposter.name)'s profile") { [weak self] in self?.onTapReposter?() })
         }
+        if !replyCaption.isHidden, onTapReplyCaption != nil {
+            actions.append(action("Open the post it replies to") { [weak self] in self?.onTapReplyCaption?() })
+        }
+        actions += linkActions(action)
         let photoCount = tweet.media.filter { if case .photo = $0.kind { return true } else { return false } }.count
         for index in 0..<min(photoCount, 4) {
             actions.append(action(photoCount == 1 ? "View photo" : "View photo \(index + 1)") { [weak self] in
@@ -780,6 +784,40 @@ final class TweetCell: UICollectionViewCell {
             actions.append(action("Delete") { [weak self] in self?.onDelete?() })
         }
         return actions
+    }
+
+    /// The body's mentions, hashtags and links, then the card's address when
+    /// the body doesn't already carry it, as actions: a row read as one
+    /// element has no other way to reach them.
+    private func linkActions(
+        _ action: (String, @escaping () -> Void) -> UIAccessibilityCustomAction
+    ) -> [UIAccessibilityCustomAction] {
+        var actions: [UIAccessibilityCustomAction] = []
+        var linked = Set<URL>()
+        for route in bodyView.routes.prefix(Self.maxLinkActions) {
+            switch route {
+            case let .profile(handle):
+                actions.append(action("Open @\(handle)'s profile") { [weak self] in self?.onTapMention?(handle) })
+            case let .hashtag(query):
+                actions.append(action("Search \(query)") { [weak self] in self?.onTapHashtag?(query) })
+            case let .url(target):
+                linked.insert(target)
+                actions.append(action("Open link to \(Self.spokenHost(of: target))") { [weak self] in
+                    self?.onTapCard?(target)
+                })
+            }
+        }
+        if let card = mediaContent.linkTarget, !linked.contains(card) {
+            actions.append(action("Open link to \(Self.spokenHost(of: card))") { [weak self] in self?.onTapCard?(card) })
+        }
+        return actions
+    }
+
+    private static let maxLinkActions = 8
+
+    private static func spokenHost(of url: URL) -> String {
+        guard let host = url.host() else { return url.absoluteString }
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
     }
 
     // MARK: - Hierarchy
@@ -905,6 +943,7 @@ final class TweetCell: UICollectionViewCell {
         threadRail.isHidden = true
         contentView.addManaged(threadRail)
         contentView.addManaged(separator)
+        contentView.addSubview(avatarRing)
 
         let columnLeading = column.leadingAnchor.constraint(equalTo: contentView.leadingAnchor)
         self.columnLeading = columnLeading
@@ -914,7 +953,7 @@ final class TweetCell: UICollectionViewCell {
         NSLayoutConstraint.activate([
             avatar.widthAnchor.constraint(equalToConstant: Self.avatarSize),
             avatar.heightAnchor.constraint(equalToConstant: Self.avatarSize),
-
+        ] + avatarRing.surrounding(avatar, gap: Self.ringGap) + [
             threadRail.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: DesignSystem.Spacing.s),
             railWidth,
             threadRail.topAnchor.constraint(equalTo: contentView.topAnchor),
@@ -943,11 +982,10 @@ final class TweetCell: UICollectionViewCell {
         }
         let button = UIButton(configuration: config)
         button.contentHorizontalAlignment = .leading
-        contentView.addSubview(avatarRing)
         button.accessibilityHint = "Shows the full post text"
         return button
     }
-        ] + avatarRing.surrounding(avatar, gap: Self.ringGap) + [
+
     /// The repost affordance: a tap opens Repost / Undo repost / Quote (X's
     /// repost sheet), never fires a blind toggle. Deferred + uncached so the
     /// first item's title always reflects the current repost state, including

@@ -80,6 +80,8 @@ final class PhotoGridView: UIView {
             tile.accessibilityHint = "Opens the photo"
             altBadges[index].isHidden = alt == nil
         }
+        overflowLabel.isHidden = urls.count <= PhotoMosaic.maxPhotos
+        overflowLabel.text = "+\(urls.count - PhotoMosaic.maxPhotos)"
         guard imagesEnabled else {
             tiles.forEach { $0.cancel() }
             backdrops.forEach { $0.clear() }
@@ -88,8 +90,6 @@ final class PhotoGridView: UIView {
         for (index, tile) in tiles.enumerated() where mosaic.tiles.indices.contains(index) {
             tile.load(url: self.urls[index], targetSize: mosaic.tiles[index].size)
         }
-        overflowLabel.isHidden = urls.count <= PhotoMosaic.maxPhotos
-        overflowLabel.text = "+\(urls.count - PhotoMosaic.maxPhotos)"
     }
 
     func prepareForReuse() {
@@ -135,7 +135,14 @@ final class PhotoGridView: UIView {
         heightConstraint?.constant = max(1, drawn.height.rounded())
     }
 
+    /// Replaces the tiles for a new count. The old tiles' loads are stopped
+    /// first: one landing later would report its old position and dress the
+    /// new tile there with a picture it doesn't show.
     private func rebuild(count: Int) {
+        tiles.forEach {
+            $0.onLoad = nil
+            $0.cancel()
+        }
         (tiles as [UIView] + backdrops + altBadges).forEach { $0.removeFromSuperview() }
         overflowLabel.removeFromSuperview()
         tiles = (0..<count).map { makeTile(index: $0) }

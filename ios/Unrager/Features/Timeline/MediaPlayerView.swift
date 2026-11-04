@@ -226,12 +226,13 @@ final class MediaPlayerView: UIView {
         playBadge.isHidden = true
     }
 
+    /// Puts the poster back and drops the failed player, so the next time the
+    /// row comes to rest a fresh one tries again; a failed item never recovers.
     private func playbackFailed() {
-        guard player != nil else { return }
-        AppLogger.shared.warn("inline video failed to load", category: .timeline)
-        poster.layer.removeAllAnimations()
-        poster.alpha = 1
-        playBadge.isHidden = false
+        guard let player else { return }
+        AppLogger.shared.warn("inline video failed to load: \(String(describing: player.currentItem?.error))",
+                              category: .timeline)
+        releasePlayer()
     }
 
     /// Drops the player, its buffered item and observers while keeping the

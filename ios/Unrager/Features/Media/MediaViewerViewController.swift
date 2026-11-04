@@ -495,7 +495,7 @@ private final class ZoomablePhotoCell: UICollectionViewCell, UIScrollViewDelegat
         retry = { [weak self] in
             self?.load(url: url, maxPixel: maxPixel, placeholder: placeholder, accessibilityText: accessibilityText)
         }
-        failureButton.isHidden = true
+        showFailure(false)
         spinner.startAnimating()
         layoutImage()
         task = Task { [weak self] in
@@ -507,9 +507,23 @@ private final class ZoomablePhotoCell: UICollectionViewCell, UIScrollViewDelegat
                 self.hasFullRes = true
                 if self.isAtMinimumZoom { self.layoutImage() }
             } else {
-                self.failureButton.isHidden = false
+                AppLogger.shared.warn("full-size photo failed to load: \(url.lastPathComponent)", category: .media)
+                self.showFailure(true)
             }
         }
+    }
+
+    /// Shows or hides the retry, and offers it to VoiceOver, which reads the
+    /// page as one picture and so never reaches the button itself.
+    private func showFailure(_ failed: Bool) {
+        failureButton.isHidden = !failed
+        accessibilityValue = failed ? "Couldn't load" : nil
+        accessibilityCustomActions = failed
+            ? [UIAccessibilityCustomAction(name: "Retry") { [weak self] _ in
+                self?.retry?()
+                return true
+            }]
+            : nil
     }
 
     override func layoutSubviews() {

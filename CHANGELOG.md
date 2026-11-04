@@ -6,6 +6,7 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **An inline clip that failed to load in the iPhone app plays the next time it comes to rest.** A clip whose load failed once (a dropped connection) never played again while its row stayed around. A photo that failed in the full-screen viewer now offers its Retry to VoiceOver, a post with more than four photos shows the right "+N" with images off, and a reused photo grid no longer dresses a tile with the previous post's picture landing late.
 - **The stats card on your own posts in the iPhone app keeps its numbers while it fetches newer ones.** Five minutes on, a post scrolled back to fell back to the pulsing loading outline until X answered, and to the public counts if asking again failed; the last numbers now stay until new ones replace them.
 - **VoiceOver can open everything a post links to in the iPhone app.** A post reads as one element, so the links, @mentions and #hashtags in its text, its link card or Space, and the post it replies to were out of reach; each is now an action on the post ("Open link to example.com", "Open @handle's profile", "Search #tag", "Open the post it replies to").
 - **The iPhone app's unread button can't crash while a feed is updating, and a long session holds less memory.** Tapping it in the moment a deleted post was leaving the list could step past the list's end. Feeds also kept every post they had ever shown, and each Bookmarks search prompt was never freed.

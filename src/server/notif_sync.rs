@@ -58,6 +58,35 @@ impl NotificationSync {
         }
         Some(cursor)
     }
+
+    /// Takes the push for `marker_ms` when there is one, marking X as told so
+    /// a concurrent report doesn't push it again while this one is in flight.
+    fn claim_push(&mut self, marker_ms: i64) -> Option<Push> {
+        let cursor = self.cursor_to_push(marker_ms)?.to_owned();
+        let push = Push {
+            cursor,
+            told_ms: self.newest_ms,
+            previous_ms: self.x_marker_ms,
+        };
+        self.x_marker_ms = push.told_ms;
+        Some(push)
+    }
+
+    /// Undoes [`Self::claim_push`] after X refused, unless something has
+    /// moved the marker since.
+    fn release(&mut self, push: Push) {
+        if self.x_marker_ms == push.told_ms {
+            self.x_marker_ms = push.previous_ms;
+        }
+    }
+}
+
+/// A push to X in flight: the cursor sent, the time X is being told it has
+/// read up to, and what the marker was before.
+struct Push {
+    cursor: String,
+    told_ms: Option<i64>,
+    previous_ms: Option<i64>,
 }
 
 /// An instant as the ISO 8601 marker the iPhone app parses.
@@ -88,19 +117,20 @@ pub async fn refresh_if_stale(state: &AppState, within: Duration) {
 }
 
 /// Passes a client's read marker on to X when it covers the whole first page.
+/// The sync state is only locked around the bookkeeping, never across the
+/// call to X, so notification reads don't queue behind a slow X.
 pub async fn push_seen(state: &AppState, marker: &str) {
     refresh_if_stale(state, PUSH_FRESH_FOR).await;
     let marker_ms = marker_millis(marker);
-    let mut sync = state.notification_sync.lock().await;
-    let Some(cursor) = sync.cursor_to_push(marker_ms).map(str::to_owned) else {
+    let Some(push) = state.notification_sync.lock().await.claim_push(marker_ms) else {
         return;
     };
-    match whisper::mark_notifications_seen(&state.gql, &cursor).await {
-        Ok(()) => {
-            tracing::info!("notifications marked read on X");
-            sync.x_marker_ms = sync.newest_ms;
+    match whisper::mark_notifications_seen(&state.gql, &push.cursor).await {
+        Ok(()) => tracing::info!("notifications marked read on X"),
+        Err(e) => {
+            tracing::warn!("could not mark notifications read on X: {e}");
+            state.notification_sync.lock().await.release(push);
         }
-        Err(e) => tracing::warn!("could not mark notifications read on X: {e}"),
     }
 }
 
@@ -135,6 +165,29 @@ mod tests {
     fn x_is_not_told_what_it_knows() {
         assert_eq!(synced(5_000, Some(5_000)).cursor_to_push(5_000), None);
         assert_eq!(synced(5_000, Some(5_400)).cursor_to_push(5_000), None);
+    }
+
+    #[test]
+    fn a_claimed_push_is_not_claimed_twice_and_a_refusal_hands_it_back() {
+        let mut sync = synced(5_000, Some(1_000));
+        let push = sync.claim_push(5_000).unwrap();
+        assert_eq!(push.cursor, "TOP");
+        assert!(sync.claim_push(5_000).is_none());
+        sync.release(push);
+        assert_eq!(sync.x_marker_ms, Some(1_000));
+        assert!(sync.claim_push(5_000).is_some());
+    }
+
+    #[test]
+    fn a_refusal_does_not_undo_a_marker_x_moved_meanwhile() {
+        let mut sync = synced(5_000, Some(1_000));
+        let push = sync.claim_push(5_000).unwrap();
+        sync.observe(&NotificationPage {
+            unread_after_ms: Some(6_000),
+            ..Default::default()
+        });
+        sync.release(push);
+        assert_eq!(sync.x_marker_ms, Some(6_000));
     }
 
     #[test]

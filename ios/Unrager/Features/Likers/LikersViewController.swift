@@ -116,7 +116,13 @@ final class LikersViewController: PagedUserListViewController {
     private func fetchPostIfNeeded() {
         guard post.tweet == nil else { return }
         Task { [weak self, tweetID] in
-            guard let tweet = try? await AppEnvironment.shared.api.tweet(id: tweetID) else { return }
+            let tweet: Tweet
+            do {
+                tweet = try await AppEnvironment.shared.api.tweet(id: tweetID)
+            } catch {
+                AppLogger.shared.warn("liked post \(tweetID) unavailable for the header: \(error)", category: .profile)
+                return
+            }
             guard let self else { return }
             self.post = LikedPost(tweet: tweet)
             self.likeCount = tweet.likeCount

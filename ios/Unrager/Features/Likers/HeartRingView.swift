@@ -142,12 +142,14 @@ final class HeartRingView: UIView {
 
     /// Circles a short arc that breathes while the first page loads, and lets it
     /// fade when it is done. Left out under Reduce Motion, where the empty
-    /// track just waits.
+    /// track just waits. An arc already circling is left alone, so the header
+    /// redrawing while the list loads doesn't snap it back to the top.
     private func applyPulse() {
-        pulse.removeAnimation(forKey: "spin")
-        pulse.removeAnimation(forKey: "breathe")
         let animates = isPulsing && window != nil && !UIAccessibility.isReduceMotionEnabled
-        if animates {
+        if !animates {
+            pulse.removeAnimation(forKey: "spin")
+            pulse.removeAnimation(forKey: "breathe")
+        } else if pulse.animation(forKey: "spin") == nil {
             let spin = CABasicAnimation(keyPath: "transform.rotation.z")
             spin.fromValue = 0
             spin.toValue = 2 * Double.pi

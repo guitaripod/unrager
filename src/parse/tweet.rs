@@ -993,6 +993,9 @@ fn scrub_urls_in_text(text: &str, legacy: &Value) -> String {
 /// around it so consecutive spaces and orphaned separators don't leak into the
 /// visible text.
 fn strip_url(text: &str, url: &str) -> String {
+    if url.is_empty() {
+        return text.to_string();
+    }
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(idx) = rest.find(url) {
@@ -2008,5 +2011,19 @@ mod tests {
         assert!(!tweet.favorited);
         assert!(!tweet.retweeted);
         assert!(!tweet.bookmarked);
+    }
+
+    #[test]
+    fn an_empty_url_entity_strips_nothing_and_returns() {
+        assert_eq!(strip_url("hello world", ""), "hello world");
+        assert_eq!(strip_tco_urls("  look here ", &[String::new()]), "look here");
+    }
+
+    #[test]
+    fn media_with_an_empty_url_parses() {
+        let mut v = minimal_tweet_json("4201", "a photo");
+        v["legacy"]["extended_entities"] = json!({ "media": [{ "url": "" }] });
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(tweet.text, "a photo");
     }
 }

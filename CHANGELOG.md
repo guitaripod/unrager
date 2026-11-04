@@ -6,6 +6,7 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **A post with an empty link or media URL no longer hangs the server or the terminal client.** X occasionally sends a link entity or attachment whose URL is blank; stripping it from the text looped forever, freezing whichever feed, thread or search held that post (and a server worker with it). Blank URLs are now skipped.
 - **A post's stats card in the iPhone app always takes the height of what it shows.** A card that got shorter once X's numbers arrived (the loading outline of a chart giving way to the engagement bar, for a post X had no hours for, no analytics for, or whose request failed) stayed as tall as the outline with the slack opening above the figure, and the same happened when a strip closed. Rows now measure themselves from their content, so they close up and open out to fit whatever the post has; a post with nothing to chart or split shows just its figures, with no empty bar or stray divider.
 
 ## [0.31.2] — 2026-10-17

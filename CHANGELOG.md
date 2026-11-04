@@ -6,6 +6,7 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **A model answer that says neither HIDE nor KEEP is no longer saved as KEEP for a week.** A model that starts thinking out loud or replies with nothing was read as KEEP and cached, so those posts were never judged again until the cache expired; such an answer now shows the post unjudged and asks again next time. A model server that is down logs one warning when it stops answering and one line when it is back, instead of a warning for every post (one 90-minute outage wrote 7,000).
 - **Notifications keep answering while X is slow to mark them read.** Telling X that everything was read held the notifications state for the whole request, up to 30 seconds, and every notifications read in the app waited behind it.
 - **A post's stats say so when X is blocking requests, instead of "no analytics".** An automation block or account lock on the analytics query read as a post X keeps no numbers for; it now comes through as the error it is.
 - **A country flag is never taken from whoever holds an account's old handle.** Flags are looked up by handle, and a handle freed by a rename can belong to someone else by the time it's asked about; that person's country was stored as the original account's. A lookup that comes back as a different account is now dropped and asked again later.

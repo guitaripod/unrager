@@ -7,11 +7,11 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 const DEFAULT_CONFIG: &str = include_str!("filter_default.toml");
 const KEEP_RULE: &str = "KEEP technical, scientific, art, music, sports, personal-life, and humor posts — including spicy opinions, frustration, trash talk, and sharp critique — as long as the post has actual content, not just an invitation to be angry.";
@@ -1570,21 +1570,32 @@ pub struct Classifier {
 }
 
 /// When the filter's model last answered, shared by the classifier and every
-/// handle, and whether a warm-up is already on its way to it.
+/// handle, whether a warm-up is already on its way to it, and how many
+/// requests in a row it has failed.
 #[derive(Default)]
 struct Warmth {
     answered_at: Mutex<Option<Instant>>,
     warming: AtomicBool,
+    failing: AtomicUsize,
 }
 
 impl Warmth {
-    fn note(&self, answered: bool) {
-        if answered {
-            *self
-                .answered_at
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = Some(Instant::now());
+    fn answered(&self) {
+        *self
+            .answered_at
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(Instant::now());
+        let missed = self.failing.swap(0, Ordering::AcqRel);
+        if missed > 0 {
+            info!(missed, "filter model answering again");
         }
+    }
+
+    /// Counts a failed request and says whether it starts a run of them:
+    /// only the first is worth a warning, since a model server that is down
+    /// fails every post the same way.
+    fn failed(&self) -> bool {
+        self.failing.fetch_add(1, Ordering::AcqRel) == 0
     }
 
     fn fresh(&self) -> bool {
@@ -1693,9 +1704,15 @@ impl Classifier {
         tokio::spawn(async move {
             let _permit = sem.acquire_owned().await.ok();
             let rubric = current_rubric(&rubric);
-            let verdict =
-                classify_once(&http, &llm, &rubric, &payload.rest_id, &payload.text).await;
-            warmth.note(verdict.is_some());
+            let verdict = classify_once(
+                &http,
+                &llm,
+                &rubric,
+                &warmth,
+                &payload.rest_id,
+                &payload.text,
+            )
+            .await;
             let _ = tx.send(Event::TweetClassified {
                 rest_id: payload.rest_id,
                 verdict,
@@ -1733,9 +1750,7 @@ impl ClassifierHandle {
     pub async fn classify(&self, rest_id: &str, text: &str) -> Option<Judgement> {
         let _permit = self.sem.acquire().await.ok();
         let rubric = current_rubric(&self.rubric);
-        let judged = classify_once(&self.http, &self.llm, &rubric, rest_id, text).await;
-        self.warmth.note(judged.is_some());
-        judged
+        classify_once(&self.http, &self.llm, &rubric, &self.warmth, rest_id, text).await
     }
 
     /// [`Self::classify`] for `unrager eval`: the same request, plus the raw
@@ -1801,14 +1816,15 @@ impl ClassifierHandle {
         };
         match self.llm.chat_with_client(req, &self.http).await {
             Ok(_) => {
-                self.warmth.note(true);
+                self.warmth.answered();
                 tracing::info!(
                     model = %self.llm.model,
                     elapsed_ms = started.elapsed().as_millis() as u64,
                     "filter model warmed up"
                 );
             }
-            Err(e) => warn!("filter warm-up failed: {e}"),
+            Err(e) if self.warmth.failed() => warn!("filter warm-up failed: {e}"),
+            Err(e) => debug!("filter warm-up failed: {e}"),
         }
         true
     }
@@ -1853,14 +1869,17 @@ fn verdict_request(rubric: &Rubric, text: &str) -> ChatRequest {
 }
 
 /// `None` when the backend never produced an answer (unreachable, timed out,
-/// malformed reply). Callers show the tweet but must not cache anything: a
-/// cold-loading model or a restart would otherwise pin a fake KEEP onto every
-/// tweet in flight for the whole retention window. A rubric with no rules
-/// keeps everything without asking.
+/// malformed reply, or one that says neither HIDE nor KEEP). Callers show the
+/// tweet but must not cache anything: a cold-loading model or a restart would
+/// otherwise pin a fake KEEP onto every tweet in flight for the whole
+/// retention window. A rubric with no rules keeps everything without asking.
+/// The first failure of a run is a warning and the rest are debug lines, so
+/// a model server that is down doesn't log once per post.
 async fn classify_once(
     http: &reqwest::Client,
     llm: &LlmConfig,
     rubric: &Rubric,
+    warmth: &Warmth,
     rest_id: &str,
     text: &str,
 ) -> Option<Judgement> {
@@ -1871,7 +1890,20 @@ async fn classify_once(
     let req = verdict_request(rubric, text);
     debug!(rest_id, text_len = text.len(), "filter dispatch");
     match llm.chat_with_client(req, http).await {
+        Ok(reply) if !answer_is_readable(&reply.content) => {
+            if warmth.failed() {
+                warn!(
+                    rest_id,
+                    raw = %reply.content,
+                    "filter model answered neither HIDE nor KEEP; showing posts unjudged"
+                );
+            } else {
+                debug!(rest_id, raw = %reply.content, "filter answer unreadable");
+            }
+            None
+        }
         Ok(reply) => {
+            warmth.answered();
             let judged = rubric.judge(&reply.content);
             debug!(
                 rest_id,
@@ -1884,7 +1916,11 @@ async fn classify_once(
             Some(judged)
         }
         Err(e) => {
-            warn!("filter classify failed for {rest_id}: {e}");
+            if warmth.failed() {
+                warn!("filter model not answering ({e}); showing posts unjudged until it does");
+            } else {
+                debug!("filter classify failed for {rest_id}: {e}");
+            }
             None
         }
     }
@@ -2996,6 +3032,13 @@ mod tests {
     /// An OpenAI-compatible model server that answers KEEP to everything
     /// after `delay`, counting the requests it gets.
     async fn counting_model(delay: Duration) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        answering_model(delay, "KEEP").await
+    }
+
+    async fn answering_model(
+        delay: Duration,
+        answer: &'static str,
+    ) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -3030,7 +3073,9 @@ mod tests {
                     }
                     counter.fetch_add(1, Ordering::SeqCst);
                     tokio::time::sleep(delay).await;
-                    let body = r#"{"choices":[{"message":{"content":"KEEP"}}]}"#;
+                    let body =
+                        serde_json::json!({ "choices": [{ "message": { "content": answer } }] })
+                            .to_string();
                     let response = format!(
                         "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                         body.len()
@@ -3085,5 +3130,22 @@ mod tests {
             handle.warm().await,
             "a model that never answered is asked again"
         );
+    }
+
+    #[tokio::test]
+    async fn an_answer_that_is_neither_hide_nor_keep_is_not_a_verdict() {
+        let (host, asked) = answering_model(Duration::ZERO, "<think>\nOkay").await;
+        let handle = handle_for(&host);
+        assert!(handle.classify("1", "a post about bread").await.is_none());
+        assert_eq!(asked.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn only_the_first_failure_of_a_run_is_flagged() {
+        let warmth = Warmth::default();
+        assert!(warmth.failed());
+        assert!(!warmth.failed());
+        warmth.answered();
+        assert!(warmth.failed());
     }
 }

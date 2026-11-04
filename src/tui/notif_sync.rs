@@ -14,6 +14,7 @@ pub struct NotificationSync {
     ids: Vec<String>,
     newest_ms: Option<i64>,
     x_marker_ms: Option<i64>,
+    reported_ms: Option<i64>,
 }
 
 impl NotificationSync {
@@ -24,6 +25,7 @@ impl NotificationSync {
         self.ids = page.notifications.iter().map(|n| n.id.clone()).collect();
         self.newest_ms = page.newest_ms();
         self.x_marker_ms = page.unread_after_ms.or(self.x_marker_ms);
+        self.reported_ms = page.unread_after_ms.or(self.reported_ms);
         match page.unread_after_ms {
             Some(marker) => read_up_to(page, marker),
             None => Vec::new(),
@@ -33,8 +35,10 @@ impl NotificationSync {
     /// The ids on an older page that X's marker already covers. Only first
     /// pages carry the marker, and the 2-day read store has long forgotten
     /// what was read further down, so these would otherwise show as unread.
+    /// Only a marker X reported counts, not one this client pushed and X may
+    /// have refused.
     pub fn read_on_x(&self, page: &NotificationPage) -> Vec<String> {
-        match self.x_marker_ms {
+        match self.reported_ms {
             Some(marker) => read_up_to(page, marker),
             None => Vec::new(),
         }
@@ -121,6 +125,14 @@ mod tests {
         let mut sync = NotificationSync::default();
         sync.observe(&page(Some(3_000)));
         assert_eq!(sync.take_cursor_to_push(|_| true), None);
+    }
+
+    #[test]
+    fn an_older_page_is_not_read_on_the_strength_of_an_unconfirmed_push() {
+        let mut sync = NotificationSync::default();
+        sync.observe(&page(Some(500)));
+        assert!(sync.take_cursor_to_push(|_| true).is_some());
+        assert!(sync.read_on_x(&page(None)).is_empty());
     }
 
     #[test]

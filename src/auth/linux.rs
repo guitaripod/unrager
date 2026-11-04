@@ -61,10 +61,13 @@ async fn collect_keyring_secrets() -> Result<Vec<Vec<u8>>> {
         if !is_safe_storage && !is_portal_blob {
             continue;
         }
-        let secret = item
-            .get_secret()
-            .await
-            .map_err(|e| Error::Keyring(e.to_string()))?;
+        let secret = match item.get_secret().await {
+            Ok(secret) => secret,
+            Err(e) => {
+                tracing::debug!("keyring item {label:?} unreadable, skipping: {e}");
+                continue;
+            }
+        };
         if !secret.is_empty() {
             tracing::debug!("keyring candidate: {label:?} ({} bytes)", secret.len());
             out.push(secret);

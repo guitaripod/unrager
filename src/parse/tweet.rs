@@ -2018,7 +2018,10 @@ mod tests {
     #[test]
     fn an_empty_url_entity_strips_nothing_and_returns() {
         assert_eq!(strip_url("hello world", ""), "hello world");
-        assert_eq!(strip_tco_urls("  look here ", &[String::new()]), "look here");
+        assert_eq!(
+            strip_tco_urls("  look here ", &[String::new()]),
+            "look here"
+        );
     }
 
     #[test]
@@ -2033,6 +2036,9 @@ mod tests {
     fn an_entity_spelled_out_in_a_post_is_decoded_once() {
         assert_eq!(decode_html_entities("&amp;lt;b&amp;gt;"), "&lt;b&gt;");
         assert_eq!(decode_html_entities("&amp;amp;"), "&amp;");
-        assert_eq!(decode_html_entities("a &lt; b &amp;&amp; c &gt; d"), "a < b && c > d");
+        assert_eq!(
+            decode_html_entities("a &lt; b &amp;&amp; c &gt; d"),
+            "a < b && c > d"
+        );
     }
 }

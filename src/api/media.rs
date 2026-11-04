@@ -95,6 +95,15 @@ impl MediaFile {
     }
 }
 
+/// The next [`CHUNK_SIZE`] bytes of `source`, fewer only at its end, so a
+/// video is held in memory one segment at a time rather than whole.
+async fn read_chunk(source: &mut (impl tokio::io::AsyncRead + Unpin)) -> std::io::Result<Vec<u8>> {
+    use tokio::io::AsyncReadExt;
+    let mut chunk = Vec::with_capacity(CHUNK_SIZE as usize);
+    source.take(CHUNK_SIZE).read_to_end(&mut chunk).await?;
+    Ok(chunk)
+}
+
 fn classify(mime: &str) -> Option<MediaCategory> {
     match mime {
         "image/jpeg" | "image/png" | "image/webp" => Some(MediaCategory::TweetImage),
@@ -218,16 +227,23 @@ impl<'a> MediaUploader<'a> {
         let media_id = self.init(file).await?;
         tracing::debug!("INIT → media_id {media_id}");
 
-        let bytes = tokio::fs::read(&file.path).await.map_err(|e| {
+        let unreadable = |e: std::io::Error| {
             Error::Config(format!(
                 "cannot read media file {}: {e}",
                 file.path.display()
             ))
-        })?;
-
-        for (segment_index, chunk) in bytes.chunks(CHUNK_SIZE as usize).enumerate() {
-            self.append(&media_id, segment_index as u64, chunk).await?;
-            tracing::debug!("APPEND segment {} ({} bytes)", segment_index, chunk.len());
+        };
+        let mut source = tokio::fs::File::open(&file.path)
+            .await
+            .map_err(unreadable)?;
+        for segment_index in 0..segments {
+            let chunk = read_chunk(&mut source).await.map_err(unreadable)?;
+            if chunk.is_empty() {
+                break;
+            }
+            let len = chunk.len();
+            self.append(&media_id, segment_index, chunk).await?;
+            tracing::debug!("APPEND segment {segment_index} ({len} bytes)");
         }
 
         let finalize_response = self.finalize(&media_id).await?;
@@ -259,8 +275,8 @@ impl<'a> MediaUploader<'a> {
         extract_media_id(&value)
     }
 
-    async fn append(&self, media_id: &str, segment_index: u64, chunk: &[u8]) -> Result<()> {
-        let part = Part::bytes(chunk.to_vec())
+    async fn append(&self, media_id: &str, segment_index: u64, chunk: Vec<u8>) -> Result<()> {
+        let part = Part::bytes(chunk)
             .file_name("chunk")
             .mime_str("application/octet-stream")
             .map_err(|e| Error::Config(format!("bad chunk mime: {e}")))?;
@@ -613,5 +629,23 @@ mod tests {
         assert_eq!(format_size(500), "500 B");
         assert_eq!(format_size(2048), "2.0 KB");
         assert_eq!(format_size(5 * 1024 * 1024), "5.0 MB");
+    }
+
+    #[tokio::test]
+    async fn chunks_are_read_one_segment_at_a_time() {
+        let size = 2 * CHUNK_SIZE as usize + 1000;
+        let mut source = std::io::Cursor::new(vec![7u8; size]);
+        let mut lengths = Vec::new();
+        loop {
+            let chunk = read_chunk(&mut source).await.unwrap();
+            if chunk.is_empty() {
+                break;
+            }
+            lengths.push(chunk.len());
+        }
+        assert_eq!(
+            lengths,
+            vec![CHUNK_SIZE as usize, CHUNK_SIZE as usize, 1000]
+        );
     }
 }

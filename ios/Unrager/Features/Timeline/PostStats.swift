@@ -100,7 +100,8 @@ final class PostStatsStore {
         case failed(Date)
     }
 
-    private static let freshFor: TimeInterval = 300
+    /// How long X's numbers count as current before a redraw asks again.
+    static let freshFor: TimeInterval = 300
     /// How long a failed request rests before a redraw may ask again, so a
     /// failure can't turn every re-render of the row into another request.
     static let retryAfter: TimeInterval = 60
@@ -108,6 +109,7 @@ final class PostStatsStore {
     private let fetch: @MainActor (String) async throws -> PostAnalytics?
     private let now: () -> Date
     private var entries: [String: (entry: Entry, at: Date)] = [:]
+    private var lastLoaded: [String: PostAnalytics] = [:]
 
     init(fetch: @escaping @MainActor (String) async throws -> PostAnalytics?, now: @escaping () -> Date) {
         self.fetch = fetch
@@ -122,6 +124,12 @@ final class PostStatsStore {
         case .failed: return age < Self.retryAfter ? stored.entry : nil
         case .loaded, .unavailable: return age < Self.freshFor ? stored.entry : nil
         }
+    }
+
+    /// The numbers X last sent for `id`, however old: what the card keeps
+    /// showing while newer ones load, or when asking again failed.
+    func lastAnalytics(for id: String) -> PostAnalytics? {
+        lastLoaded[id]
     }
 
     /// Lets the next draw ask again for a post whose last request failed — the
@@ -150,6 +158,7 @@ final class PostStatsStore {
             }
             guard let self else { return }
             self.entries[id] = (result, self.now())
+            if case let .loaded(analytics) = result { self.lastLoaded[id] = analytics }
             changed()
         }
     }
@@ -481,17 +490,21 @@ enum PostStatsPolicy {
 
     /// An own post's strip from `store`: X's numbers once they are in, the
     /// public counts when X has none or the request failed, and a request the
-    /// first time (or once a failure's rest is over).
+    /// first time (or once the numbers are old, or a failure's rest is over).
+    /// Numbers that went stale stay on the card while newer ones load, so a
+    /// post scrolled back to never falls back to the loading outline.
     static func ownContent(
         for tweet: Tweet, store: PostStatsStore, changed: @escaping @MainActor () -> Void
     ) -> PostStatsContent {
+        let last = store.lastAnalytics(for: tweet.restID).map(PostStatsContent.analytics)
         switch store.entry(for: tweet.restID) {
         case let .loaded(analytics)?: return .analytics(analytics)
-        case .unavailable?, .failed?: return .publicCounts
-        case .loading?: return .loading
+        case .unavailable?: return .publicCounts
+        case .failed?: return last ?? .publicCounts
+        case .loading?: return last ?? .loading
         case nil:
             store.load(tweet.restID, changed: changed)
-            return .loading
+            return last ?? .loading
         }
     }
 }

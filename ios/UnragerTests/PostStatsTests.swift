@@ -109,6 +109,43 @@ struct PostStatsTests {
         #expect(calls.count == 2)
     }
 
+    @Test("Numbers past their five minutes stay on the card while newer ones load")
+    @MainActor
+    func staleNumbersStayWhileRefreshing() async throws {
+        let clock = Clock()
+        let calls = Calls()
+        let first = PostAnalytics(impressions: 155, engagements: 8, detailExpands: 5, profileVisits: 1)
+        let second = PostAnalytics(impressions: 210, engagements: 9, detailExpands: 6, profileVisits: 1)
+        let store = PostStatsStore(fetch: { _ in
+            calls.count += 1
+            return calls.count == 1 ? first : second
+        }, now: { clock.now })
+        let post = try tweet(views: 10)
+        #expect(await settledContent(for: post, store: store) == .analytics(first))
+        clock.now += PostStatsStore.freshFor + 1
+        #expect(PostStatsPolicy.ownContent(for: post, store: store) {} == .analytics(first))
+        #expect(await settledContent(for: post, store: store) == .analytics(second))
+        #expect(calls.count == 2)
+    }
+
+    @Test("A refresh that fails keeps the last numbers rather than the public counts")
+    @MainActor
+    func failedRefreshKeepsNumbers() async throws {
+        let clock = Clock()
+        let calls = Calls()
+        let analytics = PostAnalytics(impressions: 155, engagements: 8, detailExpands: 5, profileVisits: 1)
+        let store = PostStatsStore(fetch: { _ in
+            calls.count += 1
+            if calls.count > 1 { throw URLError(.timedOut) }
+            return analytics
+        }, now: { clock.now })
+        let post = try tweet(views: 10)
+        #expect(await settledContent(for: post, store: store) == .analytics(analytics))
+        clock.now += PostStatsStore.freshFor + 1
+        #expect(await settledContent(for: post, store: store) == .analytics(analytics))
+        #expect(calls.count == 2)
+    }
+
     private func layoutPlot(_ layout: PostStatsLayout) -> String {
         switch layout.plot {
         case .none: return "none"

@@ -159,6 +159,18 @@ enum DesignSystem {
                 for: .systemFont(ofSize: 13 * scale, weight: .regular), maximumPointSize: 20)
         }
         static func caption() -> UIFont { scaled(.caption1, size: 12, weight: .regular) }
+        /// `caption()` capped at 15 pt, for a caption that sits in the
+        /// navigation bar, which keeps its height at every text size.
+        static func barCaption() -> UIFont {
+            UIFontMetrics(forTextStyle: .caption1).scaledFont(
+                for: .systemFont(ofSize: 12 * scale, weight: .regular), maximumPointSize: 15)
+        }
+        /// `name()` capped at 20 pt, for a title that rides in the navigation
+        /// bar beside its buttons.
+        static func barTitle() -> UIFont {
+            UIFontMetrics(forTextStyle: .subheadline).scaledFont(
+                for: .systemFont(ofSize: 15 * scale, weight: .bold), maximumPointSize: 20)
+        }
         /// A person's name in a people list.
         static func rowName() -> UIFont { scaled(.callout, size: 16, weight: .semibold) }
         /// `metric()` in semibold, for a phrase that stands out beside it.

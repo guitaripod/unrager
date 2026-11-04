@@ -54,6 +54,13 @@ class FeedViewController: UIViewController, TweetActionHandling {
     /// again — it's a glance, not a permanent fixture.
     private var freshnessHideWork: DispatchWorkItem?
     private var freshnessDismissed = false
+    /// Set while the pill says a refresh failed, so the "updated Nm ago" tick
+    /// can't write over the notice before it has been read.
+    private var staleNoticeShowing = false
+    /// The pill's two places: centred in the navigation bar between its
+    /// controls, or just under the bar when it would run into them.
+    private var freshnessInBar: NSLayoutConstraint!
+    private var freshnessUnderBar: NSLayoutConstraint!
     /// Set between drag-begin and the feed coming to rest. No inline video plays
     /// while scrolling, so `AVPlayer` allocation/decode never lands on the scroll
     /// path — the source of the start-of-scroll frame spike.
@@ -341,7 +348,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
     /// Builds the freshness pill: a dim caption on a glass capsule, centred in
     /// the navigation bar between its two controls and non-interactive.
     private func configureFreshness() {
-        freshnessLabel.font = DesignSystem.Typography.caption()
+        freshnessLabel.font = DesignSystem.Typography.barCaption()
         freshnessLabel.textColor = DesignSystem.Color.secondaryLabel
         freshnessLabel.textAlignment = .center
         freshnessPill.clipsToBounds = true
@@ -350,9 +357,13 @@ class FeedViewController: UIViewController, TweetActionHandling {
         freshnessPill.alpha = 0
         freshnessPill.contentView.addManaged(freshnessLabel)
         view.addManaged(freshnessPill)
+        freshnessInBar = freshnessPill.centerYAnchor.constraint(
+            equalTo: view.safeAreaLayoutGuide.topAnchor, constant: -Self.navBarCentreInset)
+        freshnessUnderBar = freshnessPill.topAnchor.constraint(
+            equalTo: view.safeAreaLayoutGuide.topAnchor, constant: DesignSystem.Spacing.s)
         NSLayoutConstraint.activate([
             freshnessPill.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            freshnessPill.centerYAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: -Self.navBarCentreInset),
+            freshnessInBar,
             freshnessLabel.topAnchor.constraint(equalTo: freshnessPill.contentView.topAnchor, constant: DesignSystem.Spacing.xs),
             freshnessLabel.bottomAnchor.constraint(equalTo: freshnessPill.contentView.bottomAnchor, constant: -DesignSystem.Spacing.xs),
             freshnessLabel.leadingAnchor.constraint(equalTo: freshnessPill.contentView.leadingAnchor, constant: DesignSystem.Spacing.m),
@@ -881,6 +892,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
         freshnessDismissed = false
         presentFreshness("Couldn't refresh · saved posts")
         UIAccessibility.post(notification: .announcement, argument: freshnessLabel.text)
+        staleNoticeShowing = true
     }
 
     @objc func pullToRefresh() { viewModel.refresh() }
@@ -906,11 +918,13 @@ class FeedViewController: UIViewController, TweetActionHandling {
             freshnessDismissed = false
             freshnessPill.layer.removeAllAnimations()
             freshnessPill.isHidden = true
+            staleNoticeShowing = false
             freshnessPill.alpha = 0
             return
         }
         freshnessLabel.text = text
         guard !freshnessDismissed else { return }
+        guard !staleNoticeShowing else { return }
         presentFreshness(text)
     }
 
@@ -921,15 +935,21 @@ class FeedViewController: UIViewController, TweetActionHandling {
         freshnessLabel.text = text
         let wasShowing = !freshnessPill.isHidden && freshnessPill.alpha > 0.5
         freshnessPill.isHidden = false
-        view.layoutIfNeeded()
+        placeFreshnessPill()
         freshnessPill.layer.cornerRadius = freshnessPill.bounds.height / 2
         if !wasShowing {
             freshnessPill.alpha = 0
-            freshnessPill.transform = CGAffineTransform(translationX: 0, y: -10).scaledBy(x: 0.94, y: 0.94)
-            UIView.animate(withDuration: 0.55, delay: 0, usingSpringWithDamping: 0.82,
-                           initialSpringVelocity: 0.4, options: [.allowUserInteraction]) {
-                self.freshnessPill.alpha = 1
-                self.freshnessPill.transform = .identity
+            if UIAccessibility.isReduceMotionEnabled {
+                UIView.animate(withDuration: 0.2, delay: 0, options: [.allowUserInteraction]) {
+                    self.freshnessPill.alpha = 1
+                }
+            } else {
+                freshnessPill.transform = CGAffineTransform(translationX: 0, y: -10).scaledBy(x: 0.94, y: 0.94)
+                UIView.animate(withDuration: 0.55, delay: 0, usingSpringWithDamping: 0.82,
+                               initialSpringVelocity: 0.4, options: [.allowUserInteraction]) {
+                    self.freshnessPill.alpha = 1
+                    self.freshnessPill.transform = .identity
+                }
             }
         }
         scheduleFreshnessHide()
@@ -937,17 +957,39 @@ class FeedViewController: UIViewController, TweetActionHandling {
 
     /// Fades the freshness pill out ~3s after it shows, so it reads as a brief
     /// "here's how fresh this is" glance.
+    /// Centres the pill in the navigation bar when the bar has no title of its
+    /// own and the pill clears the bar's leading control by the same margin on
+    /// both sides; otherwise (a titled screen, a large text size, the longer
+    /// failure note) it hangs just under the bar, over the top of the list.
+    private func placeFreshnessPill() {
+        freshnessUnderBar.isActive = false
+        freshnessInBar.isActive = true
+        view.layoutIfNeeded()
+        let titled = !(navigationItem.title ?? "").isEmpty || navigationItem.titleView != nil
+        var leadingEdge = view.safeAreaInsets.left + DesignSystem.Spacing.l
+        if let control = navigationItem.leftBarButtonItem?.customView, control.window != nil {
+            leadingEdge = control.convert(control.bounds, to: view).maxX + DesignSystem.Spacing.s
+        }
+        let room = view.bounds.width - 2 * leadingEdge
+        guard titled || freshnessPill.bounds.width > room else { return }
+        freshnessInBar.isActive = false
+        freshnessUnderBar.isActive = true
+        view.layoutIfNeeded()
+    }
+
     private func scheduleFreshnessHide() {
         freshnessHideWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             UIView.animate(withDuration: 0.35, delay: 0, options: [.curveEaseIn]) {
                 self.freshnessPill.alpha = 0
-                self.freshnessPill.transform = CGAffineTransform(translationX: 0, y: -6)
+            let drifts = !UIAccessibility.isReduceMotionEnabled
+                if drifts { self.freshnessPill.transform = CGAffineTransform(translationX: 0, y: -6) }
             } completion: { _ in
                 self.freshnessDismissed = true
                 self.freshnessPill.isHidden = true
                 self.freshnessPill.transform = .identity
+                self.staleNoticeShowing = false
             }
         }
         freshnessHideWork = work

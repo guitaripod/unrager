@@ -82,6 +82,8 @@ final class HomeViewController: FeedViewController {
     private func configureTitleMenu() {
         navigationItem.title = ""
         navigationItem.leftBarButtonItem = UIBarButtonItem(customView: titleButton)
+        titleButton.showsLargeContentViewer = true
+        titleButton.addInteraction(UILargeContentViewerInteraction())
         updateTitle()
     }
 
@@ -137,10 +139,11 @@ final class HomeViewController: FeedViewController {
         config.baseForegroundColor = DesignSystem.Color.label
         config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
             var out = incoming
-            out.font = DesignSystem.Typography.name()
+            out.font = DesignSystem.Typography.barTitle()
             return out
         }
         titleButton.configuration = config
+        titleButton.largeContentTitle = name
         titleButton.titleLabel?.numberOfLines = 1
         titleButton.titleLabel?.lineBreakMode = .byTruncatingTail
         titleButton.setContentCompressionResistancePriority(.required, for: .horizontal)

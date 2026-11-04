@@ -270,10 +270,12 @@ impl GqlClient {
         }
         let body = res.text().await?;
         if !status.is_success() {
-            return Err(Error::GraphqlStatus {
-                status: status.as_u16(),
-                body: truncate(&body, 400),
-            });
+            return Err(classify_api_error(Some(status.as_u16()), &body).unwrap_or(
+                Error::GraphqlStatus {
+                    status: status.as_u16(),
+                    body: truncate(&body, 400),
+                },
+            ));
         }
         serde_json::from_str(&body).map_err(|e| {
             Error::GraphqlShape(format!(
@@ -1353,6 +1355,14 @@ mod tests {
                 .try_refresh_query_ids(Operation::HomeTimeline, Some("stale-id"))
                 .await
         );
+    }
+
+    #[test]
+    fn a_rest_block_is_typed_so_it_is_never_retried_as_an_auth_failure() {
+        let body = r#"{"errors":[{"code":226,"message":"We can't complete this right now."}]}"#;
+        let error = classify_api_error(Some(403), body).unwrap();
+        assert!(error.is_automation_block());
+        assert!(!is_auth_failure(&error));
     }
 
     #[test]

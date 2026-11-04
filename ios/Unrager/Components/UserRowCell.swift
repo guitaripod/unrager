@@ -70,11 +70,16 @@ final class UserRowCell: UICollectionViewListCell {
     private let handleLabel = UILabel()
     private let phraseLabel = UILabel()
     private let bioLabel = UILabel()
-    private let ring = CAShapeLayer()
-    private var ringTint: UIColor?
+    private let metaRow = UIStackView()
+    private let metaSpacer = UIView()
+    private let ring = AvatarRingView(lineWidth: UserRowCell.ringWidth)
     private let followButton = UIButton(type: .system)
-    private var textToButton: NSLayoutConstraint!
+    /// The Follow button beside the name, or, at the accessibility text
+    /// sizes, under the text where the name keeps the row's whole width.
+    private var besideText: [NSLayoutConstraint] = []
+    private var underText: [NSLayoutConstraint] = []
     private var textToEdge: NSLayoutConstraint!
+    private var textBottom: NSLayoutConstraint!
     private var boundID: String?
     private var avatarTask: Task<Void, Never>?
     private var following: Bool?
@@ -96,10 +101,8 @@ final class UserRowCell: UICollectionViewListCell {
         avatar.backgroundColor = .secondarySystemFill
         avatar.accessibilityIgnoresInvertColors = true
 
-        nameLabel.font = DesignSystem.Typography.system(16, weight: .semibold)
         nameLabel.textColor = DesignSystem.Color.label
         nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        flagLabel.font = DesignSystem.Typography.system(16, weight: .semibold)
         flagLabel.setContentHuggingPriority(.required, for: .horizontal)
         flagLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         flagLabel.isHidden = true
@@ -113,18 +116,13 @@ final class UserRowCell: UICollectionViewListCell {
         nameRow.spacing = DesignSystem.Spacing.xs
         nameRow.alignment = .center
 
-        handleLabel.font = DesignSystem.Typography.metric()
         handleLabel.textColor = DesignSystem.Color.secondaryLabel
         handleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        phraseLabel.font = DesignSystem.Typography.metric()
         phraseLabel.setContentHuggingPriority(.required, for: .horizontal)
         phraseLabel.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
         phraseLabel.isHidden = true
-        let metaSpacer = UIView()
         metaSpacer.setContentHuggingPriority(UILayoutPriority(1), for: .horizontal)
-        let metaRow = UIStackView(arrangedSubviews: [handleLabel, phraseLabel, metaSpacer])
-        metaRow.alignment = .firstBaseline
-        bioLabel.font = DesignSystem.Typography.metric()
+        [handleLabel, phraseLabel, metaSpacer].forEach(metaRow.addArrangedSubview)
         bioLabel.textColor = DesignSystem.Color.label
         bioLabel.numberOfLines = 2
 
@@ -137,14 +135,7 @@ final class UserRowCell: UICollectionViewListCell {
         texts.addArrangedSubview(tail)
         texts.setCustomSpacing(0, after: bioLabel)
 
-        ring.fillColor = nil
-        ring.lineWidth = Self.ringWidth
-        ring.isHidden = true
-        contentView.layer.addSublayer(ring)
-        registerForTraitChanges([UITraitUserInterfaceStyle.self, UITraitAccessibilityContrast.self]) {
-            (cell: UserRowCell, _) in
-            cell.paintRing()
-        }
+        applyFonts()
 
         followButton.setContentHuggingPriority(.required, for: .horizontal)
         followButton.setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -154,10 +145,25 @@ final class UserRowCell: UICollectionViewListCell {
             view.translatesAutoresizingMaskIntoConstraints = false
             contentView.addSubview(view)
         }
-        textToButton = texts.trailingAnchor.constraint(equalTo: followButton.leadingAnchor, constant: -DesignSystem.Spacing.m)
+        contentView.addSubview(ring)
         textToEdge = texts.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -DesignSystem.Spacing.l)
-        let textBottom = texts.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -DesignSystem.Spacing.m)
+        textBottom = texts.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -DesignSystem.Spacing.m)
         textBottom.priority = .defaultHigh
+        let buttonBottom = followButton.bottomAnchor.constraint(
+            equalTo: contentView.bottomAnchor, constant: -DesignSystem.Spacing.m)
+        buttonBottom.priority = .defaultHigh
+        besideText = [
+            texts.trailingAnchor.constraint(equalTo: followButton.leadingAnchor, constant: -DesignSystem.Spacing.m),
+            followButton.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -DesignSystem.Spacing.l),
+            followButton.topAnchor.constraint(equalTo: contentView.topAnchor, constant: DesignSystem.Spacing.m),
+            textBottom,
+        ]
+        underText = [
+            textToEdge,
+            followButton.leadingAnchor.constraint(equalTo: texts.leadingAnchor),
+            followButton.topAnchor.constraint(equalTo: texts.bottomAnchor, constant: DesignSystem.Spacing.s),
+            buttonBottom,
+        ]
         NSLayoutConstraint.activate([
             avatar.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: DesignSystem.Spacing.l),
             avatar.topAnchor.constraint(equalTo: contentView.topAnchor, constant: DesignSystem.Spacing.m),
@@ -166,17 +172,25 @@ final class UserRowCell: UICollectionViewListCell {
             avatar.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor, constant: -DesignSystem.Spacing.m),
             texts.leadingAnchor.constraint(equalTo: avatar.trailingAnchor, constant: DesignSystem.Spacing.m),
             texts.topAnchor.constraint(equalTo: contentView.topAnchor, constant: DesignSystem.Spacing.m + 1),
-            textBottom,
-            followButton.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -DesignSystem.Spacing.l),
-            followButton.topAnchor.constraint(equalTo: contentView.topAnchor, constant: DesignSystem.Spacing.m),
-            textToEdge,
             separatorLayoutGuide.leadingAnchor.constraint(equalTo: texts.leadingAnchor),
-        ])
+        ] + ring.surrounding(avatar, gap: Self.ringGap))
+        arrangeFollowButton(shown: false)
+    }
+
+    /// Sets every text's font for the current text size, the system's and the
+    /// app's own, so a row bound after either changed reads at the new size.
+    private func applyFonts() {
+        nameLabel.font = DesignSystem.Typography.rowName()
+        flagLabel.font = DesignSystem.Typography.rowName()
+        handleLabel.font = DesignSystem.Typography.metric()
+        phraseLabel.font = DesignSystem.Typography.metric()
+        bioLabel.font = DesignSystem.Typography.metric()
     }
 
     func configure(with row: UserRow, detailed: Bool = false) {
         avatarTask?.cancel()
         boundID = row.id
+        applyFonts()
 
         nameLabel.attributedText = TwemojiText.attributed(
             row.name, font: nameLabel.font, color: DesignSystem.Color.label)
@@ -209,12 +223,13 @@ final class UserRowCell: UICollectionViewListCell {
     /// the viewer, or else how big the account is.
     private func showStanding(_ standing: Standing?, row: UserRow, detailed: Bool) {
         let phrase: NSAttributedString?
+        let lead = isStacked ? "" : " · "
         if let standing, let text = standing.phrase {
-            phrase = NSAttributedString(string: " · \(text)", attributes: [
-                .font: DesignSystem.Typography.system(13, weight: .semibold), .foregroundColor: standing.tint,
+            phrase = NSAttributedString(string: "\(lead)\(text)", attributes: [
+                .font: DesignSystem.Typography.metricEmphasis(), .foregroundColor: standing.tint,
             ])
         } else if detailed, let followers = row.followers {
-            phrase = NSAttributedString(string: " · \(Format.count(followers)) followers", attributes: [
+            phrase = NSAttributedString(string: "\(lead)\(Format.count(followers)) followers", attributes: [
                 .font: DesignSystem.Typography.metric(), .foregroundColor: DesignSystem.Color.tertiaryLabel,
             ])
         } else {
@@ -222,27 +237,7 @@ final class UserRowCell: UICollectionViewListCell {
         }
         phraseLabel.attributedText = phrase
         phraseLabel.isHidden = phrase == nil
-        ringTint = standing?.drawsRing == true ? standing?.tint : nil
-        paintRing()
-        setNeedsLayout()
-    }
-
-    private func paintRing() {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        ring.isHidden = ringTint == nil
-        ring.strokeColor = ringTint?.resolvedColor(with: traitCollection).cgColor
-        CATransaction.commit()
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        guard !ring.isHidden else { return }
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        ring.frame = contentView.bounds
-        ring.path = UIBezierPath(ovalIn: avatar.frame.insetBy(dx: -Self.ringGap, dy: -Self.ringGap)).cgPath
-        CATransaction.commit()
+        ring.tint = standing?.drawsRing == true ? standing?.tint : nil
     }
 
     /// Puts the person's country flag after the name: at once when it resolved
@@ -299,8 +294,7 @@ final class UserRowCell: UICollectionViewListCell {
     private func showFollow(_ state: Bool?, title: String) {
         following = state
         followButton.isHidden = state == nil
-        textToButton.isActive = state != nil
-        textToEdge.isActive = state == nil
+        arrangeFollowButton(shown: state != nil)
         guard let state else { return }
         var config = state ? UIButton.Configuration.gray() : UIButton.Configuration.filled()
         config.cornerStyle = .capsule
@@ -310,10 +304,29 @@ final class UserRowCell: UICollectionViewListCell {
         config.contentInsets = NSDirectionalEdgeInsets(top: 7, leading: 14, bottom: 7, trailing: 14)
         config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
             var outgoing = incoming
-            outgoing.font = DesignSystem.Typography.system(14, weight: .semibold)
+            outgoing.font = DesignSystem.Typography.rowButton()
             return outgoing
         }
         followButton.configuration = config
+    }
+
+    /// Whether the row is laid out for an accessibility text size: the name
+    /// may take two lines, the follower phrase goes under the handle and the
+    /// Follow button under the text, so nothing has to be cut short.
+    private var isStacked: Bool { traitCollection.preferredContentSizeCategory.isAccessibilityCategory }
+
+    private func arrangeFollowButton(shown: Bool) {
+        let stacked = isStacked
+        nameLabel.numberOfLines = stacked ? 2 : 1
+        metaRow.axis = stacked ? .vertical : .horizontal
+        metaRow.alignment = stacked ? .leading : .firstBaseline
+        metaSpacer.isHidden = stacked
+        NSLayoutConstraint.deactivate(besideText + underText + [textToEdge, textBottom])
+        switch (shown, stacked) {
+        case (true, false): NSLayoutConstraint.activate(besideText)
+        case (true, true): NSLayoutConstraint.activate(underText)
+        case (false, _): NSLayoutConstraint.activate([textToEdge, textBottom])
+        }
     }
 
     override func prepareForReuse() {
@@ -324,7 +337,6 @@ final class UserRowCell: UICollectionViewListCell {
         onToggleFollow = nil
         flagLabel.isHidden = true
         flagLabel.alpha = 1
-        ringTint = nil
-        paintRing()
+        ring.tint = nil
     }
 }

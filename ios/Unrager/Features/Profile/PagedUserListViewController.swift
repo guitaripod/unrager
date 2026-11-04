@@ -55,6 +55,7 @@ class PagedUserListViewController: UIViewController {
     private var loadTask: Task<Void, Never>?
     private var generation = 0
     private var redrawObserver: AnyCancellable?
+    private var textSizeObserver: AnyCancellable?
     private var contentSizeObserver: NSKeyValueObservation?
     private let footer = PagingFooter()
 
@@ -198,6 +199,12 @@ class PagedUserListViewController: UIViewController {
                 guard let self else { return }
                 self.dataSource.reconfigureVisibleItems(of: self.collectionView)
             }
+        textSizeObserver = NotificationCenter.default.publisher(for: AppSettings.fontScaleDidChange)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.dataSource.reconfigureAllItems() }
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (self: Self, _) in
+            self.dataSource.reconfigureAllItems()
+        }
         load(reset: true)
     }
 

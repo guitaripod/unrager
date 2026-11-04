@@ -159,6 +159,16 @@ enum DesignSystem {
                 for: .systemFont(ofSize: 13 * scale, weight: .regular), maximumPointSize: 20)
         }
         static func caption() -> UIFont { scaled(.caption1, size: 12, weight: .regular) }
+        /// A person's name in a people list.
+        static func rowName() -> UIFont { scaled(.callout, size: 16, weight: .semibold) }
+        /// `metric()` in semibold, for a phrase that stands out beside it.
+        static func metricEmphasis() -> UIFont { scaled(.footnote, size: 13, weight: .semibold) }
+        /// A people row's Follow button, capped at 22 pt so the button leaves
+        /// the name room at the accessibility text sizes.
+        static func rowButton() -> UIFont {
+            UIFontMetrics(forTextStyle: .subheadline).scaledFont(
+                for: .systemFont(ofSize: 14 * scale, weight: .semibold), maximumPointSize: 22)
+        }
         static func title() -> UIFont { scaled(.title2, size: 22, weight: .heavy) }
     }
 

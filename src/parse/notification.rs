@@ -400,15 +400,19 @@ fn extract_target_tweet(item: &Value) -> Option<TargetTweet> {
     None
 }
 
+/// The N of "and N others" in a grouped notification's message. Every "and "
+/// is tried, so one inside a name ("Grand Prix and 4 others") doesn't hide
+/// the phrase, and only a number followed by " other" counts.
 fn extract_others_count(text: &str) -> Option<u64> {
     let marker = "and ";
-    let idx = text.find(marker)?;
-    let after = &text[idx + marker.len()..];
-    let num_str: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if num_str.is_empty() {
-        return None;
-    }
-    num_str.parse().ok()
+    text.match_indices(marker).find_map(|(idx, _)| {
+        let after = &text[idx + marker.len()..];
+        let digits = after.len() - after.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        if digits == 0 || !after[digits..].starts_with(" other") {
+            return None;
+        }
+        after[..digits].parse().ok()
+    })
 }
 
 #[cfg(test)]
@@ -616,6 +620,23 @@ mod tests {
         });
         let n = build_grouped_entry("g-2", &content).unwrap();
         assert_eq!(n.target_tweet_snippet.as_deref(), Some("write &amp; for &"));
+    }
+
+    #[test]
+    fn others_count_reads_the_phrase_not_a_name() {
+        assert_eq!(
+            extract_others_count("Grand Prix and 4 others liked your post"),
+            Some(4)
+        );
+        assert_eq!(
+            extract_others_count("Hand 2 Tech and 9 others liked your post"),
+            Some(9)
+        );
+        assert_eq!(
+            extract_others_count("Alice and 1 other reposted your post"),
+            Some(1)
+        );
+        assert_eq!(extract_others_count("Alice and Bob liked your post"), None);
     }
 
     fn user(handle: &str) -> User {

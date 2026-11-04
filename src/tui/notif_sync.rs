@@ -24,14 +24,20 @@ impl NotificationSync {
         self.ids = page.notifications.iter().map(|n| n.id.clone()).collect();
         self.newest_ms = page.newest_ms();
         self.x_marker_ms = page.unread_after_ms.or(self.x_marker_ms);
-        let Some(marker) = page.unread_after_ms else {
-            return Vec::new();
-        };
-        page.notifications
-            .iter()
-            .filter(|n| n.timestamp.timestamp_millis() <= marker)
-            .map(|n| n.id.clone())
-            .collect()
+        match page.unread_after_ms {
+            Some(marker) => read_up_to(page, marker),
+            None => Vec::new(),
+        }
+    }
+
+    /// The ids on an older page that X's marker already covers. Only first
+    /// pages carry the marker, and the 2-day read store has long forgotten
+    /// what was read further down, so these would otherwise show as unread.
+    pub fn read_on_x(&self, page: &NotificationPage) -> Vec<String> {
+        match self.x_marker_ms {
+            Some(marker) => read_up_to(page, marker),
+            None => Vec::new(),
+        }
     }
 
     /// The cursor to give X when the whole first page has been read here and
@@ -46,6 +52,14 @@ impl NotificationSync {
         self.x_marker_ms = Some(newest);
         Some(cursor)
     }
+}
+
+fn read_up_to(page: &NotificationPage, marker_ms: i64) -> Vec<String> {
+    page.notifications
+        .iter()
+        .filter(|n| n.timestamp.timestamp_millis() <= marker_ms)
+        .map(|n| n.id.clone())
+        .collect()
 }
 
 #[cfg(test)]
@@ -107,5 +121,14 @@ mod tests {
         let mut sync = NotificationSync::default();
         sync.observe(&page(Some(3_000)));
         assert_eq!(sync.take_cursor_to_push(|_| true), None);
+    }
+
+    #[test]
+    fn an_older_page_under_xs_marker_is_read() {
+        let mut sync = NotificationSync::default();
+        let older = page(None);
+        assert!(sync.read_on_x(&older).is_empty());
+        sync.observe(&page(Some(2_000)));
+        assert_eq!(sync.read_on_x(&older), vec!["old".to_string()]);
     }
 }

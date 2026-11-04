@@ -469,8 +469,13 @@ impl App {
         result: Result<crate::parse::notification::NotificationPage>,
         append: bool,
     ) {
-        if !append && let Ok(page) = &result {
-            self.sync_notifications_with_x(page);
+        if let Ok(page) = &result {
+            if append {
+                let read_on_x = self.notif_sync.read_on_x(page);
+                self.notif_seen.mark_all(read_on_x);
+            } else {
+                self.sync_notifications_with_x(page);
+            }
         }
         let Some(FocusEntry::Notifications(view)) = self.focus_stack.last_mut() else {
             tracing::debug!("notification page arrived but pane no longer active, discarding");

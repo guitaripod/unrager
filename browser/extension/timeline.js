@@ -77,9 +77,8 @@ const unragerTimeline = (() => {
     if (itemContent.promotedMetadata != null) return;
     const node = unwrap(itemContent.tweet_results && itemContent.tweet_results.result);
     if (!node || node.__typename !== "Tweet" || !node.legacy) return;
-    const original = unwrap(
-      node.legacy.retweeted_status_result && node.legacy.retweeted_status_result.result
-    );
+    const wrapped = node.legacy.retweeted_status_result || node.retweeted_status_result;
+    const original = unwrap(wrapped && wrapped.result);
     const subject = original && original.__typename === "Tweet" ? original : node;
     const authors = [author(node).id];
     if (subject !== node) authors.push(author(subject).id);

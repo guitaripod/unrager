@@ -104,6 +104,7 @@ final class StreamSheetViewController: UIViewController {
     /// Keeps whatever streamed before the failure and says what went wrong
     /// under it, with a Retry in the bar that starts the request over.
     private func showFailure(_ error: any Error) {
+        AppLogger.shared.warn("\(title ?? "stream") failed: \(error)", category: .ui)
         spinner.stopAnimating()
         failure = error.localizedDescription
         follower.renderNow()

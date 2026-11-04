@@ -140,6 +140,7 @@ final class FilterSettingsViewController: UIViewController {
                 let config = try await AppEnvironment.shared.api.filterConfig()
                 apply(config)
             } catch {
+                AppLogger.shared.warn("filter rules load failed: \(error)", category: .settings)
                 presentLoadFailure(error)
             }
         }
@@ -219,6 +220,7 @@ final class FilterSettingsViewController: UIViewController {
                 NotificationCenter.default.post(name: AppSettings.filterRulesDidChange, object: nil)
                 navigationController?.popViewController(animated: true)
             } catch {
+                AppLogger.shared.warn("filter rules save failed: \(error)", category: .settings)
                 refreshSaveState()
                 present(AlertFactory.error(error, title: "Couldn't save"), animated: true)
             }

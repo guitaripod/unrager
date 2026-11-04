@@ -17,7 +17,14 @@ enum SessionSync {
 
     static func restore() {
         restoreTask = Task {
-            guard let state = try? await api.session(), !Task.isCancelled else { return }
+            let state: SessionState
+            do {
+                state = try await api.session()
+            } catch {
+                AppLogger.shared.warn("session restore failed, keeping the saved filter setting: \(error)", category: .app)
+                return
+            }
+            guard !Task.isCancelled else { return }
             AppSettings.filterEnabled = state.filterEnabled
             AppLogger.shared.info("session restored: filter=\(state.filterEnabled)", category: .app)
         }

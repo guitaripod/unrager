@@ -54,6 +54,7 @@ public actor TwemojiCache {
 
     private var resolvedBase: String?
     private var lastResolveFailure: Date?
+    private var resolveTask: Task<String, Never>?
     private var inFlight: [String: Task<CGImage?, Never>] = [:]
     private var knownMissing: Set<String> = []
 
@@ -159,11 +160,20 @@ public actor TwemojiCache {
     /// the lookup fails (offline), the bundled fallback version serves this
     /// request and the lookup is retried after a minute, rather than pinning
     /// the fallback for the whole session.
+    /// Every fetch that starts while the lookup is out waits on that one
+    /// lookup, so a screenful of new emoji asks jsDelivr for the version once.
     private func assetBase() async -> String {
         if let resolvedBase { return resolvedBase }
         if let failedAt = lastResolveFailure, Date().timeIntervalSince(failedAt) < 60 {
             return "\(Self.repo)@\(Self.fallbackVersion)/assets/72x72"
         }
+        let task = resolveTask ?? Task { await resolveBase() }
+        resolveTask = task
+        return await task.value
+    }
+
+    private func resolveBase() async -> String {
+        defer { resolveTask = nil }
         if let version = await resolveVersion() {
             let base = "\(Self.repo)@\(version)/assets/72x72"
             resolvedBase = base

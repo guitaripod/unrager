@@ -445,8 +445,10 @@ final class PostcardView: UIView {
                 graphemes.formUnion(quoted.text.emojiGraphemes())
             }
         }
-        for grapheme in graphemes {
-            _ = await TwemojiCache.shared.image(for: grapheme)
+        await withTaskGroup(of: Void.self) { group in
+            for grapheme in graphemes {
+                group.addTask { _ = await TwemojiCache.shared.image(for: grapheme) }
+            }
         }
     }
 

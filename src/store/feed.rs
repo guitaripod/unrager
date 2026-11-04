@@ -81,7 +81,7 @@ impl FeedStore {
     /// of processes alongside the single writer.
     pub fn open_reader(path: &Path) -> Result<Self> {
         let conn = open_conn(path)?;
-        let seq = max_seq(&conn);
+        let seq = max_seq(&conn)?;
         Ok(Self {
             conn,
             seq,
@@ -102,7 +102,7 @@ impl FeedStore {
             return Ok(None);
         }
         let conn = open_conn(path)?;
-        let seq = max_seq(&conn);
+        let seq = max_seq(&conn)?;
         Ok(Some(Self {
             conn,
             seq,
@@ -492,13 +492,14 @@ fn open_conn(path: &Path) -> Result<Connection> {
     Ok(conn)
 }
 
-fn max_seq(conn: &Connection) -> i64 {
-    conn.query_row(
+/// Fails rather than guessing: a writer that started from 0 would rank every
+/// new For You post below the stored ones, and trimming keeps the highest.
+fn max_seq(conn: &Connection) -> Result<i64> {
+    Ok(conn.query_row(
         "SELECT COALESCE(MAX(ingest_seq), 0) FROM tweets",
         [],
         |row| row.get(0),
-    )
-    .unwrap_or(0)
+    )?)
 }
 
 fn writer_lock_path(path: &Path) -> PathBuf {

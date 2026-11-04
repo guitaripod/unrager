@@ -102,6 +102,13 @@ async fn do_compose(
         .map(|t| MediaFile::from_path(t.path()))
         .collect::<crate::error::Result<Vec<_>>>()?;
     crate::api::validate_set(&files)?;
+    let attachments = files.len() + media_ids.len();
+    if attachments > crate::api::media::MAX_MEDIA_PER_TWEET {
+        return Err(ApiError::bad_request(format!(
+            "X allows at most {} media attachments per post (got {attachments})",
+            crate::api::media::MAX_MEDIA_PER_TWEET
+        )));
+    }
 
     let api = ApiClient::non_interactive().await?;
     let posted = api

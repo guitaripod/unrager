@@ -57,7 +57,11 @@ pub fn describe(response: &Value) -> String {
         .map(|e| e.to_string())
         .unwrap_or_default();
     let mut text = format!("typename={typename} keys=[{keys}] errors={errors}");
-    text.truncate(400);
+    let mut end = text.len().min(400);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
     text
 }
 
@@ -97,6 +101,15 @@ fn number(value: &Value) -> Option<u64> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn describe_cuts_long_errors_on_a_character_boundary() {
+        for pad in 0..4 {
+            let message = format!("{}{}", "x".repeat(340 + pad), "é".repeat(80));
+            let text = describe(&json!({ "errors": [{ "message": message }] }));
+            assert!(text.len() <= 400);
+        }
+    }
 
     #[test]
     fn posted_at_is_read_from_the_snowflake() {

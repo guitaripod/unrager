@@ -218,10 +218,9 @@ fn float_to_hex(value: f64) -> String {
 }
 
 pub fn parse_path_data(d: &str) -> Vec<Vec<i32>> {
-    if d.len() < 10 {
+    let Some(rest) = d.get(9..).filter(|rest| !rest.is_empty()) else {
         return Vec::new();
-    }
-    let rest = &d[9..];
+    };
     rest.split('C')
         .filter(|s| !s.trim().is_empty())
         .map(|segment| {
@@ -454,6 +453,11 @@ mod tests {
     #[test]
     fn parse_path_data_too_short() {
         assert!(parse_path_data("M 0").is_empty());
+    }
+
+    #[test]
+    fn parse_path_data_with_a_wide_character_at_the_cut_does_not_panic() {
+        assert!(parse_path_data("M 0 0 0 é C 1 2 3 4 5 6").is_empty());
     }
 
     #[test]

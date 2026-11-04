@@ -525,7 +525,7 @@ impl GqlClient {
             .and_then(Value::as_u64)
             .unwrap_or(1);
         for _ in 0..MAX_ATTEMPTS {
-            tokio::time::sleep(Duration::from_secs(wait_secs.max(1))).await;
+            tokio::time::sleep(Duration::from_secs(wait_secs.clamp(1, 60))).await;
             let res = self
                 .http
                 .get(url)

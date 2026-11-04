@@ -337,7 +337,7 @@ impl<'a> MediaUploader<'a> {
                 .get("check_after_secs")
                 .and_then(Value::as_u64)
                 .unwrap_or(2)
-                .max(2);
+                .clamp(2, 60);
             tracing::debug!("STATUS attempt {attempt}: state={state:?}, next poll in {wait_secs}s");
             sleep(Duration::from_secs(wait_secs).max(STATUS_POLL_MIN_INTERVAL)).await;
         }

@@ -72,7 +72,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
         guard let self, let tweet = self.tweetsByID[id] else { return }
         let width = self.collectionView.bounds.width
         let isFocal = id == self.focalID
-        let ownTweet = self.selfHandle?.caseInsensitiveCompare(tweet.author.handle) == .orderedSame
+        let ownTweet = self.viewerHandle?.caseInsensitiveCompare(tweet.author.handle) == .orderedSame
         let indent = self.indentLevel(for: id)
         cell.configure(with: tweet, imagesEnabled: AppSettings.imagesEnabled,
                        contentWidth: max(120, width - CGFloat(min(indent, 3)) * ThreadRailView.step),
@@ -81,7 +81,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
                        stats: PostStatsPolicy.content(
                            for: tweet, expanded: self.expandedStats.contains(id), isOwn: ownTweet,
                            changed: { [weak self] in self?.reconfigure(id, animated: true) }),
-                       viewerHandle: self.selfHandle ?? AppEnvironment.shared.currentHandle)
+                       viewerHandle: self.viewerHandle)
         self.applyFlag(to: cell, author: tweet.author)
         cell.onTapAuthor = { [weak self] in self?.push(ProfileViewController(handle: tweet.author.handle)) }
         if let reposter = tweet.retweetedBy {
@@ -95,7 +95,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
         cell.onToggleBookmark = { [weak self, weak cell] in self?.toggleBookmark(tweet, cell: cell) }
         cell.onShare = { [weak self] in self?.shareTweet(tweet) }
         cell.onToggleStats = { [weak self] in self?.toggleStats(id) }
-        if OwnPost.canDelete(tweet, viewerHandle: self.selfHandle ?? AppEnvironment.shared.currentHandle) {
+        if OwnPost.canDelete(tweet, viewerHandle: self.viewerHandle) {
             cell.onDelete = { [weak self] in self?.confirmDelete(tweet) }
         }
         if ownTweet {
@@ -179,12 +179,11 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
             loadingSkeleton.trailingAnchor.constraint(equalTo: view.trailingAnchor),
         ])
 
-        navigationItem.rightBarButtonItems = [
-            UIBarButtonItem(
-                image: DesignSystem.icon("arrowshape.turn.up.left"),
-                primaryAction: UIAction { [weak self] _ in self?.replyToFocal() }),
-            sortButton,
-        ]
+        let reply = UIBarButtonItem(
+            image: DesignSystem.icon("arrowshape.turn.up.left"),
+            primaryAction: UIAction { [weak self] _ in self?.replyToFocal() })
+        reply.accessibilityLabel = "Reply"
+        navigationItem.rightBarButtonItems = [reply, sortButton]
 
         let reg = registration
         dataSource = UICollectionViewDiffableDataSource(collectionView: collectionView) { cv, ip, id in
@@ -426,17 +425,24 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
         didRenderFocal = true
     }
 
-    /// Resolves the signed-in handle so the analytics block only shows for the
-    /// viewer's own tweets. Reconfigures the focal cell once known.
+    /// The signed-in handle: the confirmed one once `whoami` answers, the one
+    /// the app last knew until then.
+    private var viewerHandle: String? { selfHandle ?? AppEnvironment.shared.currentHandle }
+
+    /// Resolves the signed-in handle so stats, Liked by and Delete show on the
+    /// viewer's own posts, the focal one and any reply. Redraws the rows it
+    /// wrote once known, since rows drawn before it answered couldn't tell.
     private func resolveSelfHandle() {
         Task { [weak self] in
-            guard let me = try? await AppEnvironment.shared.api.whoami() else { return }
+            guard let me = await AppEnvironment.shared.whoami() else { return }
             guard let self else { return }
             self.selfHandle = me.handle
-            guard let focalID = self.focalID,
-                  self.dataSource.snapshot().indexOfItem(focalID) != nil else { return }
             var snapshot = self.dataSource.snapshot()
-            snapshot.reconfigureItems([focalID])
+            let own = snapshot.itemIdentifiers.filter {
+                self.tweetsByID[$0]?.author.handle.caseInsensitiveCompare(me.handle) == .orderedSame
+            }
+            guard !own.isEmpty else { return }
+            snapshot.reconfigureItems(own)
             await self.dataSource.apply(snapshot, animatingDifferences: false)
         }
     }
@@ -488,6 +494,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
                     revealPostedReply()
                     return
                 }
+                AppLogger.shared.warn("thread load failed: \(error)", category: .thread)
                 hideLoading()
                 footer.set(.hidden)
                 emptyState.isHidden = false

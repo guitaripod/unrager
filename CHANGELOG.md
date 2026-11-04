@@ -6,6 +6,7 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **Your own replies in a thread show their stats, Liked by and Delete in the iPhone app.** Only the post the thread opened on was redrawn once the app knew who you are, so replies drawn before that stayed like anyone else's. The thread's Reply button is also named for VoiceOver.
 - **The iPhone app looks up the Twemoji version once, and a postcard with several emoji opens sooner.** Every emoji fetched while the lookup was out asked jsDelivr for the latest version on its own, and the postcard waited for its emoji one after another.
 - **An inline clip that failed to load in the iPhone app plays the next time it comes to rest.** A clip whose load failed once (a dropped connection) never played again while its row stayed around. A photo that failed in the full-screen viewer now offers its Retry to VoiceOver, a post with more than four photos shows the right "+N" with images off, and a reused photo grid no longer dresses a tile with the previous post's picture landing late.
 - **The stats card on your own posts in the iPhone app keeps its numbers while it fetches newer ones.** Five minutes on, a post scrolled back to fell back to the pulsing loading outline until X answered, and to the public counts if asking again failed; the last numbers now stay until new ones replace them.

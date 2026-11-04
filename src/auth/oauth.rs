@@ -23,6 +23,10 @@ const SCOPES: &str = "tweet.read tweet.write users.read media.write offline.acce
 const CALLBACK_TIMEOUT: StdDuration = StdDuration::from_secs(300);
 const REFRESH_MARGIN: Duration = Duration::seconds(60);
 const REFRESH_TIMEOUT: StdDuration = StdDuration::from_secs(20);
+/// How long one connection to the callback listener may take to send its
+/// request line before it is dropped and the next one is accepted.
+const CALLBACK_READ_TIMEOUT: StdDuration = StdDuration::from_secs(10);
+
 /// Serializes token refreshes in this process. X rotates the refresh token
 /// on every use, so two requests that both found the token expired would
 /// spend the same refresh token and the second would be refused.
@@ -252,9 +256,22 @@ async fn wait_for_callback(expected_state: &str) -> Result<String> {
 
     let accept = async {
         loop {
-            let (mut stream, _) = listener.accept().await?;
+            let mut stream = match listener.accept().await {
+                Ok((stream, _)) => stream,
+                Err(e) => {
+                    tracing::debug!("oauth callback accept failed: {e}");
+                    continue;
+                }
+            };
             let mut buf = vec![0u8; 8192];
-            let n = stream.read(&mut buf).await?;
+            let n = match timeout(CALLBACK_READ_TIMEOUT, stream.read(&mut buf)).await {
+                Ok(Ok(n)) => n,
+                Ok(Err(e)) => {
+                    tracing::debug!("oauth callback read failed: {e}");
+                    continue;
+                }
+                Err(_) => continue,
+            };
             let request = String::from_utf8_lossy(&buf[..n]);
             let Some(first_line) = request.lines().next() else {
                 continue;
@@ -338,7 +355,7 @@ fn handle_callback_line(line: &str, expected_state: &str) -> Result<String> {
 }
 
 async fn exchange_code(code: &str, verifier: &str, client_id: &str) -> Result<Tokens> {
-    let http = reqwest::Client::new();
+    let http = token_client()?;
     let params = [
         ("grant_type", "authorization_code"),
         ("code", code),
@@ -352,10 +369,7 @@ async fn exchange_code(code: &str, verifier: &str, client_id: &str) -> Result<To
 
 async fn refresh_tokens(refresh_token: &str) -> Result<Tokens> {
     let client_id = client_id()?;
-    let http = reqwest::Client::builder()
-        .connect_timeout(StdDuration::from_secs(10))
-        .timeout(REFRESH_TIMEOUT)
-        .build()?;
+    let http = token_client()?;
     let params = [
         ("grant_type", "refresh_token"),
         ("refresh_token", refresh_token),
@@ -363,6 +377,13 @@ async fn refresh_tokens(refresh_token: &str) -> Result<Tokens> {
     ];
     let res = http.post(TOKEN_URL).form(&params).send().await?;
     parse_token_response(res).await
+}
+
+fn token_client() -> Result<reqwest::Client> {
+    Ok(reqwest::Client::builder()
+        .connect_timeout(StdDuration::from_secs(10))
+        .timeout(REFRESH_TIMEOUT)
+        .build()?)
 }
 
 async fn parse_token_response(res: reqwest::Response) -> Result<Tokens> {

@@ -260,6 +260,7 @@ async fn wait_for_callback(expected_state: &str) -> Result<String> {
                 Ok((stream, _)) => stream,
                 Err(e) => {
                     tracing::debug!("oauth callback accept failed: {e}");
+                    tokio::time::sleep(StdDuration::from_millis(100)).await;
                     continue;
                 }
             };

@@ -220,12 +220,12 @@ impl AboutFetcher {
     /// One single-flighted `AboutAccountQuery` round-trip. The semaphore
     /// serializes upstream calls across every clone of this fetcher so
     /// concurrent callers never burst the AboutAccountQuery rate limit.
-    pub async fn fetch(&self, screen_name: &str) -> FetchOutcome {
+    pub async fn fetch(&self, rest_id: &str, screen_name: &str) -> FetchOutcome {
         let _permit = match self.sem.acquire().await {
             Ok(p) => p,
             Err(_) => return Err(AboutUnavailable),
         };
-        fetch_one(&self.client, screen_name).await
+        fetch_one(&self.client, rest_id, screen_name).await
     }
 
     /// Cache-through resolution for inline callers (the server route):
@@ -261,7 +261,7 @@ impl AboutFetcher {
         if let Some(entry) = store.lock().await.get(rest_id) {
             return Ok(entry.clone());
         }
-        let result = fetch_one(&self.client, screen_name).await;
+        let result = fetch_one(&self.client, rest_id, screen_name).await;
         if let Ok(profile) = &result {
             store.lock().await.put(rest_id, profile.clone());
         }
@@ -269,7 +269,10 @@ impl AboutFetcher {
     }
 }
 
-async fn fetch_one(client: &GqlClient, screen_name: &str) -> FetchOutcome {
+/// Looks `screen_name` up and keeps the answer only when it is `rest_id`'s:
+/// a handle can belong to someone else by now (renamed accounts free theirs),
+/// and that person's country must not be stored as this one's.
+async fn fetch_one(client: &GqlClient, rest_id: &str, screen_name: &str) -> FetchOutcome {
     let response = match client
         .get(
             Operation::AboutAccountQuery,
@@ -285,6 +288,13 @@ async fn fetch_one(client: &GqlClient, screen_name: &str) -> FetchOutcome {
         }
     };
     match about::parse(&response) {
+        Ok(p) if p.rest_id != rest_id => {
+            tracing::debug!(
+                "@{screen_name} is now account {}, not {rest_id}; not caching",
+                p.rest_id
+            );
+            Err(AboutUnavailable)
+        }
         Ok(p) if has_any_about_data(&p) => Ok(Some(p)),
         Ok(_) => Ok(None),
         Err(e) => {

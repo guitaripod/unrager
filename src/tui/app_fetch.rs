@@ -929,7 +929,7 @@ impl App {
         let fetcher = self.about_fetcher.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = fetcher.fetch(&handle).await;
+            let result = fetcher.fetch(&rest_id, &handle).await;
             let _ = tx.send(Event::AboutProfileResolved { rest_id, result });
         });
     }

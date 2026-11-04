@@ -37,10 +37,12 @@ pub fn parse_tweet_ref(raw: &str) -> Result<String> {
 
 /// Replaces `path` with `bytes` all at once: they go to a sibling temp file
 /// that is then renamed over the target, so a crash mid-write leaves the old
-/// file rather than half of the new one. A symlink is followed, so the file
-/// it points at is replaced and the link survives.
+/// file rather than half of the new one. A symlink is followed, even one
+/// whose target doesn't exist yet, so the file it points at is written and
+/// the link survives, and the file keeps its permissions (a `filter.toml`
+/// holding an API key stays private).
 pub fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let target = resolve_link(path);
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -48,7 +50,29 @@ pub fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()>
     tmp_name.push(".tmp");
     let tmp = target.with_file_name(tmp_name);
     std::fs::write(&tmp, bytes)?;
+    if let Ok(existing) = std::fs::metadata(&target) {
+        std::fs::set_permissions(&tmp, existing.permissions())?;
+    }
     std::fs::rename(&tmp, &target)
+}
+
+/// The file `path` stands for: itself, or where its symlinks lead, as far as
+/// they go when the last one points at nothing yet.
+fn resolve_link(path: &std::path::Path) -> std::path::PathBuf {
+    if let Ok(real) = std::fs::canonicalize(path) {
+        return real;
+    }
+    let mut current = path.to_path_buf();
+    for _ in 0..40 {
+        let Ok(next) = std::fs::read_link(&current) else {
+            break;
+        };
+        current = match current.parent() {
+            Some(parent) => parent.join(next),
+            None => next,
+        };
+    }
+    current
 }
 
 #[cfg(test)]
@@ -142,5 +166,37 @@ mod tests {
                 .is_symlink()
         );
         assert_eq!(std::fs::read(&real).unwrap(), b"new");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_writes_through_a_link_to_a_file_not_made_yet() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let link = dir.path().join("filter.toml");
+        std::os::unix::fs::symlink("dotfiles/filter.toml", &link).unwrap();
+        write_atomic(&link, b"rules").unwrap();
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("dotfiles/filter.toml")).unwrap(),
+            b"rules"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_keeps_a_private_file_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("filter.toml");
+        std::fs::write(&path, b"api_key = \"secret\"").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        write_atomic(&path, b"api_key = \"rotated\"").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
     }
 }

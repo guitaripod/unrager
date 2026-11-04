@@ -6,6 +6,7 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **A picture with see-through parts posts from the iPhone app as it looks.** Every picture went as a JPEG, which has no transparency, so a sticker or logo arrived on black; one with transparent pixels now goes as a PNG (or, past X's 5 MB, as a JPEG on white). The add-photo button and each attachment's remove button are named for VoiceOver.
 - **Your own replies in a thread show their stats, Liked by and Delete in the iPhone app.** Only the post the thread opened on was redrawn once the app knew who you are, so replies drawn before that stayed like anyone else's. The thread's Reply button is also named for VoiceOver.
 - **The iPhone app looks up the Twemoji version once, and a postcard with several emoji opens sooner.** Every emoji fetched while the lookup was out asked jsDelivr for the latest version on its own, and the postcard waited for its emoji one after another.
 - **An inline clip that failed to load in the iPhone app plays the next time it comes to rest.** A clip whose load failed once (a dropped connection) never played again while its row stayed around. A photo that failed in the full-screen viewer now offers its Retry to VoiceOver, a post with more than four photos shows the right "+N" with images off, and a reused photo grid no longer dresses a tile with the previous post's picture landing late.

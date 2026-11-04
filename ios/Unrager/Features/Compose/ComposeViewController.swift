@@ -47,9 +47,13 @@ final class ComposeViewController: UIViewController {
         barButtonSystemItem: .cancel, target: self, action: #selector(cancel))
     private lazy var postButton = UIBarButtonItem(
         title: "Post", style: .prominent, target: self, action: #selector(post))
-    private lazy var photoButton = UIBarButtonItem(
-        image: DesignSystem.icon("photo.on.rectangle"),
-        primaryAction: UIAction { [weak self] _ in self?.presentPicker() })
+    private lazy var photoButton: UIBarButtonItem = {
+        let item = UIBarButtonItem(
+            image: DesignSystem.icon("photo.on.rectangle"),
+            primaryAction: UIAction { [weak self] _ in self?.presentPicker() })
+        item.accessibilityLabel = "Add photo"
+        return item
+    }()
 
     private struct Attachment: Identifiable {
         let id = UUID()
@@ -218,6 +222,10 @@ final class ComposeViewController: UIViewController {
     private func syncAttachmentBar() {
         attachmentBar.isHidden = attachments.isEmpty
         attachmentBarHeight.constant = attachments.isEmpty ? 0 : 64
+        let thumbnails = attachmentBar.arrangedSubviews.compactMap { $0 as? AttachmentThumbnail }
+        for (index, thumbnail) in thumbnails.enumerated() {
+            thumbnail.setPosition(index + 1, of: thumbnails.count)
+        }
     }
 
     private func updateControls() {
@@ -521,7 +529,14 @@ extension ComposeViewController: PHPickerViewControllerDelegate {
             var loaded: [ComposeMediaLoader.Loaded?] = Array(repeating: nil, count: handoffs.count)
             await withTaskGroup(of: (Int, ComposeMediaLoader.Loaded?).self) { group in
                 for (index, handoff) in handoffs.enumerated() {
-                    group.addTask { (index, try? await ComposeMediaLoader.load(handoff)) }
+                    group.addTask {
+                        do {
+                            return (index, try await ComposeMediaLoader.load(handoff))
+                        } catch {
+                            AppLogger.shared.warn("photo couldn't be added: \(error)", category: .compose)
+                            return (index, nil)
+                        }
+                    }
                 }
                 for await (index, item) in group { loaded[index] = item }
             }
@@ -600,6 +615,7 @@ private final class QuotePreviewView: UIView {
 /// button.
 private final class AttachmentThumbnail: UIView {
     private let onRemove: (UIView) -> Void
+    private let remove = UIButton(type: .system)
 
     init(image: UIImage, onRemove: @escaping (UIView) -> Void) {
         self.onRemove = onRemove
@@ -613,7 +629,6 @@ private final class AttachmentThumbnail: UIView {
         addManaged(imageView)
         imageView.pinEdges(to: self)
 
-        let remove = UIButton(type: .system)
         var config = UIButton.Configuration.plain()
         config.image = UIImage(systemName: "xmark.circle.fill", withConfiguration: UIImage.SymbolConfiguration(
             paletteColors: [.white, UIColor.black.withAlphaComponent(0.6)]))?
@@ -637,4 +652,10 @@ private final class AttachmentThumbnail: UIView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    /// Names which photo the remove button takes away, so VoiceOver doesn't
+    /// read the same "Remove" for every one.
+    func setPosition(_ position: Int, of count: Int) {
+        remove.accessibilityLabel = count == 1 ? "Remove photo" : "Remove photo \(position) of \(count)"
+    }
 }

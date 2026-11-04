@@ -36,12 +36,7 @@ pub fn load(path: &Path) -> Option<SessionState> {
 }
 
 pub fn save(path: &Path, state: &SessionState) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(state)?)?;
-    std::fs::rename(&tmp, path)?;
+    crate::util::write_atomic(path, &serde_json::to_vec_pretty(state)?)?;
     Ok(())
 }
 

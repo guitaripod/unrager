@@ -20,7 +20,9 @@ pub async fn patch(
     let mut val = serde_json::to_value(&*s).map_err(ApiError::from)?;
     merge(&mut val, patch);
     *s = serde_json::from_value(val).map_err(ApiError::from)?;
-    let _ = save_session_state(&state.session_path, &s);
+    if let Err(e) = save_session_state(&state.session_path, &s) {
+        tracing::warn!("server session not saved: {e}");
+    }
     Ok(Json(s.clone()))
 }
 

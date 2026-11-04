@@ -388,15 +388,14 @@ fn unavailable_reason(said: &str, fallback: &'static str) -> &'static str {
 
 fn load_session_state(path: &std::path::Path) -> Option<SessionState> {
     let txt = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&txt).ok()
+    serde_json::from_str(&txt)
+        .inspect_err(|e| tracing::warn!("{} is unreadable, starting fresh: {e}", path.display()))
+        .ok()
 }
 
 pub fn save_session_state(path: &std::path::Path, state: &SessionState) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let txt = serde_json::to_string_pretty(state).unwrap_or_else(|_| "{}".into());
-    std::fs::write(path, txt)
+    let txt = serde_json::to_vec_pretty(state).map_err(std::io::Error::other)?;
+    crate::util::write_atomic(path, &txt)
 }
 
 #[cfg(test)]

@@ -58,8 +58,17 @@ pub async fn patch_filter(
     let toml_path = state.filter_toml_path.clone();
     let rules = updated.clone();
     tokio::task::spawn_blocking(move || -> std::result::Result<(), ApiError> {
-        let raw = std::fs::read_to_string(&toml_path).unwrap_or_default();
-        std::fs::write(&toml_path, rules.write_rules_into(&raw)?)?;
+        let raw = match std::fs::read_to_string(&toml_path) {
+            Ok(raw) => raw,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => {
+                return Err(ApiError::internal(format!(
+                    "can't read {} to update its rules: {e}",
+                    toml_path.display()
+                )));
+            }
+        };
+        crate::util::write_atomic(&toml_path, rules.write_rules_into(&raw)?.as_bytes())?;
         Ok(())
     })
     .await

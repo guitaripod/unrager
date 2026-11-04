@@ -35,6 +35,22 @@ pub fn parse_tweet_ref(raw: &str) -> Result<String> {
     Err(Error::BadTweetRef(raw.to_string()))
 }
 
+/// Replaces `path` with `bytes` all at once: they go to a sibling temp file
+/// that is then renamed over the target, so a crash mid-write leaves the old
+/// file rather than half of the new one. A symlink is followed, so the file
+/// it points at is replaced and the link survives.
+pub fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut tmp_name = target.file_name().unwrap_or_default().to_os_string();
+    tmp_name.push(".tmp");
+    let tmp = target.with_file_name(tmp_name);
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, &target)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,5 +110,37 @@ mod tests {
         assert_eq!(short_count(1_500_000), "1.5M");
         assert_eq!(short_count(42_300_000), "42.3M");
         assert_eq!(short_count(999_999), "1.0M");
+    }
+
+    #[test]
+    fn write_atomic_replaces_the_file_and_leaves_no_temp_behind() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("nested").join("state.json");
+        write_atomic(&path, b"one").unwrap();
+        write_atomic(&path, b"two").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"two");
+        let names: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec![std::ffi::OsString::from("state.json")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_keeps_a_symlink_pointing_at_the_new_contents() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let real = dir.path().join("real.toml");
+        let link = dir.path().join("link.toml");
+        std::fs::write(&real, b"old").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        write_atomic(&link, b"new").unwrap();
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read(&real).unwrap(), b"new");
     }
 }

@@ -49,7 +49,9 @@ pub async fn analytics(
                 );
                 ApiError::not_found("no analytics for this post")
             }),
-        Err(Error::GraphqlApi { .. }) => Err(ApiError::not_found("no analytics for this post")),
+        Err(error @ Error::GraphqlApi { .. }) if !error.is_automation_block() => {
+            Err(ApiError::not_found("no analytics for this post"))
+        }
         Err(error) => Err(error.into()),
     }
 }

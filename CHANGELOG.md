@@ -6,6 +6,7 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **A post's stats say so when X is blocking requests, instead of "no analytics".** An automation block or account lock on the analytics query read as a post X keeps no numbers for; it now comes through as the error it is.
 - **A country flag is never taken from whoever holds an account's old handle.** Flags are looked up by handle, and a handle freed by a rename can belong to someone else by the time it's asked about; that person's country was stored as the original account's. A lookup that comes back as a different account is now dropped and asked again later.
 - **Saving rules from the extension or the app can no longer wipe the rest of `filter.toml`.** When the file existed but couldn't be read, a rules edit wrote a new `filter.toml` holding only the rules, dropping the `[llm]` table and every comment; it now answers an error and leaves the file alone. Rules edits, and the server's saved session, are written to a temporary file and renamed into place, so a crash mid-write can't leave half a file.
 - **A failed Following poll no longer parks the background feed as if it were caught up.** A rate limit or network blip on Following counted as "nothing new", so with For you full the worker stopped polling until a client woke it; only a poll that succeeds and finds nothing now counts.

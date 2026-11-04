@@ -34,7 +34,9 @@ async function serverUrl() {
   return (server || DEFAULT_SERVER).replace(/\/+$/, "");
 }
 
-async function post(path, body, timeoutMs) {
+/// POSTs `body` and hands the response to `read`, all under one timeout, so
+/// a server that sends its headers and then stalls can't hang the caller.
+async function post(path, body, timeoutMs, read = (res) => res) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -46,15 +48,16 @@ async function post(path, body, timeoutMs) {
     });
     noteServerVersion(res.headers.get("x-unrager-version"));
     if (!res.ok) throw new Error(`http ${res.status}: ${(await res.text()).slice(0, 200)}`);
-    return res;
+    return await read(res);
   } finally {
     clearTimeout(timer);
   }
 }
 
 async function classify(tweets, cachedOnly) {
-  const res = await post("/api/classify", { tweets, cached_only: !!cachedOnly }, TIMEOUT_MS);
-  const body = await res.json();
+  const body = await post("/api/classify", { tweets, cached_only: !!cachedOnly }, TIMEOUT_MS, (res) =>
+    res.json()
+  );
   return body.verdicts || [];
 }
 

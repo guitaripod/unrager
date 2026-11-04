@@ -23,6 +23,10 @@ const MIN_INTERVAL_HIGH_MS: u64 = 700;
 pub const USER_AGENT: &str =
     "Mozilla/5.0 (X11; Linux x86_64; rv:153.0) Gecko/20100101 Firefox/153.0";
 const SESSION_REFRESH_COOLDOWN: Duration = Duration::from_secs(5 * 60);
+/// How long after one scrape of x.com's bundles another isn't tried: an
+/// operation that answers 400/404 for a reason fresh ids can't fix would
+/// otherwise rescrape on every poll.
+const QUERY_ID_REFRESH_COOLDOWN: Duration = Duration::from_secs(5 * 60);
 
 /// The live session plus a generation counter bumped on every rotation, so a
 /// request can prove which session its headers were signed with and the retry
@@ -48,6 +52,10 @@ pub struct GqlClient {
     /// last failed/no-op attempt so a persistent non-cookie 403 doesn't
     /// re-copy and re-decrypt the cookie DB on every poll.
     session_refresh: AsyncMutex<Option<Instant>>,
+    /// Serializes query id scrapes and remembers when the last one ran, so
+    /// concurrent failures share one scrape and a persistent 404 doesn't
+    /// repeat it on every call.
+    query_id_refresh: AsyncMutex<Option<Instant>>,
     store: Mutex<QueryIdStore>,
     cache_path: PathBuf,
     next_allowed: AsyncMutex<Instant>,
@@ -135,6 +143,7 @@ impl GqlClient {
                 generation: 0,
             }),
             session_refresh: AsyncMutex::new(None),
+            query_id_refresh: AsyncMutex::new(None),
             store: Mutex::new(store),
             cache_path,
             next_allowed: AsyncMutex::new(Instant::now()),
@@ -283,6 +292,7 @@ impl GqlClient {
         background: bool,
     ) -> Result<Value> {
         self.ensure_online()?;
+        let qid_used = self.lookup_qid(op).map(|q| q.id);
         match self
             .call_once(&method, op, variables, features, background)
             .await
@@ -294,15 +304,12 @@ impl GqlClient {
                     op.name(),
                     signed.error
                 );
-                match self.refresh_query_ids().await {
-                    Ok(()) => self
-                        .call_once(&method, op, variables, features, background)
+                if self.try_refresh_query_ids(op, qid_used.as_deref()).await {
+                    self.call_once(&method, op, variables, features, background)
                         .await
-                        .map_err(|retry| retry.error),
-                    Err(refresh_err) => {
-                        tracing::warn!("query id refresh failed: {refresh_err}");
-                        Err(signed.error)
-                    }
+                        .map_err(|retry| retry.error)
+                } else {
+                    Err(signed.error)
                 }
             }
             Err(signed) if is_auth_failure(&signed.error) => {
@@ -691,6 +698,32 @@ impl GqlClient {
             }
             Err(e) => {
                 tracing::warn!("startup scrape failed (transaction key unavailable): {e}");
+                false
+            }
+        }
+    }
+
+    /// Scrapes fresh query ids after `op` failed with `qid_used`, unless a
+    /// scrape ran within [`QUERY_ID_REFRESH_COOLDOWN`]; then the call is only
+    /// worth retrying if that scrape gave `op` a different id. Returns whether
+    /// to retry.
+    async fn try_refresh_query_ids(&self, op: Operation, qid_used: Option<&str>) -> bool {
+        let mut last_scrape = self.query_id_refresh.lock().await;
+        if last_scrape.is_some_and(|at| at.elapsed() < QUERY_ID_REFRESH_COOLDOWN) {
+            let changed = self.lookup_qid(op).map(|q| q.id).as_deref() != qid_used;
+            if !changed {
+                tracing::debug!(
+                    op = op.name(),
+                    "query ids were refreshed recently and did not change; not scraping again"
+                );
+            }
+            return changed;
+        }
+        *last_scrape = Some(Instant::now());
+        match self.refresh_query_ids().await {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!("query id refresh failed: {e}");
                 false
             }
         }
@@ -1085,7 +1118,8 @@ fn truncate(s: &str, max_bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        Bucket, Error, GqlClient, Instant, is_auth_failure, needs_query_id_refresh, truncate,
+        Bucket, Error, GqlClient, Instant, classify_api_error, is_auth_failure,
+        needs_query_id_refresh, truncate,
     };
     use crate::auth::XSession;
     use crate::gql::query_ids::{Operation, QueryIdStore};
@@ -1296,6 +1330,29 @@ mod tests {
         let (_, signed_with) = client.session_snapshot();
         client.replace_session(session("racer"));
         assert!(client.try_refresh_session(signed_with).await);
+    }
+
+    #[tokio::test]
+    async fn a_recent_scrape_is_not_repeated_for_an_unchanged_id() {
+        let client = test_client();
+        *client.query_id_refresh.lock().await = Some(Instant::now());
+        let used = client.lookup_qid(Operation::HomeTimeline).map(|q| q.id);
+        assert!(
+            !client
+                .try_refresh_query_ids(Operation::HomeTimeline, used.as_deref())
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn a_recent_scrape_that_changed_the_id_is_retried() {
+        let client = test_client();
+        *client.query_id_refresh.lock().await = Some(Instant::now());
+        assert!(
+            client
+                .try_refresh_query_ids(Operation::HomeTimeline, Some("stale-id"))
+                .await
+        );
     }
 
     #[test]

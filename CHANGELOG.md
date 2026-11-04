@@ -6,6 +6,7 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **Error screens in the iPhone app no longer show raw backticks.** "Can't reach the unrager server" ended "…that `unrager serve` is running" with the backticks showing, as did server messages that name a command; error and empty screens now render inline markdown, and the network error no longer needs it.
 - **Changing the server address in the iPhone app can't sign it in as the old server's account or lose the new address.** An account lookup still on its way from the old server was kept, and remembered for the new one, when it landed after the change; checking the connection while a newly typed address was being tested cancelled saving it.
 - **The Liked by header's loading arc circles smoothly in the iPhone app.** It jumped back to the top every time the header redrew while the list loaded.
 - **A profile's Media tab in the iPhone app says when it couldn't load, with a Retry.** A failed load showed "No photos or videos" as if the account had none, and asked again up to eight times running; it now shows the error, or "Couldn't load more" under pictures already shown. A profile that reloaded while a Follow was on its way no longer flips the button back, and the header's redraws no longer throw away the measured heights of the posts under it.

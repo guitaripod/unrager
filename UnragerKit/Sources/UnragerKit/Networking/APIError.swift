@@ -133,7 +133,7 @@ extension APIError: LocalizedError {
         case .invalidRequest(let m): return m
         case .network(let detail), .connectionLost(let detail):
             let cause = detail.isEmpty ? "" : " (\(detail))"
-            return "Can't reach the unrager server\(cause). Check the server address in Settings and that `unrager serve` is running."
+            return "Can't reach the unrager server\(cause). Check the server address in Settings and that the server is running."
         case .timeout: return "The request timed out."
         case .cancelled: return "Cancelled."
         case .unauthorized: return "The server isn't logged in to X (cookies missing or expired)."

@@ -45,7 +45,9 @@ final class EmptyStateView: UIView {
     func show(symbol: String, title: String, subtitle: String, showRetry: Bool) {
         imageView.image = DesignSystem.icon(symbol, pointSize: 40)
         titleLabel.text = title
-        subtitleLabel.text = subtitle
+        subtitleLabel.attributedText = InlineMarkdown.render(
+            subtitle, font: DesignSystem.Typography.metric(), color: DesignSystem.Color.secondaryLabel)
+        subtitleLabel.textAlignment = .center
         retryButton.isHidden = !showRetry
     }
 

@@ -159,6 +159,28 @@ fn session_cache_path() -> Option<PathBuf> {
     Some(crate::config::cache_dir().ok()?.join("session-cache.json"))
 }
 
+/// The cached session with the cookie source it was read from, so pinning
+/// another browser or pointing `UNRAGER_COOKIES_PATH` elsewhere takes effect
+/// at once instead of after the cache's day is up.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CachedSession {
+    source: String,
+    #[serde(flatten)]
+    session: XSession,
+}
+
+/// Where cookies are read from right now: the cookie file override, else
+/// the pinned browser, else any.
+fn cookie_source() -> String {
+    if let Some(path) = std::env::var_os(COOKIES_PATH_ENV) {
+        return format!("path:{}", path.to_string_lossy());
+    }
+    match pinned_browser() {
+        Some(pin) => format!("browser:{}", pin.to_ascii_lowercase()),
+        None => "any".into(),
+    }
+}
+
 fn load_cached_session() -> Option<XSession> {
     let path = session_cache_path()?;
     let meta = std::fs::metadata(&path).ok()?;
@@ -171,18 +193,41 @@ fn load_cached_session() -> Option<XSession> {
         return None;
     }
     let bytes = std::fs::read(&path).ok()?;
-    serde_json::from_slice(&bytes).ok()
+    let cached: CachedSession = serde_json::from_slice(&bytes).ok()?;
+    if cached.source != cookie_source() {
+        tracing::debug!("session cache came from another cookie source, re-extracting");
+        return None;
+    }
+    Some(cached.session)
 }
 
+/// Writes the cache readable by its owner only: it holds the session's
+/// `auth_token`, which is as good as the account's password.
 fn save_cached_session(session: &XSession) {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
     let Some(path) = session_cache_path() else {
         return;
     };
-    if let Ok(json) = serde_json::to_vec(session) {
-        let tmp = path.with_extension("json.tmp");
-        if std::fs::write(&tmp, &json).is_ok() {
-            let _ = std::fs::rename(&tmp, &path);
-        }
+    let cached = CachedSession {
+        source: cookie_source(),
+        session: session.clone(),
+    };
+    let Ok(json) = serde_json::to_vec(&cached) else {
+        return;
+    };
+    let tmp = path.with_extension("json.tmp");
+    let _ = std::fs::remove_file(&tmp);
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)
+        .and_then(|mut file| file.write_all(&json));
+    if written.is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
     }
 }
 
@@ -659,5 +704,25 @@ mod linux_decrypt_tests {
         assert_eq!(session.auth_token, "at");
         assert_eq!(session.ct0, "c0");
         assert_eq!(session.twid, "tw");
+    }
+
+    #[test]
+    fn a_cached_session_carries_its_cookie_source() {
+        let session = XSession {
+            auth_token: "a".into(),
+            ct0: "c".into(),
+            twid: "u%3D1".into(),
+        };
+        let json = serde_json::to_value(CachedSession {
+            source: "browser:vivaldi".into(),
+            session: session.clone(),
+        })
+        .unwrap();
+        assert_eq!(json["source"], "browser:vivaldi");
+        assert_eq!(json["auth_token"], "a");
+        let back: CachedSession = serde_json::from_value(json).unwrap();
+        assert_eq!(back.session, session);
+        let unlabelled = serde_json::to_vec(&session).unwrap();
+        assert!(serde_json::from_slice::<CachedSession>(&unlabelled).is_err());
     }
 }

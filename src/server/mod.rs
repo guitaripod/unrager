@@ -145,16 +145,63 @@ async fn reject_when_filter_only(
 /// extension origin and the native apps send none, so anything else is a web
 /// page trying to drive this server through its visitor's browser (post as
 /// them, rewrite their rules) and is refused.
+///
+/// A page can also make itself same-site by pointing its own name's DNS at
+/// this machine (DNS rebinding); its reads then carry no `Origin`, but their
+/// `Host` is that public name, so only hosts no one can register publicly
+/// are answered.
 async fn reject_web_origins(request: Request, next: Next) -> Response {
-    match request.headers().get(header::ORIGIN) {
-        Some(origin) if !is_extension_origin(origin) => ApiError::new(
+    let headers = request.headers();
+    let foreign_origin = headers
+        .get(header::ORIGIN)
+        .is_some_and(|origin| !is_extension_origin(origin));
+    if foreign_origin || !headers.get(header::HOST).is_none_or(is_private_host) {
+        return ApiError::new(
             StatusCode::FORBIDDEN,
             "forbidden_origin",
-            "unrager only answers its browser extension and the iPhone app, not web pages",
+            "unrager only answers its browser extension and apps, at localhost, an IP address \
+             or a local or Tailscale name, not web pages",
         )
-        .into_response(),
-        _ => next.run(request).await,
+        .into_response();
     }
+    next.run(request).await
+}
+
+/// Whether a `Host` header names this machine in a way a web page can't
+/// borrow: an IP address, a single-label name (`localhost`, a bare hostname),
+/// or a name under a suffix that never resolves on the public internet,
+/// Tailscale's `ts.net` included.
+fn is_private_host(host: &HeaderValue) -> bool {
+    const PRIVATE_SUFFIXES: [&str; 11] = [
+        ".localhost",
+        ".local",
+        ".lan",
+        ".home",
+        ".internal",
+        ".intranet",
+        ".corp",
+        ".private",
+        ".home.arpa",
+        ".localdomain",
+        ".ts.net",
+    ];
+    let Ok(host) = host.to_str() else {
+        return false;
+    };
+    let name = match host.strip_prefix('[') {
+        Some(bracketed) => {
+            return bracketed
+                .split(']')
+                .next()
+                .is_some_and(|ip| ip.parse::<std::net::Ipv6Addr>().is_ok());
+        }
+        None => host.rsplit_once(':').map_or(host, |(name, _port)| name),
+    };
+    let name = name.trim_end_matches('.').to_ascii_lowercase();
+    !name.is_empty()
+        && (name.parse::<std::net::IpAddr>().is_ok()
+            || !name.contains('.')
+            || PRIVATE_SUFFIXES.iter().any(|suffix| name.ends_with(suffix)))
 }
 
 /// Tells every client which unrager answered, so the browser extension can
@@ -336,12 +383,19 @@ mod tests {
     use tower::Service;
 
     async fn status_for(origin: Option<&str>) -> StatusCode {
+        status_for_host(origin, None).await
+    }
+
+    async fn status_for_host(origin: Option<&str>, host: Option<&str>) -> StatusCode {
         let mut app = Router::new()
             .route("/api/health", get(|| async { "ok" }))
             .layer(middleware::from_fn(reject_web_origins));
         let mut request = axum::http::Request::builder().uri("/api/health");
         if let Some(origin) = origin {
             request = request.header(header::ORIGIN, origin);
+        }
+        if let Some(host) = host {
+            request = request.header(header::HOST, host);
         }
         app.call(request.body(Body::empty()).unwrap())
             .await
@@ -370,6 +424,41 @@ mod tests {
                 status_for(Some(origin)).await,
                 StatusCode::FORBIDDEN,
                 "{origin}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_rebound_public_name_is_refused_but_local_names_and_addresses_are_not() {
+        for host in [
+            "localhost:7777",
+            "127.0.0.1:7777",
+            "[::1]:7777",
+            "100.127.250.64:7777",
+            "192.168.1.20",
+            "arch:7777",
+            "macbook.taila1a09.ts.net:7777",
+            "studio.local",
+            "nas.home.arpa:7777",
+            "dev.localhost:7777",
+        ] {
+            assert_eq!(
+                status_for_host(None, Some(host)).await,
+                StatusCode::OK,
+                "{host}"
+            );
+        }
+        for host in [
+            "evil.example:7777",
+            "attacker.com",
+            "rebind.it.:7777",
+            "[evil]:7777",
+            "",
+        ] {
+            assert_eq!(
+                status_for_host(None, Some(host)).await,
+                StatusCode::FORBIDDEN,
+                "{host}"
             );
         }
     }

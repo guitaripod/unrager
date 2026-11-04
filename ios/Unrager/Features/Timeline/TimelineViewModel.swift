@@ -673,7 +673,9 @@ final class TimelineViewModel {
     /// exhaustion latch, and commits them together with the tweets it publishes:
     /// a failure part-way never leaves the list, the cursor and the seen set out
     /// of step (which would skip posts or append a page twice). Pages already
-    /// gathered when an error hits are published and the error is still reported.
+    /// gathered when an error hits are published and the error is still reported,
+    /// except a refresh that failed before any post survived: that leaves the
+    /// list on screen as it was rather than replacing it with nothing.
     private func collectBatch(reset: Bool) async {
         var ids = reset ? Set<String>() : Set(tweets.value.map(\.restID))
         var workingCursor = reset ? nil : cursor
@@ -716,7 +718,7 @@ final class TimelineViewModel {
             failure = error
         }
         if Task.isCancelled { return }
-        guard failure == nil || !survivors.isEmpty || pages > 0 else {
+        guard failure == nil || !survivors.isEmpty || (pages > 0 && !reset) else {
             reportLoadFailure(failure)
             return
         }

@@ -43,7 +43,25 @@ pub fn db_path(cache_dir: &Path) -> PathBuf {
 
 pub struct AboutStore {
     conn: Connection,
-    cache: HashMap<String, Option<AboutProfile>>,
+    cache: HashMap<String, Entry>,
+}
+
+struct Entry {
+    fetched_at: i64,
+    profile: Option<AboutProfile>,
+}
+
+impl Entry {
+    /// A negative answer and a community one are only trusted for a while,
+    /// so a long-running server looks them up again just as a restart would.
+    fn is_stale(&self, now: i64) -> bool {
+        let ttl_days = match &self.profile {
+            None => NEGATIVE_TTL_DAYS,
+            Some(p) if p.community => COMMUNITY_TTL_DAYS,
+            Some(_) => return false,
+        };
+        self.fetched_at < now - ttl_days * 86400
+    }
 }
 
 impl AboutStore {
@@ -85,16 +103,7 @@ impl AboutStore {
             );
         }
 
-        let cutoff = chrono::Utc::now().timestamp() - NEGATIVE_TTL_DAYS * 86400;
-        let pruned = conn.execute(
-            "DELETE FROM about WHERE payload IS NULL AND fetched_at < ?1",
-            params![cutoff],
-        )?;
-        if pruned > 0 {
-            tracing::info!(pruned, "about.db: pruned stale negative entries");
-        }
-
-        let community_cutoff = chrono::Utc::now().timestamp() - COMMUNITY_TTL_DAYS * 86400;
+        let now = chrono::Utc::now().timestamp();
         let mut stmt = conn.prepare("SELECT rest_id, fetched_at, payload FROM about")?;
         let rows = stmt.query_map([], |row| {
             Ok((
@@ -103,18 +112,27 @@ impl AboutStore {
                 row.get::<_, Option<String>>(2)?,
             ))
         })?;
-        let mut cache: HashMap<String, Option<AboutProfile>> = HashMap::new();
+        let mut cache: HashMap<String, Entry> = HashMap::new();
         let mut expired: Vec<String> = Vec::new();
         for r in rows {
             let (rest_id, fetched_at, payload) = r?;
-            let parsed: Option<AboutProfile> = payload
-                .as_deref()
-                .and_then(|s| serde_json::from_str(s).ok());
-            if parsed.as_ref().is_some_and(|p| p.community) && fetched_at < community_cutoff {
+            let profile = match payload.as_deref().map(serde_json::from_str) {
+                None => None,
+                Some(Ok(profile)) => Some(profile),
+                Some(Err(_)) => {
+                    expired.push(rest_id);
+                    continue;
+                }
+            };
+            let entry = Entry {
+                fetched_at,
+                profile,
+            };
+            if entry.is_stale(now) {
                 expired.push(rest_id);
                 continue;
             }
-            cache.insert(rest_id, parsed);
+            cache.insert(rest_id, entry);
         }
         drop(stmt);
         for rest_id in &expired {
@@ -123,7 +141,7 @@ impl AboutStore {
         if !expired.is_empty() {
             tracing::info!(
                 expired = expired.len(),
-                "about.db: dropped stale community entries"
+                "about.db: dropped stale and unreadable entries"
             );
         }
         tracing::debug!(entries = cache.len(), "about.db: loaded");
@@ -131,11 +149,15 @@ impl AboutStore {
     }
 
     pub fn get(&self, rest_id: &str) -> Option<&Option<AboutProfile>> {
-        self.cache.get(rest_id)
+        let now = chrono::Utc::now().timestamp();
+        self.cache
+            .get(rest_id)
+            .filter(|entry| !entry.is_stale(now))
+            .map(|entry| &entry.profile)
     }
 
     pub fn has(&self, rest_id: &str) -> bool {
-        self.cache.contains_key(rest_id)
+        self.get(rest_id).is_some()
     }
 
     pub fn put(&mut self, rest_id: &str, profile: Option<AboutProfile>) {
@@ -148,7 +170,13 @@ impl AboutStore {
         ) {
             tracing::warn!("about db write failed for {rest_id}: {e}");
         }
-        self.cache.insert(rest_id.to_string(), profile);
+        self.cache.insert(
+            rest_id.to_string(),
+            Entry {
+                fetched_at: now,
+                profile,
+            },
+        );
     }
 }
 
@@ -382,6 +410,48 @@ mod tests {
         let s = AboutStore::open(tmp.path()).unwrap();
         assert!(!s.has("500"));
         assert!(s.has("501"));
+    }
+
+    #[test]
+    fn a_running_store_stops_trusting_old_negatives_and_community_entries() {
+        let tmp = NamedTempFile::new().unwrap();
+        let mut s = AboutStore::open(tmp.path()).unwrap();
+        let mut community = sample_profile("510", Some("Japan"));
+        community.community = true;
+        s.put("510", Some(community));
+        s.put("511", None);
+        s.put("512", Some(sample_profile("512", Some("Japan"))));
+        let long_ago = chrono::Utc::now().timestamp() - (NEGATIVE_TTL_DAYS + 1) * 86400;
+        for entry in s.cache.values_mut() {
+            entry.fetched_at = long_ago;
+        }
+        assert!(!s.has("510"));
+        assert!(!s.has("511"));
+        assert!(s.has("512"));
+    }
+
+    #[test]
+    fn an_unreadable_row_is_dropped_rather_than_read_as_no_profile() {
+        let tmp = NamedTempFile::new().unwrap();
+        AboutStore::open(tmp.path()).unwrap();
+        Connection::open(tmp.path())
+            .unwrap()
+            .execute(
+                "INSERT INTO about (rest_id, fetched_at, payload) VALUES ('520', ?1, '{\"old\":1}')",
+                params![chrono::Utc::now().timestamp()],
+            )
+            .unwrap();
+        let s = AboutStore::open(tmp.path()).unwrap();
+        assert!(!s.has("520"));
+        let rows: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM about WHERE rest_id = '520'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 0);
     }
 
     #[test]

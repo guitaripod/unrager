@@ -6,6 +6,7 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **Country flags are looked up again after their cache window even while the server keeps running.** "No location" answers are meant to be retried after 30 days and community-cache flags after 14, but only a restart did it, so a server up for weeks kept an account flagless long after it set a location. Entries now expire in place, and a stored profile that can no longer be read is dropped instead of being taken as "no location" forever.
 - **"And N others" on a grouped notification counts right when a name contains "and".** A like or repost from someone named like "Grand Prix" lost its "and 4 others" count, and "Hand 2 Tech and 9 others" counted 2; the number is now read from the phrase itself.
 - **A post that spells out an HTML entity shows it as written.** Text like `&lt;b&gt;` or `&amp;` typed into a post came out as `<b>` and `&`, in every client and in what the filter judged, because X's escaping was undone twice; a liked post's snippet in Notifications was decoded a third time. Each text is now decoded exactly once, and the browser extension reads post text the same way.
 - **A post with an empty link or media URL no longer hangs the server or the terminal client.** X occasionally sends a link entity or attachment whose URL is blank; stripping it from the text looped forever, freezing whichever feed, thread or search held that post (and a server worker with it). Blank URLs are now skipped.

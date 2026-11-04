@@ -6,6 +6,7 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **Ask, brief and translate say when the model server broke off an answer.** An error the model server sent after it had started answering (a crashed runner, a model unloaded mid-answer) was skipped, and a stream that simply stopped counted as finished, so a cut-off answer looked complete. Both now end the answer with an error, and the finish reason of servers that send it with the last words (SGLang, vLLM) is kept.
 - **A model answer that says neither HIDE nor KEEP is no longer saved as KEEP for a week.** A model that starts thinking out loud or replies with nothing was read as KEEP and cached, so those posts were never judged again until the cache expired; such an answer now shows the post unjudged and asks again next time. A model server that is down logs one warning when it stops answering and one line when it is back, instead of a warning for every post (one 90-minute outage wrote 7,000).
 - **Notifications keep answering while X is slow to mark them read.** Telling X that everything was read held the notifications state for the whole request, up to 30 seconds, and every notifications read in the app waited behind it.
 - **A post's stats say so when X is blocking requests, instead of "no analytics".** An automation block or account lock on the analytics query read as a post X keeps no numbers for; it now comes through as the error it is.

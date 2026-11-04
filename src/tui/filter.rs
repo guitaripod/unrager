@@ -523,7 +523,6 @@ impl LlmConfig {
         let stream = response.bytes_stream().map_err(std::io::Error::other);
         let reader = StreamReader::new(stream);
         let mut lines = BufReader::new(reader).lines();
-        let mut done_reason: Option<String> = None;
 
         loop {
             match lines.next_line().await {
@@ -533,6 +532,9 @@ impl LlmConfig {
                     }
                     match serde_json::from_str::<Value>(&line) {
                         Ok(parsed) => {
+                            if let Some(message) = stream_error(&parsed) {
+                                return Err(format!("model server error: {message}"));
+                            }
                             if let Some(c) =
                                 parsed.pointer("/message/content").and_then(|v| v.as_str())
                             {
@@ -548,11 +550,10 @@ impl LlmConfig {
                                 }
                             }
                             if parsed.get("done").and_then(|v| v.as_bool()) == Some(true) {
-                                done_reason = parsed
+                                return Ok(parsed
                                     .get("done_reason")
                                     .and_then(|v| v.as_str())
-                                    .map(str::to_string);
-                                break;
+                                    .map(str::to_string));
                             }
                         }
                         Err(e) => {
@@ -560,14 +561,12 @@ impl LlmConfig {
                         }
                     }
                 }
-                Ok(None) => break,
+                Ok(None) => return Err(STREAM_CUT_SHORT.into()),
                 Err(e) => {
                     return Err(format!("stream error: {e}"));
                 }
             }
         }
-
-        Ok(done_reason)
     }
 
     /// OpenAI-compatible streaming shape: Server-Sent Events, each
@@ -608,27 +607,27 @@ impl LlmConfig {
         let stream = response.bytes_stream().map_err(std::io::Error::other);
         let reader = StreamReader::new(stream);
         let mut lines = BufReader::new(reader).lines();
-        let mut done_reason: Option<String> = None;
 
         loop {
             match lines.next_line().await {
-                Ok(Some(line)) => match parse_sse_data_line(&line) {
-                    SseLine::Token(t) => on_token(&t),
-                    SseLine::Thinking(t) => on_thinking(&t),
-                    SseLine::Done(reason) => {
-                        done_reason = reason;
-                        break;
+                Ok(Some(line)) => {
+                    for effect in parse_sse_data_line(&line) {
+                        match effect {
+                            SseLine::Token(t) => on_token(&t),
+                            SseLine::Thinking(t) => on_thinking(&t),
+                            SseLine::Done(reason) => return Ok(reason),
+                            SseLine::Failed(message) => {
+                                return Err(format!("model server error: {message}"));
+                            }
+                        }
                     }
-                    SseLine::Ignore => {}
-                },
-                Ok(None) => break,
+                }
+                Ok(None) => return Err(STREAM_CUT_SHORT.into()),
                 Err(e) => {
                     return Err(format!("stream error: {e}"));
                 }
             }
         }
-
-        Ok(done_reason)
     }
 
     /// Whether `models` (a `list_models` result) includes the configured
@@ -680,56 +679,69 @@ impl LlmConfig {
     }
 }
 
-/// One line's effect while parsing an OpenAI-compatible SSE chat stream.
+/// Why a stream that simply stopped is an error: both stream shapes end with
+/// a marker, and without it the answer shown so far is only part of one.
+const STREAM_CUT_SHORT: &str = "the model server closed the stream before the answer finished";
+
+/// One effect of a line of an OpenAI-compatible SSE chat stream. A chunk can
+/// carry several: the last token comes with the finish reason.
 #[derive(Debug, PartialEq)]
 enum SseLine {
     Token(String),
     Thinking(String),
     Done(Option<String>),
-    Ignore,
+    Failed(String),
+}
+
+/// The message of an `error` a model server sends inside a stream it has
+/// already answered 200 for (Ollama's `{"error": "..."}`, an OpenAI-style
+/// `{"error": {"message": ...}}`).
+fn stream_error(chunk: &Value) -> Option<String> {
+    let error = chunk.get("error").filter(|e| !e.is_null())?;
+    Some(
+        error
+            .get("message")
+            .and_then(Value::as_str)
+            .or_else(|| error.as_str())
+            .map_or_else(|| error.to_string(), str::to_string),
+    )
 }
 
 /// Pure parser for one raw line of an OpenAI-compatible SSE stream —
 /// factored out of `stream_sse` so the trickiest new logic here is unit
 /// testable without a live server.
-fn parse_sse_data_line(line: &str) -> SseLine {
-    let line = line.trim();
-    if line.is_empty() {
-        return SseLine::Ignore;
-    }
-    let Some(rest) = line.strip_prefix("data:") else {
-        return SseLine::Ignore;
+fn parse_sse_data_line(line: &str) -> Vec<SseLine> {
+    let Some(rest) = line.trim().strip_prefix("data:") else {
+        return Vec::new();
     };
     let rest = rest.trim();
     if rest == "[DONE]" {
-        return SseLine::Done(None);
+        return vec![SseLine::Done(None)];
     }
     let Ok(parsed) = serde_json::from_str::<Value>(rest) else {
-        return SseLine::Ignore;
+        return Vec::new();
     };
-    if let Some(t) = parsed
-        .pointer("/choices/0/delta/content")
-        .and_then(|v| v.as_str())
-    {
-        if !t.is_empty() {
-            return SseLine::Token(t.to_string());
-        }
+    if let Some(message) = stream_error(&parsed) {
+        return vec![SseLine::Failed(message)];
     }
-    if let Some(t) = parsed
-        .pointer("/choices/0/delta/reasoning_content")
-        .and_then(|v| v.as_str())
-    {
-        if !t.is_empty() {
-            return SseLine::Thinking(t.to_string());
-        }
+    let text = |pointer: &str| {
+        parsed
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+    };
+    let mut effects = Vec::new();
+    if let Some(t) = text("/choices/0/delta/reasoning_content") {
+        effects.push(SseLine::Thinking(t));
     }
-    if let Some(reason) = parsed
-        .pointer("/choices/0/finish_reason")
-        .and_then(|v| v.as_str())
-    {
-        return SseLine::Done(Some(reason.to_string()));
+    if let Some(t) = text("/choices/0/delta/content") {
+        effects.push(SseLine::Token(t));
     }
-    SseLine::Ignore
+    if let Some(reason) = text("/choices/0/finish_reason") {
+        effects.push(SseLine::Done(Some(reason)));
+    }
+    effects
 }
 
 impl FilterConfig {
@@ -2982,7 +2994,7 @@ mod tests {
     #[test]
     fn parse_sse_data_line_token() {
         let line = r#"data: {"choices":[{"delta":{"content":"hi","reasoning_content":null}}]}"#;
-        assert_eq!(parse_sse_data_line(line), SseLine::Token("hi".into()));
+        assert_eq!(parse_sse_data_line(line), vec![SseLine::Token("hi".into())]);
     }
 
     #[test]
@@ -2991,14 +3003,14 @@ mod tests {
             r#"data: {"choices":[{"delta":{"content":"","reasoning_content":"pondering"}}]}"#;
         assert_eq!(
             parse_sse_data_line(line),
-            SseLine::Thinking("pondering".into())
+            vec![SseLine::Thinking("pondering".into())]
         );
     }
 
     #[test]
     fn parse_sse_data_line_empty_content_is_ignored() {
         let line = r#"data: {"choices":[{"delta":{"content":"","reasoning_content":null}}]}"#;
-        assert_eq!(parse_sse_data_line(line), SseLine::Ignore);
+        assert_eq!(parse_sse_data_line(line), Vec::<SseLine>::new());
     }
 
     #[test]
@@ -3007,26 +3019,58 @@ mod tests {
             r#"data: {"choices":[{"delta":{"reasoning_content":null},"finish_reason":"stop"}]}"#;
         assert_eq!(
             parse_sse_data_line(line),
-            SseLine::Done(Some("stop".into()))
+            vec![SseLine::Done(Some("stop".into()))]
         );
     }
 
     #[test]
     fn parse_sse_data_line_done_sentinel() {
-        assert_eq!(parse_sse_data_line("data: [DONE]"), SseLine::Done(None));
+        assert_eq!(
+            parse_sse_data_line("data: [DONE]"),
+            vec![SseLine::Done(None)]
+        );
     }
 
     #[test]
     fn parse_sse_data_line_blank_and_non_data_lines_are_ignored() {
-        assert_eq!(parse_sse_data_line(""), SseLine::Ignore);
-        assert_eq!(parse_sse_data_line("   "), SseLine::Ignore);
-        assert_eq!(parse_sse_data_line(": keep-alive comment"), SseLine::Ignore);
-        assert_eq!(parse_sse_data_line("event: ping"), SseLine::Ignore);
+        assert_eq!(parse_sse_data_line(""), Vec::<SseLine>::new());
+        assert_eq!(parse_sse_data_line("   "), Vec::<SseLine>::new());
+        assert_eq!(
+            parse_sse_data_line(": keep-alive comment"),
+            Vec::<SseLine>::new()
+        );
+        assert_eq!(parse_sse_data_line("event: ping"), Vec::<SseLine>::new());
     }
 
     #[test]
     fn parse_sse_data_line_malformed_json_is_ignored() {
-        assert_eq!(parse_sse_data_line("data: not json"), SseLine::Ignore);
+        assert_eq!(parse_sse_data_line("data: not json"), Vec::<SseLine>::new());
+    }
+
+    #[test]
+    fn parse_sse_data_line_keeps_the_finish_reason_that_comes_with_the_last_token() {
+        let line = r#"data: {"choices":[{"delta":{"content":"end"},"finish_reason":"length"}]}"#;
+        assert_eq!(
+            parse_sse_data_line(line),
+            vec![
+                SseLine::Token("end".into()),
+                SseLine::Done(Some("length".into()))
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_sse_data_line_reads_an_error_sent_mid_stream() {
+        let line = r#"data: {"error":{"message":"model unloaded","type":"server_error"}}"#;
+        assert_eq!(
+            parse_sse_data_line(line),
+            vec![SseLine::Failed("model unloaded".into())]
+        );
+        assert_eq!(
+            stream_error(&serde_json::json!({ "error": "llama runner process has terminated" })),
+            Some("llama runner process has terminated".into())
+        );
+        assert_eq!(stream_error(&serde_json::json!({ "error": null })), None);
     }
 
     /// An OpenAI-compatible model server that answers KEEP to everything

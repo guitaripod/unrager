@@ -1337,12 +1337,18 @@ mod tests {
     #[tokio::test]
     async fn a_recent_scrape_is_not_repeated_for_an_unchanged_id() {
         let client = test_client();
-        *client.query_id_refresh.lock().await = Some(Instant::now());
+        let scraped_at = Instant::now();
+        *client.query_id_refresh.lock().await = Some(scraped_at);
         let used = client.lookup_qid(Operation::HomeTimeline).map(|q| q.id);
         assert!(
             !client
                 .try_refresh_query_ids(Operation::HomeTimeline, used.as_deref())
                 .await
+        );
+        assert_eq!(
+            *client.query_id_refresh.lock().await,
+            Some(scraped_at),
+            "no new scrape was started"
         );
     }
 

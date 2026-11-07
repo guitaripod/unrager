@@ -289,6 +289,7 @@ fn app_routes() -> Router<Arc<AppState>> {
             get(routes::timeline::notifications),
         )
         .route("/feed/status", get(routes::feed::status))
+        .route("/rate-limits", get(routes::limits::rate_limits))
         .route("/tweet/{id}", get(routes::tweet::single))
         .route(
             "/tweets/{tweet_id}/analytics",

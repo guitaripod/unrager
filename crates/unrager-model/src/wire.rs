@@ -87,6 +87,25 @@ pub struct FeedStatusResponse {
     pub feeds: Vec<FeedStatus>,
 }
 
+/// X's request budget for one GraphQL operation, reported by
+/// `GET /api/rate-limits` from the `x-rate-limit-*` headers of its last
+/// answer. Once `reset_at` (unix seconds) has passed the window has refilled
+/// and `remaining` is stale. `cooldown_secs` is how long the server still
+/// refuses the operation after a 429, `0` when it doesn't.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RateBudget {
+    pub operation: String,
+    pub limit: u64,
+    pub remaining: u64,
+    pub reset_at: u64,
+    pub cooldown_secs: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RateLimitsResponse {
+    pub budgets: Vec<RateBudget>,
+}
+
 /// One page of a thread. The first page always carries `focal` (the server
 /// 404s when the focal tweet is genuinely absent); cursor continuation pages
 /// omit it entirely — they only append replies, and clients keep rendering

@@ -64,11 +64,23 @@ pub struct GqlClient {
     /// operation on its own, so a search 429 must never freeze likes or the
     /// Home feed, and the reverse.
     cooldowns: Mutex<HashMap<Bucket, std::time::Instant>>,
+    /// Each operation's budget as the `x-rate-limit-*` headers of its last
+    /// answer reported it, so a caller can see what is left before spending it.
+    windows: Mutex<HashMap<Operation, RateWindow>>,
     transaction_key: Mutex<Option<TransactionKeyMaterial>>,
     /// Set for `unrager demo`: every request fails with [`Error::Offline`]
     /// before anything is sent, so a demo never reaches X or reads the
     /// browser's login.
     offline: bool,
+}
+
+/// What X last reported about one operation's budget: the requests its
+/// window allows, how many are left, and when (unix seconds) it refills.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RateWindow {
+    pub limit: u64,
+    pub remaining: u64,
+    pub reset_at: u64,
 }
 
 /// One rate-limit budget. Each GraphQL operation and each legacy REST path
@@ -149,6 +161,7 @@ impl GqlClient {
             next_allowed: AsyncMutex::new(Instant::now()),
             client_uuid,
             cooldowns: Mutex::new(HashMap::new()),
+            windows: Mutex::new(HashMap::new()),
             transaction_key: Mutex::new(None),
             offline: false,
         })
@@ -852,6 +865,9 @@ impl GqlClient {
             .get("x-rate-limit-remaining")
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.parse::<u64>().ok());
+        if let Some(window) = rate_window(res.headers()) {
+            self.record_window(op, window);
+        }
         let is_about = matches!(op, Operation::AboutAccountQuery);
 
         // X's write budgets on this surface are undocumented. Recording what
@@ -985,6 +1001,27 @@ impl GqlClient {
         guard.insert(bucket, now + remaining);
     }
 
+    fn record_window(&self, op: Operation, window: RateWindow) {
+        if let Ok(mut guard) = self.windows.lock() {
+            guard.insert(op, window);
+        }
+    }
+
+    /// Every operation X has reported a budget for, with the cooldown its
+    /// interactive bucket still has after a 429, ordered by operation name.
+    pub fn rate_windows(&self) -> Vec<(Operation, RateWindow, Option<Duration>)> {
+        let mut windows: Vec<(Operation, RateWindow)> = self
+            .windows
+            .lock()
+            .map(|guard| guard.iter().map(|(op, window)| (*op, *window)).collect())
+            .unwrap_or_default();
+        windows.sort_by_key(|(op, _)| op.name());
+        windows
+            .into_iter()
+            .map(|(op, window)| (op, window, self.cooldown_remaining(&Bucket::Op(op))))
+            .collect()
+    }
+
     /// The longest cooldown on any interactive read (Home, threads, search,
     /// profiles).
     pub fn read_rate_limit_remaining(&self) -> Option<Duration> {
@@ -1058,6 +1095,22 @@ fn is_auth_failure(e: &Error) -> bool {
     )
 }
 
+/// The budget an answer's `x-rate-limit-limit`, `-remaining` and `-reset`
+/// headers describe, or None when any of them is missing.
+fn rate_window(headers: &HeaderMap) -> Option<RateWindow> {
+    let read = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok())
+    };
+    Some(RateWindow {
+        limit: read("x-rate-limit-limit")?,
+        remaining: read("x-rate-limit-remaining")?,
+        reset_at: read("x-rate-limit-reset")?,
+    })
+}
+
 fn compute_rate_limit_remaining(reset_epoch: Option<u64>) -> Duration {
     const DEFAULT_WINDOW: Duration = Duration::from_secs(15 * 60);
     const MIN_WINDOW: Duration = Duration::from_secs(60);
@@ -1120,8 +1173,8 @@ fn truncate(s: &str, max_bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        Bucket, Error, GqlClient, Instant, classify_api_error, is_auth_failure,
-        needs_query_id_refresh, truncate,
+        Bucket, Error, GqlClient, HeaderMap, HeaderValue, Instant, RateWindow, classify_api_error,
+        is_auth_failure, needs_query_id_refresh, rate_window, truncate,
     };
     use crate::auth::XSession;
     use crate::gql::query_ids::{Operation, QueryIdStore};
@@ -1205,6 +1258,52 @@ mod tests {
         );
         assert!(client.about_rate_limit_remaining().is_none());
         assert!(client.ingest_rate_limit_remaining().is_none());
+    }
+
+    #[test]
+    fn a_rate_window_needs_all_three_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-rate-limit-limit", HeaderValue::from_static("50"));
+        headers.insert("x-rate-limit-remaining", HeaderValue::from_static("47"));
+        assert_eq!(rate_window(&headers), None);
+        headers.insert("x-rate-limit-reset", HeaderValue::from_static("1794045955"));
+        assert_eq!(
+            rate_window(&headers),
+            Some(RateWindow {
+                limit: 50,
+                remaining: 47,
+                reset_at: 1794045955,
+            })
+        );
+        headers.insert("x-rate-limit-remaining", HeaderValue::from_static("lots"));
+        assert_eq!(rate_window(&headers), None);
+    }
+
+    #[test]
+    fn rate_windows_are_sorted_and_carry_the_interactive_cooldown() {
+        let client = test_client();
+        let window = |remaining| RateWindow {
+            limit: 50,
+            remaining,
+            reset_at: 1794045955,
+        };
+        client.record_window(Operation::SearchTimeline, window(0));
+        client.record_window(Operation::HomeTimeline, window(40));
+        client.record_window(Operation::SearchTimeline, window(3));
+        client.record_cooldown(
+            Bucket::Op(Operation::SearchTimeline),
+            std::time::Duration::from_secs(300),
+        );
+        client.record_cooldown(Bucket::Ingest, std::time::Duration::from_secs(300));
+
+        let windows = client.rate_windows();
+        assert_eq!(windows.len(), 2);
+        assert_eq!(windows[0].0, Operation::HomeTimeline);
+        assert_eq!(windows[0].1, window(40));
+        assert!(windows[0].2.is_none());
+        assert_eq!(windows[1].0, Operation::SearchTimeline);
+        assert_eq!(windows[1].1, window(3));
+        assert!(windows[1].2.is_some_and(|d| d.as_secs() > 290));
     }
 
     #[tokio::test]

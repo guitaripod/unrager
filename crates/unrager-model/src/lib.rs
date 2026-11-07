@@ -8,6 +8,6 @@ pub use wire::{
     AboutStatus, AboutView, AskContextEntry, AskPreset, AskRequest, AskRole, AskTurn, BriefChunk,
     ComposeResult, FeedStatus, FeedStatusResponse, FilterTopic, FilterVerdictEvent,
     MediaUploadResult, Notification, NotificationActor, NotificationsPage, NotificationsSeenMarker,
-    PostAnalytics, ProfileView, SessionState, ThreadView, TimelinePage, TokenEvent, UserListPage,
-    Verdict,
+    PostAnalytics, ProfileView, RateBudget, RateLimitsResponse, SessionState, ThreadView,
+    TimelinePage, TokenEvent, UserListPage, Verdict,
 };

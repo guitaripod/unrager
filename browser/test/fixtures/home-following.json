@@ -1,0 +1,742 @@
+{
+ "data": {
+  "home": {
+   "home_timeline_urt": {
+    "id": "VGltZWxpbmU6Rm9sbG93aW5n",
+    "instructions": [
+     {
+      "__typename": "TimelineAddEntries",
+      "entries": [
+       {
+        "content": {
+         "__typename": "TimelineTimelineItem",
+         "client_event_info": {
+          "component": "for_you_phoenix",
+          "element": "tweet"
+         },
+         "content": {
+          "__isTimelineTimelineItemContent": "TimelineTweet",
+          "__typename": "TimelineTweet",
+          "display_type": "Tweet",
+          "tweet_results": {
+           "__typename": "TweetResults",
+           "id": "VHdlZXRSZXN1bHRzOj2000000000000000011",
+           "rest_id": "2000000000000000011",
+           "result": {
+            "__isTweetResult": "Tweet",
+            "__typename": "Tweet",
+            "core": {
+             "user_results": {
+              "result": {
+               "__typename": "User",
+               "core": {
+                "name": "Reposter",
+                "screen_name": "reposter"
+               },
+               "id": "VXNlcjo100000000000000011",
+               "rest_id": "100000000000000011",
+               "verification": {
+                "is_blue_verified": false
+               }
+              },
+              "id": "VXNlclJlc3VsdHM6100000000000000011"
+             }
+            },
+            "counts": {
+             "bookmark_count": 0,
+             "favorite_count": 3,
+             "quote_count": 0,
+             "reply_count": 1,
+             "retweet_count": 0
+            },
+            "details": {
+             "created_at_ms": 1794035463000,
+             "display_text_range": [
+              0,
+              44
+             ],
+             "full_text": "RT @original_author: the post being reposted",
+             "hashtag_entities": []
+            },
+            "id": "VHdlZXQ62000000000000000011",
+            "legacy": {
+             "conversation_id_str": "2000000000000000011",
+             "entities": {},
+             "lang": "en",
+             "retweeted_status_results": {
+              "__typename": "TweetResults",
+              "id": "VHdlZXRSZXN1bHRzOj2000000000000000012",
+              "rest_id": "2000000000000000012",
+              "result": {
+               "__typename": "TweetWithVisibilityResults",
+               "limited_action_results": {},
+               "tweet": {
+                "__isTweetResult": "Tweet",
+                "__typename": "Tweet",
+                "core": {
+                 "user_results": {
+                  "result": {
+                   "__typename": "User",
+                   "core": {
+                    "name": "Original Author",
+                    "screen_name": "original_author"
+                   },
+                   "id": "VXNlcjo100000000000000012",
+                   "rest_id": "100000000000000012",
+                   "verification": {
+                    "is_blue_verified": false
+                   }
+                  },
+                  "id": "VXNlclJlc3VsdHM6100000000000000012"
+                 }
+                },
+                "counts": {
+                 "bookmark_count": 0,
+                 "favorite_count": 3,
+                 "quote_count": 0,
+                 "reply_count": 1,
+                 "retweet_count": 0
+                },
+                "details": {
+                 "created_at_ms": 1794035463000,
+                 "display_text_range": [
+                  0,
+                  23
+                 ],
+                 "full_text": "the post being reposted",
+                 "hashtag_entities": []
+                },
+                "id": "VHdlZXQ62000000000000000012",
+                "legacy": {
+                 "conversation_id_str": "2000000000000000012",
+                 "entities": {},
+                 "lang": "en"
+                },
+                "rest_id": "2000000000000000012",
+                "views": {
+                 "count": "24"
+                }
+               }
+              }
+             }
+            },
+            "rest_id": "2000000000000000011",
+            "views": {
+             "count": "24"
+            }
+           }
+          }
+         }
+        },
+        "entry_id": "tweet-2000000000000000011",
+        "sort_index": "2118974066252578816"
+       },
+       {
+        "content": {
+         "__typename": "TimelineTimelineItem",
+         "client_event_info": {
+          "component": "for_you_phoenix",
+          "element": "tweet"
+         },
+         "content": {
+          "__isTimelineTimelineItemContent": "TimelineTweet",
+          "__typename": "TimelineTweet",
+          "display_type": "Tweet",
+          "tweet_results": {
+           "__typename": "TweetResults",
+           "id": "VHdlZXRSZXN1bHRzOj2000000000000000013",
+           "rest_id": "2000000000000000013",
+           "result": {
+            "__isTweetResult": "Tweet",
+            "__typename": "Tweet",
+            "core": {
+             "user_results": {
+              "result": {
+               "__typename": "User",
+               "core": {
+                "name": "Reposter",
+                "screen_name": "reposter"
+               },
+               "id": "VXNlcjo100000000000000013",
+               "rest_id": "100000000000000013",
+               "verification": {
+                "is_blue_verified": false
+               }
+              },
+              "id": "VXNlclJlc3VsdHM6100000000000000013"
+             }
+            },
+            "counts": {
+             "bookmark_count": 0,
+             "favorite_count": 3,
+             "quote_count": 0,
+             "reply_count": 1,
+             "retweet_count": 0
+            },
+            "details": {
+             "created_at_ms": 1794035463000,
+             "display_text_range": [
+              0,
+              12
+             ],
+             "full_text": "RT @me: mine",
+             "hashtag_entities": []
+            },
+            "id": "VHdlZXQ62000000000000000013",
+            "legacy": {
+             "conversation_id_str": "2000000000000000013",
+             "entities": {},
+             "lang": "en",
+             "retweeted_status_results": {
+              "__typename": "TweetResults",
+              "id": "VHdlZXRSZXN1bHRzOj2000000000000000014",
+              "rest_id": "2000000000000000014",
+              "result": {
+               "__isTweetResult": "Tweet",
+               "__typename": "Tweet",
+               "core": {
+                "user_results": {
+                 "result": {
+                  "__typename": "User",
+                  "core": {
+                   "name": "Me",
+                   "screen_name": "me"
+                  },
+                  "id": "VXNlcjo900000000000000001",
+                  "rest_id": "900000000000000001",
+                  "verification": {
+                   "is_blue_verified": false
+                  }
+                 },
+                 "id": "VXNlclJlc3VsdHM6900000000000000001"
+                }
+               },
+               "counts": {
+                "bookmark_count": 0,
+                "favorite_count": 3,
+                "quote_count": 0,
+                "reply_count": 1,
+                "retweet_count": 0
+               },
+               "details": {
+                "created_at_ms": 1794035463000,
+                "display_text_range": [
+                 0,
+                 4
+                ],
+                "full_text": "mine",
+                "hashtag_entities": []
+               },
+               "id": "VHdlZXQ62000000000000000014",
+               "legacy": {
+                "conversation_id_str": "2000000000000000014",
+                "entities": {},
+                "lang": "en"
+               },
+               "rest_id": "2000000000000000014",
+               "views": {
+                "count": "24"
+               }
+              }
+             }
+            },
+            "rest_id": "2000000000000000013",
+            "views": {
+             "count": "24"
+            }
+           }
+          }
+         }
+        },
+        "entry_id": "tweet-2000000000000000013",
+        "sort_index": "2118974066252578816"
+       }
+      ]
+     },
+     {
+      "__typename": "TimelineReplaceEntry",
+      "entry_id_to_replace": "tweet-2000000000000000021",
+      "entry": {
+       "content": {
+        "__typename": "TimelineTimelineItem",
+        "client_event_info": {
+         "component": "for_you_phoenix",
+         "element": "tweet"
+        },
+        "content": {
+         "__isTimelineTimelineItemContent": "TimelineTweet",
+         "__typename": "TimelineTweet",
+         "display_type": "Tweet",
+         "tweet_results": {
+          "__typename": "TweetResults",
+          "id": "VHdlZXRSZXN1bHRzOj2000000000000000021",
+          "rest_id": "2000000000000000021",
+          "result": {
+           "__isTweetResult": "Tweet",
+           "__typename": "Tweet",
+           "core": {
+            "user_results": {
+             "result": {
+              "__typename": "User",
+              "core": {
+               "name": "Edited",
+               "screen_name": "edited"
+              },
+              "id": "VXNlcjo100000000000000021",
+              "rest_id": "100000000000000021",
+              "verification": {
+               "is_blue_verified": false
+              }
+             },
+             "id": "VXNlclJlc3VsdHM6100000000000000021"
+            }
+           },
+           "counts": {
+            "bookmark_count": 0,
+            "favorite_count": 3,
+            "quote_count": 0,
+            "reply_count": 1,
+            "retweet_count": 0
+           },
+           "details": {
+            "created_at_ms": 1794035463000,
+            "display_text_range": [
+             0,
+             11
+            ],
+            "full_text": "edited text",
+            "hashtag_entities": []
+           },
+           "id": "VHdlZXQ62000000000000000021",
+           "legacy": {
+            "conversation_id_str": "2000000000000000021",
+            "entities": {},
+            "lang": "en"
+           },
+           "rest_id": "2000000000000000021",
+           "views": {
+            "count": "24"
+           }
+          }
+         }
+        }
+       },
+       "entry_id": "tweet-2000000000000000021",
+       "sort_index": "2118974066252578816"
+      }
+     },
+     {
+      "__typename": "TimelinePinEntry",
+      "entry": {
+       "content": {
+        "__typename": "TimelineTimelineItem",
+        "client_event_info": {
+         "component": "for_you_phoenix",
+         "element": "tweet"
+        },
+        "content": {
+         "__isTimelineTimelineItemContent": "TimelineTweet",
+         "__typename": "TimelineTweet",
+         "display_type": "Tweet",
+         "tweet_results": {
+          "__typename": "TweetResults",
+          "id": "VHdlZXRSZXN1bHRzOj2000000000000000022",
+          "rest_id": "2000000000000000022",
+          "result": {
+           "__isTweetResult": "Tweet",
+           "__typename": "Tweet",
+           "core": {
+            "user_results": {
+             "result": {
+              "__typename": "User",
+              "core": {
+               "name": "Pinned",
+               "screen_name": "pinned"
+              },
+              "id": "VXNlcjo100000000000000022",
+              "rest_id": "100000000000000022",
+              "verification": {
+               "is_blue_verified": false
+              }
+             },
+             "id": "VXNlclJlc3VsdHM6100000000000000022"
+            }
+           },
+           "counts": {
+            "bookmark_count": 0,
+            "favorite_count": 3,
+            "quote_count": 0,
+            "reply_count": 1,
+            "retweet_count": 0
+           },
+           "details": {
+            "created_at_ms": 1794035463000,
+            "display_text_range": [
+             0,
+             11
+            ],
+            "full_text": "pinned post",
+            "hashtag_entities": []
+           },
+           "id": "VHdlZXQ62000000000000000022",
+           "legacy": {
+            "conversation_id_str": "2000000000000000022",
+            "entities": {},
+            "lang": "en"
+           },
+           "rest_id": "2000000000000000022",
+           "views": {
+            "count": "24"
+           }
+          }
+         }
+        }
+       },
+       "entry_id": "tweet-2000000000000000022",
+       "sort_index": "2118974066252578816"
+      }
+     },
+     {
+      "__typename": "TimelineAddEntries",
+      "entries": [
+       {
+        "content": {
+         "__typename": "TimelineTimelineItem",
+         "client_event_info": {
+          "component": "for_you_phoenix",
+          "element": "tweet"
+         },
+         "content": {
+          "__isTimelineTimelineItemContent": "TimelineTweet",
+          "__typename": "TimelineTweet",
+          "display_type": "Tweet",
+          "tweet_results": {
+           "__typename": "TweetResults",
+           "id": "VHdlZXRSZXN1bHRzOj2000000000000000023",
+           "rest_id": "2000000000000000023",
+           "result": {
+            "__isTweetResult": "Tweet",
+            "__typename": "Tweet",
+            "core": {
+             "user_results": {
+              "result": {
+               "__typename": "User",
+               "core": {
+                "name": "Reposter",
+                "screen_name": "reposter"
+               },
+               "id": "VXNlcjo100000000000000023",
+               "rest_id": "100000000000000023",
+               "verification": {
+                "is_blue_verified": false
+               }
+              },
+              "id": "VXNlclJlc3VsdHM6100000000000000023"
+             }
+            },
+            "counts": {
+             "bookmark_count": 0,
+             "favorite_count": 3,
+             "quote_count": 0,
+             "reply_count": 1,
+             "retweet_count": 0
+            },
+            "details": {
+             "created_at_ms": 1794035463000,
+             "display_text_range": [
+              0,
+              11
+             ],
+             "full_text": "RT @gone: …",
+             "hashtag_entities": []
+            },
+            "id": "VHdlZXQ62000000000000000023",
+            "legacy": {
+             "conversation_id_str": "2000000000000000023",
+             "entities": {},
+             "lang": "en",
+             "retweeted_status_results": {
+              "__typename": "TweetResults",
+              "id": "VHdlZXRSZXN1bHRzOj2000000000000000024",
+              "rest_id": "2000000000000000024",
+              "result": {
+               "__typename": "TweetTombstone",
+               "rest_id": "2000000000000000024"
+              }
+             }
+            },
+            "rest_id": "2000000000000000023",
+            "views": {
+             "count": "24"
+            }
+           }
+          }
+         }
+        },
+        "entry_id": "tweet-2000000000000000023",
+        "sort_index": "2118974066252578816"
+       },
+       {
+        "content": {
+         "__typename": "TimelineTimelineItem",
+         "client_event_info": {
+          "component": "for_you_phoenix",
+          "element": "tweet"
+         },
+         "content": {
+          "__isTimelineTimelineItemContent": "TimelineTweet",
+          "__typename": "TimelineTweet",
+          "display_type": "Tweet",
+          "tweet_results": {
+           "__typename": "TweetResults",
+           "id": "VHdlZXRSZXN1bHRzOj2000000000000000025",
+           "rest_id": "2000000000000000025",
+           "result": {
+            "__isTweetResult": "Tweet",
+            "__typename": "Tweet",
+            "core": {
+             "user_results": {
+              "result": {
+               "__typename": "User",
+               "core": {
+                "name": "Me",
+                "screen_name": "me"
+               },
+               "id": "VXNlcjo900000000000000001",
+               "rest_id": "900000000000000001",
+               "verification": {
+                "is_blue_verified": false
+               }
+              },
+              "id": "VXNlclJlc3VsdHM6900000000000000001"
+             }
+            },
+            "counts": {
+             "bookmark_count": 0,
+             "favorite_count": 3,
+             "quote_count": 0,
+             "reply_count": 1,
+             "retweet_count": 0
+            },
+            "details": {
+             "created_at_ms": 1794035463000,
+             "display_text_range": [
+              0,
+              20
+             ],
+             "full_text": "RT @stranger: theirs",
+             "hashtag_entities": []
+            },
+            "id": "VHdlZXQ62000000000000000025",
+            "legacy": {
+             "conversation_id_str": "2000000000000000025",
+             "entities": {},
+             "lang": "en",
+             "retweeted_status_results": {
+              "__typename": "TweetResults",
+              "id": "VHdlZXRSZXN1bHRzOj2000000000000000026",
+              "rest_id": "2000000000000000026",
+              "result": {
+               "__isTweetResult": "Tweet",
+               "__typename": "Tweet",
+               "core": {
+                "user_results": {
+                 "result": {
+                  "__typename": "User",
+                  "core": {
+                   "name": "Stranger",
+                   "screen_name": "stranger"
+                  },
+                  "id": "VXNlcjo100000000000000026",
+                  "rest_id": "100000000000000026",
+                  "verification": {
+                   "is_blue_verified": false
+                  }
+                 },
+                 "id": "VXNlclJlc3VsdHM6100000000000000026"
+                }
+               },
+               "counts": {
+                "bookmark_count": 0,
+                "favorite_count": 3,
+                "quote_count": 0,
+                "reply_count": 1,
+                "retweet_count": 0
+               },
+               "details": {
+                "created_at_ms": 1794035463000,
+                "display_text_range": [
+                 0,
+                 6
+                ],
+                "full_text": "theirs",
+                "hashtag_entities": []
+               },
+               "id": "VHdlZXQ62000000000000000026",
+               "legacy": {
+                "conversation_id_str": "2000000000000000026",
+                "entities": {},
+                "lang": "en"
+               },
+               "rest_id": "2000000000000000026",
+               "views": {
+                "count": "24"
+               }
+              }
+             }
+            },
+            "rest_id": "2000000000000000025",
+            "views": {
+             "count": "24"
+            }
+           }
+          }
+         }
+        },
+        "entry_id": "tweet-2000000000000000025",
+        "sort_index": "2118974066252578816"
+       }
+      ]
+     },
+     {
+      "__typename": "TimelineAddToModule",
+      "module_entry_id": "home-conversation-2000000000000000007",
+      "prepend": false,
+      "module_items": [
+       {
+        "entry_id": "tweet-2000000000000000015",
+        "item": {
+         "__typename": "TimelineModuleItem",
+         "content": {
+          "__isTimelineTimelineItemContent": "TimelineTweet",
+          "__typename": "TimelineTweet",
+          "display_type": "Tweet",
+          "tweet_results": {
+           "__typename": "TweetResults",
+           "id": "VHdlZXRSZXN1bHRzOj2000000000000000015",
+           "rest_id": "2000000000000000015",
+           "result": {
+            "__isTweetResult": "Tweet",
+            "__typename": "Tweet",
+            "core": {
+             "user_results": {
+              "result": {
+               "__typename": "User",
+               "core": {
+                "name": "Late Replier",
+                "screen_name": "late_replier"
+               },
+               "id": "VXNlcjo100000000000000015",
+               "rest_id": "100000000000000015",
+               "verification": {
+                "is_blue_verified": false
+               }
+              },
+              "id": "VXNlclJlc3VsdHM6100000000000000015"
+             }
+            },
+            "counts": {
+             "bookmark_count": 0,
+             "favorite_count": 3,
+             "quote_count": 0,
+             "reply_count": 1,
+             "retweet_count": 0
+            },
+            "details": {
+             "created_at_ms": 1794035463000,
+             "display_text_range": [
+              0,
+              13
+             ],
+             "full_text": "a later reply",
+             "hashtag_entities": []
+            },
+            "id": "VHdlZXQ62000000000000000015",
+            "legacy": {
+             "conversation_id_str": "2000000000000000015",
+             "entities": {},
+             "lang": "en"
+            },
+            "rest_id": "2000000000000000015",
+            "views": {
+             "count": "24"
+            }
+           }
+          }
+         }
+        }
+       },
+       {
+        "entry_id": "tweet-2000000000000000027",
+        "item": {
+         "__typename": "TimelineModuleItem",
+         "content": {
+          "__isTimelineTimelineItemContent": "TimelineTweet",
+          "__typename": "TimelineTweet",
+          "display_type": "Tweet",
+          "tweet_results": {
+           "__typename": "TweetResults",
+           "id": "VHdlZXRSZXN1bHRzOj2000000000000000027",
+           "rest_id": "2000000000000000027",
+           "result": {
+            "__isTweetResult": "Tweet",
+            "__typename": "Tweet",
+            "core": {
+             "user_results": {
+              "result": {
+               "__typename": "User",
+               "core": {
+                "name": "Me",
+                "screen_name": "me"
+               },
+               "id": "VXNlcjo900000000000000001",
+               "rest_id": "900000000000000001",
+               "verification": {
+                "is_blue_verified": false
+               }
+              },
+              "id": "VXNlclJlc3VsdHM6900000000000000001"
+             }
+            },
+            "counts": {
+             "bookmark_count": 0,
+             "favorite_count": 3,
+             "quote_count": 0,
+             "reply_count": 1,
+             "retweet_count": 0
+            },
+            "details": {
+             "created_at_ms": 1794035463000,
+             "display_text_range": [
+              0,
+              13
+             ],
+             "full_text": "my late reply",
+             "hashtag_entities": []
+            },
+            "id": "VHdlZXQ62000000000000000027",
+            "legacy": {
+             "conversation_id_str": "2000000000000000027",
+             "entities": {},
+             "lang": "en"
+            },
+            "rest_id": "2000000000000000027",
+            "views": {
+             "count": "24"
+            }
+           }
+          }
+         }
+        }
+       }
+      ]
+     }
+    ],
+    "response_objects": {
+     "feedback_actions": []
+    }
+   },
+   "id": "SG9tZQ=="
+  }
+ }
+}

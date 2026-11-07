@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+## [0.32.0] — 2026-11-07
+
 - **The browser extension works with x.com's new web app.** X replaced its web client, and the extension stopped doing anything without saying so: it no longer recognised the Home timeline requests (now `HomeTimeline` and `HomeLatestTimelineQuery` on `api.x.com`), couldn't read their new response shape, and looked for page elements that no longer exist, so no post was checked or hidden while the popup reported a healthy filter. It now reads the new timelines and finds posts by their permalinks, and keeps its behaviour: unjudged posts are held back before they're painted (X's response reaches X only once the extension has read it, and new rows are marked before their first paint), hidden posts leave no gap in X's scrolling list, a post you're reading doesn't move when posts above it come or go, late verdicts still fold a post away, a conversation's replies are hidden with a hidden post, and **Show this post**, the right-click menu (a right-click in a quoted post acts on the post quoting it) and the **Not interested** button work again. The Not interested button now also appears on Following, where X's menu now offers it too. The model now reads a post's links as the terminal client and the iPhone app do (a picture's t.co link dropped, other links as their address), and a conversation you reply to stays shown even when X adds your reply after the posts above it. Should X change its page again, the popup says "X changed its timeline" within ten seconds instead of quietly hiding nothing.
 - **Error screens in the iPhone app no longer show raw backticks.** "Can't reach the unrager server" ended "…that `unrager serve` is running" with the backticks showing, as did server messages that name a command; error and empty screens now render inline markdown, and the network error no longer needs it.
 - **Changing the server address in the iPhone app can't sign it in as the old server's account or lose the new address.** An account lookup still on its way from the old server was kept, and remembered for the new one, when it landed after the change; checking the connection while a newly typed address was being tested cancelled saving it.
@@ -435,7 +437,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.31.2...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.32.0...HEAD
+[0.32.0]: https://github.com/guitaripod/unrager/releases/tag/0.32.0
 [0.31.2]: https://github.com/guitaripod/unrager/releases/tag/0.31.2
 [0.31.1]: https://github.com/guitaripod/unrager/releases/tag/0.31.1
 [0.31.0]: https://github.com/guitaripod/unrager/releases/tag/0.31.0

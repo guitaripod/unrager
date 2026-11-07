@@ -156,7 +156,7 @@ function tabView(tab, paused) {
       detail: "Open your Home timeline on x.com. Posts that match your rules disappear as they load.",
     };
   }
-  const { hidden, checked, state, lastError, shapeProblem } = tab.stats;
+  const { hidden, checked, state, lastError, shapeProblem, layoutProblem } = tab.stats;
   if (state === "error") {
     return {
       tone: "problem",
@@ -165,12 +165,12 @@ function tabView(tab, paused) {
       fine: lastError || "",
     };
   }
-  if (shapeProblem && checked === 0) {
+  if (layoutProblem || (shapeProblem && checked === 0)) {
     return {
       tone: "problem",
       headline: "X changed its timeline",
       detail: "unrager can't read the posts on this page. Updating it usually fixes this:",
-      fine: shapeProblem,
+      fine: layoutProblem || shapeProblem,
       command: "unrager update && unrager setup",
     };
   }

@@ -23,11 +23,6 @@
   /// Once the timeline has waited this long, its loading edge shows the
   /// spinner at once as it moves down, rather than fading it in again.
   const EDGE_STEADY_MS = 450;
-  /// How long, and for how many calm frames, the post in view is held in
-  /// place after posts above it come or go: X moves its cells a frame or two
-  /// after one changes size.
-  const SETTLE_MS = 1000;
-  const SETTLE_FRAMES = 6;
   /// A tab asks for the model to be loaded at most this often; the server
   /// skips one that just answered anyway.
   const WARM_EVERY_MS = 30000;
@@ -35,9 +30,20 @@
   /// Addresses X gives the dialogs it opens over the page you're on (a reply,
   /// a photo), which stays on screen underneath.
   const OVERLAY = /^\/(?:compose\/|[^/]+\/status\/\d+\/(?:photo|video)\/)/;
+  /// What X lays over the page for those, and for dialogs that keep its
+  /// address.
+  const DIALOG = '[aria-modal="true"], [role="dialog"][data-slot="xds-modal-surface"]';
+  /// The rows of X's timeline list, which X positions itself as you scroll,
+  /// and the post blocks inside them: one per row, or a conversation's
+  /// posts in one row. A quoted post is a block nested inside another.
+  const ROW = "main li[data-index]";
+  const POST = '[role="link"][data-href*="/status/"]';
   /// How long the Not interested button waits for X's menu to open or close.
   const MENU_WAIT_MS = 1500;
-  const MENU = '#layers [role="menu"]';
+  const MENU = '[role="menu"]';
+  /// How long Home can show posts while no timeline arrives, or none of
+  /// them can be found on the page, before the popup says X changed.
+  const DRIFT_MS = 10000;
   const FROWN =
     '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.75"/>' +
     '<path d="M8.6 16.3c.85-1.2 2-1.8 3.4-1.8s2.55.6 3.4 1.8"/>' +
@@ -77,7 +83,7 @@
   /// Cells folding out of view, with their animation.
   const folding = new Map();
   const warned = new Set();
-  const health = { failing: false, lastError: null, shapeProblem: null };
+  const health = { failing: false, lastError: null, shapeProblem: null, layoutProblem: null };
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   let generation = 0;
   let lastBadge = "";
@@ -87,10 +93,14 @@
   let page = null;
   /// When the timeline's loading edge appeared, or 0 while there's none.
   let waitingSince = 0;
-  /// The post kept in place while posts above it come and go.
-  let anchor = null;
-  let lastInput = 0;
   let lastWarm = 0;
+  /// Timeline responses read on this tab, and the ids their cells show, for
+  /// telling when X's page and its timelines stop matching up.
+  let timelinesSeen = 0;
+  const seenDomIds = new Set();
+  let driftSince = 0;
+  let lastDriftCheck = 0;
+  let driftTimer = 0;
 
   function state() {
     if (settings.paused) return "paused";
@@ -106,6 +116,7 @@
       held: holds.size + threadHolds.size,
       lastError: health.lastError,
       shapeProblem: health.shapeProblem,
+      layoutProblem: health.layoutProblem,
     };
   }
 
@@ -156,7 +167,7 @@
   /// Whether a dialog covers the page, as opposed to a bar along its bottom
   /// edge (a cookie notice) that can stay open while you move between pages.
   function dialogOpen() {
-    for (const dialog of document.querySelectorAll('[aria-modal="true"]')) {
+    for (const dialog of document.querySelectorAll(DIALOG)) {
       const box = dialog.getBoundingClientRect();
       if (box.height > 0 && box.top < window.innerHeight / 2) return true;
     }
@@ -181,15 +192,20 @@
     return page === "/home";
   }
 
-  /// The post a cell shows: its first permalink wrapping a <time>. A quoted
-  /// post's own timestamp link comes later in the cell, so it never wins.
+  /// The post a cell shows: a post block's permalink, which for a repost is
+  /// the original's. A row without a post (Who to follow) shows none.
   function cellTweetId(cell) {
-    for (const a of cell.querySelectorAll('a[href*="/status/"]')) {
-      if (!a.querySelector("time")) continue;
-      const m = /\/status\/(\d+)/.exec(a.getAttribute("href") || "");
-      if (m) return m[1];
+    const m = /\/status\/(\d+)/.exec(cell.getAttribute("data-href") || "");
+    return m ? m[1] : null;
+  }
+
+  /// The post block `el` is in, past any quoted post it's inside.
+  function postOf(el) {
+    let post = null;
+    for (let block = el.closest(POST); block; block = block.parentElement && block.parentElement.closest(POST)) {
+      post = block;
     }
-    return null;
+    return post;
   }
 
   /// A rule's leading phrase, "war" for "war, military conflict, …"; the
@@ -222,6 +238,7 @@
       const id = cellTweetId(cell);
       if (id) overrule(id, "keep");
     });
+    for (const type of ["pointerdown", "pointerup", "mousedown", "mouseup"]) show.addEventListener(type, swallow);
     note.append(label, show);
     cell.prepend(note);
     return note;
@@ -247,13 +264,6 @@
     return true;
   }
 
-  /// Whether For you is the tab showing: X's menu offers "Not interested"
-  /// only there, and the same post can turn up under Following too.
-  function onForYou() {
-    const tabs = document.querySelectorAll('[data-testid="primaryColumn"] [role="tablist"] [role="tab"]');
-    return tabs.length === 0 || tabs[0].getAttribute("aria-selected") === "true";
-  }
-
   /// Polls once a frame until `find` returns something, or gives up with null.
   function waitFor(find, ms) {
     return new Promise((resolve) => {
@@ -267,36 +277,45 @@
     });
   }
 
-  function closeMenu(dropdown) {
-    const layer = dropdown && dropdown.closest('[role="group"]');
-    const mask = layer && layer.firstElementChild && layer.firstElementChild.firstElementChild;
-    if (mask && !mask.contains(dropdown)) mask.click();
-    else document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", keyCode: 27, bubbles: true }));
+  /// A post's own "More" button: the menu button in its header, not one in
+  /// its action bar (Repost, Share) or in a post it quotes.
+  function moreButton(post) {
+    for (const button of post.querySelectorAll('button[aria-haspopup="menu"]')) {
+      if (button.closest(POST) === post && !button.closest('[role="group"]')) return button;
+    }
+    return null;
+  }
+
+  /// The menu `trigger` opened, which X portals to the end of the page and
+  /// labels by its trigger, so another post's menu is never mistaken for it.
+  function menuOf(trigger) {
+    return trigger.id ? document.querySelector(`${MENU}[aria-labelledby="${CSS.escape(trigger.id)}"]`) : null;
+  }
+
+  function closeMenu() {
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", keyCode: 27, bubbles: true }));
   }
 
   /// X's own "Not interested in this post", minus the menu: opens the post's
   /// "More" menu out of sight and picks the item X labelled `prompt`, so X
   /// sends its feedback and swaps in its usual confirmation, Undo included.
-  async function pickNotInterested(article, prompt) {
-    const caret = article.querySelector('[data-testid="caret"]');
-    if (!caret) return false;
+  async function pickNotInterested(post, prompt) {
+    const more = moreButton(post);
+    if (!more || !more.id) return false;
     root.setAttribute("data-unrager-quiet-menu", "");
     let picked = false;
     try {
-      caret.click();
-      const dropdown = await waitFor(() => document.querySelector(`${MENU} [data-testid="Dropdown"]`), MENU_WAIT_MS);
-      const items = dropdown ? [...dropdown.querySelectorAll('[role="menuitem"]')] : [];
+      more.click();
+      const menu = await waitFor(() => menuOf(more), MENU_WAIT_MS);
+      const items = menu ? [...menu.querySelectorAll('[role="menuitem"]')] : [];
       const item = items.find((el) => el.textContent.trim() === prompt);
       if (item) {
         item.click();
         picked = true;
-      } else {
-        const late =
-          dropdown ||
-          (await waitFor(() => document.querySelector(`${MENU} [data-testid="Dropdown"]`), MENU_WAIT_MS));
-        if (late) closeMenu(late);
+      } else if (menu || (await waitFor(() => menuOf(more), MENU_WAIT_MS))) {
+        closeMenu();
       }
-      await waitFor(() => !document.querySelector(MENU), MENU_WAIT_MS);
+      await waitFor(() => !menuOf(more), MENU_WAIT_MS);
     } finally {
       root.removeAttribute("data-unrager-quiet-menu");
     }
@@ -313,13 +332,12 @@
     e.preventDefault();
     e.stopPropagation();
     const button = e.currentTarget;
-    const cell = button.closest('[data-testid="cellInnerDiv"]');
-    const article = button.closest('article[data-testid="tweet"]');
-    const id = cell ? cellTweetId(cell) : null;
+    const post = postOf(button);
+    const id = post ? cellTweetId(post) : null;
     const prompt = id === null ? null : offers.get(id);
-    if (!article || !prompt || button.dataset.state === "busy") return;
+    if (!prompt || button.dataset.state === "busy") return;
     button.dataset.state = "busy";
-    if (await pickNotInterested(article, prompt)) {
+    if (await pickNotInterested(post, prompt)) {
       delete button.dataset.state;
       return;
     }
@@ -331,47 +349,33 @@
     }, 2000);
   }
 
-  /// Where the button goes in the post's header: just before the Grok
-  /// button's branch of the row it shares with "More", or before "More"
-  /// itself where there's no Grok button.
-  function slotFor(article, caret) {
-    const grok = article.querySelector('[aria-label*="Grok"]:is(button, [role="button"])');
-    if (grok) {
-      let branch = grok;
-      while (branch.parentElement && branch.parentElement !== article && !branch.parentElement.contains(caret)) {
-        branch = branch.parentElement;
-      }
-      const row = branch.parentElement;
-      if (row && row !== article && row.contains(caret) && !row.querySelector('[data-testid="tweetText"]')) {
-        return { row, before: branch, gap: caret.getBoundingClientRect().left - grok.getBoundingClientRect().right };
-      }
-    }
-    let branch = caret;
-    while (branch.parentElement && branch.parentElement !== article && branch.parentElement.childElementCount === 1) {
-      branch = branch.parentElement;
-    }
-    return branch.parentElement && branch.parentElement !== article ? { row: branch.parentElement, before: branch, gap: 0 } : null;
-  }
-
-  /// The one-click Not interested button, sized and coloured from the post's
-  /// own "More" button so it sits in X's header like one of X's.
-  function buildButton(caret, prompt, gap) {
+  /// The one-click Not interested button, sized, spaced and coloured from
+  /// the post's own "More" button so it sits in X's header like one of X's.
+  function buildButton(more, prompt) {
     const wrap = document.createElement("div");
     wrap.className = "unrager-ni-wrap";
+    wrap.style.margin = getComputedStyle(more).margin;
     const button = document.createElement("button");
     button.type = "button";
     button.className = "unrager-ni";
     button.title = prompt;
     button.setAttribute("aria-label", prompt);
     button.innerHTML = FROWN;
-    const box = caret.getBoundingClientRect();
+    const box = more.getBoundingClientRect();
     if (box.width && box.height) {
       button.style.width = `${box.width}px`;
       button.style.height = `${box.height}px`;
     }
-    const icon = caret.querySelector("svg");
-    if (icon) button.style.color = getComputedStyle(icon).color;
-    if (gap > 0) wrap.style.marginRight = `${gap}px`;
+    const icon = more.querySelector("svg");
+    if (icon) {
+      const glyph = icon.getBoundingClientRect();
+      const svg = button.querySelector("svg");
+      if (glyph.width && glyph.height) {
+        svg.style.width = `${glyph.width}px`;
+        svg.style.height = `${glyph.height}px`;
+      }
+      button.style.color = getComputedStyle(icon).color;
+    }
     button.addEventListener("click", onNotInterested);
     for (const type of ["pointerdown", "pointerup", "mousedown", "mouseup"]) button.addEventListener(type, swallow);
     wrap.append(button);
@@ -379,30 +383,49 @@
   }
 
   /// Adds the button to a post X offers "Not interested" for, and takes it
-  /// off a cell X has since reused for a post it doesn't. A cell out of view
-  /// gets it once it shows, when X's header can be measured to match.
+  /// off a cell X has since reused for a post it doesn't. It goes first in
+  /// the row "More" leads, before X's Grok button. A cell out of view gets
+  /// it once it shows, when X's header can be measured to match.
   function syncButton(cell, id, show) {
-    const article = cell.querySelector('article[data-testid="tweet"]');
-    if (!article) return;
-    const existing = article.querySelector(".unrager-ni-wrap");
+    const existing = cell.querySelector(".unrager-ni-wrap");
     const prompt = show && id !== null ? offers.get(id) : undefined;
     if (!prompt) {
       if (existing) existing.remove();
       return;
     }
     if (existing) return;
-    const caret = article.querySelector('[data-testid="caret"]');
-    const slot = caret && slotFor(article, caret);
-    if (slot) slot.row.insertBefore(buildButton(caret, prompt, slot.gap), slot.before);
+    const more = moreButton(cell);
+    const row = more && more.parentElement;
+    if (row) row.insertBefore(buildButton(more, prompt), row.firstElementChild);
   }
 
-  /// The cells of the timeline on screen, top to bottom. A dialog X lays
-  /// over it (a photo with its replies) has cells of its own, left alone.
+  /// The cells of the timeline X has rendered, top to bottom: each row's
+  /// post blocks, or the row itself when it holds no post. A dialog X lays
+  /// over it (a photo with its replies) has rows of its own, left alone.
   function timelineCells() {
-    const cell = '[data-testid="cellInnerDiv"]';
-    const column = document.querySelector('[data-testid="primaryColumn"]');
-    const inColumn = column ? column.querySelectorAll(cell) : [];
-    return [...(inColumn.length ? inColumn : document.querySelectorAll(cell))];
+    const rows = [...document.querySelectorAll(ROW)].filter(
+      (row) => !row.parentElement.closest(`li[data-index], ${DIALOG}`)
+    );
+    rows.sort((a, b) => Number(a.dataset.index) - Number(b.dataset.index));
+    const cells = [];
+    for (const row of rows) {
+      const posts = [...row.querySelectorAll(POST)].filter((block) => postOf(block) === block);
+      if (posts.length) {
+        cells.push(...posts);
+        clearMarks(row);
+      } else {
+        cells.push(row);
+      }
+    }
+    return cells;
+  }
+
+  /// Takes the marks off a row X now fills with posts, which carry their own:
+  /// a row held while it showed no post would otherwise hide them.
+  function clearMarks(row) {
+    if (row.dataset.unrager !== undefined) delete row.dataset.unrager;
+    if (row.dataset.unragerEdge !== undefined) delete row.dataset.unragerEdge;
+    if (row.dataset.unragerEnter !== undefined) delete row.dataset.unragerEnter;
   }
 
   function wasOnScreen(cell, id) {
@@ -444,33 +467,21 @@
     return !!first && first.classList.contains("unrager-note");
   }
 
-  /// The first cell in view when it reaches above the top of the window, so
-  /// posts before it are out of sight above; null when the timeline's top
-  /// is in view, where posts arriving above should push it down.
-  function firstInView(rows) {
-    for (const { cell } of rows) {
-      const box = cell.getBoundingClientRect();
-      if (box.height > 0 && box.bottom > 0) {
-        return box.top <= 0 ? { cell, top: box.top, since: performance.now(), until: 0, calm: 0, running: false } : null;
-      }
-    }
-    return null;
-  }
-
-  /// Reads, before anything is written, which cells change and where: a
-  /// post in view that a late verdict hides folds away, and returns whether
-  /// posts coming or going above the one in view need making up for.
+  /// Reads, before anything is written, which cells change: a post in view
+  /// that a late verdict hides folds away. Posts coming or going above the
+  /// one in view need no making up for: X's list moves the page by what a
+  /// row above it gains or loses, so the post being read stays put.
   function measure(rows, home, filtering) {
     const motion = home && !reducedMotion.matches;
-    let first = -1;
-    rows.forEach((row, i) => {
+    let changed = false;
+    for (const row of rows) {
       const was = lastShown.get(row.cell);
       const noted = hasNote(row.cell) !== (!!row.info && settings.reveal && !settings.paused);
       row.changed = was !== undefined && (was !== row.shows || noted);
       row.enter = motion && row.changed && row.shows && was === false;
-      if (row.changed && first < 0) first = i;
-    });
-    if (first < 0 || !home) return false;
+      if (row.changed) changed = true;
+    }
+    if (!changed || !home) return;
     for (const row of rows) {
       if (!row.changed || row.shows || row.mark !== "hidden" || !filtering || !motion || folding.has(row.cell)) continue;
       const box = row.cell.getBoundingClientRect();
@@ -479,56 +490,17 @@
         row.height = box.height;
       }
     }
-    const kept =
-      anchor && anchor.running && anchor.cell.isConnected && rows.some((r) => r.cell === anchor.cell)
-        ? anchor
-        : firstInView(rows);
-    if (!kept || rows.findIndex((r) => r.cell === kept.cell) <= first) return false;
-    anchor = kept;
-    return true;
-  }
-
-  /// Holds the post in view where the reader had it while posts above it
-  /// come or go: X positions its cells itself, a frame or two after one
-  /// changes size, where the browser's own scroll anchoring can't follow.
-  /// Stops as soon as the reader scrolls, or once nothing has moved for a
-  /// few frames.
-  function keepInPlace() {
-    const current = anchor;
-    current.until = performance.now() + SETTLE_MS;
-    current.calm = 0;
-    if (current.running) return;
-    current.running = true;
-    const step = () => {
-      if (anchor !== current) return;
-      const box = current.cell.isConnected ? current.cell.getBoundingClientRect() : null;
-      const done = !box || !box.height || lastInput > current.since || performance.now() > current.until;
-      if (!done) {
-        const drift = box.top - current.top;
-        if (Math.abs(drift) >= 0.5) {
-          window.scrollBy(0, drift);
-          current.calm = 0;
-        } else {
-          current.calm += 1;
-        }
-      }
-      if (done || current.calm >= SETTLE_FRAMES) {
-        anchor = null;
-        return;
-      }
-      requestAnimationFrame(step);
-    };
-    step();
   }
 
   /// Folds a post in view away, so the posts under it slide up rather than
-  /// jump, and marks it hidden once it's flat.
+  /// jump, and marks it hidden once it's flat. Its padding and divider fold
+  /// with it.
   function foldAway(cell, height) {
     cell.dataset.unragerFolding = "";
     const animation = cell.animate(
       [
         { height: `${height}px`, opacity: 1 },
-        { height: "0px", opacity: 0 },
+        { height: "0px", paddingTop: "0px", paddingBottom: "0px", borderBottomWidth: "0px", opacity: 0 },
       ],
       { duration: FOLD_MS, easing: "cubic-bezier(0.4, 0, 0.2, 1)", fill: "forwards" }
     );
@@ -564,9 +536,9 @@
     const home = onHome();
     root.toggleAttribute("data-unrager-away", !home);
     const filtering = home && !settings.paused && !settings.reveal;
-    const buttons = offers.size > 0 && !settings.paused && home && onForYou();
+    const buttons = offers.size > 0 && !settings.paused && home;
     const { rows, edge } = planCells(timelineCells(), filtering);
-    const settle = measure(rows, home, filtering);
+    measure(rows, home, filtering);
     if (edge < 0) waitingSince = 0;
     else if (!waitingSince) waitingSince = now;
     const edgeShows = edge >= 0 && rows.slice(edge + 1).every((r) => !r.shows);
@@ -613,16 +585,17 @@
         for (const cell of entering) delete cell.dataset.unragerEnter;
       }, ENTER_MS + 100);
     }
-    if (settle) keepInPlace();
     marksOnPage = marks;
+  }
+
+  function needsApply() {
+    const idle = hidden.size === 0 && holds.size === 0 && threadHolds.size === 0 && folding.size === 0;
+    return !idle || marksOnPage || offers.size > 0;
   }
 
   let scheduled = false;
   function scheduleApply() {
-    const idle = hidden.size === 0 && holds.size === 0 && threadHolds.size === 0 && folding.size === 0;
-    if (scheduled || (idle && !marksOnPage && offers.size === 0)) {
-      return;
-    }
+    if (scheduled || !needsApply()) return;
     scheduled = true;
     requestAnimationFrame(() => {
       scheduled = false;
@@ -636,6 +609,9 @@
     known.delete(tweet.id);
     known.set(tweet.id, tweet);
     if (known.size > MAX_KNOWN) known.delete(known.keys().next().value);
+    seenDomIds.delete(tweet.domId);
+    seenDomIds.add(tweet.domId);
+    if (seenDomIds.size > MAX_ON_SCREEN) seenDomIds.delete(seenDomIds.values().next().value);
     if (tweet.notInterested) {
       offers.delete(tweet.domId);
       offers.set(tweet.domId, tweet.notInterested);
@@ -643,9 +619,30 @@
     }
     if (tweet.thread) {
       if (!threads.has(tweet.thread)) threads.set(tweet.thread, new Map());
-      threads.get(tweet.thread).set(tweet.domId, { position: tweet.position, own: tweet.own });
+      const posts = threads.get(tweet.thread);
+      posts.set(tweet.domId, { own: tweet.own });
       if (threads.size > MAX_KNOWN) threads.delete(threads.keys().next().value);
+      if (tweet.own || [...posts.values()].some((post) => post.own)) claimThread(posts);
     }
+  }
+
+  /// A conversation the user took part in is theirs as a whole, including
+  /// posts X showed before it added their reply to the block: none of them
+  /// is held or hidden any more.
+  function claimThread(posts) {
+    for (const [domId, post] of posts) {
+      if (post.own) continue;
+      post.own = true;
+      hidden.delete(domId);
+      holds.delete(domId);
+      for (const t of known.values()) if (t.domId === domId) t.own = true;
+    }
+  }
+
+  /// Orders a conversation block's posts top first: a reply is always newer
+  /// than the post it answers, and post ids grow with time.
+  function byAge([a], [b]) {
+    return a.length - b.length || (a < b ? -1 : a > b ? 1 : 0);
   }
 
   /// Whether the user chose to always show the post a cell shows.
@@ -666,7 +663,7 @@
     for (const posts of threads.values()) {
       let hiddenAbove = false;
       let waitUntil = 0;
-      for (const [domId, post] of [...posts].sort((a, b) => a[1].position - b[1].position)) {
+      for (const [domId, post] of [...posts].sort(byAge)) {
         const info = hidden.get(domId);
         const follows = !post.own && !keptByUser(domId);
         if (hiddenAbove && follows) {
@@ -857,6 +854,7 @@
       return;
     }
     const { tweets, problem } = unragerTimeline.extractTweets(json, selfId());
+    timelinesSeen += 1;
     health.shapeProblem = problem;
     if (problem) warn(`${op}: ${problem} — X may have changed its response shape`);
     const firstSeen = tweets.filter((t) => !known.has(t.id));
@@ -872,6 +870,45 @@
     }
     syncThreads();
     scheduleApply();
+    publish();
+  }
+
+  /// What's wrong when Home shows posts the filter can't work on: no
+  /// timeline ever arrived (X renamed its request), or none of the posts
+  /// on screen is one a timeline brought (X changed its page).
+  function driftProblem() {
+    if (!timelinesSeen) return "no timeline responses seen; X may have renamed its timeline request";
+    const ids = timelineCells().map(cellTweetId);
+    if (ids.some((id) => id !== null && seenDomIds.has(id))) return null;
+    return "the posts on the page don't match the timeline; X may have changed its page";
+  }
+
+  /// Notices X changing under the filter, which otherwise just stops
+  /// hiding anything: a problem that lasts `DRIFT_MS` goes to the popup,
+  /// checked again then even if the page has gone still. Page changes check
+  /// at most once a second.
+  function checkDrift() {
+    const now = Date.now();
+    if (now - lastDriftCheck < 1000) return;
+    assessDrift();
+  }
+
+  function assessDrift() {
+    const now = Date.now();
+    lastDriftCheck = now;
+    const problem = onHome() && document.querySelector("main article") ? driftProblem() : null;
+    if (!problem) driftSince = 0;
+    else if (!driftSince) driftSince = now;
+    const report = problem && now - driftSince >= DRIFT_MS ? problem : null;
+    if (problem && !report && !driftTimer) {
+      driftTimer = setTimeout(() => {
+        driftTimer = 0;
+        assessDrift();
+      }, driftSince + DRIFT_MS - now + 50);
+    }
+    if (report === health.layoutProblem) return;
+    health.layoutProblem = report;
+    if (report) warn(report);
     publish();
   }
 
@@ -935,8 +972,8 @@
   document.addEventListener(
     "contextmenu",
     (e) => {
-      const cell = e.target instanceof Element ? e.target.closest('[data-testid="cellInnerDiv"]') : null;
-      contextTarget = cell ? cellTweetId(cell) : null;
+      const post = e.target instanceof Element && e.target.closest(ROW) ? postOf(e.target) : null;
+      contextTarget = post ? cellTweetId(post) : null;
     },
     true
   );
@@ -957,20 +994,27 @@
     else ready.then(warm);
   });
 
-  /// A reader scrolling takes over from keepInPlace at once.
-  for (const type of ["wheel", "touchmove", "keydown", "mousedown"]) {
-    window.addEventListener(
-      type,
-      () => {
-        lastInput = performance.now();
-      },
-      { capture: true, passive: true }
-    );
+  const ADDED = `li[data-index], ${POST}`;
+
+  /// Whether X just put timeline rows or posts on the page. X adds them
+  /// from its own animation frame callbacks, so a frame requested now would
+  /// mark them only after they've been painted once.
+  function addsCells(mutations) {
+    for (const m of mutations) {
+      for (const node of m.addedNodes) {
+        if (node instanceof Element && (node.matches(ADDED) || node.querySelector(ADDED))) return true;
+      }
+    }
+    return false;
   }
 
-  new MutationObserver(() => {
+  /// New rows are marked before the browser paints them; anything else
+  /// waits for the next frame.
+  new MutationObserver((mutations) => {
     trackPage();
-    scheduleApply();
+    if (addsCells(mutations) && needsApply()) applyHides();
+    else scheduleApply();
+    checkDrift();
   }).observe(root, { childList: true, subtree: true });
 
   document.addEventListener("DOMContentLoaded", publish, { once: true });

@@ -1,23 +1,35 @@
+html:not([data-unrager-paused]):not([data-unrager-reveal]):not([data-unrager-away]) main li[data-index] {
+  min-height: 1px;
+}
+
 html:not([data-unrager-paused]):not([data-unrager-reveal]):not([data-unrager-away])
-  [data-testid="cellInnerDiv"]:is([data-unrager="hidden"], [data-unrager="held"]) {
+  main li[data-index] [data-unrager]:is([data-unrager="hidden"], [data-unrager="held"]),
+html:not([data-unrager-paused]):not([data-unrager-reveal]):not([data-unrager-away])
+  main li[data-index]:is([data-unrager="hidden"], [data-unrager="held"]) > * {
   display: none !important;
 }
 
 html:not([data-unrager-paused]):not([data-unrager-reveal]):not([data-unrager-away])
-  [data-testid="cellInnerDiv"][data-unrager="held"][data-unrager-edge] {
+  main li[data-index] [data-unrager="held"][data-unrager-edge],
+html:not([data-unrager-paused]):not([data-unrager-reveal]):not([data-unrager-away])
+  main li[data-index][data-unrager="held"][data-unrager-edge] {
   display: block !important;
   height: 64px !important;
+  padding: 0 !important;
   overflow: hidden !important;
 }
 
 html:not([data-unrager-paused]):not([data-unrager-reveal]):not([data-unrager-away])
-  [data-testid="cellInnerDiv"][data-unrager="held"][data-unrager-edge] > * {
+  main li[data-index] [data-unrager="held"][data-unrager-edge] > * {
   visibility: hidden !important;
 }
 
 html:not([data-unrager-paused]):not([data-unrager-reveal]):not([data-unrager-away])
-  [data-testid="cellInnerDiv"][data-unrager="held"][data-unrager-edge]::before {
+  main li[data-index] [data-unrager="held"][data-unrager-edge]::before,
+html:not([data-unrager-paused]):not([data-unrager-reveal]):not([data-unrager-away])
+  main li[data-index][data-unrager="held"][data-unrager-edge]::before {
   content: "";
+  position: static;
   display: block;
   box-sizing: border-box;
   width: 24px;
@@ -26,20 +38,23 @@ html:not([data-unrager-paused]):not([data-unrager-reveal]):not([data-unrager-awa
   border: 2.5px solid rgba(29, 155, 240, 0.2);
   border-top-color: rgb(29, 155, 240);
   border-radius: 50%;
+  background: none;
   animation: unrager-spin 0.8s linear infinite, unrager-appear 0.2s 0.25s both;
 }
 
 html:not([data-unrager-paused]):not([data-unrager-reveal]):not([data-unrager-away])
-  [data-testid="cellInnerDiv"][data-unrager="held"][data-unrager-edge="steady"]::before {
+  main li[data-index] [data-unrager="held"][data-unrager-edge="steady"]::before,
+html:not([data-unrager-paused]):not([data-unrager-reveal]):not([data-unrager-away])
+  main li[data-index][data-unrager="held"][data-unrager-edge="steady"]::before {
   animation: unrager-spin 0.8s linear infinite;
 }
 
-[data-testid="cellInnerDiv"][data-unrager-folding] {
+main [data-unrager-folding] {
   overflow: hidden !important;
   pointer-events: none;
 }
 
-[data-testid="cellInnerDiv"][data-unrager-enter] {
+main [data-unrager-enter] {
   animation: unrager-appear 0.2s ease-out;
 }
 
@@ -57,13 +72,15 @@ html:not([data-unrager-paused]):not([data-unrager-reveal]):not([data-unrager-awa
 
 @media (prefers-reduced-motion: reduce) {
   html:not([data-unrager-paused]):not([data-unrager-reveal]):not([data-unrager-away])
-    [data-testid="cellInnerDiv"][data-unrager="held"][data-unrager-edge]::before {
+    main li[data-index] [data-unrager="held"][data-unrager-edge]::before,
+  html:not([data-unrager-paused]):not([data-unrager-reveal]):not([data-unrager-away])
+    main li[data-index][data-unrager="held"][data-unrager-edge]::before {
     animation: unrager-spin 1.6s linear infinite;
   }
 }
 
 html[data-unrager-reveal]:not([data-unrager-paused]):not([data-unrager-away])
-  [data-testid="cellInnerDiv"][data-unrager="hidden"] > :not(.unrager-note) {
+  main [data-unrager="hidden"] > :not(.unrager-note) {
   opacity: 0.4;
 }
 
@@ -73,10 +90,11 @@ html:not([data-unrager-reveal]) .unrager-note {
 }
 
 .unrager-note {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 10px 16px 0;
+  margin: 0 0 8px;
   font: 600 12px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
@@ -112,7 +130,7 @@ html:not([data-unrager-reveal]) .unrager-note {
   outline-offset: 2px;
 }
 
-html[data-unrager-quiet-menu] #layers [role="menu"] {
+html[data-unrager-quiet-menu] [role="menu"] {
   opacity: 0 !important;
 }
 
@@ -155,8 +173,8 @@ html:is([data-unrager-paused], [data-unrager-away]) .unrager-ni-wrap {
 
 .unrager-ni svg {
   position: relative;
-  width: 18.75px;
-  height: 18.75px;
+  width: 18px;
+  height: 18px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.75;

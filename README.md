@@ -109,7 +109,7 @@ Click the unrager icon for its popup:
 
 Right-click any post on your Home timeline for **Hide this post** or **Show this post**. unrager remembers the choice: it outranks the model in the extension, the terminal client and the iPhone app, and survives rule changes.
 
-On For you, every post gets a **Not interested** button, a small frown next to X's Grok button. One click does what *Not interested in this post* in the post's ⋯ menu does, without the menu: X shows its usual confirmation, with Undo and **Show fewer posts from** that account.
+Every post X offers *Not interested in this post* for, in For you and Following, gets a **Not interested** button, a small frown next to X's Grok button. One click does what that item in the post's ⋯ menu does, without the menu, and X answers as it does from the menu.
 
 The toolbar badge shows how many posts were hidden on the current tab, `off` while paused, `!` when posts can't be checked and `↑` when the extension and unrager are different versions (open the popup to finish updating).
 

@@ -1,12 +1,15 @@
 /// Runs in the page's own JS world (manifest `"world": "MAIN"`), so its
-/// patches are the XMLHttpRequest/fetch X's bundle actually calls. It only
+/// patches are the fetch/XMLHttpRequest X's bundle actually calls. It only
 /// observes: the response X consumes is never rewritten.
 (() => {
-  const OPS = new Set(["HomeTimeline", "HomeLatestTimeline"]);
+  /// X's Home timelines by the names this hook reports them under. The web
+  /// app has called them `HomeTimeline`, `HomeTimelineQuery` and
+  /// `HomeLatestTimelineQuery`, on x.com/i/api and on api.x.com.
+  const OP = /\/graphql\/[^/?]+\/(Home(?:Latest)?Timeline)(?:Query)?(?:[/?#]|$)/;
 
   const opFor = (url) => {
-    const m = /\/graphql\/[^/?]+\/([A-Za-z]+)/.exec(String(url || ""));
-    return m && OPS.has(m[1]) ? m[1] : null;
+    const m = OP.exec(String(url || ""));
+    return m ? m[1] : null;
   };
 
   /// Hands a timeline body to the isolated-world content script. A DOM
@@ -21,7 +24,8 @@
   /// load while X waits for it.
   const loading = (op) => document.dispatchEvent(new CustomEvent("unrager:loading", { detail: op }));
 
-  /// X's web client issues its GraphQL calls through XMLHttpRequest.
+  /// Kept alongside the fetch hook so a transport switch on X's side doesn't
+  /// silently turn the filter off.
   function hookXhr() {
     const xhrOps = new WeakMap();
     const { open, send } = XMLHttpRequest.prototype;
@@ -55,8 +59,10 @@
     };
   }
 
-  /// Kept alongside the XHR hook so a transport switch on X's side doesn't
-  /// silently turn the filter off.
+  /// X's web app fetches its timelines. A JSON timeline reaches X only once
+  /// its body has been read here and handed on, so its posts are known
+  /// before X can render them; X reads the whole body before parsing it
+  /// anyway. Anything streamed is only watched, never held back.
   function hookFetch() {
     const origFetch = window.fetch;
     window.fetch = function (input) {
@@ -65,15 +71,25 @@
       const op = opFor(url);
       if (op) loading(op);
       const pending = origFetch.apply(this, arguments);
-      if (op) {
-        pending
-          .then((res) => (res.ok ? res.clone().text() : null))
-          .then((body) => {
-            if (body) post(op, body);
-          })
-          .catch(() => {});
-      }
-      return pending;
+      if (!op) return pending;
+      return pending.then((res) => {
+        let read = null;
+        try {
+          if (res.ok) {
+            read = res
+              .clone()
+              .text()
+              .then((body) => {
+                if (body) post(op, body);
+              })
+              .catch(() => {});
+          }
+        } catch (_) {
+          read = null;
+        }
+        const json = /json/i.test(res.headers.get("content-type") || "");
+        return read && json ? read.then(() => res) : res;
+      });
     };
   }
 

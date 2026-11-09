@@ -6,6 +6,7 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **Hidden posts no longer leave blank gaps in the x.com timeline.** After scrolling back up, or past posts quickly, an empty stretch could sit where a hidden post was, up to the height of the post, and stay until the page was reloaded. X's new web app measures a timeline row in the same moment it adds it, before the extension could mark the post, and kept the full height when the row left view before X looked again. Hidden and held-back posts are now out of view from the instant X adds them, so X measures them folded from the start, and any row X still measured wrong (in either direction) is put right once the page is still. A post you're reading still folds away when a late verdict hides it, and coming back to Home from a post filters its rows before they are drawn.
 - **`unrager serve` reports how much of X's request budget is left.** `GET /api/rate-limits` lists, for every operation X has answered since the server started, the window's limit, what is left, when it refills and any cooldown the server holds after a 429, so a tool that polls through the server (a saved search, say) can stop before it is the one that runs a budget dry and freezes search or the feed for the apps.
 
 ## [0.32.0] — 2026-11-07

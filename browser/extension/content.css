@@ -49,6 +49,12 @@ html:not([data-unrager-paused]):not([data-unrager-reveal]):not([data-unrager-awa
   animation: unrager-spin 0.8s linear infinite;
 }
 
+main li[data-index][data-unrager-nudge]::after {
+  content: "";
+  display: block;
+  height: 2px;
+}
+
 main [data-unrager-folding] {
   overflow: hidden !important;
   pointer-events: none;

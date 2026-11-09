@@ -38,6 +38,14 @@
   /// posts in one row. A quoted post is a block nested inside another.
   const ROW = "main li[data-index]";
   const POST = '[role="link"][data-href*="/status/"]';
+  /// What `<html>` carries while marked cells are kept out of view: on Home,
+  /// not paused, hidden posts not shown.
+  const FILTERING = "html:not([data-unrager-paused]):not([data-unrager-reveal]):not([data-unrager-away])";
+  /// How long the page has to stay still before rows X measured wrong are
+  /// looked for.
+  const HEAL_DELAY_MS = 250;
+  /// How many times in a row one row is nudged before it's left alone.
+  const MAX_NUDGES = 3;
   /// How long the Not interested button waits for X's menu to open or close.
   const MENU_WAIT_MS = 1500;
   const MENU = '[role="menu"]';
@@ -82,6 +90,14 @@
   const lastShown = new WeakMap();
   /// Cells folding out of view, with their animation.
   const folding = new Map();
+  /// Ids of the posts the last pass held back, here or behind a post above.
+  let heldIds = new Set();
+  /// The style sheet that hides posts by id the moment X adds them.
+  const rules = document.createElement("style");
+  /// Rows nudged so X's list measures them again, with how often.
+  const nudged = new WeakMap();
+  let healTimer = 0;
+  let nudging = false;
   const warned = new Set();
   const health = { failing: false, lastError: null, shapeProblem: null, layoutProblem: null };
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -181,6 +197,14 @@
     const path = window.location.pathname;
     if (path === page || OVERLAY.test(path) || dialogOpen()) return;
     page = path;
+  }
+
+  /// Marks the page as Home or not as soon as X changes the address, which
+  /// it does before it draws the new page, so Home's rows are filtered from
+  /// the moment X adds them on the way back. Leaving Home is left to
+  /// `applyHides`, so a hidden post doesn't flash up as the page goes.
+  function arrive() {
+    if (onHome()) root.removeAttribute("data-unrager-away");
   }
 
   /// Only the Home timelines are filtered. Anywhere else (a post you opened,
@@ -403,12 +427,8 @@
   /// post blocks, or the row itself when it holds no post. A dialog X lays
   /// over it (a photo with its replies) has rows of its own, left alone.
   function timelineCells() {
-    const rows = [...document.querySelectorAll(ROW)].filter(
-      (row) => !row.parentElement.closest(`li[data-index], ${DIALOG}`)
-    );
-    rows.sort((a, b) => Number(a.dataset.index) - Number(b.dataset.index));
     const cells = [];
-    for (const row of rows) {
+    for (const row of timelineRows()) {
       const posts = [...row.querySelectorAll(POST)].filter((block) => postOf(block) === block);
       if (posts.length) {
         cells.push(...posts);
@@ -418,6 +438,15 @@
       }
     }
     return cells;
+  }
+
+  /// The rows of X's timeline list in `data-index` order, without those of
+  /// a list nested in a row or of a dialog laid over the page.
+  function timelineRows() {
+    const rows = [...document.querySelectorAll(ROW)].filter(
+      (row) => !row.parentElement.closest(`li[data-index], ${DIALOG}`)
+    );
+    return rows.sort((a, b) => Number(a.dataset.index) - Number(b.dataset.index));
   }
 
   /// Takes the marks off a row X now fills with posts, which carry their own:
@@ -544,9 +573,11 @@
     const edgeShows = edge >= 0 && rows.slice(edge + 1).every((r) => !r.shows);
     const edgeState = now - waitingSince > EDGE_STEADY_MS ? "steady" : "";
     const entering = [];
+    const held = new Set();
     let marks = false;
     rows.forEach((row, i) => {
       const { cell, id, info, mark } = row;
+      if (mark === "held" && id !== null) held.add(id);
       if (folding.has(cell)) {
         if (mark === "hidden" && filtering) {
           marks = true;
@@ -563,6 +594,8 @@
       if (mark) {
         if (cell.dataset.unrager !== mark) cell.dataset.unrager = mark;
         marks = true;
+      } else if (id !== null) {
+        if (cell.dataset.unrager !== "shown") cell.dataset.unrager = "shown";
       } else if (cell.dataset.unrager) {
         delete cell.dataset.unrager;
       }
@@ -586,6 +619,88 @@
       }, ENTER_MS + 100);
     }
     marksOnPage = marks;
+    heldIds = held;
+    syncRules();
+    if (home) scheduleHeal();
+  }
+
+  /// The posts X must find out of view the moment it adds them: hidden ones,
+  /// and held ones that haven't been on screen. X's list measures a row in
+  /// the same task that adds it, before any script can mark it, and keeps
+  /// that height; only a style sheet applies in time. Only posts a timeline
+  /// brought can be among them.
+  function hiddenOnArrival() {
+    const ids = [];
+    for (const id of seenDomIds) {
+      if (!/^\d+$/.test(id)) continue;
+      const waiting = holds.has(id) || threadHolds.has(id) || heldIds.has(id);
+      if (hidden.has(id) || (waiting && !onScreen.has(id))) ids.push(id);
+    }
+    return ids;
+  }
+
+  /// Keeps the style sheet hiding `hiddenOnArrival` current. A post already
+  /// marked shown is left to `applyHides`, so a late verdict still folds it
+  /// away, and so is the loading edge's spinner; a quoted post never hides
+  /// on its own, nor does a reply in a dialog over the timeline.
+  function syncRules() {
+    const ids = hiddenOnArrival();
+    const text = ids.length
+      ? `${FILTERING} ${ROW} ${POST}:is(${ids.map((id) => `[data-href$="/status/${id}"]`).join(", ")})` +
+        `:not([data-unrager="shown"], [data-unrager-edge], [role="link"] *, :is(${DIALOG}) *) { display: none !important; }`
+      : "";
+    if (!rules.isConnected) root.append(rules);
+    if (rules.textContent !== text) rules.textContent = text;
+  }
+
+  /// Looks for rows X measured wrong once the page has been still a moment.
+  function scheduleHeal() {
+    clearTimeout(healTimer);
+    healTimer = setTimeout(healGaps, HEAL_DELAY_MS);
+  }
+
+  /// X's list places each row where the one above it ends, by the height it
+  /// measured. A row whose next row doesn't start where it ends changed
+  /// height without X noticing (it was measured before a mark applied, and
+  /// went out of view before X looked again), leaving a gap under it or an
+  /// overlap. Growing it by a pixel for a couple of frames makes X measure
+  /// every row it shows again. A row that lines up again gets its tries back.
+  function healGaps() {
+    healTimer = 0;
+    if (document.hidden) return;
+    if (folding.size || nudging) {
+      scheduleHeal();
+      return;
+    }
+    if (!onHome()) return;
+    let above = null;
+    for (const row of timelineRows()) {
+      const index = Number(row.dataset.index);
+      const box = row.getBoundingClientRect();
+      if (above && index === above.index + 1) {
+        if (Math.abs(box.top - above.bottom) <= 1) nudged.delete(above.row);
+        else if (nudge(above.row)) return;
+      }
+      above = { row, index, bottom: box.bottom };
+    }
+  }
+
+  /// Returns whether it nudged: a row still out of line after `MAX_NUDGES`
+  /// tries is left as it is, and the rows under it are still looked at.
+  function nudge(row) {
+    const times = nudged.get(row) || 0;
+    if (times >= MAX_NUDGES) return false;
+    nudged.set(row, times + 1);
+    nudging = true;
+    row.dataset.unragerNudge = "";
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        delete row.dataset.unragerNudge;
+        nudging = false;
+        scheduleHeal();
+      })
+    );
+    return true;
   }
 
   function needsApply() {
@@ -700,6 +815,7 @@
     let newlyHidden = 0;
     for (const v of list || []) newlyHidden += apply(v.id, v);
     syncThreads();
+    syncRules();
     return newlyHidden;
   }
 
@@ -833,6 +949,7 @@
     for (const t of known.values()) if (t.domId === domId) ids.add(t.id);
     for (const id of ids) apply(id, { id, verdict, reason: null, overridden: true });
     syncThreads();
+    syncRules();
     scheduleApply();
     publish();
     sendToExtension({ type: "override", ids: [...ids], verdict }).then(
@@ -869,6 +986,7 @@
       classify(tweets);
     }
     syncThreads();
+    syncRules();
     scheduleApply();
     publish();
   }
@@ -1017,6 +1135,11 @@
     checkDrift();
   }).observe(root, { childList: true, subtree: true });
 
+  if (window.navigation) window.navigation.addEventListener("currententrychange", arrive);
+  window.addEventListener("popstate", arrive);
+  window.addEventListener("scroll", () => marksOnPage && scheduleHeal(), { passive: true });
+
+  syncRules();
   document.addEventListener("DOMContentLoaded", publish, { once: true });
   console.info("[unrager] active");
 })();

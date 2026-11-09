@@ -33,6 +33,8 @@ pub async fn serve(addr: SocketAddr, filter_only: bool) -> crate::error::Result<
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     if state.x_session_loaded {
         spawn_ingest(&state, shutdown_rx);
+    } else if !filter_only {
+        spawn_ingest_once_signed_in(&state, shutdown_rx);
     }
     spawn_housekeeping(&state);
     let app = router(state.clone());
@@ -85,6 +87,43 @@ fn spawn_housekeeping(state: &Arc<AppState>) {
 /// How often a server that is serving read-only checks whether the process
 /// holding the feed-writer lock has let it go.
 const WRITER_LOCK_RETRY: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// How long a server that started without X cookies waits before looking
+/// for them again, doubling up to `SESSION_RETRY_MAX` while they stay out of
+/// reach, so a locked keyring isn't asked every minute.
+const SESSION_RETRY: std::time::Duration = std::time::Duration::from_secs(60);
+const SESSION_RETRY_MAX: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Starts the ingest worker once there is an X session to fetch with. A
+/// server started at boot, before the desktop session unlocked the keyring,
+/// has none; the first request that needs X re-extracts it, and this looks
+/// for it (the session cache first, then the browser) meanwhile, so the feed
+/// fills without a restart.
+fn spawn_ingest_once_signed_in(
+    state: &Arc<AppState>,
+    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+) {
+    let state = state.clone();
+    tokio::spawn(async move {
+        let mut wait = SESSION_RETRY;
+        while !state.gql.has_session() {
+            tokio::select! {
+                _ = tokio::time::sleep(wait) => {}
+                res = shutdown_rx.changed() => if res.is_err() || *shutdown_rx.borrow() { return; },
+            }
+            wait = (wait * 2).min(SESSION_RETRY_MAX);
+            if state.gql.has_session() {
+                break;
+            }
+            match crate::auth::chromium::load_session().await {
+                Ok(session) => state.gql.adopt_session(session),
+                Err(e) => tracing::debug!("still no X session: {e}"),
+            }
+        }
+        tracing::info!("X session available; starting feed ingest");
+        spawn_ingest(&state, shutdown_rx);
+    });
+}
 
 /// Take the feed-writer lock and launch the background ingest worker. While
 /// another process (a second serve, or a TUI) owns the lock, this process

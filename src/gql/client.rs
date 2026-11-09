@@ -602,6 +602,26 @@ impl GqlClient {
         (slot.session.clone(), slot.generation)
     }
 
+    /// Whether X cookies were ever loaded: a server started before the
+    /// keyring unlocked runs without any until one is extracted.
+    pub fn has_session(&self) -> bool {
+        !self
+            .session
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .session
+            .auth_token
+            .is_empty()
+    }
+
+    /// Takes a session extracted after startup, unless a request's own
+    /// re-extraction already put one in place.
+    pub fn adopt_session(&self, session: XSession) {
+        if !self.has_session() {
+            self.replace_session(session);
+        }
+    }
+
     fn replace_session(&self, fresh: XSession) {
         let mut slot = self.session.write().unwrap_or_else(PoisonError::into_inner);
         slot.session = fresh;
@@ -1406,6 +1426,22 @@ mod tests {
         let (current, after) = client.session_snapshot();
         assert_eq!(after, before + 1);
         assert_eq!(current, session("rotated"));
+    }
+
+    #[test]
+    fn a_session_found_after_startup_is_adopted_only_by_a_client_without_one() {
+        let client = GqlClient::new(
+            XSession::default(),
+            QueryIdStore::with_fallbacks(),
+            std::env::temp_dir().join("unrager-client-test-query-ids.json"),
+        )
+        .unwrap();
+        assert!(!client.has_session());
+        client.adopt_session(session("unlocked"));
+        assert!(client.has_session());
+        assert_eq!(client.session_snapshot().0, session("unlocked"));
+        client.adopt_session(session("later"));
+        assert_eq!(client.session_snapshot().0, session("unlocked"));
     }
 
     #[tokio::test]

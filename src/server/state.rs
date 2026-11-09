@@ -31,8 +31,9 @@ pub struct AppState {
     /// routes answer (what the browser extension needs).
     pub filter_only: bool,
     /// Whether browser cookies were loaded at startup. Without them the
-    /// background feed ingest stays off; X-backed routes still re-extract the
-    /// session on first use, so a keyring that unlocks later self-heals.
+    /// background feed ingest waits until they can be read, and X-backed
+    /// routes re-extract the session on first use, so a keyring that unlocks
+    /// later self-heals.
     pub x_session_loaded: bool,
     pub gql: Arc<GqlClient>,
     pub filter_config: Mutex<FilterConfig>,
@@ -90,7 +91,7 @@ impl AppState {
                 Ok(session) => Some(session),
                 Err(e) => {
                     tracing::warn!(
-                        "no X session ({e}); serving the filter, feed ingest off until restart"
+                        "no X session ({e}); serving the filter, feed ingest waits for one"
                     );
                     None
                 }

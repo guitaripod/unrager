@@ -1,6 +1,7 @@
 /// Runs in the page's own JS world (manifest `"world": "MAIN"`), so its
-/// patches are the fetch/XMLHttpRequest X's bundle actually calls. It only
-/// observes: the response X consumes is never rewritten.
+/// patches are the fetch/XMLHttpRequest X's bundle actually calls. It reads
+/// the response X consumes without rewriting it, and puts back the height of
+/// a row the content script hides after X measured it.
 (() => {
   /// X's Home timelines by the names this hook reports them under. The web
   /// app has called them `HomeTimeline`, `HomeTimelineQuery` and
@@ -106,7 +107,178 @@
     window.__unrager_status = () => status;
   }
 
+  /// The rows of X's virtualized timeline list. X measures a row in the
+  /// commit that adds it and keeps that height, so a post the content script
+  /// hides after that measurement, and whose row leaves view before X looks
+  /// again, leaves a blank stretch. The content script asks for the row to be
+  /// measured again once it hides or shows a post, and X's own measurement is
+  /// corrected when the row is already marked.
+  const ROW = "main li[data-index]";
+  const ROW_ITEM = "li[data-index]";
+  const POST = '[role="link"][data-href*="/status/"]';
+  const MAX_KEYS = 4000;
+  const bound = { list: null, virt: null };
+  const keys = new Map();
+
+  function postsOf(row) {
+    return [...row.querySelectorAll(POST)].filter((post) => !post.parentElement.closest(POST));
+  }
+
+  function postId(post) {
+    const m = /\/status\/(\d+)/.exec(post.dataset.href || "");
+    return m ? m[1] : null;
+  }
+
+  function rowAt(index) {
+    if (!bound.list) return null;
+    return bound.list.querySelector(`:scope > li[data-index="${index}"]`);
+  }
+
+  function itemKey(virt, index) {
+    try {
+      return String(virt.options.getItemKey(index));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Remembers which list item a post's row is, so a verdict that arrives
+  /// after the row has been unmounted can still correct its height.
+  function learn(row, virt) {
+    const key = itemKey(virt, Number(row.dataset.index));
+    if (!key) return;
+    for (const post of postsOf(row)) {
+      const id = postId(post);
+      if (!id) continue;
+      keys.delete(id);
+      keys.set(id, key);
+    }
+    while (keys.size > MAX_KEYS) keys.delete(keys.keys().next().value);
+  }
+
+  function learnAll() {
+    if (!bound.list || !bound.virt) return;
+    for (const row of bound.list.children) {
+      if (row instanceof Element && row.matches(ROW_ITEM)) learn(row, bound.virt);
+    }
+  }
+
+  /// Finds X's virtualizer through the list's React fiber. X's list is a
+  /// fork of TanStack Virtual, whose `resizeItem(index, height)` is what a
+  /// measurement ends in; wrapping it keeps a marked row from being cached
+  /// at its unmarked height even when X measured it first.
+  function virtualizerOf(list) {
+    const fiberKey = Object.keys(list).find((k) => k.startsWith("__reactFiber$"));
+    let fiber = fiberKey && list[fiberKey];
+    while (fiber && !(fiber.memoizedProps && fiber.memoizedProps.virtualizer)) fiber = fiber.return;
+    return fiber ? fiber.memoizedProps.virtualizer : null;
+  }
+
+  function wrap(virt, list) {
+    if (!virt || virt.__unragerList === list) return;
+    virt.__unragerList = list;
+    const resize = virt.resizeItem;
+    if (typeof resize !== "function") return;
+    virt.resizeItem = function (index, size) {
+      const row = rowAt(index);
+      if (row && !row.hasAttribute("data-unrager-folding")) {
+        const marked =
+          row.matches('[data-unrager="hidden"], [data-unrager="held"]') ||
+          !!row.querySelector('[data-unrager="hidden"], [data-unrager="held"]');
+        if (marked) size = row.offsetHeight;
+      }
+      return resize.apply(this, arguments);
+    };
+  }
+
+  function bind(refresh = false) {
+    if (bound.list && bound.virt && bound.list.isConnected) {
+      if (!refresh) return bound.virt;
+      const virt = virtualizerOf(bound.list);
+      if (virt && virt !== bound.virt) {
+        bound.virt = virt;
+        wrap(virt, bound.list);
+        learnAll();
+      }
+      return bound.virt;
+    }
+    const first = document.querySelector(ROW);
+    const list = first && first.parentElement;
+    if (!list) return null;
+    const virt = virtualizerOf(list);
+    if (!virt) return null;
+    bound.list = list;
+    bound.virt = virt;
+    wrap(virt, list);
+    learnAll();
+    return virt;
+  }
+
+  /// Puts one row's real height back into X's list. `index` is the row the
+  /// content script saw; without one, the post's last row is looked up by its
+  /// item key, which survives rows unmounting and the list reordering.
+  function resizeRow(request) {
+    const virt = bind(true);
+    if (!virt) return;
+    let index = Number.isInteger(request.index) ? request.index : -1;
+    if (index < 0) {
+      const id = request.id === null || request.id === undefined ? null : String(request.id);
+      if (!id) return;
+      learnAll();
+      const key = keys.get(id);
+      const measurements = virt.getMeasurements();
+      const match = key === undefined
+        ? measurements.find((m) => m && String(m.key).includes(id))
+        : measurements.find((m) => m && String(m.key) === key);
+      if (!match) return;
+      index = match.index;
+    }
+    const row = rowAt(index);
+    const height = row
+      ? row.offsetHeight
+      : Number.isFinite(request.height)
+        ? request.height
+        : request.hidden
+          ? 1
+          : null;
+    if (height === null) return;
+    try {
+      virt.resizeItem(index, height);
+    } catch (_) {}
+  }
+
+  function onRowSize(e) {
+    if (typeof e.detail !== "string") return;
+    let request;
+    try {
+      request = JSON.parse(e.detail);
+    } catch (_) {
+      return;
+    }
+    if (request && typeof request === "object") resizeRow(request);
+  }
+
+  /// Learns each row as X adds or fills it, then answers the content script's
+  /// `unrager:rowsize` events.
+  function hookRows() {
+    new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        for (const node of m.addedNodes) {
+          if (!(node instanceof Element)) continue;
+          const row = node.matches(ROW_ITEM) ? node : node.closest(ROW_ITEM);
+          const rows = row ? [row] : [...node.querySelectorAll(ROW_ITEM)];
+          if (!rows.length) continue;
+          const virt = bind();
+          if (!virt || !bound.list) continue;
+          for (const added of rows) if (bound.list.contains(added)) learn(added, virt);
+        }
+      }
+    }).observe(document, { childList: true, subtree: true });
+    document.addEventListener("unrager:rowsize", onRowSize);
+  }
+
   hookXhr();
   hookFetch();
   exposeStatus();
+  hookRows();
 })();

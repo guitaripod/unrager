@@ -1,9 +1,10 @@
-/// Pure walk over the Home timeline JSON of X's web app (the `x-web` client:
-/// snake_case Relay fields, tweet text under `details`). Text, links and
-/// reposts are read the way src/parse/tweet.rs reads the same posts from the
-/// older GraphQL shape, and the classification text is
-/// `filter::build_classification_text`'s, so the model sees a post the same
-/// whichever client asks first.
+/// Pure walk over the Home timeline JSON of both clients: the `x-web` app
+/// (snake_case Relay fields, tweet text under `details`) and rweb (camelCase
+/// fields, text under `legacy`), which X still serves to most signed-in users
+/// while the new app rolls out country by country. Text, links and reposts
+/// are read the way src/parse/tweet.rs reads the older GraphQL shape, and the
+/// classification text is `filter::build_classification_text`'s, so the model
+/// sees a post the same whichever client asks first.
 const unragerTimeline = (() => {
   const MAX_TEXT_CHARS = 500;
 
@@ -22,6 +23,19 @@ const unragerTimeline = (() => {
     return result && result.__typename === "TweetWithVisibilityResults" ? result.tweet : result;
   }
 
+  /// The t.co links standing for a post's pictures and videos, which X
+  /// places by code point in `full_text`.
+  function mediaLinks(node, fullText) {
+    const chars = Array.from(fullText);
+    const links = [];
+    for (const media of node.media_entities2 || []) {
+      const [start, end] = media.indices || [];
+      const link = Number.isInteger(start) && Number.isInteger(end) ? chars.slice(start, end).join("") : "";
+      if (/^https:\/\/t\.co\/\w+$/.test(link) && !links.includes(link)) links.push(link);
+    }
+    return links;
+  }
+
   /// Cuts `url` out of `text` with the spaces around it, keeping one space
   /// between words it separated, like `strip_url`.
   function stripUrl(text, url) {
@@ -37,30 +51,21 @@ const unragerTimeline = (() => {
     return out + rest;
   }
 
-  /// The t.co links standing for a post's pictures and videos, which X
-  /// places by code point in `full_text`.
-  function mediaLinks(node, fullText) {
-    const chars = Array.from(fullText);
-    const links = [];
-    for (const media of node.media_entities2 || []) {
-      const [start, end] = media.indices || [];
-      const link = Number.isInteger(start) && Number.isInteger(end) ? chars.slice(start, end).join("") : "";
-      if (/^https:\/\/t\.co\/\w+$/.test(link) && !links.includes(link)) links.push(link);
-    }
-    return links;
-  }
-
   /// A post's text as `parse_tweet_node` reads it (`scrub_urls_in_text`):
   /// the whole text of a long post, its pictures' t.co links dropped, other
-  /// t.co links shown as the address they stand for, trimmed.
+  /// t.co links shown as the address they stand for, trimmed. rweb's text is
+  /// under `legacy` and was already read the same way.
   function tweetText(node) {
-    const fullText = (node.details && node.details.full_text) || "";
+    const details = node.details || {};
+    const legacy = node.legacy || {};
+    const fullText = details.full_text || legacy.full_text || "";
     const note =
       node.note_tweet &&
       node.note_tweet.note_tweet_results &&
       node.note_tweet.note_tweet_results.result &&
       node.note_tweet.note_tweet_results.result.text;
     let text = decodeEntities(note || fullText);
+    if (!details.full_text) return text.trim();
     for (const link of mediaLinks(node, fullText)) text = stripUrl(text, link);
     for (const u of node.url_entities || []) {
       if (u && u.url && u.display_url) text = text.split(u.url).join(u.display_url);
@@ -80,7 +85,12 @@ const unragerTimeline = (() => {
   function author(node) {
     const u = (node.core && node.core.user_results && node.core.user_results.result) || {};
     const core = u.core || {};
-    return { id: u.rest_id || null, handle: core.screen_name || "", name: core.name || "" };
+    const legacy = u.legacy || {};
+    return {
+      id: u.rest_id || null,
+      handle: core.screen_name || legacy.screen_name || "",
+      name: core.name || legacy.name || "",
+    };
   }
 
   /// Mirrors `filter::build_classification_text`, so a verdict computed here
@@ -88,7 +98,8 @@ const unragerTimeline = (() => {
   function classificationText(node) {
     const { handle, name } = author(node);
     let s = `@${handle} (${name}): ${tweetText(node)}`;
-    const quoted = unwrap(node.quoted_tweet_results && node.quoted_tweet_results.result);
+    const quote = node.quoted_tweet_results || node.quoted_status_result;
+    const quoted = unwrap(quote && quote.result);
     if (quoted && quoted.__typename === "Tweet") {
       s += "\n";
       for (const line of lines(tweetText(quoted))) s += `> ${line}\n`;
@@ -97,30 +108,42 @@ const unragerTimeline = (() => {
   }
 
   /// X's own label for "Not interested in this post", in the user's language,
-  /// by the feedback key entries point at.
+  /// by the feedback key entries point at. Only For you responses carry these.
   function notInterestedPrompts(urt) {
     const prompts = new Map();
-    const actions = (urt.response_objects && urt.response_objects.feedback_actions) || [];
+    const actions =
+      (urt.response_objects && urt.response_objects.feedback_actions) ||
+      (urt.responseObjects && urt.responseObjects.feedbackActions) ||
+      [];
     for (const action of actions) {
       const value = action && action.value;
-      if (value && value.feedback_type === "DontLike" && value.prompt) prompts.set(action.key, value.prompt);
+      const type = value && (value.feedback_type || value.feedbackType);
+      if (value && type === "DontLike" && value.prompt) prompts.set(action.key, value.prompt);
     }
     return prompts;
   }
 
   function notInterested(feedbackInfo, prompts) {
-    for (const key of (feedbackInfo && feedbackInfo.feedback_keys) || []) {
+    const keys =
+      (feedbackInfo && (feedbackInfo.feedback_keys || feedbackInfo.feedbackKeys)) || [];
+    for (const key of keys) {
       if (prompts.has(key)) return prompts.get(key);
     }
     return null;
   }
 
   function collectTweet(content, out, offer) {
-    if (!content || content.__typename !== "TimelineTweet") return;
-    if (content.promoted_metadata != null) return;
+    if (!content) return;
+    const type = content.__typename || content.itemType;
+    if (type !== "TimelineTweet") return;
+    if (content.promoted_metadata != null || content.promotedMetadata != null) return;
     const node = unwrap(content.tweet_results && content.tweet_results.result);
     if (!node || node.__typename !== "Tweet") return;
-    const wrapped = (node.legacy && node.legacy.retweeted_status_results) || node.retweeted_status_results;
+    const wrapped =
+      node.retweeted_status_results ||
+      (node.legacy &&
+        (node.legacy.retweeted_status_results || node.legacy.retweeted_status_result)) ||
+      node.retweeted_status_result;
     const original = unwrap(wrapped && wrapped.result);
     const subject = original && original.__typename === "Tweet" ? original : node;
     const authors = [author(node).id];
@@ -143,15 +166,20 @@ const unragerTimeline = (() => {
     for (const t of group) t.own = true;
   }
 
-  /// Tags the posts of a conversation X shows as one block with the block.
-  function markThread(group, thread) {
-    for (const t of group) t.thread = thread;
+  /// Tags the posts of a conversation X shows as one block with the block and
+  /// their place in it. rweb orders the block by position; the new app orders
+  /// it by post id.
+  function markThread(group, thread, first) {
+    group.forEach((t, i) => {
+      t.thread = thread;
+      t.position = first + i;
+    });
   }
 
   function collectItems(items, group, prompts) {
     for (const entry of items || []) {
       const item = entry && entry.item;
-      if (item) collectTweet(item.content, group, notInterested(item.feedback_info, prompts));
+      if (item) collectTweet(item.content || item.itemContent, group, notInterested(item.feedback_info || item.feedbackInfo, prompts));
     }
   }
 
@@ -163,12 +191,14 @@ const unragerTimeline = (() => {
   function collectFromEntry(entry, out, selfId, prompts) {
     const content = entry && entry.content;
     if (!content) return;
+    const type = content.__typename || content.entryType;
     const group = [];
-    if (content.__typename === "TimelineTimelineItem") {
-      collectTweet(content.content, group, notInterested(content.feedback_info, prompts));
-    } else if (content.__typename === "TimelineTimelineModule") {
+    if (type === "TimelineTimelineItem") {
+      collectTweet(content.content || content.itemContent, group, notInterested(content.feedback_info || content.feedbackInfo, prompts));
+    } else if (type === "TimelineTimelineModule") {
       collectItems(content.items, group, prompts);
-      if (entry.entry_id) markThread(group, entry.entry_id);
+      const thread = content.entry_id || content.entryId || entry.entry_id || entry.entryId;
+      if (thread) markThread(group, thread, 0);
     }
     markOwn(group, selfId);
     out.push(...group);
@@ -185,6 +215,42 @@ const unragerTimeline = (() => {
     return null;
   }
 
+  /// Which client sent this body: `xweb` for the new app, `rweb` for the old
+  /// one still served to most signed-in users, or null for a response with no
+  /// post in it. The two shapes are told apart by where an entry keeps the
+  /// post (`content` on the new app, `itemContent` on rweb).
+  function clientOf(json) {
+    const urt = timelineOf(json);
+    const instructions = urt && urt.instructions;
+    if (!Array.isArray(instructions)) return null;
+    for (const block of instructions) {
+      for (const entry of block.entries || []) {
+        const content = entry && entry.content;
+        if (!content) continue;
+        const type = content.__typename || content.entryType;
+        if (type === "TimelineTimelineItem") {
+          if (content.itemContent) return "rweb";
+          if (content.content) return "xweb";
+        }
+        if (type === "TimelineTimelineModule") {
+          const first = (content.items || [])[0];
+          const item = first && first.item;
+          if (item) {
+            if (item.itemContent) return "rweb";
+            if (item.content) return "xweb";
+          }
+        }
+      }
+      const module = block.module_items || block.moduleItems;
+      const first = module && module[0];
+      if (first) {
+        if (first.itemContent) return "rweb";
+        if (first.content) return "xweb";
+      }
+    }
+    return null;
+  }
+
   /// Returns the tweets found plus a `problem` string when the shape looks
   /// wrong, so drift surfaces as a warning instead of a silently idle filter.
   /// `selfId` is the signed-in account's id, for marking the user's own posts.
@@ -197,30 +263,31 @@ const unragerTimeline = (() => {
     const prompts = notInterestedPrompts(urt);
     const tweets = [];
     for (const block of instructions) {
-      const type = block && block.__typename;
+      const type = block && (block.__typename || block.type);
       if (type === "TimelineAddEntries") {
         for (const entry of block.entries || []) collectFromEntry(entry, tweets, selfId, prompts);
       } else if (type === "TimelineAddToModule") {
         const group = [];
-        collectItems(block.module_items, group, prompts);
-        if (block.module_entry_id) markThread(group, block.module_entry_id);
+        collectItems(block.module_items || block.moduleItems, group, prompts);
+        const thread = block.module_entry_id || block.moduleEntryId;
+        if (thread) markThread(group, thread, block.prepend ? -1000 : 1000);
         markOwn(group, selfId);
         tweets.push(...group);
       } else if (type === "TimelineReplaceEntry" || type === "TimelinePinEntry") {
         collectFromEntry(block.entry, tweets, selfId, prompts);
       }
     }
-    const hadEntries = instructions.some(
-      (b) =>
-        b &&
-        b.__typename === "TimelineAddEntries" &&
-        (b.entries || []).some((e) => /^(?:tweet|home-conversation)-/.test((e && e.entry_id) || ""))
-    );
+    const hadEntries = instructions.some((b) => {
+      if (!b) return false;
+      const entries = b.entries || [];
+      if ((b.__typename || b.type) !== "TimelineAddEntries") return false;
+      return entries.some((e) => /^(?:tweet|home-conversation)-/.test((e && (e.entry_id || e.entryId)) || ""));
+    });
     const problem = hadEntries && tweets.length === 0 ? "tweet entries present but none extracted" : null;
     return { tweets, problem };
   }
 
-  return { extractTweets };
+  return { extractTweets, clientOf };
 })();
 
 if (typeof module !== "undefined" && module.exports) module.exports = unragerTimeline;

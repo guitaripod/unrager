@@ -33,7 +33,7 @@
     },
     {
       "matches": ["https://x.com/*", "https://twitter.com/*"],
-      "js": ["timeline.js", "content.js"],
+      "js": ["timeline.js", "content-rweb.js", "content.js"],
       "css": ["content.css"],
       "run_at": "document_start"
     }

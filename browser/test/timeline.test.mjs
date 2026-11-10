@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { extractTweets } = require("../extension/timeline.js");
+const { extractTweets, clientOf } = require("../extension/timeline.js");
 
 const SELF = "900000000000000001";
 const fixture = (name) => JSON.parse(readFileSync(new URL(`fixtures/${name}`, import.meta.url), "utf8"));
@@ -130,4 +130,30 @@ test("long text is cut at 500 characters, counting emoji once", () => {
   entry.content.content.tweet_results.result.details.full_text = "😡".repeat(600);
   const text = extractTweets(json, SELF).tweets[0].text;
   assert.equal(Array.from(text).length, 500);
+});
+
+test("rweb: the old web app's posts, reposts and conversations read the same", () => {
+  const json = fixture("rweb-home.json");
+  const { tweets, problem } = extractTweets(json, SELF);
+  assert.equal(problem, null);
+  const posts = byId(tweets);
+  assert.equal(posts.get("3000000000000000001").text, "@plain (Plain & Simple): Fish & chips");
+  assert.equal(posts.get("3000000000000000001").notInterested, "Not interested in this post");
+  const repost = posts.get("3000000000000000003");
+  assert.equal(repost.id, "3000000000000000003");
+  assert.equal(repost.domId, "3000000000000000003");
+  assert.equal(repost.text, "@original (Original): the post being reposted");
+  assert.deepEqual(repost.authors, ["100000000000000302", "100000000000000303"]);
+  for (const id of ["3000000000000000004", "3000000000000000005"]) {
+    assert.equal(posts.get(id).thread, "home-conversation-3000000000000000004");
+  }
+  assert.equal(posts.get("3000000000000000004").position, 0);
+  assert.equal(posts.get("3000000000000000005").position, 1);
+});
+
+test("the client that sent a timeline body is told from its shape", () => {
+  assert.equal(clientOf(fixture("home-for-you.json")), "xweb");
+  assert.equal(clientOf(fixture("home-following.json")), "xweb");
+  assert.equal(clientOf(fixture("rweb-home.json")), "rweb");
+  assert.equal(clientOf({ data: { home: {} } }), null);
 });

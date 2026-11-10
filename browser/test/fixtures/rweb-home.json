@@ -1,0 +1,150 @@
+{
+ "data": {
+  "home": {
+   "home_timeline_urt": {
+    "instructions": [
+     {
+      "type": "TimelineAddEntries",
+      "entries": [
+       {
+        "entryId": "tweet-3000000000000000001",
+        "content": {
+         "entryType": "TimelineTimelineItem",
+         "itemContent": {
+          "__typename": "TimelineTweet",
+          "itemType": "TimelineTweet",
+          "tweet_results": {
+           "result": {
+            "__typename": "Tweet",
+            "rest_id": "3000000000000000001",
+            "core": {
+             "user_results": {
+              "result": {
+               "__typename": "User",
+               "rest_id": "100000000000000301",
+               "legacy": {"screen_name": "plain", "name": "Plain & Simple"}
+              }
+             }
+            },
+            "legacy": {"full_text": "Fish &amp; chips"}
+           }
+          }
+         },
+         "feedbackInfo": {"feedbackKeys": ["like-key"]}
+        }
+       },
+       {
+        "entryId": "tweet-3000000000000000002",
+        "content": {
+         "entryType": "TimelineTimelineItem",
+         "itemContent": {
+          "__typename": "TimelineTweet",
+          "itemType": "TimelineTweet",
+          "tweet_results": {
+           "result": {
+            "__typename": "Tweet",
+            "rest_id": "3000000000000000002",
+            "core": {
+             "user_results": {
+              "result": {
+               "__typename": "User",
+               "rest_id": "100000000000000302",
+               "legacy": {"screen_name": "reposter", "name": "Reposter"}
+              }
+             }
+            },
+            "legacy": {
+             "full_text": "RT @original: the post being reposted",
+             "retweeted_status_result": {
+              "result": {
+               "__typename": "Tweet",
+               "rest_id": "3000000000000000003",
+               "core": {
+                "user_results": {
+                 "result": {
+                  "__typename": "User",
+                  "rest_id": "100000000000000303",
+                  "legacy": {"screen_name": "original", "name": "Original"}
+                 }
+                }
+               },
+               "legacy": {"full_text": "the post being reposted"}
+              }
+             }
+            }
+           }
+          }
+         }
+        }
+       },
+       {
+        "entryId": "home-conversation-3000000000000000004",
+        "content": {
+         "entryType": "TimelineTimelineModule",
+         "items": [
+          {
+           "item": {
+            "itemContent": {
+             "__typename": "TimelineTweet",
+             "itemType": "TimelineTweet",
+             "tweet_results": {
+              "result": {
+               "__typename": "Tweet",
+               "rest_id": "3000000000000000004",
+               "core": {
+                "user_results": {
+                 "result": {
+                  "__typename": "User",
+                  "rest_id": "100000000000000304",
+                  "legacy": {"screen_name": "talker", "name": "Talker"}
+                 }
+                }
+               },
+               "legacy": {"full_text": "the post"}
+              }
+             }
+            }
+           }
+          },
+          {
+           "item": {
+            "itemContent": {
+             "__typename": "TimelineTweet",
+             "itemType": "TimelineTweet",
+             "tweet_results": {
+              "result": {
+               "__typename": "Tweet",
+               "rest_id": "3000000000000000005",
+               "core": {
+                "user_results": {
+                 "result": {
+                  "__typename": "User",
+                  "rest_id": "100000000000000305",
+                  "legacy": {"screen_name": "replier", "name": "Replier"}
+                 }
+                }
+               },
+               "legacy": {"full_text": "a reply"}
+              }
+             }
+            }
+           }
+          }
+         ]
+        }
+       }
+      ]
+     }
+    ],
+    "responseObjects": {
+     "feedbackActions": [
+      {
+       "key": "like-key",
+       "value": {"feedbackType": "DontLike", "prompt": "Not interested in this post"}
+      }
+     ]
+    }
+   }
+  }
+ }
+}

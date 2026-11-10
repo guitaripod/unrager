@@ -41,6 +41,8 @@
   /// What `<html>` carries while marked cells are kept out of view: on Home,
   /// not paused, hidden posts not shown.
   const FILTERING = "html:not([data-unrager-paused]):not([data-unrager-reveal]):not([data-unrager-away])";
+  /// The marks that keep a cell out of view.
+  const MARKED = new Set(["hidden", "held"]);
   /// How long the page has to stay still before rows X measured wrong are
   /// looked for.
   const HEAL_DELAY_MS = 250;
@@ -92,6 +94,9 @@
   const folding = new Map();
   /// Ids of the posts the last pass held back, here or behind a post above.
   let heldIds = new Set();
+  /// Posts a verdict newly hid this pass, to be measured again after the
+  /// marks are on; X may have measured their rows while they were shown.
+  const pendingRows = new Set();
   /// The style sheet that hides posts by id the moment X adds them.
   const rules = document.createElement("style");
   /// Rows nudged so X's list measures them again, with how often.
@@ -117,6 +122,9 @@
   let driftSince = 0;
   let lastDriftCheck = 0;
   let driftTimer = 0;
+  /// Whether this page is the new x-web app. Set by the first timeline body
+  /// in its shape; content-rweb.js handles rweb's bodies on the same page.
+  let active = false;
 
   function state() {
     if (settings.paused) return "paused";
@@ -147,6 +155,7 @@
   }
 
   function publish() {
+    if (!active) return;
     const s = stats();
     window.postMessage({ source: "unrager-content", type: "status", status: { loaded: true, ...s } }, origin);
     const badge = `${s.state}:${s.hidden}`;
@@ -542,6 +551,7 @@
         const id = cellTweetId(cell);
         if (id !== null && hidden.has(id)) cell.dataset.unrager = "hidden";
         animation.cancel();
+        reportRowSize(cell, id, id !== null && hidden.has(id));
         scheduleApply();
       },
       () => {}
@@ -553,12 +563,15 @@
     folding.delete(cell);
     delete cell.dataset.unragerFolding;
     animation.cancel();
+    reportRowSize(cell, cellTweetId(cell), false);
   }
 
   /// Marks cells instead of removing them: X's React tree owns these nodes,
   /// and pulling one out from under it breaks its next unmount. Re-checking
   /// every cell lets a recycled cell showing a different post come back.
   function applyHides() {
+    if (!active && document.querySelector(ROW)) active = true;
+    if (!active) return;
     const now = Date.now();
     for (const [domId, until] of holds) if (until <= now) holds.delete(domId);
     for (const [domId, until] of threadHolds) if (until <= now) threadHolds.delete(domId);
@@ -577,6 +590,7 @@
     let marks = false;
     rows.forEach((row, i) => {
       const { cell, id, info, mark } = row;
+      const was = cell.dataset.unrager;
       if (mark === "held" && id !== null) held.add(id);
       if (folding.has(cell)) {
         if (mark === "hidden" && filtering) {
@@ -604,6 +618,11 @@
       } else if (cell.dataset.unragerEdge !== undefined) {
         delete cell.dataset.unragerEdge;
       }
+      const now = cell.dataset.unrager;
+      if (now !== was && (MARKED.has(was) || MARKED.has(now))) {
+        reportRowSize(cell, id, MARKED.has(now));
+        if (id !== null) pendingRows.delete(id);
+      }
       if (row.enter) {
         cell.dataset.unragerEnter = "";
         entering.push(cell);
@@ -622,6 +641,10 @@
     heldIds = held;
     syncRules();
     if (home) scheduleHeal();
+    if (pendingRows.size) {
+      for (const id of pendingRows) reportRowSize(null, id, true);
+      pendingRows.clear();
+    }
   }
 
   /// The posts X must find out of view the moment it adds them: hidden ones,
@@ -651,6 +674,27 @@
       : "";
     if (!rules.isConnected) root.append(rules);
     if (rules.textContent !== text) rules.textContent = text;
+  }
+
+  /// Asks page-hook to put a row's real height back into X's list once a
+  /// post's mark changes, so a row X measured before the mark can't leave a
+  /// blank stretch once it leaves view. The row is read before the event is
+  /// sent, while the mark is on and the row is still where it was.
+  function reportRowSize(cell, id, hidden) {
+    const row = cell ? cell.closest(ROW) : null;
+    const index = row ? Number(row.dataset.index) : null;
+    const height = row ? row.offsetHeight : null;
+    const detail = JSON.stringify({
+      id: id === null || id === undefined ? null : String(id),
+      index: Number.isInteger(index) ? index : null,
+      height: Number.isFinite(height) ? height : null,
+      hidden: !!hidden,
+    });
+    queueMicrotask(() => {
+      try {
+        document.dispatchEvent(new CustomEvent("unrager:rowsize", { detail }));
+      } catch (_) {}
+    });
   }
 
   /// Looks for rows X measured wrong once the page has been still a moment.
@@ -807,6 +851,7 @@
     }
     const newly = hidden.has(domId) ? 0 : 1;
     hidden.set(domId, { reason: verdict.reason || null, overridden: !!verdict.overridden });
+    if (newly) pendingRows.add(domId);
     return newly;
   }
 
@@ -945,6 +990,7 @@
   /// menu or a note's "Show this post". It applies here at once, and unrager
   /// keeps it, so every client and every later visit respects it.
   function overrule(domId, verdict) {
+    if (!active) return;
     const ids = new Set([domId]);
     for (const t of known.values()) if (t.domId === domId) ids.add(t.id);
     for (const id of ids) apply(id, { id, verdict, reason: null, overridden: true });
@@ -970,6 +1016,8 @@
       publish();
       return;
     }
+    if (unragerTimeline.clientOf(json) !== "xweb") return;
+    active = true;
     const { tweets, problem } = unragerTimeline.extractTweets(json, selfId());
     timelinesSeen += 1;
     health.shapeProblem = problem;
@@ -1006,6 +1054,7 @@
   /// checked again then even if the page has gone still. Page changes check
   /// at most once a second.
   function checkDrift() {
+    if (!active) return;
     const now = Date.now();
     if (now - lastDriftCheck < 1000) return;
     assessDrift();
@@ -1039,6 +1088,7 @@
     verdicts.clear();
     pending.clear();
     holds.clear();
+    pendingRows.clear();
     syncThreads();
     health.failing = false;
     if (!settings.paused) classify([...known.values()]);
@@ -1075,7 +1125,7 @@
   });
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (!msg) return false;
+    if (!msg || !active) return false;
     if (msg.type === "stats") sendResponse(stats());
     if (msg.type === "overrule" && contextTarget) overrule(contextTarget, msg.verdict);
     if (msg.type === "republish") {
@@ -1090,6 +1140,7 @@
   document.addEventListener(
     "contextmenu",
     (e) => {
+      if (!active) return;
       const post = e.target instanceof Element && e.target.closest(ROW) ? postOf(e.target) : null;
       contextTarget = post ? cellTweetId(post) : null;
     },

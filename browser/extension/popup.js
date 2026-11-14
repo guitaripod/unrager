@@ -197,10 +197,12 @@ async function refresh() {
   const [health, tab, stored] = await Promise.all([
     request(`${server}/api/health`, { timeoutMs: 2500 }).catch(() => null),
     activeTab(),
-    chrome.storage.local.get(["paused", "reveal"]),
+    chrome.storage.local.get(["paused", "reveal", "insightsOff"]),
   ]);
   $("paused").checked = !!stored.paused;
   $("reveal").checked = !!stored.reveal;
+  $("insights").checked = !stored.insightsOff;
+  $("insights-hint").textContent = insightsHint(health);
 
   if (!health) {
     $("model").textContent = "";
@@ -225,6 +227,16 @@ async function refresh() {
   render(
     versionView(health.version) || (filter && modelView(filter)) || tabView(tab, !!stored.paused)
   );
+}
+
+/// What the stats on the user's own posts can show with this server: all
+/// of it from a full server, only what rose since the last look otherwise.
+function insightsHint(health) {
+  if (health && health.filter_only) {
+    return "Only what rose since you last looked: who liked your posts and their link clicks need unrager's full server (unrager setup --apps).";
+  }
+  if (!health) return "Start unrager to see who liked your posts and their link clicks.";
+  return "Who liked and reposted your posts, link clicks and new followers, beside their counts. Hover them for the rest.";
 }
 
 function setRulesAvailable(available) {
@@ -415,6 +427,7 @@ $("paused").addEventListener("change", async (e) => {
   refresh();
 });
 $("reveal").addEventListener("change", (e) => chrome.storage.local.set({ reveal: e.target.checked }));
+$("insights").addEventListener("change", (e) => chrome.storage.local.set({ insightsOff: !e.target.checked }));
 $("command-copy").addEventListener("click", async () => {
   await navigator.clipboard.writeText($("command-text").textContent);
   $("command-copy").textContent = "Copied";

@@ -105,11 +105,20 @@ Click the unrager icon for its popup:
 - **Pause filtering** shows X exactly as it is until you switch it back on.
 - **Show hidden posts** brings hidden posts back, dimmed and labelled with the rule that hid each one, so you can check the model's judgment. **Show this post** keeps one on screen for good.
 - **What gets hidden** is your rules: how strict the filter is, and the topics to add, edit or remove, each with how many posts it hid since the rules last changed. Save, and open x.com tabs are checked again under the new rules right away; what's hidden stays hidden until then.
+- **Stats on your posts** turns the extras on your own posts (below) on or off.
 - **Settings** points the extension at unrager on another computer, such as the desktop with the GPU (see [Running the model on another computer](#running-the-model-on-another-computer)).
 
 Right-click any post on your Home timeline for **Hide this post** or **Show this post**. unrager remembers the choice: it outranks the model in the extension, the terminal client and the iPhone app, and survives rule changes.
 
 Every post X offers *Not interested in this post* for, in For you and Following, gets a **Not interested** button, a small frown next to X's Grok button. One click does what that item in the post's ⋯ menu does, without the menu, and X answers as it does from the menu.
+
+Your own posts, wherever x.com shows them (Home, your profile, a post's page, a thread), carry what X keeps a few clicks away, in the space their action bar already leaves, so nothing on the page moves:
+
+- the faces of the latest people who liked and reposted the post beside those counts, ringed teal for mutuals and amber for people who follow you;
+- a green **+N** beside each count that rose since you last looked at the post (views only for a real jump);
+- new followers, link clicks and profile visits from the post beside its views.
+
+Hover any of them, or X's views count, for a card: the post's impressions and engagement, its first two days hour by hour (point at a bar to read it), every figure from X's analytics, and tabs listing everyone who liked, reposted and quoted it, with **Follow back** for people who follow you and filters for mutuals, followers and verified accounts. Click to keep the card open. Who liked a post and X's analytics come through `unrager serve` reading X as you, so they need the full server (`unrager setup --apps`); with the filter-only server the rises since your last look still show.
 
 The toolbar badge shows how many posts were hidden on the current tab, `off` while paused, `!` when posts can't be checked and `↑` when the extension and unrager are different versions (open the popup to finish updating).
 
@@ -224,7 +233,7 @@ If the model isn't answering, X keeps working as usual: unrager fails open. A ne
 
 ## Privacy
 
-- The extension reads only the Home timeline responses X already sends your browser. It requests nothing extra from X and changes nothing X sends; it only hides posts on your screen. The **Not interested** button clicks X's own menu item for you, so what X hears is exactly what it would from the menu.
+- The extension reads only the Home timeline responses X already sends your browser. It requests nothing from X itself and changes nothing X sends; it only hides posts on your screen. The stats on your own posts come from a full `unrager serve` (`--apps`), which asks X, as you, for your posts' analytics, likers, reposters and quotes, holding back its automatic lookups before they'd use the last tenth of X's budget for them. The **Not interested** button clicks X's own menu item for you, so what X hears is exactly what it would from the menu.
 - Post text goes from the extension to unrager on your computer, and from unrager to your model. There's no account, no telemetry, and no server of ours in the loop.
 - The background server `unrager setup` installs runs in filter-only mode: it never reads your X login and never talks to X.
 - The server answers only the extension and the iPhone app. Requests from web pages are refused, so a site you visit can't use it through your browser.

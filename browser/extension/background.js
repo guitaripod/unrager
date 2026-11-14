@@ -8,6 +8,13 @@ const TIMEOUT_MS = 120000;
 const OVERRIDE_TIMEOUT_MS = 10000;
 /// The server answers a warm-up at once and loads the model on its own time.
 const WARM_TIMEOUT_MS = 5000;
+/// Reads from X through the server: a glance at a post, a page of people.
+const READ_TIMEOUT_MS = 20000;
+const WHOAMI_TIMEOUT_MS = 8000;
+/// Posts whose glances stay cached, newest first.
+const MAX_GLANCES = 300;
+const GLANCE_PARTS = ["analytics", "likers", "reposters"];
+const PEOPLE_PAGE = 50;
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 const X_HOME = ["https://x.com/home*", "https://twitter.com/home*"];
 
@@ -52,6 +59,185 @@ async function post(path, body, timeoutMs, read = (res) => res) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+/// Reads `path` as JSON. A failure carries the server's `kind` and
+/// `retry_after_secs` when it sent them, so a caller can tell "rate
+/// limited, ask again later" from "this server can't do that".
+async function getJson(path, timeoutMs = READ_TIMEOUT_MS, method = "GET") {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${await serverUrl()}${path}`, { method, signal: controller.signal });
+    noteServerVersion(res.headers.get("x-unrager-version"));
+    const text = await res.text();
+    let body = null;
+    try {
+      body = text ? JSON.parse(text) : null;
+    } catch (_) {}
+    if (!res.ok) {
+      const err = new Error((body && body.error) || `http ${res.status}`);
+      err.status = res.status;
+      err.kind = body && body.kind;
+      err.retryAfter = body && body.retry_after_secs;
+      throw err;
+    }
+    return body;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/// What a content script gets back when a request fails.
+function failure(err) {
+  const aborted = err && err.name === "AbortError";
+  return {
+    ok: false,
+    error: String((err && err.message) || err),
+    kind: (err && err.kind) || (aborted ? "timeout" : err && err.status ? "http" : "unreachable"),
+    status: (err && err.status) || null,
+    retryAfter: (err && err.retryAfter) || null,
+  };
+}
+
+/// What the stats on the user's own posts show of a person, kept small so a
+/// page of them fits in session storage.
+function slimUser(u) {
+  return {
+    rest_id: u.rest_id,
+    handle: u.handle,
+    name: u.name,
+    verified: !!u.verified,
+    avatar_url: u.avatar_url || "",
+    followers: u.followers || 0,
+    follows_me: u.follows_me,
+    followed_by_me: u.followed_by_me,
+  };
+}
+
+function slimPage(page) {
+  return page ? { users: (page.users || []).map(slimUser), cursor: page.cursor || null } : null;
+}
+
+function slimTweet(t) {
+  return {
+    rest_id: t.rest_id,
+    author: slimUser(t.author || {}),
+    created_at: t.created_at,
+    text: t.text || "",
+    like_count: t.like_count || 0,
+    reply_count: t.reply_count || 0,
+    retweet_count: t.retweet_count || 0,
+    view_count: t.view_count == null ? null : t.view_count,
+    url: t.url || "",
+  };
+}
+
+/// Each post's glance parts as last fetched, `{analytics|likers|reposters:
+/// {at, value}}`, mirrored into session storage so the worker going to
+/// sleep, another tab or a reload doesn't spend X's budget on them again.
+const glances = new Map();
+const glancesInFlight = new Map();
+const GLANCE_KEY = (id) => `glance:${id}`;
+
+async function cachedGlance(id) {
+  if (glances.has(id)) return glances.get(id);
+  const key = GLANCE_KEY(id);
+  const stored = await chrome.storage.session.get(key).catch(() => ({}));
+  if (glances.has(id)) return glances.get(id);
+  const entry = stored[key] || {};
+  glances.set(id, entry);
+  return entry;
+}
+
+/// Glance writes, one after another, each with its index update, so two
+/// glances landing together can't drop each other's entry or parts.
+let glanceWrites = Promise.resolve();
+
+/// Merges freshly fetched parts into the post's cached glance, as it stands
+/// by the time they land, and keeps the glances of the `MAX_GLANCES` posts
+/// fetched most recently.
+function storeGlance(id, parts) {
+  const write = glanceWrites.then(async () => {
+    const entry = { ...(await cachedGlance(id)), ...parts };
+    glances.set(id, entry);
+    const { glanceIndex = {} } = await chrome.storage.session.get("glanceIndex");
+    glanceIndex[id] = Date.now();
+    const ids = Object.keys(glanceIndex).sort((a, b) => glanceIndex[b] - glanceIndex[a]);
+    const dropped = ids.slice(MAX_GLANCES);
+    for (const old of dropped) {
+      delete glanceIndex[old];
+      glances.delete(old);
+    }
+    await chrome.storage.session.set({ [GLANCE_KEY(id)]: entry, glanceIndex });
+    if (dropped.length) await chrome.storage.session.remove(dropped.map(GLANCE_KEY));
+    return entry;
+  });
+  glanceWrites = write.catch(() => {});
+  return write.catch(() => ({ ...(glances.get(id) || {}), ...parts }));
+}
+
+/// A glance at one of the user's posts: each part asked for comes from the
+/// cache while it's younger than `maxAgeMs`, and only the rest from the
+/// server. A part the server held back or failed on is left out, and the
+/// answer says which and when to ask again.
+async function glance(id, asked, maxAgeMs) {
+  const parts = asked.filter((part) => GLANCE_PARTS.includes(part));
+  let entry = await cachedGlance(id);
+  const now = Date.now();
+  const stale = parts.filter((part) => !entry[part] || now - entry[part].at > maxAgeMs);
+  let deferred = [];
+  let failed = [];
+  let retryAfter = null;
+  if (stale.length) {
+    const key = `${id}:${stale.join(",")}`;
+    let pending = glancesInFlight.get(key);
+    if (!pending) {
+      const path = `/api/tweets/${encodeURIComponent(id)}/insights?parts=${stale.join(",")}`;
+      pending = getJson(path).finally(() => glancesInFlight.delete(key));
+      glancesInFlight.set(key, pending);
+    }
+    const body = (await pending) || {};
+    deferred = body.deferred || [];
+    failed = body.failed || [];
+    retryAfter = body.retry_after_secs || null;
+    const fetchedAt = Date.now();
+    const fresh = {};
+    for (const part of stale) {
+      if (deferred.includes(part) || failed.includes(part)) continue;
+      fresh[part] = { at: fetchedAt, value: part === "analytics" ? body.analytics || null : slimPage(body[part]) };
+    }
+    entry = await storeGlance(id, fresh);
+  }
+  const value = { deferred, failed, retryAfter };
+  for (const part of parts) {
+    if (entry[part]) value[part] = { at: entry[part].at, value: entry[part].value };
+  }
+  return value;
+}
+
+async function people(kind, id, cursor) {
+  const query = `count=${PEOPLE_PAGE}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+  const path =
+    kind === "reposters"
+      ? `/api/tweets/${encodeURIComponent(id)}/reposters?${query}`
+      : `/api/likers/${encodeURIComponent(id)}?${query}`;
+  return slimPage(await getJson(path));
+}
+
+async function quotes(id, cursor) {
+  const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+  const page = await getJson(`/api/tweets/${encodeURIComponent(id)}/quotes${query}`);
+  return { tweets: ((page && page.tweets) || []).map(slimTweet), cursor: (page && page.cursor) || null };
+}
+
+/// Answers a content script's request with `{ok, value}` or a failure.
+function reply(promise, sendResponse) {
+  promise.then(
+    (value) => sendResponse({ ok: true, value }),
+    (err) => sendResponse(failure(err))
+  );
+  return true;
 }
 
 async function classify(tweets, cachedOnly) {
@@ -162,6 +348,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       (err) => sendResponse({ ok: false, error: String((err && err.message) || err) })
     );
     return true;
+  }
+  if (msg.type === "whoami") return reply(getJson("/api/whoami", WHOAMI_TIMEOUT_MS), sendResponse);
+  if (msg.type === "glance" && typeof msg.id === "string" && Array.isArray(msg.parts)) {
+    return reply(glance(msg.id, msg.parts, msg.maxAgeMs || 0), sendResponse);
+  }
+  if (msg.type === "people" && typeof msg.id === "string") {
+    return reply(people(msg.kind, msg.id, msg.cursor), sendResponse);
+  }
+  if (msg.type === "quotes" && typeof msg.id === "string") {
+    return reply(quotes(msg.id, msg.cursor), sendResponse);
+  }
+  if (msg.type === "follow" && typeof msg.userId === "string") {
+    const path = `/api/users/${encodeURIComponent(msg.userId)}/follow`;
+    return reply(getJson(path, OVERRIDE_TIMEOUT_MS, "POST"), sendResponse);
   }
   if (msg.type === "badge" && sender.tab && sender.tab.id !== undefined) {
     restored.then(() => setBadge(sender.tab.id, msg));

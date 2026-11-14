@@ -68,6 +68,14 @@ const EXTENSION_FILES: &[(&str, &[u8])] = &[
         include_bytes!("../../browser/extension/content-rweb.js"),
     ),
     (
+        "insights-model.js",
+        include_bytes!("../../browser/extension/insights-model.js"),
+    ),
+    (
+        "insights.js",
+        include_bytes!("../../browser/extension/insights.js"),
+    ),
+    (
         "content.css",
         include_bytes!("../../browser/extension/content.css"),
     ),

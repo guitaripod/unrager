@@ -189,18 +189,29 @@ const unragerInsightsModel = (() => {
 
   /// Which of `items` fit in `width` pixels beside a count, `gap` apart.
   /// Each item offers widths from its fullest form down (a face pile of 3,
-  /// 2, then 1 faces); the most important items are placed first, each in
-  /// the fullest form that still fits. Returns, by key, the index of the
-  /// form chosen; an item that fits in no form is left out.
+  /// 2, then 1 faces). Every item first gets its smallest form, most
+  /// important first, while there's room; then the most important grow
+  /// into the fullest form the room left allows, so a fuller pile never
+  /// pushes out something less important that would have fitted beside a
+  /// smaller one. Returns, by key, the index of the form chosen; an item
+  /// that fits in no form is left out.
   function fit(items, width, gap) {
     const chosen = {};
-    let left = width;
+    let used = 0;
     const order = [...items].sort((a, b) => a.priority - b.priority);
     for (const item of order) {
-      const needs = (w) => w + (Object.keys(chosen).length ? gap : 0);
-      const index = item.widths.findIndex((w) => needs(w) <= left);
-      if (index === -1) continue;
-      left -= needs(item.widths[index]);
+      const smallest = item.widths.length - 1;
+      const cost = item.widths[smallest] + (Object.keys(chosen).length ? gap : 0);
+      if (smallest < 0 || used + cost > width) continue;
+      used += cost;
+      chosen[item.key] = smallest;
+    }
+    for (const item of order) {
+      if (!(item.key in chosen)) continue;
+      const current = item.widths[chosen[item.key]];
+      const index = item.widths.findIndex((w) => used - current + w <= width);
+      if (index === -1 || index >= chosen[item.key]) continue;
+      used += item.widths[index] - current;
       chosen[item.key] = index;
     }
     return chosen;

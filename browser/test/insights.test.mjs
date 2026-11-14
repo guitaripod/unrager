@@ -134,7 +134,7 @@ test("views need a real jump to be marked; other counts rise at one", () => {
   assert.equal(M.notable("replies", 0, 3), false);
 });
 
-test("what fits beside a count: most important first, each as full as it still fits", () => {
+test("what fits beside a count: everything at its smallest first, then the most important grow", () => {
   const items = [
     { key: "faces", priority: 2, widths: [42, 30, 18] },
     { key: "delta", priority: 1, widths: [20] },
@@ -145,6 +145,12 @@ test("what fits beside a count: most important first, each as full as it still f
   assert.deepEqual(M.fit(items, 43, 5), { delta: 0, faces: 2 });
   assert.deepEqual(M.fit(items, 19, 5), { faces: 2 });
   assert.deepEqual(M.fit(items, 10, 5), {});
+  const facesFirst = [
+    { key: "faces", priority: 1, widths: [42, 30, 18] },
+    { key: "delta", priority: 2, widths: [22] },
+  ];
+  assert.deepEqual(M.fit(facesFirst, 50, 5), { faces: 2, delta: 0 }, "a smaller pile leaves room for the rise");
+  assert.deepEqual(M.fit(facesFirst, 58, 5), { faces: 1, delta: 0 });
 });
 
 test("the seen store keeps the most recently seen posts", () => {

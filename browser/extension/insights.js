@@ -40,9 +40,9 @@
   const HOVER_CLOSE_MS = 280;
   /// The space kept between a count and what's drawn after it, between the
   /// things drawn, and before the next control.
-  const LEAD = 6;
-  const ITEM_GAP = 5;
-  const TAIL = 6;
+  const LEAD = 5;
+  const ITEM_GAP = 4;
+  const TAIL = 4;
   const FACE = 18;
   const FACE_STEP = 12;
   const FONT = 'TwitterChirp, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
@@ -757,11 +757,12 @@
     const a = p.glance.analytics;
     if (a) {
       const chipSlot = st.controls.views ? "views" : "likes";
-      const rank = chipSlot === "views" ? [0.2, 0.4, 2] : [5, 6, 7];
+      const links = linksOut(st.container);
+      const rank = chipSlot === "views" ? (links ? [0.3, 0.1, 2] : [0.2, 0.4, 2]) : links ? [6, 5, 7] : [5, 6, 7];
       if (a.follows > 0) {
         plan[chipSlot].push(chipItem("follows", a.follows, `${M.full(a.follows)} new follower${a.follows === 1 ? "" : "s"} from this post`, rank[0], rises.follows));
       }
-      if (a.link_clicks > 0 || linksOut(st.container)) {
+      if (a.link_clicks > 0 || links) {
         plan[chipSlot].push(chipItem("link", a.link_clicks, `${M.full(a.link_clicks)} link click${a.link_clicks === 1 ? "" : "s"}`, rank[1], rises.link_clicks));
       }
       if (a.profile_visits > 0) {
@@ -776,7 +777,7 @@
     return {
       key: "delta",
       priority,
-      widths: [textWidth(text, `700 11px ${FONT}`) + 10],
+      widths: [textWidth(text, `700 10.5px ${FONT}`) + 7],
       render: () => h("span", { class: "delta", text }),
     };
   }
@@ -1665,8 +1666,8 @@
     :host { all: initial; font-family: ${FONT}; cursor: pointer; -webkit-tap-highlight-color: transparent; }
     :host(:focus-visible) { outline: 2px solid rgb(29, 155, 240); outline-offset: 3px; border-radius: 10px; }
     .row { display: flex; align-items: center; gap: ${ITEM_GAP}px; height: 20px; white-space: nowrap; }
-    .delta { display: inline-flex; align-items: center; height: 16px; padding: 0 5px; border-radius: 8px;
-      font: 700 11px/16px ${FONT}; color: rgb(0, 186, 124); background: rgba(0, 186, 124, 0.14);
+    .delta { display: inline-flex; align-items: center; height: 15px; padding: 0 3.5px; border-radius: 7.5px;
+      font: 700 10.5px/15px ${FONT}; color: rgb(0, 186, 124); background: rgba(0, 186, 124, 0.14);
       font-variant-numeric: tabular-nums; animation: pop 420ms cubic-bezier(0.2, 1.5, 0.4, 1) both; }
     .faces { display: inline-flex; align-items: center; height: 20px; }
     .face { width: ${FACE}px; height: ${FACE}px; border-radius: 50%; object-fit: cover; background: var(--line);

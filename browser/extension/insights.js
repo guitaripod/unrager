@@ -34,6 +34,13 @@
   /// When to ask again for parts the server was still asking X for.
   const RECHECK_MS = [900, 1800, 3500, 7000, 15000];
   const PARTS = ["analytics", "likers", "reposters"];
+  /// How long a known flag, and a known lack of one, is trusted.
+  const FLAG_KNOWN_MS = 30 * 86400000;
+  const FLAG_UNKNOWN_MS = 2 * 3600000;
+  const FLAG_BATCH_MS = 80;
+  /// How long people whose flags couldn't be asked for wait to be asked again.
+  const FLAG_RETRY_MS = 60000;
+  const TWEMOJI = "https://abs-0.twimg.com/emoji/v2/svg/";
   /// How long a post stays in view before what it shows counts as seen.
   const SEEN_AFTER_MS = 1200;
   /// Posts whose last-seen counts are kept, most recent first.
@@ -104,6 +111,12 @@
   const storedWanted = new Set();
   let flushTimer = 0;
   let inFlight = 0;
+  /// People's flags: `{c: country, a: alpha2, t: when asked}` by account id,
+  /// shared with every tab through extension storage.
+  let flagCache = {};
+  const flagsAsked = new Set();
+  const flagQueue = new Map();
+  let flagTimer = 0;
   let passFrame = 0;
   let retryTimer = 0;
   let measureCanvas = null;
@@ -804,6 +817,57 @@
       },
       soonest - Date.now() + 50
     );
+  }
+
+  /// A person's flag as known to the extension, asking the server (in a
+  /// batch, once per page) about anyone not asked lately. Null when no
+  /// country is known.
+  function flagOf(user) {
+    if (!user || !user.rest_id) return null;
+    const entry = flagCache[user.rest_id];
+    const fresh = entry && Date.now() - entry.t < (entry.c ? FLAG_KNOWN_MS : FLAG_UNKNOWN_MS);
+    if (!fresh && !flagsAsked.has(user.rest_id) && !flagQueue.has(user.rest_id) && serverReady()) {
+      flagsAsked.add(user.rest_id);
+      flagQueue.set(user.rest_id, { rest_id: user.rest_id, handle: user.handle });
+      if (!flagTimer) flagTimer = setTimeout(flushFlags, FLAG_BATCH_MS);
+    }
+    return entry && entry.c ? entry : null;
+  }
+
+  async function flushFlags() {
+    flagTimer = 0;
+    const users = [...flagQueue.values()].slice(0, 200);
+    for (const u of users) flagQueue.delete(u.rest_id);
+    if (!users.length) return;
+    const answer = await send({ type: "flags", users });
+    if (answer.ok) {
+      const now = Date.now();
+      for (const u of users) {
+        const f = answer.value[u.rest_id];
+        const old = flagCache[u.rest_id];
+        if (f) flagCache[u.rest_id] = { c: f.country, a: f.alpha2 || null, t: now };
+        else if (!old || !old.c) flagCache[u.rest_id] = { c: null, a: null, t: now };
+        flagsAsked.delete(u.rest_id);
+      }
+      if (users.some((u) => flagCache[u.rest_id].c)) renderCard();
+    } else {
+      setTimeout(() => {
+        for (const u of users) flagsAsked.delete(u.rest_id);
+      }, FLAG_RETRY_MS);
+    }
+    if (flagQueue.size) flagTimer = setTimeout(flushFlags, FLAG_BATCH_MS);
+  }
+
+  /// A flag as X draws emoji: Twemoji from X's own image host, the
+  /// country's flag, or a globe for a region.
+  function flagEl(user) {
+    const f = flagOf(user);
+    if (!f) return null;
+    const code = /^[A-Z]{2}$/.test(f.a || "") ? f.a : null;
+    const name = code
+      ? [...code].map((ch) => (0x1f1e6 + ch.charCodeAt(0) - 65).toString(16)).join("-")
+      : "1f310";
+    return h("img", { class: "flag", src: `${TWEMOJI}${name}.svg`, alt: "", title: f.c, draggable: "false" });
   }
 
   /// A people list for the card, started from what a glance brought.
@@ -1607,7 +1671,8 @@
             "span",
             { class: "name" },
             h("span", { class: "nm", text: user.name || user.handle }),
-            user.verified ? h("span", { class: "badge", html: ICONS.verified }) : null
+            user.verified ? h("span", { class: "badge", html: ICONS.verified }) : null,
+            flagEl(user)
           ),
           h("span", { class: "handle", text: `@${user.handle}${user.followers ? ` · ${M.short(user.followers)} followers` : ""}` })
         )
@@ -1729,6 +1794,7 @@
                 { class: "q-head" },
                 h("span", { class: "nm", text: author.name || author.handle }),
                 author.verified ? h("span", { class: "badge", html: ICONS.verified }) : null,
+                flagEl(author),
                 h("span", { class: "handle", text: ` @${author.handle} · ${M.span(Date.now() - Date.parse(t.created_at))}` })
               ),
               h("span", { class: "q-text", text: t.text }),
@@ -1916,6 +1982,7 @@
     .handle { color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; }
     .badge { display: inline-flex; flex: none; }
     .badge svg { width: 17px; height: 17px; fill: rgb(29, 155, 240); }
+    .flag { width: 16px; height: 16px; flex: none; margin-left: 4px; }
     .badge .check { fill: #fff; }
     .tag { margin-left: auto; flex: none; font: 600 12px/16px ${FONT}; padding: 3px 8px; border-radius: 6px; color: var(--ring);
       background: color-mix(in srgb, var(--ring) 14%, transparent); }
@@ -1946,12 +2013,13 @@
     }
   `;
 
-  chrome.storage.local.get(["insightsOff", "insightsSeen", "insightsSelf"]).then(
+  chrome.storage.local.get(["insightsOff", "insightsSeen", "insightsSelf", "flagCache"]).then(
     (stored) => {
       settings.off = !!stored.insightsOff;
       settings.loaded = true;
       seen = stored.insightsSeen || {};
       seenLoaded = true;
+      flagCache = stored.flagCache || {};
       self.id = cookieSelfId();
       if (stored.insightsSelf && stored.insightsSelf.id === self.id) {
         self.handle = stored.insightsSelf.handle;
@@ -1970,6 +2038,7 @@
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
     if (changes.insightsSeen && seenLoaded) seen = M.mergeSeen(changes.insightsSeen.newValue, seen, MAX_SEEN);
+    if (changes.flagCache && changes.flagCache.newValue) flagCache = { ...flagCache, ...changes.flagCache.newValue };
     if (!changes.insightsOff) return;
     settings.off = !!changes.insightsOff.newValue;
     if (settings.off) teardown();

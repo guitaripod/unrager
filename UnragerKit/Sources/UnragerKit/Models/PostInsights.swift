@@ -81,3 +81,23 @@ public struct InsightsBatchPost: Encodable, Sendable, Hashable {
         self.reposts = reposts
     }
 }
+
+/// Where an account says it's based, as a flag (`POST /api/flags`).
+public struct UserFlag: Decodable, Sendable, Hashable {
+    public let country: String
+    public let alpha2: String?
+    public let flag: String?
+}
+
+/// The flags of the accounts asked about whose country is known, by account
+/// id; one left out has none known yet.
+public struct FlagsResponse: Decodable, Sendable {
+    public let flags: [String: UserFlag]
+
+    enum CodingKeys: String, CodingKey { case flags }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        flags = try c.decodeIfPresent([String: UserFlag].self, forKey: .flags) ?? [:]
+    }
+}

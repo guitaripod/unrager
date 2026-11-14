@@ -228,6 +228,24 @@ impl AboutFetcher {
         fetch_one(&self.client, rest_id, screen_name).await
     }
 
+    /// What is known of a user's country without asking X: `store`, then
+    /// the community cache. For lists of people, where asking X about each
+    /// would spend its small budget at once.
+    pub async fn resolve_known(
+        &self,
+        store: &Mutex<AboutStore>,
+        rest_id: &str,
+        screen_name: &str,
+    ) -> Option<AboutProfile> {
+        if let Some(entry) = store.lock().await.get(rest_id) {
+            return entry.clone();
+        }
+        let community = self.community.as_ref()?;
+        let profile = community.lookup(rest_id, screen_name).await?;
+        store.lock().await.put(rest_id, Some(profile.clone()));
+        Some(profile)
+    }
+
     /// Cache-through resolution for inline callers (the server route):
     /// answer from `store` when the user is already known, then from the
     /// community cache when one is configured (ahead of the rate-limit check,

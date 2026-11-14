@@ -394,6 +394,25 @@ pub struct InsightsBatch {
     pub errors: std::collections::BTreeMap<String, String>,
 }
 
+/// Where an account says it's based, as a flag.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UserFlag {
+    pub country: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alpha2: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flag: Option<String>,
+}
+
+/// `POST /api/flags` — the flags of the accounts asked about whose country
+/// is known (from `about.db` or the community cache), by account id. One
+/// left out has none known yet.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct FlagsResponse {
+    #[serde(default)]
+    pub flags: std::collections::BTreeMap<String, UserFlag>,
+}
+
 /// `GET`/`PUT /api/notifications/seen` — the newest-seen notification marker,
 /// persisted server-side so badge state syncs across clients.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -465,6 +484,11 @@ mod tests {
             serde_json::from_value::<PostInsights>(wire).unwrap(),
             insights
         );
+        let flags: FlagsResponse = serde_json::from_value(
+            json!({"flags": {"7": {"country": "Finland", "alpha2": "FI", "flag": "🇫🇮"}}}),
+        )
+        .unwrap();
+        assert_eq!(flags.flags["7"].alpha2.as_deref(), Some("FI"));
     }
 
     #[test]

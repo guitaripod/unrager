@@ -156,6 +156,20 @@ public final class APIClient: Sendable {
         return try await postJSON("api/insights", body: body, as: InsightsBatch.self)
     }
 
+    /// The flags of a list of accounts (by `restID` and handle) whose country
+    /// the server knows from its cache or the community cache.
+    public func flags(for users: [(restID: String, handle: String)]) async throws -> FlagsResponse {
+        struct Body: Encodable {
+            struct User: Encodable {
+                let rest_id: String
+                let handle: String
+            }
+            let users: [User]
+        }
+        let body = Body(users: users.map { Body.User(rest_id: $0.restID, handle: $0.handle) })
+        return try await postJSON("api/flags", body: body, as: FlagsResponse.self)
+    }
+
     /// Who reposted a post, newest first, a page at a time.
     public func reposters(tweetID: String, cursor: String? = nil, count: Int? = nil) async throws -> UserListPage {
         var query: [URLQueryItem] = []

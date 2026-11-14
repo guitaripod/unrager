@@ -227,6 +227,17 @@ struct PostInsightsTests {
         #expect(posts.first?["likes"] as? Int == 48)
     }
 
+    @Test("Flags decode by account id, a region without a code too")
+    func flags() async throws {
+        let json = #"{"flags":{"7":{"country":"Finland","alpha2":"FI","flag":"🇫🇮"},"8":{"country":"South Asia"}}}"#
+        let transport = ScriptedTransport(status: 200, body: json)
+        let response = try await APIClient(transport: transport, baseURL: { .testServer })
+            .flags(for: [(restID: "7", handle: "ada"), (restID: "8", handle: "bo")])
+        #expect(response.flags["7"]?.alpha2 == "FI")
+        #expect(response.flags["8"]?.alpha2 == nil)
+        #expect(await transport.last()?.url.path == "/api/flags")
+    }
+
     @Test("Reposters page like any user list")
     func reposters() async throws {
         let transport = ScriptedTransport(

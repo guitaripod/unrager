@@ -13,6 +13,8 @@ const READ_TIMEOUT_MS = 20000;
 const WHOAMI_TIMEOUT_MS = 8000;
 /// Posts whose glances stay in local storage, most recently used first.
 const MAX_STORED_POSTS = 400;
+/// People whose flags stay in local storage.
+const MAX_FLAGS = 8000;
 const GLANCE_PARTS = ["analytics", "likers", "reposters"];
 /// The newest likers and reposters a glance brings.
 const GLANCE_COUNT = 20;
@@ -210,6 +212,33 @@ async function storeGlances(fresh) {
   await chrome.storage.local.set({ ...writes, insIndex: index });
 }
 
+/// Where each of a list of people is based, from the server (its about.db
+/// and the X-Posed community cache). Every answer is kept in `flagCache`
+/// with when it was asked, so a list opens with its flags; someone left out
+/// (unknown, or the community cache unreachable just then) is noted as such
+/// but never replaces a country already known.
+async function flags(users) {
+  const body = (await getJson("/api/flags", READ_TIMEOUT_MS, "POST", { users })) || {};
+  const found = body.flags || {};
+  await serially(async () => {
+    const { flagCache = {} } = await chrome.storage.local.get("flagCache");
+    const now = Date.now();
+    for (const u of users) {
+      const f = found[u.rest_id];
+      const old = flagCache[u.rest_id];
+      if (f) flagCache[u.rest_id] = { c: f.country, a: f.alpha2 || null, t: now };
+      else if (!old || !old.c) flagCache[u.rest_id] = { c: null, a: null, t: now };
+    }
+    const ids = Object.keys(flagCache);
+    if (ids.length > MAX_FLAGS) {
+      ids.sort((a, b) => flagCache[a].t - flagCache[b].t);
+      for (const id of ids.slice(0, ids.length - MAX_FLAGS)) delete flagCache[id];
+    }
+    await chrome.storage.local.set({ flagCache });
+  }).catch(() => {});
+  return found;
+}
+
 async function people(kind, id, cursor) {
   const query = `count=${PEOPLE_PAGE}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
   const path =
@@ -352,6 +381,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const asked = (Array.isArray(msg.parts) ? msg.parts : []).filter((p) => GLANCE_PARTS.includes(p));
     const parts = asked.length ? asked : GLANCE_PARTS;
     return reply(glances(posts, parts), sendResponse);
+  }
+  if (msg.type === "flags" && Array.isArray(msg.users)) {
+    const users = msg.users
+      .filter((u) => u && /^\d+$/.test(String(u.rest_id)) && /^[A-Za-z0-9_]{1,15}$/.test(String(u.handle)))
+      .slice(0, 200)
+      .map((u) => ({ rest_id: String(u.rest_id), handle: String(u.handle) }));
+    return reply(flags(users), sendResponse);
   }
   if (msg.type === "people" && typeof msg.id === "string") {
     return reply(people(msg.kind, msg.id, msg.cursor), sendResponse);

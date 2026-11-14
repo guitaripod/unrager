@@ -5,6 +5,7 @@ pub mod config;
 pub mod engage;
 pub mod feed;
 pub mod filter;
+pub mod flags;
 pub mod health;
 pub mod insights;
 pub mod limits;

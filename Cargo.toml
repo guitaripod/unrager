@@ -57,7 +57,6 @@ server = [
     "dep:tower",
     "dep:tower-http",
     "dep:async-stream",
-    "dep:eventsource-stream",
     "dep:fs2",
 ]
 
@@ -76,7 +75,6 @@ cbc = { version = "0.1", features = ["alloc"] }
 pbkdf2 = { version = "0.12", default-features = false }
 hmac = "0.12"
 sha1 = "0.10"
-anyhow = "1"
 thiserror = "2"
 tracing = "0.1"
 tracing-appender = "0.2"
@@ -115,7 +113,6 @@ axum = { version = "0.8", features = ["multipart", "macros"], optional = true }
 tower = { version = "0.5", optional = true }
 tower-http = { version = "0.6", features = ["compression-full", "trace", "fs"], optional = true }
 async-stream = { version = "0.3", optional = true }
-eventsource-stream = { version = "0.2", optional = true }
 fs2 = { version = "0.4", optional = true }
 lru = { version = "0.16", optional = true }
 
@@ -124,6 +121,9 @@ secret-service = { version = "4", features = ["rt-tokio-crypto-rust"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"
+
+[dev-dependencies]
+anyhow = "1"
 
 [profile.release]
 lto = "thin"

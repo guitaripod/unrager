@@ -191,13 +191,13 @@ impl App {
             return;
         };
         let start = view.selected() + 1;
-        let mut hit = None;
-        for i in start..view.notifications.len() {
-            if !self.notif_seen.is_seen(&view.notifications[i].id) {
-                hit = Some(i);
-                break;
-            }
-        }
+        let hit = view
+            .notifications
+            .iter()
+            .enumerate()
+            .skip(start)
+            .find(|(_, n)| !self.notif_seen.is_seen(&n.id))
+            .map(|(i, _)| i);
         match hit {
             Some(i) => {
                 view.set_selected(i);

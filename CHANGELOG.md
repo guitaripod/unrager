@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+## [0.33.0] — 2026-11-14
+
 - **The lists of who liked, reposted and quoted your post show where each person is based.** Each row in the card carries the person's flag, drawn as X draws emoji, from the countries unrager already knows and the X-Posed community cache when `[about] community_cache` is on, all looked up in one request per list and never through X's own about lookups, which come too few for a list. Flags are kept in the extension, so a list reopens with them.
 - **Stats on your own posts show up the moment x.com draws them, even after a restart.** unrager keeps what X said about your posts in `insights.db` and answers from it, asking X again only once a post's numbers can have moved (within a minute for a new post, hours for an old one) or its likes rose, and the extension keeps the last numbers too, so a post's faces and figures are drawn before anything is asked. A page of posts is one request that never waits on X: what's missing is fetched behind it, every post's likers first, and fills in as X answers. A failure or X asking to wait is remembered for a minute instead of retried with every scroll, at most three requests from the stats reach X at once so the apps' own stay quick, and `GET /api/whoami` no longer asks X on every page load.
 - **Your own posts on x.com show who liked and reposted them, link clicks and new followers, without a click.** The browser extension now draws the stats X keeps behind its analytics page and its Liked by and Reposted by lists into the empty space of your posts' action bar, wherever x.com shows them (Home, your profile, a post's page, a thread), in the old and the new web app, and nothing on the page moves: the faces of the latest likers and reposters ringed by whether they follow you, a green +N beside every count that rose since you last looked at the post, and the post's new followers, link clicks and profile visits beside its views. Hovering any of them, or X's views count, opens a card with the impressions, the engaged share, the first two days hour by hour, every figure from X's analytics, and tabs listing everyone who liked, reposted and quoted the post, with Follow back and filters for mutuals, followers and verified accounts; a click keeps it open. A switch in the popup turns it off. Who liked a post and X's analytics come from a full `unrager serve` (`unrager setup --apps`); with the filter-only server the rises since your last look still show.
@@ -446,7 +448,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 - **Mordor wallpaper + fiery accents** on the For You feed. Dark-theme + dark-terminal only; ambient whisper and the filter continue regardless.
 
-[Unreleased]: https://github.com/guitaripod/unrager/compare/0.32.0...HEAD
+[Unreleased]: https://github.com/guitaripod/unrager/compare/0.33.0...HEAD
+[0.33.0]: https://github.com/guitaripod/unrager/releases/tag/0.33.0
 [0.32.0]: https://github.com/guitaripod/unrager/releases/tag/0.32.0
 [0.31.2]: https://github.com/guitaripod/unrager/releases/tag/0.31.2
 [0.31.1]: https://github.com/guitaripod/unrager/releases/tag/0.31.1

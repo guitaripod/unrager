@@ -336,6 +336,14 @@ fn app_routes() -> Router<Arc<AppState>> {
         )
         .route("/tweets/{tweet_id}", delete(routes::posts::delete))
         .route("/tweets/{tweet_id}/quotes", get(routes::posts::quotes))
+        .route(
+            "/tweets/{tweet_id}/insights",
+            get(routes::insights::insights),
+        )
+        .route(
+            "/tweets/{tweet_id}/reposters",
+            get(routes::insights::reposters),
+        )
         .route("/thread/{id}", get(routes::tweet::thread))
         .route("/about/{rest_id}", get(routes::about::about))
         .route("/profile/{handle}", get(routes::profile::profile))

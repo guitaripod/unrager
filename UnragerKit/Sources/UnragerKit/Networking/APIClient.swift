@@ -130,6 +130,25 @@ public final class APIClient: Sendable {
         }
     }
 
+    /// X's analytics and the newest likers and reposters of one of the
+    /// signed-in account's own posts, asked of X together. `parts` names what
+    /// to fetch; all of it when empty.
+    public func postInsights(tweetID: String, parts: [InsightPart] = [], count: Int? = nil) async throws -> PostInsights {
+        var query: [URLQueryItem] = []
+        if !parts.isEmpty {
+            query.append(URLQueryItem(name: "parts", value: parts.map(\.rawValue).joined(separator: ",")))
+        }
+        append(&query, cursor: nil, count: count)
+        return try await get("api/tweets/\(pathSegment(tweetID))/insights", query: query, as: PostInsights.self)
+    }
+
+    /// Who reposted a post, newest first, a page at a time.
+    public func reposters(tweetID: String, cursor: String? = nil, count: Int? = nil) async throws -> UserListPage {
+        var query: [URLQueryItem] = []
+        append(&query, cursor: cursor, count: count)
+        return try await get("api/tweets/\(pathSegment(tweetID))/reposters", query: query, as: UserListPage.self)
+    }
+
     // MARK: - Profiles / Likers
 
     /// The profile and its recent posts. `includeTweets: false` asks for the

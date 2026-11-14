@@ -28,30 +28,41 @@ pub async fn analytics(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> std::result::Result<Json<PostAnalytics>, ApiError> {
+    fetch_analytics(&state, &id)
+        .await?
+        .map(Json)
+        .ok_or_else(|| ApiError::not_found("no analytics for this post"))
+}
+
+/// X's analytics for one post, or `None` when X has none for it: it isn't
+/// the signed-in account's, or it's too new to have any.
+pub(super) async fn fetch_analytics(
+    state: &AppState,
+    id: &str,
+) -> std::result::Result<Option<PostAnalytics>, ApiError> {
     let posted =
-        parse_activity::posted_at(&id).ok_or_else(|| ApiError::bad_request("not a post id"))?;
+        parse_activity::posted_at(id).ok_or_else(|| ApiError::bad_request("not a post id"))?;
     let response = state
         .gql
         .get(
             Operation::TweetActivityQuery,
-            &endpoints::tweet_activity_variables(&id, posted, chrono::Utc::now()),
+            &endpoints::tweet_activity_variables(id, posted, chrono::Utc::now()),
             &endpoints::tweet_activity_features(),
         )
         .await;
     match response {
-        Ok(response) => parse_activity::parse_post_analytics(&response)
-            .map(Json)
-            .ok_or_else(|| {
+        Ok(response) => {
+            let analytics = parse_activity::parse_post_analytics(&response);
+            if analytics.is_none() {
                 tracing::info!(
                     post = %id,
                     shape = %parse_activity::describe(&response),
                     "post analytics: X sent no metrics"
                 );
-                ApiError::not_found("no analytics for this post")
-            }),
-        Err(error @ Error::GraphqlApi { .. }) if !error.is_automation_block() => {
-            Err(ApiError::not_found("no analytics for this post"))
+            }
+            Ok(analytics)
         }
+        Err(error @ Error::GraphqlApi { .. }) if !error.is_automation_block() => Ok(None),
         Err(error) => Err(error.into()),
     }
 }

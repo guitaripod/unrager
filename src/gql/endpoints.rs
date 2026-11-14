@@ -408,7 +408,9 @@ pub fn about_account_features() -> Value {
     json!({})
 }
 
-pub fn favoriters_variables(tweet_id: &str, count: u32, cursor: Option<&str>) -> Value {
+/// Variables for the lists of people who engaged with one post, `Favoriters`
+/// (liked it) and `Retweeters` (reposted it), which X asks for alike.
+pub fn engagers_variables(tweet_id: &str, count: u32, cursor: Option<&str>) -> Value {
     let mut vars = json!({
         "tweetId": tweet_id,
         "count": count,
@@ -420,7 +422,7 @@ pub fn favoriters_variables(tweet_id: &str, count: u32, cursor: Option<&str>) ->
     vars
 }
 
-pub fn favoriters_features() -> Value {
+pub fn engagers_features() -> Value {
     json!({
         "rweb_video_screen_enabled": false,
         "profile_label_improvements_pcf_label_in_post_enabled": true,

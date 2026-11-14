@@ -341,6 +341,42 @@ pub struct PostAnalytics {
     pub hourly_impressions: Vec<u64>,
 }
 
+/// One part of [`PostInsights`], named in `?parts=` and in what the answer
+/// had to leave out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InsightPart {
+    Analytics,
+    Likers,
+    Reposters,
+}
+
+/// `GET /api/tweets/{id}/insights` — what the browser extension shows on the
+/// signed-in account's own posts without being asked: X's analytics and the
+/// newest people who liked and reposted the post, fetched together. Requests
+/// like this one go out on their own as posts scroll by, so the server holds
+/// a part back rather than spend the last of X's budget for it, and says so.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct PostInsights {
+    /// Absent when X has none for the post (it isn't the account's own, or
+    /// it's too new), or when the part was left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analytics: Option<PostAnalytics>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub likers: Option<UserListPage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reposters: Option<UserListPage>,
+    /// Parts held back to leave X's budget to the apps, or because X asked
+    /// to wait: ask for them again after `retry_after_secs`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deferred: Vec<InsightPart>,
+    /// Parts X failed to answer this time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed: Vec<InsightPart>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_after_secs: Option<u64>,
+}
+
 /// `GET`/`PUT /api/notifications/seen` — the newest-seen notification marker,
 /// persisted server-side so badge state syncs across clients.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -364,6 +400,35 @@ pub struct SessionState {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn insights_leave_out_what_they_lack() {
+        let empty = serde_json::to_value(PostInsights::default()).unwrap();
+        assert_eq!(empty, json!({}));
+        let partial = PostInsights {
+            likers: Some(UserListPage {
+                users: Vec::new(),
+                cursor: Some("c".into()),
+                verified_only: false,
+            }),
+            deferred: vec![InsightPart::Reposters],
+            retry_after_secs: Some(120),
+            ..PostInsights::default()
+        };
+        let wire = serde_json::to_value(&partial).unwrap();
+        assert_eq!(
+            wire,
+            json!({
+                "likers": {"users": [], "cursor": "c"},
+                "deferred": ["reposters"],
+                "retry_after_secs": 120
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<PostInsights>(wire).unwrap(),
+            partial
+        );
+    }
 
     #[test]
     fn a_token_event_carries_a_failure_only_when_there_is_one() {

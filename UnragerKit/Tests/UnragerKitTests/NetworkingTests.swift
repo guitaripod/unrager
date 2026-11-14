@@ -174,3 +174,51 @@ struct PostAnalyticsTests {
         #expect(PostAnalytics(impressions: 0, engagements: 0).engagementRate == nil)
     }
 }
+
+@Suite("Post insights")
+struct PostInsightsTests {
+    @Test("A glance decodes its parts and what was held back, skipping parts it doesn't know")
+    func decodes() async throws {
+        let json = #"""
+        {"analytics":{"impressions":72,"engagements":2,"detail_expands":1,"profile_visits":1,"link_clicks":0,"follows":1},
+         "likers":{"users":[{"rest_id":"7","handle":"ada","name":"Ada","verified":true,"followers":3,"following":4,"follows_me":true}],"cursor":"next"},
+         "deferred":["reposters","bookmarkers"],"retry_after_secs":120}
+        """#
+        let transport = ScriptedTransport(status: 200, body: json)
+        let client = APIClient(transport: transport, baseURL: { .testServer })
+        let insights = try await client.postInsights(tweetID: "1", parts: [.analytics, .likers, .reposters], count: 20)
+        #expect(insights.analytics?.follows == 1)
+        #expect(insights.likers?.users.first?.handle == "ada")
+        #expect(insights.likers?.cursor == "next")
+        #expect(insights.reposters == nil)
+        #expect(insights.deferred == [.reposters])
+        #expect(insights.failed.isEmpty)
+        #expect(insights.retryAfterSecs == 120)
+        let url = try #require(await transport.last()?.url)
+        #expect(url.path == "/api/tweets/1/insights")
+        #expect(url.query?.contains("parts=analytics,likers,reposters") == true)
+        #expect(url.query?.contains("count=20") == true)
+    }
+
+    @Test("An empty glance is nothing, not an error")
+    func empty() async throws {
+        let client = APIClient(transport: ScriptedTransport(status: 200, body: "{}"), baseURL: { .testServer })
+        let insights = try await client.postInsights(tweetID: "1")
+        #expect(insights.analytics == nil && insights.likers == nil && insights.deferred.isEmpty)
+    }
+
+    @Test("Reposters page like any user list")
+    func reposters() async throws {
+        let transport = ScriptedTransport(
+            status: 200,
+            body: #"{"users":[{"rest_id":"7","handle":"ada","name":"Ada","verified":false,"followers":1,"following":2}],"cursor":"c2"}"#
+        )
+        let page = try await APIClient(transport: transport, baseURL: { .testServer })
+            .reposters(tweetID: "9", cursor: "c1")
+        #expect(page.users.map(\.handle) == ["ada"])
+        #expect(page.cursor == "c2")
+        let url = try #require(await transport.last()?.url)
+        #expect(url.path == "/api/tweets/9/reposters")
+        #expect(url.query == "cursor=c1")
+    }
+}

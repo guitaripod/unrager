@@ -459,23 +459,60 @@ pub struct LikersPage {
     pub next_cursor: Option<String>,
 }
 
+/// The people who engaged with a post in one way, each a list X pages alike.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Engagers {
+    /// Who liked it, which X shows the post's author alone.
+    Likes,
+    /// Who reposted it.
+    Reposts,
+}
+
+impl Engagers {
+    fn operation(self) -> Operation {
+        match self {
+            Self::Likes => Operation::Favoriters,
+            Self::Reposts => Operation::Retweeters,
+        }
+    }
+
+    fn instructions_path(self) -> &'static str {
+        match self {
+            Self::Likes => "/data/favoriters_timeline/timeline/instructions",
+            Self::Reposts => "/data/retweeters_timeline/timeline/instructions",
+        }
+    }
+}
+
 pub async fn fetch_likers(
     client: &GqlClient,
     tweet_id: &str,
     cursor: Option<&str>,
 ) -> Result<LikersPage> {
+    fetch_engagers(client, Engagers::Likes, tweet_id, 50, cursor).await
+}
+
+/// One page of the people who liked or reposted a post, newest first.
+pub async fn fetch_engagers(
+    client: &GqlClient,
+    kind: Engagers,
+    tweet_id: &str,
+    count: u32,
+    cursor: Option<&str>,
+) -> Result<LikersPage> {
+    let op = kind.operation();
     let response = client
         .get(
-            Operation::Favoriters,
-            &endpoints::favoriters_variables(tweet_id, 50, cursor),
-            &endpoints::favoriters_features(),
+            op,
+            &endpoints::engagers_variables(tweet_id, count, cursor),
+            &endpoints::engagers_features(),
         )
         .await?;
 
     let instructions = response
-        .pointer("/data/favoriters_timeline/timeline/instructions")
+        .pointer(kind.instructions_path())
         .and_then(Value::as_array)
-        .ok_or_else(|| Error::GraphqlShape("missing favoriters instructions".into()))?;
+        .ok_or_else(|| Error::GraphqlShape(format!("missing {} instructions", op.name())))?;
 
     let parsed = crate::parse::user::parse_user_list_instructions(instructions);
     Ok(LikersPage {

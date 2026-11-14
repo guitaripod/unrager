@@ -3,7 +3,7 @@ use crate::gql::query_ids::Operation;
 use crate::parse::timeline;
 use crate::server::error::ApiError;
 use crate::server::state::AppState;
-use crate::tui::focus;
+use crate::tui::focus::Engagers;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use serde::Deserialize;
@@ -97,6 +97,8 @@ async fn recent_posts(
     Ok(timeline::walk(instructions))
 }
 
+const LIKERS_COUNT: u32 = 50;
+
 #[derive(Debug, Deserialize, Default)]
 pub struct LikersQuery {
     #[serde(default)]
@@ -110,10 +112,12 @@ pub async fn likers(
     Path(tweet_id): Path<String>,
     Query(q): Query<LikersQuery>,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
-    let page = focus::fetch_likers(&state.gql, &tweet_id, q.cursor.as_deref()).await?;
+    let count = super::timeline::page_count(q.count, LIKERS_COUNT);
+    let cursor = q.cursor.as_deref().filter(|c| !c.is_empty());
+    let page = super::insights::engagers(&state, Engagers::Likes, &tweet_id, count, cursor).await?;
     Ok(Json(serde_json::json!({
         "users": page.users,
-        "cursor": page.next_cursor,
+        "cursor": page.cursor,
     })))
 }
 

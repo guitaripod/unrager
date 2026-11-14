@@ -83,6 +83,32 @@ pub struct RateWindow {
     pub reset_at: u64,
 }
 
+/// The part of a window that requests nobody is waiting on leave alone: a
+/// tenth of it, and never fewer than five requests.
+fn reserve(limit: u64) -> u64 {
+    (limit / 10).max(5)
+}
+
+/// How long a request nobody is waiting on should hold off, given X's last
+/// window for its operation, any cooldown after a 429 and the time now (unix
+/// seconds): the cooldown first, then, while no more than the reserve is
+/// left, until the window refills. A window that already refilled, or one X
+/// never reported, holds nothing back.
+fn reserve_wait(
+    window: Option<RateWindow>,
+    cooldown: Option<Duration>,
+    now_unix: u64,
+) -> Option<Duration> {
+    if let Some(cooldown) = cooldown.filter(|c| !c.is_zero()) {
+        return Some(cooldown);
+    }
+    let window = window?;
+    if window.reset_at <= now_unix || window.remaining > reserve(window.limit) {
+        return None;
+    }
+    Some(Duration::from_secs(window.reset_at - now_unix))
+}
+
 /// One rate-limit budget. Each GraphQL operation and each legacy REST path
 /// has its own; background ingest polls share `Ingest`, so a 429 caused by
 /// the feed worker never freezes an interactive request, while a background
@@ -1027,6 +1053,23 @@ impl GqlClient {
         }
     }
 
+    /// How long a request nobody is waiting on (the browser extension
+    /// filling in its glances at the user's own posts) should hold off from
+    /// `op`, or `None` when it may go now: after a 429 until the cooldown
+    /// ends, and while X's window has no more than a reserve left, until it
+    /// refills, so what the apps ask for themselves still has budget.
+    pub fn spare_budget_wait(&self, op: Operation) -> Option<Duration> {
+        let window = self
+            .windows
+            .lock()
+            .ok()
+            .and_then(|guard| guard.get(&op).copied());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        reserve_wait(window, self.cooldown_remaining(&Bucket::Op(op)), now)
+    }
+
     /// Every operation X has reported a budget for, with the cooldown its
     /// interactive bucket still has after a 429, ordered by operation name.
     pub fn rate_windows(&self) -> Vec<(Operation, RateWindow, Option<Duration>)> {
@@ -1193,8 +1236,9 @@ fn truncate(s: &str, max_bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        Bucket, Error, GqlClient, HeaderMap, HeaderValue, Instant, RateWindow, classify_api_error,
-        is_auth_failure, needs_query_id_refresh, rate_window, truncate,
+        Bucket, Duration, Error, GqlClient, HeaderMap, HeaderValue, Instant, RateWindow,
+        classify_api_error, is_auth_failure, needs_query_id_refresh, rate_window, reserve_wait,
+        truncate,
     };
     use crate::auth::XSession;
     use crate::gql::query_ids::{Operation, QueryIdStore};
@@ -1559,5 +1603,39 @@ mod tests {
         assert_eq!(truncate(s, 2), "a…");
         assert_eq!(truncate(s, 3), "a…");
         assert_eq!(truncate(s, 5), "a🦀…");
+    }
+
+    #[test]
+    fn a_glance_waits_out_a_cooldown_and_leaves_the_reserve_alone() {
+        let window = |remaining| RateWindow {
+            limit: 500,
+            remaining,
+            reset_at: 1_000,
+        };
+        assert_eq!(reserve_wait(None, None, 900), None);
+        assert_eq!(reserve_wait(Some(window(51)), None, 900), None);
+        assert_eq!(
+            reserve_wait(Some(window(50)), None, 900),
+            Some(Duration::from_secs(100))
+        );
+        assert_eq!(
+            reserve_wait(Some(window(0)), None, 1_000),
+            None,
+            "a window past its reset has refilled"
+        );
+        assert_eq!(
+            reserve_wait(Some(window(400)), Some(Duration::from_secs(30)), 900),
+            Some(Duration::from_secs(30)),
+        );
+        let small = RateWindow {
+            limit: 20,
+            remaining: 5,
+            reset_at: 960,
+        };
+        assert_eq!(
+            reserve_wait(Some(small), None, 900),
+            Some(Duration::from_secs(60)),
+            "a small window still keeps five back"
+        );
     }
 }

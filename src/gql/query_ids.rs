@@ -47,6 +47,7 @@ operations! {
     (BookmarkSearchTimeline, "rbwiGBFqb93lmG7mw_OYZQ"),
     (Bookmarks, "-dgKZ58Dr9YSJYrcgEb5KA"),
     (Favoriters, "a2IHRwTdhkcv0Zt0mI-Vrg"),
+    (Retweeters, "VzgCyBwfqzAvPjK2E4U2vA"),
     (Followers, "fVGYs5W9kNUuoUrZwYZQpQ"),
     (BlueVerifiedFollowers, "DWeIe6l1rsZMqHPbbWXtig"),
     (Following, "-Mn4uN7C-vxXBwUKtSwS6A"),

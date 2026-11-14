@@ -6,6 +6,7 @@ pub mod engage;
 pub mod feed;
 pub mod filter;
 pub mod health;
+pub mod insights;
 pub mod limits;
 pub mod media;
 pub mod moderation;

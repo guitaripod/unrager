@@ -343,7 +343,7 @@ pub struct PostAnalytics {
 
 /// One part of [`PostInsights`], named in `?parts=` and in what the answer
 /// had to leave out.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InsightPart {
     Analytics,
@@ -375,6 +375,23 @@ pub struct PostInsights {
     pub failed: Vec<InsightPart>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_after_secs: Option<u64>,
+    /// Parts answered from the server's cache while it asks X for newer
+    /// ones: ask again in a moment for those.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refreshing: Vec<InsightPart>,
+    /// When X answered each part given (unix milliseconds).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub fetched_at: std::collections::BTreeMap<InsightPart, i64>,
+}
+
+/// `POST /api/insights` — glances at several posts in one request, by post id.
+/// A post whose every part failed is in `errors`, with the error's kind.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct InsightsBatch {
+    #[serde(default)]
+    pub posts: std::collections::BTreeMap<String, PostInsights>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub errors: std::collections::BTreeMap<String, String>,
 }
 
 /// `GET`/`PUT /api/notifications/seen` — the newest-seen notification marker,
@@ -427,6 +444,26 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<PostInsights>(wire).unwrap(),
             partial
+        );
+    }
+
+    #[test]
+    fn refreshing_parts_and_fetch_times_are_keyed_by_part() {
+        let mut insights = PostInsights {
+            refreshing: vec![InsightPart::Likers],
+            ..PostInsights::default()
+        };
+        insights
+            .fetched_at
+            .insert(InsightPart::Analytics, 1_700_000_000_000);
+        let wire = serde_json::to_value(&insights).unwrap();
+        assert_eq!(
+            wire,
+            json!({"refreshing": ["likers"], "fetched_at": {"analytics": 1_700_000_000_000_i64}})
+        );
+        assert_eq!(
+            serde_json::from_value::<PostInsights>(wire).unwrap(),
+            insights
         );
     }
 

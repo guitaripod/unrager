@@ -118,7 +118,7 @@ Your own posts, wherever x.com shows them (Home, your profile, a post's page, a 
 - a green **+N** beside each count that rose since you last looked at the post (views only for a real jump);
 - new followers, link clicks and profile visits from the post beside its views.
 
-Hover any of them, or X's views count, for a card: the post's impressions and engagement, its first two days hour by hour (point at a bar to read it), every figure from X's analytics, and tabs listing everyone who liked, reposted and quoted it, with **Follow back** for people who follow you and filters for mutuals, followers and verified accounts. Click to keep the card open. Who liked a post and X's analytics come through `unrager serve` reading X as you, so they need the full server (`unrager setup --apps`); with the filter-only server the rises since your last look still show.
+Hover any of them, or X's views count, for a card: the post's impressions and engagement, its first two days hour by hour (point at a bar to read it), every figure from X's analytics, and tabs listing everyone who liked, reposted and quoted it, with **Follow back** for people who follow you and filters for mutuals, followers and verified accounts. Click to keep the card open. The numbers are kept on your computer, by the extension and by unrager, so they show as soon as x.com draws your posts, even after a restart, and X is only asked again once they've gone stale. Who liked a post and X's analytics come through `unrager serve` reading X as you, so they need the full server (`unrager setup --apps`); with the filter-only server the rises since your last look still show.
 
 The toolbar badge shows how many posts were hidden on the current tab, `off` while paused, `!` when posts can't be checked and `↑` when the extension and unrager are different versions (open the popup to finish updating).
 
@@ -466,6 +466,7 @@ Paths are platform-native: Linux uses `~/.config/unrager/`, `~/.cache/unrager/` 
 | `~/.cache/unrager/seen.db` | Read-tracking SQLite |
 | `~/.cache/unrager/feed.db` | Materialized Home buffer for the terminal client and the iPhone app (`feed.db.writer.lock` guards the single writer) |
 | `~/.cache/unrager/about.db` | Country flag and about-profile cache, shared by the terminal client and `unrager serve` |
+| `~/.cache/unrager/insights.db` | The stats on your own posts (analytics, likers, reposters, quotes) as X last gave them, so x.com opens on them |
 | `~/.cache/unrager/media/<tweet_id>/` | Downloaded attachments for `m` (external viewer; pruned to 512 MB) |
 | `~/.cache/unrager/screenshots/` | PNG screenshots written by `S` |
 | `~/.cache/unrager/avatars/<sha256>.bin` | Author-avatar disk cache (LRU-pruned to 50 MB) |

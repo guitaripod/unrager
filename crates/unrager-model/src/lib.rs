@@ -7,7 +7,7 @@ pub use tweet::{AboutProfile, Media, MediaKind, PollOption, Tweet, User};
 pub use wire::{
     AboutStatus, AboutView, AskContextEntry, AskPreset, AskRequest, AskRole, AskTurn, BriefChunk,
     ComposeResult, FeedStatus, FeedStatusResponse, FilterTopic, FilterVerdictEvent, InsightPart,
-    MediaUploadResult, Notification, NotificationActor, NotificationsPage, NotificationsSeenMarker,
-    PostAnalytics, PostInsights, ProfileView, RateBudget, RateLimitsResponse, SessionState,
-    ThreadView, TimelinePage, TokenEvent, UserListPage, Verdict,
+    InsightsBatch, MediaUploadResult, Notification, NotificationActor, NotificationsPage,
+    NotificationsSeenMarker, PostAnalytics, PostInsights, ProfileView, RateBudget,
+    RateLimitsResponse, SessionState, ThreadView, TimelinePage, TokenEvent, UserListPage, Verdict,
 };

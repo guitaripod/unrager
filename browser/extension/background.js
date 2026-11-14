@@ -11,9 +11,17 @@ const WARM_TIMEOUT_MS = 5000;
 /// Reads from X through the server: a glance at a post, a page of people.
 const READ_TIMEOUT_MS = 20000;
 const WHOAMI_TIMEOUT_MS = 8000;
-/// Posts whose glances stay cached, newest first.
-const MAX_GLANCES = 300;
+/// Posts whose glances stay in local storage, most recently used first.
+const MAX_STORED_POSTS = 400;
 const GLANCE_PARTS = ["analytics", "likers", "reposters"];
+/// The newest likers and reposters a glance brings.
+const GLANCE_COUNT = 20;
+const INS_KEY = (id) => `ins:${id}`;
+
+/// A count a content script read off X's page, or nothing.
+function count(n) {
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : undefined;
+}
 const PEOPLE_PAGE = 50;
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 const X_HOME = ["https://x.com/home*", "https://twitter.com/home*"];
@@ -64,11 +72,16 @@ async function post(path, body, timeoutMs, read = (res) => res) {
 /// Reads `path` as JSON. A failure carries the server's `kind` and
 /// `retry_after_secs` when it sent them, so a caller can tell "rate
 /// limited, ask again later" from "this server can't do that".
-async function getJson(path, timeoutMs = READ_TIMEOUT_MS, method = "GET") {
+async function getJson(path, timeoutMs = READ_TIMEOUT_MS, method = "GET", payload = undefined) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`${await serverUrl()}${path}`, { method, signal: controller.signal });
+    const res = await fetch(`${await serverUrl()}${path}`, {
+      method,
+      signal: controller.signal,
+      headers: payload === undefined ? undefined : { "Content-Type": "application/json" },
+      body: payload === undefined ? undefined : JSON.stringify(payload),
+    });
     noteServerVersion(res.headers.get("x-unrager-version"));
     const text = await res.text();
     let body = null;
@@ -133,87 +146,68 @@ function slimTweet(t) {
   };
 }
 
-/// Each post's glance parts as last fetched, `{analytics|likers|reposters:
-/// {at, value}}`, mirrored into session storage so the worker going to
-/// sleep, another tab or a reload doesn't spend X's budget on them again.
-const glances = new Map();
-const glancesInFlight = new Map();
-const GLANCE_KEY = (id) => `glance:${id}`;
+/// Storage writes that read a shared key and write it back, one after
+/// another, so two answers landing together can't drop each other's
+/// changes.
+let localWrites = Promise.resolve();
 
-async function cachedGlance(id) {
-  if (glances.has(id)) return glances.get(id);
-  const key = GLANCE_KEY(id);
-  const stored = await chrome.storage.session.get(key).catch(() => ({}));
-  if (glances.has(id)) return glances.get(id);
-  const entry = stored[key] || {};
-  glances.set(id, entry);
-  return entry;
+function serially(task) {
+  const run = localWrites.then(task);
+  localWrites = run.catch(() => {});
+  return run;
 }
 
-/// Glance writes, one after another, each with its index update, so two
-/// glances landing together can't drop each other's entry or parts.
-let glanceWrites = Promise.resolve();
-
-/// Merges freshly fetched parts into the post's cached glance, as it stands
-/// by the time they land, and keeps the glances of the `MAX_GLANCES` posts
-/// fetched most recently.
-function storeGlance(id, parts) {
-  const write = glanceWrites.then(async () => {
-    const entry = { ...(await cachedGlance(id)), ...parts };
-    glances.set(id, entry);
-    const { glanceIndex = {} } = await chrome.storage.session.get("glanceIndex");
-    glanceIndex[id] = Date.now();
-    const ids = Object.keys(glanceIndex).sort((a, b) => glanceIndex[b] - glanceIndex[a]);
-    const dropped = ids.slice(MAX_GLANCES);
-    for (const old of dropped) {
-      delete glanceIndex[old];
-      glances.delete(old);
+/// Glances at a page of the user's posts in one request. The server
+/// answers from its own cache at once and asks X behind the answer for
+/// what it lacks (`refreshing`). Every part that came back is kept in
+/// `chrome.storage.local` (`ins:<id>`), which the content script reads
+/// straight away on the next visit, before anything is asked, and which
+/// outlives the browser; `insIndex` keeps the `MAX_STORED_POSTS` posts used
+/// most recently.
+async function glances(posts, parts) {
+  const body = (await getJson("/api/insights", READ_TIMEOUT_MS, "POST", { posts, parts, count: GLANCE_COUNT })) || {};
+  const answers = {};
+  const fresh = {};
+  for (const [id, ins] of Object.entries(body.posts || {})) {
+    const got = {};
+    for (const part of GLANCE_PARTS) {
+      const at = (ins.fetched_at || {})[part];
+      if (at == null) continue;
+      got[part] = { at, value: part === "analytics" ? ins.analytics || null : slimPage(ins[part]) };
     }
-    await chrome.storage.session.set({ [GLANCE_KEY(id)]: entry, glanceIndex });
-    if (dropped.length) await chrome.storage.session.remove(dropped.map(GLANCE_KEY));
-    return entry;
-  });
-  glanceWrites = write.catch(() => {});
-  return write.catch(() => ({ ...(glances.get(id) || {}), ...parts }));
+    fresh[id] = got;
+    answers[id] = {
+      parts: got,
+      refreshing: ins.refreshing || [],
+      deferred: ins.deferred || [],
+      failed: ins.failed || [],
+      retryAfter: ins.retry_after_secs || null,
+    };
+  }
+  if (Object.keys(fresh).length) await serially(() => storeGlances(fresh)).catch(() => {});
+  return { posts: answers, errors: body.errors || {} };
 }
 
-/// A glance at one of the user's posts: each part asked for comes from the
-/// cache while it's younger than `maxAgeMs`, and only the rest from the
-/// server. A part the server held back or failed on is left out, and the
-/// answer says which and when to ask again.
-async function glance(id, asked, maxAgeMs) {
-  const parts = asked.filter((part) => GLANCE_PARTS.includes(part));
-  let entry = await cachedGlance(id);
+async function storeGlances(fresh) {
+  const keys = Object.keys(fresh).map(INS_KEY);
+  const stored = await chrome.storage.local.get([...keys, "insIndex"]);
+  const index = stored.insIndex || {};
   const now = Date.now();
-  const stale = parts.filter((part) => !entry[part] || now - entry[part].at > maxAgeMs);
-  let deferred = [];
-  let failed = [];
-  let retryAfter = null;
-  if (stale.length) {
-    const key = `${id}:${stale.join(",")}`;
-    let pending = glancesInFlight.get(key);
-    if (!pending) {
-      const path = `/api/tweets/${encodeURIComponent(id)}/insights?parts=${stale.join(",")}`;
-      pending = getJson(path).finally(() => glancesInFlight.delete(key));
-      glancesInFlight.set(key, pending);
+  const writes = {};
+  for (const [id, parts] of Object.entries(fresh)) {
+    const entry = stored[INS_KEY(id)] || { parts: {} };
+    for (const [part, value] of Object.entries(parts)) {
+      const old = entry.parts[part];
+      if (!old || old.at <= value.at) entry.parts[part] = value;
     }
-    const body = (await pending) || {};
-    deferred = body.deferred || [];
-    failed = body.failed || [];
-    retryAfter = body.retry_after_secs || null;
-    const fetchedAt = Date.now();
-    const fresh = {};
-    for (const part of stale) {
-      if (deferred.includes(part) || failed.includes(part)) continue;
-      fresh[part] = { at: fetchedAt, value: part === "analytics" ? body.analytics || null : slimPage(body[part]) };
-    }
-    entry = await storeGlance(id, fresh);
+    writes[INS_KEY(id)] = entry;
+    index[id] = now;
   }
-  const value = { deferred, failed, retryAfter };
-  for (const part of parts) {
-    if (entry[part]) value[part] = { at: entry[part].at, value: entry[part].value };
-  }
-  return value;
+  const ids = Object.keys(index).sort((a, b) => index[b] - index[a]);
+  const dropped = ids.slice(MAX_STORED_POSTS);
+  for (const id of dropped) delete index[id];
+  if (dropped.length) await chrome.storage.local.remove(dropped.map(INS_KEY));
+  await chrome.storage.local.set({ ...writes, insIndex: index });
 }
 
 async function people(kind, id, cursor) {
@@ -350,8 +344,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.type === "whoami") return reply(getJson("/api/whoami", WHOAMI_TIMEOUT_MS), sendResponse);
-  if (msg.type === "glance" && typeof msg.id === "string" && Array.isArray(msg.parts)) {
-    return reply(glance(msg.id, msg.parts, msg.maxAgeMs || 0), sendResponse);
+  if (msg.type === "glances" && Array.isArray(msg.posts)) {
+    const posts = msg.posts
+      .filter((p) => p && /^\d+$/.test(String(p.id)))
+      .slice(0, 60)
+      .map((p) => ({ id: String(p.id), likes: count(p.likes), reposts: count(p.reposts) }));
+    const asked = (Array.isArray(msg.parts) ? msg.parts : []).filter((p) => GLANCE_PARTS.includes(p));
+    const parts = asked.length ? asked : GLANCE_PARTS;
+    return reply(glances(posts, parts), sendResponse);
   }
   if (msg.type === "people" && typeof msg.id === "string") {
     return reply(people(msg.kind, msg.id, msg.cursor), sendResponse);

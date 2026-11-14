@@ -61,7 +61,8 @@ pub struct QuotesQuery {
 
 /// `GET /api/tweets/{tweet_id}/quotes`: the posts quoting one, newest first,
 /// as X's own quotes view finds them (a Latest search for
-/// `quoted_tweet_id:`).
+/// `quoted_tweet_id:`). The first page comes from the server's cache while
+/// it's fresh (X's search budget is small), later pages from X.
 pub async fn quotes(
     State(state): State<Arc<AppState>>,
     Path(tweet_id): Path<String>,
@@ -69,6 +70,19 @@ pub async fn quotes(
 ) -> std::result::Result<Json<TimelinePage>, ApiError> {
     let id = post_id(&tweet_id)?;
     let cursor = q.cursor.as_deref().filter(|c| !c.is_empty());
+    let page = match cursor {
+        None => super::insights::first_quotes_page(&state, id).await?,
+        Some(_) => fetch_quotes(&state, id, cursor).await?,
+    };
+    Ok(Json(page))
+}
+
+/// One page of the posts quoting `id`, from X.
+pub(super) async fn fetch_quotes(
+    state: &AppState,
+    id: &str,
+    cursor: Option<&str>,
+) -> std::result::Result<TimelinePage, ApiError> {
     let response = state
         .gql
         .post(
@@ -89,11 +103,11 @@ pub async fn quotes(
     let mut page = timeline::walk(instructions);
     state.hydrate_quotes(&mut page.tweets).await;
     state.remember(&page.tweets);
-    Ok(Json(TimelinePage {
+    Ok(TimelinePage {
         tweets: page.tweets,
         cursor: page.next_cursor,
         pinned: None,
-    }))
+    })
 }
 
 /// A path id that is a post's numeric id, or a 400.

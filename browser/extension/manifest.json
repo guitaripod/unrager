@@ -18,7 +18,7 @@
       "32": "icons/32.png"
     }
   },
-  "permissions": ["storage", "activeTab", "contextMenus"],
+  "permissions": ["storage", "unlimitedStorage", "activeTab", "contextMenus"],
   "host_permissions": ["http://localhost/*", "http://127.0.0.1/*"],
   "optional_host_permissions": ["http://*/*", "https://*/*"],
   "background": {

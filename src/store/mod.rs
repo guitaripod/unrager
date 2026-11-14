@@ -7,6 +7,7 @@ pub mod about;
 pub mod community;
 pub mod feed;
 pub mod ingest;
+pub mod insights;
 
 pub use about::{AboutFetcher, AboutStore, AboutUnavailable, FetchOutcome};
 pub use feed::{FeedMeta, FeedPage, FeedStore, FeedVariant, StoredTweet};

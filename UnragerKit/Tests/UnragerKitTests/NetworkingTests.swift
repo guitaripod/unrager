@@ -207,6 +207,26 @@ struct PostInsightsTests {
         #expect(insights.analytics == nil && insights.likers == nil && insights.deferred.isEmpty)
     }
 
+    @Test("A batch decodes each post with what's still on its way and when X answered")
+    func batch() async throws {
+        let json = #"""
+        {"posts":{"1":{"likers":{"users":[],"cursor":null},"refreshing":["analytics","bookmarkers"],
+          "fetched_at":{"likers":1700000000000,"views":5}}},"errors":{"2":"auth"}}
+        """#
+        let transport = ScriptedTransport(status: 200, body: json)
+        let client = APIClient(transport: transport, baseURL: { .testServer })
+        let batch = try await client.postInsightsBatch([InsightsBatchPost(id: "1", likes: 48), InsightsBatchPost(id: "2")])
+        let one = try #require(batch.posts["1"])
+        #expect(one.refreshing == [.analytics])
+        #expect(one.fetchedAt == [.likers: 1_700_000_000_000])
+        #expect(batch.errors == ["2": "auth"])
+        let request = try #require(await transport.last())
+        #expect(request.url.path == "/api/insights")
+        let sent = try #require(request.body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })
+        let posts = try #require(sent["posts"] as? [[String: Any]])
+        #expect(posts.first?["likes"] as? Int == 48)
+    }
+
     @Test("Reposters page like any user list")
     func reposters() async throws {
         let transport = ScriptedTransport(

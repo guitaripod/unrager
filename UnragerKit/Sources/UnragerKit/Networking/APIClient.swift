@@ -142,6 +142,20 @@ public final class APIClient: Sendable {
         return try await get("api/tweets/\(pathSegment(tweetID))/insights", query: query, as: PostInsights.self)
     }
 
+    /// Glances at several of the signed-in account's posts in one request,
+    /// answered from the server's cache at once; ask again for the parts in
+    /// each post's `refreshing`.
+    public func postInsightsBatch(_ posts: [InsightsBatchPost], parts: [InsightPart] = [],
+                                  count: Int? = nil) async throws -> InsightsBatch {
+        struct Body: Encodable {
+            let posts: [InsightsBatchPost]
+            let parts: [String]?
+            let count: Int?
+        }
+        let body = Body(posts: posts, parts: parts.isEmpty ? nil : parts.map(\.rawValue), count: count)
+        return try await postJSON("api/insights", body: body, as: InsightsBatch.self)
+    }
+
     /// Who reposted a post, newest first, a page at a time.
     public func reposters(tweetID: String, cursor: String? = nil, count: Int? = nil) async throws -> UserListPage {
         var query: [URLQueryItem] = []

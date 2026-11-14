@@ -344,6 +344,7 @@ fn app_routes() -> Router<Arc<AppState>> {
             "/tweets/{tweet_id}/reposters",
             get(routes::insights::reposters),
         )
+        .route("/insights", post(routes::insights::batch))
         .route("/thread/{id}", get(routes::tweet::thread))
         .route("/about/{rest_id}", get(routes::about::about))
         .route("/profile/{handle}", get(routes::profile::profile))

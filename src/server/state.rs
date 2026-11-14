@@ -13,9 +13,11 @@ use crate::store::about::{self, AboutFetcher, AboutStore};
 use crate::store::community::{self, CommunityCache};
 use crate::store::feed::FeedStore;
 use crate::store::ingest::Activity;
+use crate::store::insights::{self, InsightsStore};
 use crate::tui::filter::{Classifier, FilterCache, FilterConfig};
 use crate::tui::seen::SeenStore;
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::{Arc, PoisonError};
@@ -25,6 +27,23 @@ use unrager_model::SessionState;
 
 /// How many tweets the server keeps from what it recently sent clients.
 const RECENT_TWEETS: NonZeroUsize = NonZeroUsize::new(2000).unwrap();
+/// Why X didn't give a part: its status, kind and message, or `None` when
+/// it was only held back.
+pub type SetbackError = Option<(axum::http::StatusCode, &'static str, String)>;
+
+/// A part X recently failed or held back.
+#[derive(Debug, Clone)]
+pub struct Setback {
+    pub left: Duration,
+    pub error: SetbackError,
+}
+
+/// Requests to X for the insights on own posts that may run at once.
+const INSIGHT_FETCHES: usize = 3;
+/// Background fetches of insights that may wait their turn at once.
+const INSIGHT_QUEUE: usize = 36;
+/// Past this many per-part locks, the idle ones are let go.
+const INSIGHT_LOCKS: usize = 512;
 
 pub struct AppState {
     /// `serve --filter-only`: no X session is loaded and only the filter
@@ -59,6 +78,18 @@ pub struct AppState {
     /// session already resolved answer instantly here and vice versa.
     pub about: Mutex<AboutStore>,
     pub about_fetcher: AboutFetcher,
+    /// What X last said about the user's own posts (`insights.db`).
+    pub insights: std::sync::Mutex<InsightsStore>,
+    /// One lock per post and part, so concurrent asks for the same missing
+    /// part make one request to X.
+    insight_locks: std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// Post parts being refreshed in the background right now.
+    insight_refreshing: std::sync::Mutex<HashSet<String>>,
+    /// Post parts X just failed or held back, with until when and why.
+    insight_setbacks: std::sync::Mutex<HashMap<String, (Instant, SetbackError)>>,
+    /// Requests to X for insights at once, so a page of posts scrolling by
+    /// can't burst the operations' budgets.
+    pub insight_fetches: tokio::sync::Semaphore,
     /// When X last answered 404 for a first page of the full `Followers`
     /// GraphQL op (removed upstream in 2025), so `/api/users/{id}/followers`
     /// goes straight to the `BlueVerifiedFollowers` fallback for a while.
@@ -74,6 +105,8 @@ pub struct AppState {
     /// The signed-in account's (id, handle), so Mentions doesn't ask X who
     /// the user is on every load.
     viewer: std::sync::Mutex<Option<(String, String)>>,
+    /// The last `/api/whoami` answer, with when X gave it.
+    whoami: std::sync::Mutex<Option<(Instant, Value)>>,
     pub feed_cfg: FeedConfig,
     pub feed_db_path: PathBuf,
     pub lock_path: PathBuf,
@@ -149,11 +182,17 @@ impl AppState {
             activity: Arc::new(Activity::idle()),
             about: Mutex::new(about_store),
             about_fetcher,
+            insights: std::sync::Mutex::new(InsightsStore::open(&insights::db_path(&cache_dir))?),
+            insight_locks: std::sync::Mutex::new(HashMap::new()),
+            insight_refreshing: std::sync::Mutex::new(HashSet::new()),
+            insight_setbacks: std::sync::Mutex::new(HashMap::new()),
+            insight_fetches: tokio::sync::Semaphore::new(INSIGHT_FETCHES),
             followers_op_dead_since: std::sync::Mutex::new(None),
             recent_tweets: std::sync::Mutex::new(lru::LruCache::new(RECENT_TWEETS)),
             quotes: QuoteHydrator::new(),
             user_ids: std::sync::Mutex::new(lru::LruCache::new(USER_IDS)),
             viewer: std::sync::Mutex::new(None),
+            whoami: std::sync::Mutex::new(None),
             feed_cfg: app_config.feed.clone(),
             feed_db_path,
             lock_path: cache_dir.join("server.lock"),
@@ -165,6 +204,63 @@ impl AppState {
 }
 
 impl AppState {
+    /// The lock that serializes fetching one part of one post.
+    pub fn insight_lock(&self, key: &str) -> Arc<Mutex<()>> {
+        let mut locks = self
+            .insight_locks
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if locks.len() > INSIGHT_LOCKS {
+            locks.retain(|_, lock| Arc::strong_count(lock) > 1);
+        }
+        locks.entry(key.to_string()).or_default().clone()
+    }
+
+    /// Claims a background refresh of `key`; false when one is running, or
+    /// when `INSIGHT_QUEUE` are already waiting their turn (a profile
+    /// scrolled fast would otherwise queue every post it passed; the client
+    /// asks again for the ones still on screen).
+    pub fn begin_refresh(&self, key: &str) -> bool {
+        let mut running = self
+            .insight_refreshing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        running.len() < INSIGHT_QUEUE && running.insert(key.to_string())
+    }
+
+    pub fn end_refresh(&self, key: &str) {
+        self.insight_refreshing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(key);
+    }
+
+    /// Remembers that X failed (`error`) or held back (`None`) a part, so
+    /// it's answered with that for `pause` instead of asked again.
+    pub fn note_setback(&self, key: &str, pause: Duration, error: SetbackError) {
+        let mut setbacks = self
+            .insight_setbacks
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let now = Instant::now();
+        setbacks.retain(|_, (until, _)| *until > now);
+        setbacks.insert(key.to_string(), (now + pause, error));
+    }
+
+    /// A setback still in force for a part, with how long it has left.
+    pub fn recent_setback(&self, key: &str) -> Option<Setback> {
+        let setbacks = self
+            .insight_setbacks
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let (until, error) = setbacks.get(key)?;
+        let left = until.checked_duration_since(Instant::now())?;
+        Some(Setback {
+            left,
+            error: error.clone(),
+        })
+    }
+
     /// Keeps tweets a client was just sent for [`tweet`](Self::tweet).
     pub fn remember<'a>(&self, tweets: impl IntoIterator<Item = &'a Tweet>) {
         let mut recent = self
@@ -270,6 +366,20 @@ impl AppState {
     }
 
     /// The signed-in account's handle, asked of X once per session.
+    /// The last whoami answer, while it's younger than `ttl` and still the
+    /// account `me` (the session's `twid`, when it has one).
+    pub fn cached_whoami(&self, me: Option<&str>, ttl: Duration) -> Option<Value> {
+        let guard = self.whoami.lock().unwrap_or_else(PoisonError::into_inner);
+        let (at, answer) = guard.as_ref()?;
+        let same = me.is_none_or(|me| answer.get("rest_id").and_then(Value::as_str) == Some(me));
+        (same && at.elapsed() < ttl).then(|| answer.clone())
+    }
+
+    pub fn remember_whoami(&self, answer: Value) {
+        *self.whoami.lock().unwrap_or_else(PoisonError::into_inner) =
+            Some((Instant::now(), answer));
+    }
+
     pub async fn viewer_handle(&self) -> Result<String> {
         let me = self.gql.self_user_id();
         let cached = self

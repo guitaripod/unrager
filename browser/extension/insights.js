@@ -23,18 +23,23 @@
   const SLOTS = ["replies", "reposts", "likes", "views"];
   /// The card tab hovering each slot's additions opens.
   const SLOT_TAB = { replies: "overview", reposts: "reposts", likes: "likes", views: "overview" };
-  /// How long a glance stays good before X is asked again, and the least
-  /// time between two asks for a post whose likes or reposts just rose.
-  const FRESH_MS = 120000;
-  const GROWN_REFRESH_MS = 20000;
-  /// Glances in flight at once from this tab.
-  const MAX_RUNNING = 2;
+  /// How often a post in view is asked about again. The server answers
+  /// from its own cache and decides when X is asked, so this is cheap.
+  const CHECK_EVERY_MS = 30000;
+  /// How long posts wait to be asked about together, how many go in one
+  /// glance, and how many glances may be out at once.
+  const FLUSH_MS = 40;
+  const MAX_BATCH = 40;
+  const MAX_IN_FLIGHT = 2;
+  /// When to ask again for parts the server was still asking X for.
+  const RECHECK_MS = [900, 1800, 3500, 7000, 15000];
+  const PARTS = ["analytics", "likers", "reposters"];
   /// How long a post stays in view before what it shows counts as seen.
   const SEEN_AFTER_MS = 1200;
   /// Posts whose last-seen counts are kept, most recent first.
   const MAX_SEEN = 600;
-  /// After the tab was hidden this long, rises are counted from the next
-  /// look instead of the one before the break.
+  /// After the tab was hidden this long, rises are counted from the last
+  /// look before the break rather than from the one this page started with.
   const NEW_LOOK_AFTER_MS = 20 * 60000;
   const HOVER_OPEN_MS = 260;
   const HOVER_CLOSE_MS = 280;
@@ -94,8 +99,11 @@
   let seenLoaded = false;
   let seenWrite = 0;
   let hiddenSince = 0;
-  const queue = [];
-  let running = 0;
+  /// Posts waiting to be asked about, and to be read from storage.
+  const wanted = new Set();
+  const storedWanted = new Set();
+  let flushTimer = 0;
+  let inFlight = 0;
   let passFrame = 0;
   let retryTimer = 0;
   let measureCanvas = null;
@@ -356,13 +364,20 @@
         baseline: undefined,
         glance: {},
         fetchedAt: {},
-        countsAtFetch: {},
         loading: false,
         retryAt: 0,
         problem: null,
         lists: {},
         held: {},
         again: false,
+        checkedAt: 0,
+        countsAtCheck: null,
+        recheck: false,
+        rechecks: 0,
+        recheckTimer: 0,
+        sentCounts: null,
+        refreshing: [],
+        storedRead: false,
       };
       posts.set(id, p);
     }
@@ -464,6 +479,7 @@
     const p = postState(post.id);
     p.handle = post.handle;
     takeBaseline(p);
+    readStored(post.id);
     bindHover(st.controls.views, () => bars.get(bar), "overview");
     return st;
   }
@@ -584,25 +600,21 @@
     schedulePass();
   }
 
-  /// The parts of a glance at a post that are due: analytics, and likers or
-  /// reposters when it has any, each once it's older than `FRESH_MS`, or
-  /// sooner when its count rose past what the last fetch saw.
-  function partsDue(p) {
+  /// Whether a post is due to be asked about again: not asked yet on this
+  /// page, last asked over `CHECK_EVERY_MS` ago, its counts rose since, or
+  /// the server said a part was on its way. Whether X needs asking is the
+  /// server's call, from its own cache; this only keeps asking the server
+  /// sparse.
+  function isDue(p) {
     const now = Date.now();
-    if (now < p.retryAt) return [];
-    const due = [];
-    const stale = (part) => !(part in p.glance) || now - (p.fetchedAt[part] || 0) > FRESH_MS;
-    const risen = (part, count) =>
-      count > (p.countsAtFetch[part] || 0) && now - (p.fetchedAt[part] || 0) > GROWN_REFRESH_MS;
-    if (stale("analytics")) due.push("analytics");
-    const counts = p.counts || {};
-    if (counts.likes !== 0 && (stale("likers") || risen("likers", counts.likes))) due.push("likers");
-    if (counts.reposts > 0 && (stale("reposters") || risen("reposters", counts.reposts))) due.push("reposters");
-    return due;
+    if (now < p.retryAt) return false;
+    if (p.recheck || !p.checkedAt) return true;
+    if (p.counts && p.countsAtCheck && grew(p.countsAtCheck, p.counts)) return true;
+    return now - p.checkedAt > CHECK_EVERY_MS;
   }
 
-  /// Queues a glance at post `id` if any part of it is due. One asked for
-  /// while a glance is already out is asked again once that one lands.
+  /// Queues a glance at post `id`. One asked for while its glance is out is
+  /// asked again once that lands.
   function want(id) {
     if (!serverReady() || settings.off) return;
     const p = postState(id);
@@ -610,75 +622,169 @@
       p.again = true;
       return;
     }
-    if (queue.includes(id) || !partsDue(p).length) return;
-    queue.push(id);
-    pump();
+    if (!isDue(p)) return;
+    wanted.add(id);
+    scheduleFlush(FLUSH_MS);
   }
 
-  function pump() {
-    while (running < MAX_RUNNING && queue.length) {
-      const id = queue.shift();
-      running += 1;
-      fetchGlance(postState(id)).finally(() => {
-        running -= 1;
-        pump();
-      });
-    }
+  function scheduleFlush(delay) {
+    if (flushTimer) return;
+    flushTimer = setTimeout(flushWanted, delay);
   }
 
-  /// Asks the background worker for the due parts of a glance at `p`, which
-  /// answers from its cache what's still fresh there.
-  async function fetchGlance(p) {
-    const parts = partsDue(p);
-    if (!parts.length) return;
-    p.loading = true;
-    const counts = p.counts || {};
-    const forced = parts.some(
-      (part) =>
-        (part === "likers" && counts.likes > (p.countsAtFetch.likers || 0) && "likers" in p.glance) ||
-        (part === "reposters" && counts.reposts > (p.countsAtFetch.reposters || 0) && "reposters" in p.glance)
-    );
-    const answer = await send({ type: "glance", id: p.id, parts, maxAgeMs: forced ? GROWN_REFRESH_MS : FRESH_MS });
-    p.loading = false;
-    if (p.again) {
-      p.again = false;
-      queueMicrotask(() => want(p.id));
+  /// Whether any bar of the post is on or near the screen.
+  function isNear(id) {
+    for (const st of bars.values()) {
+      if (st.id === id && st.near) return true;
     }
-    if (!answer.ok) {
-      p.problem = answer;
-      if (answer.kind === "filter_only" || answer.kind === "auth" || answer.kind === "unreachable") {
-        server.state = answer.kind;
-        clearTimeout(server.timer);
-        server.timer = setTimeout(checkServer, 60000);
-      }
-      p.retryAt = Date.now() + Math.max(30, answer.retryAfter || 60) * 1000;
-      scheduleRetry();
-      redraw(p.id);
+    return false;
+  }
+
+  /// How far the post's bar is from the middle of the screen; a post with
+  /// no bar near it counts as far.
+  function distance(id) {
+    let best = Infinity;
+    const middle = window.innerHeight / 2;
+    for (const st of bars.values()) {
+      if (st.id !== id || !st.near || !st.bar.isConnected) continue;
+      const box = st.bar.getBoundingClientRect();
+      best = Math.min(best, Math.abs(box.top + box.height / 2 - middle));
+    }
+    return best;
+  }
+
+  /// Sends the posts waiting to be asked about as one glance, those nearest
+  /// the middle of the screen first, since the server asks X for what it
+  /// lacks in that order.
+  async function flushWanted() {
+    flushTimer = 0;
+    if (inFlight >= MAX_IN_FLIGHT) {
+      scheduleFlush(FLUSH_MS * 3);
       return;
     }
-    p.problem = null;
-    const value = answer.value || {};
-    for (const part of value.deferred || []) p.held[part] = "deferred";
-    for (const part of value.failed || []) p.held[part] = "failed";
-    for (const part of ["analytics", "likers", "reposters"]) {
-      if (!value[part]) continue;
-      delete p.held[part];
-      p.glance[part] = value[part].value;
-      p.fetchedAt[part] = value[part].at;
-      if (part === "likers") {
-        p.countsAtFetch.likers = counts.likes || 0;
-        resetList(p, "likes", value[part].value);
+    const due = [...wanted].map(postState).filter((p) => !p.loading && isDue(p));
+    wanted.clear();
+    const away = new Map(due.map((p) => [p.id, distance(p.id)]));
+    due.sort((a, b) => away.get(a.id) - away.get(b.id));
+    const batch = due.slice(0, MAX_BATCH);
+    for (const p of due.slice(MAX_BATCH)) wanted.add(p.id);
+    if (!batch.length) return;
+    for (const p of batch) {
+      p.loading = true;
+      p.recheck = false;
+      p.sentCounts = p.counts ? { ...p.counts } : null;
+    }
+    inFlight += 1;
+    const answer = await send({
+      type: "glances",
+      parts: PARTS,
+      posts: batch.map((p) => ({ id: p.id, likes: p.counts && p.counts.likes, reposts: p.counts && p.counts.reposts })),
+    });
+    inFlight -= 1;
+    const now = Date.now();
+    if (!answer.ok) noteServerProblem(answer);
+    for (const p of batch) p.loading = false;
+    for (const p of batch) {
+      try {
+        const value = answer.ok && answer.value.posts[p.id];
+        if (value) apply(p, value, now);
+        else setBack(p, answer.ok ? { kind: answer.value.errors[p.id] || "http" } : answer, now);
+        redraw(p.id);
+      } catch (e) {
+        console.warn("[unrager] stats for a post failed to draw", e);
       }
-      if (part === "reposters") {
-        p.countsAtFetch.reposters = counts.reposts || 0;
-        resetList(p, "reposts", value[part].value);
+      if (p.again) {
+        p.again = false;
+        want(p.id);
       }
     }
-    if ((value.deferred && value.deferred.length) || (value.failed && value.failed.length)) {
-      p.retryAt = Date.now() + Math.max(15, value.retryAfter || 60) * 1000;
+    if (wanted.size) scheduleFlush(0);
+  }
+
+  /// Takes in what the server said about a post, and asks again in a
+  /// moment for parts it was still asking X for.
+  function apply(p, value, now) {
+    p.problem = null;
+    p.checkedAt = now;
+    p.countsAtCheck = p.sentCounts;
+    for (const part of value.deferred) p.held[part] = "deferred";
+    for (const part of value.failed) p.held[part] = "failed";
+    for (const [part, got] of Object.entries(value.parts)) {
+      delete p.held[part];
+      takePart(p, part, got);
+    }
+    p.refreshing = value.refreshing;
+    clearTimeout(p.recheckTimer);
+    if (value.refreshing.length) {
+      const delay = RECHECK_MS[Math.min(p.rechecks, RECHECK_MS.length - 1)];
+      p.rechecks += 1;
+      p.recheckTimer = setTimeout(() => {
+        if (!isNear(p.id)) {
+          p.rechecks = 0;
+          return;
+        }
+        p.recheck = true;
+        want(p.id);
+      }, delay);
+    } else {
+      p.rechecks = 0;
+    }
+    if (value.deferred.length || value.failed.length) {
+      p.retryAt = now + Math.max(15, value.retryAfter || 60) * 1000;
       scheduleRetry();
     }
-    redraw(p.id);
+  }
+
+  /// One part of a post, unless what's held is newer.
+  function takePart(p, part, got) {
+    if (!got || (p.fetchedAt[part] || 0) > got.at) return;
+    p.glance[part] = got.value;
+    p.fetchedAt[part] = got.at;
+    if (part === "likers") resetList(p, "likes", got.value);
+    if (part === "reposters") resetList(p, "reposts", got.value);
+  }
+
+  function setBack(p, answer, now) {
+    p.problem = answer;
+    p.retryAt = now + Math.max(30, answer.retryAfter || 60) * 1000;
+    scheduleRetry();
+  }
+
+  /// A failure that says the server can't answer at all: check on it again
+  /// rather than with every post, in a minute, or in a few seconds when it
+  /// only didn't answer (the extension's worker may just have restarted).
+  function noteServerProblem(answer) {
+    if (answer.kind !== "filter_only" && answer.kind !== "auth" && answer.kind !== "unreachable") return;
+    server.state = answer.kind;
+    clearTimeout(server.timer);
+    server.timer = setTimeout(checkServer, answer.kind === "unreachable" ? 5000 : 60000);
+  }
+
+  /// Reads what the extension kept of a post on earlier visits, so its bar
+  /// is drawn at once, before the server is asked anything. Posts found in
+  /// one pass are read together.
+  function readStored(id) {
+    const p = postState(id);
+    if (p.storedRead) return;
+    p.storedRead = true;
+    storedWanted.add(id);
+    if (storedWanted.size === 1) queueMicrotask(flushStored);
+  }
+
+  async function flushStored() {
+    const ids = [...storedWanted];
+    storedWanted.clear();
+    let stored = {};
+    try {
+      stored = await chrome.storage.local.get(ids.map((id) => `ins:${id}`));
+    } catch (_) {}
+    for (const id of ids) {
+      const entry = stored[`ins:${id}`];
+      if (!entry || !entry.parts) continue;
+      const p = postState(id);
+      for (const [part, got] of Object.entries(entry.parts)) takePart(p, part, got);
+      redraw(id);
+    }
   }
 
   /// Asks again for what was held back once the earliest wait is over.
@@ -1234,11 +1340,25 @@
       h(
         "div",
         { class: "foot" },
-        since ? h("span", { class: "fine", text: `Rises are counted from your last look, ${since === "now" ? "just now" : `${since} ago`}.` }) : h("span"),
+        h("span", { class: "fine", text: freshness(p, since) }),
         h("a", { class: "out", href: `/${p.handle}/status/${p.id}/analytics`, target: "_blank", rel: "noopener" }, "X analytics", h("span", { class: "icon", html: ICONS.out }))
       )
     );
     return out;
+  }
+
+  /// How current the card's numbers are, and what the rises count from.
+  function freshness(p, since) {
+    const times = Object.values(p.fetchedAt || {}).filter(Number.isFinite);
+    const parts = [];
+    if (p.refreshing && p.refreshing.length) parts.push("Updating…");
+    else if (times.length) {
+      const age = M.span(Date.now() - Math.min(...times));
+      parts.push(age === "now" ? "Updated just now" : `Updated ${age} ago`);
+    }
+    if (since) parts.push(`rises since your look ${since === "now" ? "just now" : `${since} ago`}`);
+    const text = parts.join(" · ");
+    return text ? text.charAt(0).toUpperCase() + text.slice(1) + "." : "";
   }
 
   function tiles(a, counts, rises) {
@@ -1483,7 +1603,12 @@
         h(
           "span",
           { class: "names" },
-          h("span", { class: "name" }, h("span", { class: "nm", text: user.name || user.handle }), user.verified ? h("span", { class: "badge", html: ICONS.verified }) : null),
+          h(
+            "span",
+            { class: "name" },
+            h("span", { class: "nm", text: user.name || user.handle }),
+            user.verified ? h("span", { class: "badge", html: ICONS.verified }) : null
+          ),
           h("span", { class: "handle", text: `@${user.handle}${user.followers ? ` · ${M.short(user.followers)} followers` : ""}` })
         )
       ),
@@ -1828,7 +1953,10 @@
       seen = stored.insightsSeen || {};
       seenLoaded = true;
       self.id = cookieSelfId();
-      if (stored.insightsSelf && stored.insightsSelf.id === self.id) self.handle = stored.insightsSelf.handle;
+      if (stored.insightsSelf && stored.insightsSelf.id === self.id) {
+        self.handle = stored.insightsSelf.handle;
+        if (server.state === "unknown") server.state = "ok";
+      }
       for (const p of posts.values()) takeBaseline(p);
       checkServer();
       schedulePass();
@@ -1899,4 +2027,10 @@
   if (window.navigation) window.navigation.addEventListener("currententrychange", () => closeCard());
   window.addEventListener("popstate", () => closeCard());
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(redrawAll);
+  setInterval(() => {
+    if (document.visibilityState !== "visible") return;
+    for (const st of bars.values()) {
+      if (st.near) want(st.id);
+    }
+  }, CHECK_EVERY_MS);
 })();

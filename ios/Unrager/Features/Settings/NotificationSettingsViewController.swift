@@ -160,7 +160,7 @@ final class NotificationSettingsViewController: UIViewController {
         collectionView.backgroundColor = DesignSystem.Color.background
         collectionView.delegate = self
         view.addManaged(collectionView)
-        collectionView.pinEdges(to: view)
+        collectionView.pinEdges(to: makeContentGuide())
 
         let rows = UICollectionView.CellRegistration<UICollectionViewListCell, Item> { [weak self] cell, _, item in
             self?.configure(cell, for: item)

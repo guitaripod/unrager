@@ -81,13 +81,14 @@ final class FilterSettingsViewController: UIViewController {
 
         scrollView.keyboardDismissMode = .interactive
         scrollView.alwaysBounceVertical = true
+        let contentGuide = makeContentGuide()
         view.addManaged(scrollView)
         scrollView.addManaged(stack)
         view.addManaged(loadingIndicator)
         NSLayoutConstraint.activate([
             scrollView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: contentGuide.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: contentGuide.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor),
             stack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
             stack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),

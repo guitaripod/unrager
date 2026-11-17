@@ -89,10 +89,16 @@ final class NotificationToast: UIView {
         host.addSubview(self)
         let top = topAnchor.constraint(equalTo: host.safeAreaLayoutGuide.topAnchor, constant: DesignSystem.Spacing.s)
         topConstraint = top
+        let fillWidth = widthAnchor.constraint(
+            equalTo: host.safeAreaLayoutGuide.widthAnchor, constant: -2 * DesignSystem.Spacing.m)
+        fillWidth.priority = .defaultHigh
         NSLayoutConstraint.activate([
             top,
-            leadingAnchor.constraint(equalTo: host.safeAreaLayoutGuide.leadingAnchor, constant: DesignSystem.Spacing.m),
-            trailingAnchor.constraint(equalTo: host.safeAreaLayoutGuide.trailingAnchor, constant: -DesignSystem.Spacing.m),
+            centerXAnchor.constraint(equalTo: host.centerXAnchor),
+            leadingAnchor.constraint(greaterThanOrEqualTo: host.safeAreaLayoutGuide.leadingAnchor, constant: DesignSystem.Spacing.m),
+            trailingAnchor.constraint(lessThanOrEqualTo: host.safeAreaLayoutGuide.trailingAnchor, constant: -DesignSystem.Spacing.m),
+            widthAnchor.constraint(lessThanOrEqualToConstant: DesignSystem.maxContentWidth),
+            fillWidth,
         ])
         host.layoutIfNeeded()
 

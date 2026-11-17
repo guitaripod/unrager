@@ -32,7 +32,7 @@ final class EditTabsViewController: UIViewController {
         collectionView.backgroundColor = .clear
         collectionView.delegate = self
         view.addManaged(collectionView)
-        collectionView.pinEdges(to: view)
+        collectionView.pinEdges(to: makeContentGuide())
         collectionView.isEditing = true
 
         configureDataSource()

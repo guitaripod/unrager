@@ -20,13 +20,14 @@ final class MyProfileViewController: UIViewController {
         view.backgroundColor = DesignSystem.Color.background
         navigationItem.largeTitleDisplayMode = .never
 
+        let contentGuide = makeContentGuide()
         view.addManaged(skeleton)
-        skeleton.pinEdges(to: view)
+        skeleton.pinEdges(to: contentGuide)
         skeleton.isHidden = true
         emptyState.isHidden = true
         emptyState.onRetry = { [weak self] in self?.resolve() }
         view.addManaged(emptyState)
-        emptyState.pinEdges(toSafeAreaOf: view)
+        emptyState.pinEdges(to: contentGuide, safeAreaOf: view)
         resolve()
     }
 

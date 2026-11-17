@@ -174,6 +174,15 @@ class Handler(BaseHTTPRequestHandler):
             if LATENCY["assets"]:
                 time.sleep(LATENCY["assets"])
             return self.serve_asset(path)
+        m = re.fullmatch(r"/api/media/(\d+)/(\d+)", path)
+        if m:
+            tweet = w.tweet_by_id(m.group(1))
+            index = int(m.group(2))
+            if tweet and index < len(tweet["media"]):
+                asset = tweet["media"][index].get("url") or ""
+                if asset.startswith("/assets/"):
+                    return self.serve_asset(asset)
+            return self.send_error_json(404, "not_found", "no such media")
         if LATENCY["api"] and path.startswith(("/api/sources", "/api/profile", "/api/whoami")):
             time.sleep(LATENCY["api"])
         if LATENCY["likers"] and path.startswith("/api/likers"):

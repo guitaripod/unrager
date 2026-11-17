@@ -48,7 +48,7 @@ final class NotificationActorsViewController: UIViewController {
         collectionView.backgroundColor = .clear
         collectionView.delegate = self
         view.addManaged(collectionView)
-        collectionView.pinEdges(to: view)
+        collectionView.pinEdges(to: makeContentGuide())
 
         let reg = registration
         dataSource = UICollectionViewDiffableDataSource(collectionView: collectionView) { cv, ip, id in

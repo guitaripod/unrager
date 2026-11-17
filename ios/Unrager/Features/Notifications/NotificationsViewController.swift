@@ -327,13 +327,14 @@ final class NotificationsViewController: UIViewController {
         navigationItem.largeTitleDisplayMode = .never
         navigationItem.rightBarButtonItem = makeMoreButton()
 
+        let contentGuide = makeContentGuide()
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: makeLayout())
         collectionView.backgroundColor = .clear
         collectionView.delegate = self
         collectionView.contentInset.top = NotificationChipBar.height
         collectionView.verticalScrollIndicatorInsets.top = NotificationChipBar.height
         view.addManaged(collectionView)
-        collectionView.pinEdges(to: view)
+        collectionView.pinEdges(to: contentGuide)
         setContentScrollView(collectionView, for: .top)
         setContentScrollView(collectionView, for: .bottom)
         let refresh = UIRefreshControl()
@@ -346,16 +347,16 @@ final class NotificationsViewController: UIViewController {
         view.addManaged(newPill)
         NSLayoutConstraint.activate([
             chipBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            chipBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            chipBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            chipBar.leadingAnchor.constraint(equalTo: contentGuide.leadingAnchor),
+            chipBar.trailingAnchor.constraint(equalTo: contentGuide.trailingAnchor),
             chipBar.heightAnchor.constraint(equalToConstant: NotificationChipBar.height),
             skeleton.topAnchor.constraint(equalTo: chipBar.bottomAnchor),
-            skeleton.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            skeleton.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            skeleton.leadingAnchor.constraint(equalTo: contentGuide.leadingAnchor),
+            skeleton.trailingAnchor.constraint(equalTo: contentGuide.trailingAnchor),
             skeleton.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             emptyState.topAnchor.constraint(equalTo: chipBar.bottomAnchor),
-            emptyState.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            emptyState.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            emptyState.leadingAnchor.constraint(equalTo: contentGuide.leadingAnchor),
+            emptyState.trailingAnchor.constraint(equalTo: contentGuide.trailingAnchor),
             emptyState.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
             newPill.topAnchor.constraint(equalTo: chipBar.bottomAnchor, constant: DesignSystem.Spacing.s),
             newPill.centerXAnchor.constraint(equalTo: view.centerXAnchor),

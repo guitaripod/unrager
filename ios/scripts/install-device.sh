@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Build, ad-hoc sign, and install unrager onto a registered iPhone over USB or
-# the network (Tailscale). One-time: register the device + mint the profile with
-# `python3 scripts/provision.py --udid <UDID> --serial <DIST_CERT_SERIAL>`.
+# Build, ad-hoc sign, and install unrager onto a registered iPhone or iPad over
+# USB or the network (Tailscale). One-time: register the device + mint the
+# profile with `python3 scripts/provision.py --udid <UDID> --serial <DIST_CERT_SERIAL>`
+# (repeat --udid to cover several devices in one profile).
 #
 #   UDID=<device-udid> ./scripts/install-device.sh
 #

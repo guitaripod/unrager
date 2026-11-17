@@ -9,6 +9,11 @@ import UnragerKit
 class FeedViewController: UIViewController, TweetActionHandling {
     let viewModel: TimelineViewModel
     private(set) var collectionView: UICollectionView!
+    /// The centred, width-capped column the list lives in; subclasses pin their
+    /// own floating chrome (Home's compose button) to it so it rides with the
+    /// posts rather than the screen edge.
+    private(set) var contentGuide: UILayoutGuide!
+    private var laidOutWidth: CGFloat = 0
     private var dataSource: UICollectionViewDiffableDataSource<Int, String>!
     private var tweetsByID: [String: Tweet] = [:]
     private var cancellables = Set<AnyCancellable>()
@@ -195,6 +200,18 @@ class FeedViewController: UIViewController, TweetActionHandling {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         positionSkeleton()
+        reconfigureForWidthChange()
+    }
+
+    /// Rows measure their media and body against the list width when configured,
+    /// so a rotation or a resized window re-renders the visible ones at the new
+    /// width; off-screen rows re-measure as they dequeue.
+    private func reconfigureForWidthChange() {
+        let width = collectionView.bounds.width
+        guard width > 0, width != laidOutWidth else { return }
+        laidOutWidth = width
+        guard dataSource != nil else { return }
+        dataSource.reconfigureVisibleItems(of: collectionView)
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -298,8 +315,9 @@ class FeedViewController: UIViewController, TweetActionHandling {
         collectionView.delegate = self
         collectionView.prefetchDataSource = self
         collectionView.keyboardDismissMode = .onDrag
+        contentGuide = makeContentGuide()
         view.addManaged(collectionView)
-        collectionView.pinEdges(to: view)
+        collectionView.pinEdges(to: contentGuide)
 
         let refresh = UIRefreshControl()
         refresh.tintColor = refreshTextColor
@@ -310,7 +328,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
         emptyState.onRetry = { [weak self] in self?.viewModel.refresh() }
         if headerView == nil {
             view.addManaged(emptyState)
-            emptyState.pinEdges(toSafeAreaOf: view)
+            emptyState.pinEdges(to: contentGuide, safeAreaOf: view)
         } else {
             collectionView.addSubview(emptyState)
             headerSizeObserver = collectionView.observe(\.contentSize) { [weak self] _, _ in

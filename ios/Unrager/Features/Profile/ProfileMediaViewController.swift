@@ -244,7 +244,7 @@ final class ProfileMediaViewController: UIViewController {
         collectionView.alwaysBounceVertical = true
         collectionView.delegate = self
         view.addManaged(collectionView)
-        collectionView.pinEdges(to: view)
+        collectionView.pinEdges(to: makeContentGuide())
         let refresh = UIRefreshControl()
         refresh.tintColor = .white
         refresh.addTarget(self, action: #selector(pullToRefresh), for: .valueChanged)

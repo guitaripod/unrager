@@ -48,17 +48,28 @@ final class RootViewController: UITabBarController {
     // MARK: - Hardware keyboard
 
     override var keyCommands: [UIKeyCommand]? {
-        [
+        var commands = [
             command("n", title: "New Tweet", action: #selector(newTweetCommand)),
             command("r", title: "Refresh", action: #selector(refreshCommand)),
             command("f", title: "Search", action: #selector(searchCommand)),
         ]
+        for (index, tab) in selectedTabs.enumerated() {
+            commands.append(command("\(index + 1)", title: "Show \(tab.title)", action: #selector(selectTabCommand(_:))))
+        }
+        return commands
     }
 
     private func command(_ input: String, title: String, action: Selector) -> UIKeyCommand {
         let command = UIKeyCommand(title: title, action: action, input: input, modifierFlags: .command)
         command.wantsPriorityOverSystemBehavior = true
         return command
+    }
+
+    /// ⌘1…⌘5 jump straight to the tab in that slot, the order the bar shows.
+    @objc private func selectTabCommand(_ sender: UIKeyCommand) {
+        guard let input = sender.input, let slot = Int(input),
+              selectedTabs.indices.contains(slot - 1) else { return }
+        selectedIndex = slot - 1
     }
 
     @objc private func newTweetCommand() {

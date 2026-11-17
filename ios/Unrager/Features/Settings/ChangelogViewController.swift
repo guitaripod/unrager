@@ -24,7 +24,7 @@ final class ChangelogViewController: UIViewController {
 
         scrollView.alwaysBounceVertical = true
         view.addManaged(scrollView)
-        scrollView.pinEdges(toSafeAreaOf: view)
+        scrollView.pinEdges(to: makeContentGuide(), safeAreaOf: view)
         stack.axis = .vertical
         stack.alignment = .fill
         stack.spacing = 0

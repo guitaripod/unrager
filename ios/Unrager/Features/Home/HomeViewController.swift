@@ -271,7 +271,7 @@ final class HomeViewController: FeedViewController {
         button.accessibilityHint = "Starts a new post. Touch and hold for more."
         view.addManaged(button)
         NSLayoutConstraint.activate([
-            button.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -DesignSystem.Spacing.l),
+            button.trailingAnchor.constraint(equalTo: contentGuide.trailingAnchor, constant: -DesignSystem.Spacing.l),
             button.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -DesignSystem.Spacing.l),
             button.widthAnchor.constraint(equalToConstant: 56),
             button.heightAnchor.constraint(equalToConstant: 56),

@@ -217,13 +217,14 @@ final class MediaViewerViewController: UIViewController {
 
         let fitsContent = captionScroll.heightAnchor.constraint(equalTo: captionScroll.contentLayoutGuide.heightAnchor)
         fitsContent.priority = .defaultLow
+        let captionGuide = makeContentGuide()
         NSLayoutConstraint.activate([
             captionPanel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             captionPanel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             captionPanel.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             captionScroll.topAnchor.constraint(equalTo: captionPanel.topAnchor, constant: 56),
-            captionScroll.leadingAnchor.constraint(equalTo: captionPanel.safeAreaLayoutGuide.leadingAnchor, constant: 16),
-            captionScroll.trailingAnchor.constraint(equalTo: captionPanel.safeAreaLayoutGuide.trailingAnchor, constant: -16),
+            captionScroll.leadingAnchor.constraint(equalTo: captionGuide.leadingAnchor, constant: 16),
+            captionScroll.trailingAnchor.constraint(equalTo: captionGuide.trailingAnchor, constant: -16),
             captionScroll.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -44),
             captionScroll.heightAnchor.constraint(lessThanOrEqualTo: view.heightAnchor, multiplier: 0.35),
             fitsContent,

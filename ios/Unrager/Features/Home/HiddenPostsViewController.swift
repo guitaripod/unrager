@@ -79,12 +79,13 @@ final class HiddenPostsViewController: UIViewController {
                                           collectionViewLayout: UICollectionViewCompositionalLayout.list(using: config))
         collectionView.backgroundColor = .clear
         collectionView.delegate = self
+        let contentGuide = makeContentGuide()
         view.addManaged(collectionView)
-        collectionView.pinEdges(to: view)
+        collectionView.pinEdges(to: contentGuide)
 
         emptyState.isHidden = true
         view.addManaged(emptyState)
-        emptyState.pinEdges(toSafeAreaOf: view)
+        emptyState.pinEdges(to: contentGuide, safeAreaOf: view)
         emptyState.show(symbol: "eye", title: "Nothing hidden",
                         subtitle: "Posts the filter hides from Home show up here.", showRetry: false)
 

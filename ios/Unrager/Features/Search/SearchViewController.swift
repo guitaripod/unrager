@@ -112,7 +112,7 @@ final class SearchViewController: FeedViewController {
         recentsTable.keyboardDismissMode = .onDrag
         recentsTable.isHidden = true
         view.addManaged(recentsTable)
-        recentsTable.pinEdges(to: view)
+        recentsTable.pinEdges(to: contentGuide)
     }
 
     /// Shows the recents list only while no search has run and there is

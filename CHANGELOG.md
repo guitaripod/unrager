@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **The iPhone app is now an iPad app too.** Unrager runs natively on iPad in every orientation, full-screen or side by side with another app: the feed, threads, profiles, notifications, people lists and settings sit in a centred column that keeps a comfortable reading width instead of stretching across the screen, while the page colour and a profile's banner still run edge to edge behind it. The tab bar becomes iPadOS's floating glass bar that tucks away on scroll and expands into a sidebar, the compose button rides the column's corner, and rows re-measure when the window changes size. A hardware keyboard gets ⌘1…⌘5 to jump between tabs alongside the existing ⌘N, ⌘R and ⌘F.
+
 ## [0.33.0] — 2026-11-14
 
 - **The lists of who liked, reposted and quoted your post show where each person is based.** Each row in the card carries the person's flag, drawn as X draws emoji, from the countries unrager already knows and the X-Posed community cache when `[about] community_cache` is on, all looked up in one request per list and never through X's own about lookups, which come too few for a list. Flags are kept in the extension, so a list reopens with them.

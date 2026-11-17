@@ -48,6 +48,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
     private let footer = PagingFooter()
     private var cancellables = Set<AnyCancellable>()
     private var videoSettle: DispatchWorkItem?
+    private var laidOutWidth: CGFloat = 0
 
     /// Reply orderings offered by the sort control — the TUI's `s` cycle
     /// (newest / most liked / most replies / most reposts / most views) plus
@@ -156,12 +157,13 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
         title = "Thread"
         view.backgroundColor = DesignSystem.Color.background
 
+        let contentGuide = makeContentGuide()
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: makeLayout())
         collectionView.selfSizingInvalidation = .enabled
         collectionView.backgroundColor = .clear
         collectionView.delegate = self
         view.addManaged(collectionView)
-        collectionView.pinEdges(to: view)
+        collectionView.pinEdges(to: contentGuide)
         let refresh = UIRefreshControl()
         refresh.addTarget(self, action: #selector(pullToRefresh), for: .valueChanged)
         collectionView.refreshControl = refresh
@@ -169,14 +171,14 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
         emptyState.isHidden = true
         emptyState.onRetry = { [weak self] in self?.load() }
         view.addManaged(emptyState)
-        emptyState.pinEdges(toSafeAreaOf: view)
+        emptyState.pinEdges(to: contentGuide, safeAreaOf: view)
 
         loadingSkeleton.isHidden = true
         view.addManaged(loadingSkeleton)
         NSLayoutConstraint.activate([
             loadingSkeleton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            loadingSkeleton.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            loadingSkeleton.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            loadingSkeleton.leadingAnchor.constraint(equalTo: contentGuide.leadingAnchor),
+            loadingSkeleton.trailingAnchor.constraint(equalTo: contentGuide.trailingAnchor),
         ])
 
         let reply = UIBarButtonItem(
@@ -563,8 +565,20 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        reconfigureForWidthChange()
         if focalPin.isHeld { scrollFocalToTop() }
         scheduleVideoSettle()
+    }
+
+    /// Rows measure their media and body against the list width when configured,
+    /// so a rotation or a resized window re-renders the visible ones at the new
+    /// width; off-screen rows re-measure as they dequeue.
+    private func reconfigureForWidthChange() {
+        let width = collectionView.bounds.width
+        guard width > 0, width != laidOutWidth else { return }
+        laidOutWidth = width
+        guard dataSource != nil else { return }
+        dataSource.reconfigureVisibleItems(of: collectionView)
     }
 
     override func viewDidAppear(_ animated: Bool) {

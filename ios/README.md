@@ -1,6 +1,6 @@
-# Unrager for iPhone
+# Unrager for iPhone and iPad
 
-A native iPhone app for [unrager](../README.md): your timeline with the rage filter, threads, profiles, notifications, and Ask, Brief and Translate on your own model. It talks to `unrager serve` on your computer, so the app never sees your X login and nothing goes through a server of anyone else's.
+A native iPhone and iPad app for [unrager](../README.md): your timeline with the rage filter, threads, profiles, notifications, and Ask, Brief and Translate on your own model. It talks to `unrager serve` on your computer, so the app never sees your X login and nothing goes through a server of anyone else's.
 
 It isn't in the App Store (it runs on your X session), so you build it once on a Mac and put it on your phone yourself. It takes about ten minutes, most of it Xcode downloading.
 
@@ -9,7 +9,7 @@ It isn't in the App Store (it runs on your X session), so you build it once on a
 - **The computer that runs unrager**, signed in to x.com in a Chromium browser (Chrome, Brave, Edge, Vivaldi or Arc). Linux or macOS; it can be the same Mac you build on.
 - **Tailscale** on that computer and on your phone (free, [tailscale.com](https://tailscale.com)), so the phone reaches it from anywhere. On the same Wi-Fi at home, the computer's local address works too.
 - **A Mac with Xcode 26 or newer** (App Store, free), and `xcodegen`: `brew install xcodegen`. The Mac is only for building.
-- **An iPhone on iOS 26** and a cable to that Mac.
+- **An iPhone on iOS 26 or an iPad on iPadOS 26**, and a cable to that Mac.
 - **An Apple ID.** A free one is enough. (A paid developer account makes the app last a year instead of seven days.)
 
 ## 1. Start the server

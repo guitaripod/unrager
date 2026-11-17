@@ -73,6 +73,7 @@ class PagedUserListViewController: UIViewController {
     private var entranceUntil: CFTimeInterval = 0
     private var firstFill = false
     private var skeletonFade = 0
+    private var laidOutWidth: CGFloat = 0
 
     private lazy var registration = UICollectionView.CellRegistration<UserRowCell, String> {
         [weak self] cell, _, id in
@@ -175,7 +176,7 @@ class PagedUserListViewController: UIViewController {
             self.load(reset: self.refreshFailed)
         }
         view.addManaged(collectionView)
-        collectionView.pinEdges(to: view)
+        collectionView.pinEdges(to: makeContentGuide())
         let refresh = UIRefreshControl()
         refresh.addTarget(self, action: #selector(reload), for: .valueChanged)
         collectionView.refreshControl = refresh
@@ -211,6 +212,18 @@ class PagedUserListViewController: UIViewController {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         positionBelowHeader()
+        reconfigureForWidthChange()
+    }
+
+    /// The heading measures its post card against the list width when configured,
+    /// so a rotation or a resized window re-renders the visible rows at the new
+    /// width; off-screen rows re-measure as they dequeue.
+    private func reconfigureForWidthChange() {
+        let width = collectionView.bounds.width
+        guard width > 0, width != laidOutWidth else { return }
+        laidOutWidth = width
+        guard dataSource != nil else { return }
+        dataSource.reconfigureVisibleItems(of: collectionView)
     }
 
     private func makeLayout() -> UICollectionViewCompositionalLayout {

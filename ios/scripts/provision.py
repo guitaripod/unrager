@@ -10,9 +10,10 @@ private key must be in your keychain) and the device UDID. Writes the
 Env (or ~/.config/midgar/credentials.env):
   ASC_KEY_ID, ASC_ISSUER_ID, ASC_PRIVATE_KEY_PATH, APPLE_TEAM_ID
 Args:
-  --udid UDID            device to authorize (default: the connected device)
+  --udid UDID            device to authorize; repeat to authorize several in
+                         one profile (every device the app installs on)
   --serial SERIAL        distribution cert serial to match your local key
-  --name "iPhone Air"    device display name
+  --name "iPhone Air"    device display name (single --udid only)
 """
 import argparse
 import base64
@@ -44,7 +45,7 @@ def env(key):
 
 
 def token():
-    key_path = os.path.expanduser(env("ASC_PRIVATE_KEY_PATH"))
+    key_path = os.path.expanduser(os.path.expandvars(env("ASC_PRIVATE_KEY_PATH")))
     now = int(time.time())
     payload = {"iss": env("ASC_ISSUER_ID"), "iat": now, "exp": now + 1200, "aud": "appstoreconnect-v1"}
     return jwt.encode(payload, open(key_path).read(), algorithm="ES256",
@@ -75,18 +76,23 @@ def paged(path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--udid", required=True)
+    ap.add_argument("--udid", required=True, action="append")
     ap.add_argument("--serial", required=True, help="distribution cert serial matching your local key")
     ap.add_argument("--name", default="iPhone")
     args = ap.parse_args()
     team = env("APPLE_TEAM_ID")
 
-    dev = next((d for d in paged("/v1/devices")
-                if d["attributes"].get("udid", "").lower() == args.udid.lower()), None)
-    if not dev:
-        dev = api("POST", "/v1/devices", {"data": {"type": "devices", "attributes": {
-            "name": args.name, "platform": "IOS", "udid": args.udid}}})["data"]
-    print("device", dev["id"])
+    registered = paged("/v1/devices")
+    devices = []
+    for udid in args.udid:
+        dev = next((d for d in registered
+                    if d["attributes"].get("udid", "").lower() == udid.lower()), None)
+        if not dev:
+            name = args.name if len(args.udid) == 1 else f"Unrager {udid[-4:]}"
+            dev = api("POST", "/v1/devices", {"data": {"type": "devices", "attributes": {
+                "name": name, "platform": "IOS", "udid": udid}}})["data"]
+        print("device", dev["id"], udid)
+        devices.append(dev)
 
     bid = next((b for b in paged("/v1/bundleIds")
                 if b["attributes"].get("identifier") == BUNDLE), None)
@@ -113,7 +119,7 @@ def main():
         "relationships": {
             "bundleId": {"data": {"type": "bundleIds", "id": bid["id"]}},
             "certificates": {"data": [{"type": "certificates", "id": cert_id}]},
-            "devices": {"data": [{"type": "devices", "id": dev["id"]}]}}}})["data"]
+            "devices": {"data": [{"type": "devices", "id": d["id"]} for d in devices]}}}})["data"]
     uuid = prof["attributes"]["uuid"]
     dest = os.path.expanduser(f"~/Library/MobileDevice/Provisioning Profiles/{uuid}.mobileprovision")
     os.makedirs(os.path.dirname(dest), exist_ok=True)

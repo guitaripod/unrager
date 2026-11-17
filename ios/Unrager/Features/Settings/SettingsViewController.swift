@@ -133,7 +133,7 @@ final class SettingsViewController: UIViewController {
         collectionView.delegate = self
         collectionView.alwaysBounceVertical = true
         view.addManaged(collectionView)
-        collectionView.pinEdges(to: view)
+        collectionView.pinEdges(to: makeContentGuide())
 
         let rows = UICollectionView.CellRegistration<UICollectionViewListCell, Item> { [weak self] cell, _, item in
             self?.configure(cell, for: item)

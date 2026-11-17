@@ -12,6 +12,9 @@ final class LikersViewController: PagedUserListViewController {
     private var likeCount: Int?
     private var summary: LikersSummary
     private var ringRevealed = false
+    /// The list's width at the last header dequeue — the column, which on a wide
+    /// canvas is narrower than the view.
+    private var headerWidth: CGFloat = 0
 
     private lazy var headerRegistration = UICollectionView.CellRegistration<LikersHeaderCell, String> {
         [weak self] cell, _, _ in
@@ -20,7 +23,7 @@ final class LikersViewController: PagedUserListViewController {
         cell.onShowFollowBack = { [weak self] in self?.selectLens(LikerLens.followBack.rawValue) }
         let reveal = !self.ringRevealed && self.summary.tally.hasStandings
         if reveal { self.ringRevealed = true }
-        cell.configure(post: self.post, summary: self.summary, width: self.view.bounds.width,
+        cell.configure(post: self.post, summary: self.summary, width: self.headerWidth,
                        offersLenses: self.summary.offersLenses, reveal: reveal)
     }
 
@@ -64,7 +67,8 @@ final class LikersViewController: PagedUserListViewController {
     }
 
     override func headerCell(in collectionView: UICollectionView, at indexPath: IndexPath) -> UICollectionViewCell {
-        collectionView.dequeueConfiguredReusableCell(using: headerRegistration, for: indexPath, item: "likers-header")
+        headerWidth = collectionView.bounds.width
+        return collectionView.dequeueConfiguredReusableCell(using: headerRegistration, for: indexPath, item: "likers-header")
     }
 
     override func fetchPage(cursor: String?) async throws -> Page {

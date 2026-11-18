@@ -45,8 +45,19 @@ final class PadTabsController: UIViewController {
     private let columns = UIStackView()
     private let primary = UIView()
     private let detail = UIView()
-    private let placeholder = DetailPlaceholderView()
     private let divider = HairlineView()
+
+    /// Whether the open tab's own list can spread into a board: only while
+    /// nothing is open beside it, and only where the window has room for two
+    /// columns at all.
+    private var showsBoard: Bool {
+        layout.showsDetail && tabUsesDetail && !detailHasScreens
+    }
+
+    private var detailHasScreens: Bool {
+        guard tabs.indices.contains(selectedIndex) else { return false }
+        return details[tabs[selectedIndex]]?.viewControllers.isEmpty == false
+    }
 
     /// Whether this tab has screens that open beside the list; Settings is a
     /// column of forms and reads better across the whole window.
@@ -87,9 +98,6 @@ final class PadTabsController: UIViewController {
         columns.addArrangedSubview(primary)
         columns.addArrangedSubview(detail)
         view.addManaged(columns)
-
-        detail.addManaged(placeholder)
-        placeholder.pinEdges(to: detail)
 
         view.addManaged(divider)
         NSLayoutConstraint.activate([
@@ -159,7 +167,8 @@ final class PadTabsController: UIViewController {
         let showedDetail = showsDetail
         selectedIndex = index
         chrome.update(chromeItems(), selected: index)
-        if showsDetail != showedDetail { layoutColumns() }
+        layoutColumns()
+        _ = showedDetail
         applySelection()
         applySidebarButton()
     }
@@ -199,6 +208,7 @@ final class PadTabsController: UIViewController {
         sidebarWidth = proposed
         ClientSettings.padSidebarWidth = proposed
         apply(PadLayout.resolve(window: view.bounds.size, rail: proposed, closed: false))
+        applyBoard()
         animateLayout()
     }
 
@@ -257,6 +267,42 @@ final class PadTabsController: UIViewController {
     /// in front of them.
     private var savedLeading: [ObjectIdentifier: (items: [UIBarButtonItem]?, single: UIBarButtonItem?)] = [:]
 
+    /// A post opened beside the list has no back button of its own, so it gets
+    /// the button that puts the board back the way it was.
+    private func giveCloseButton(to screen: UIViewController) {
+        guard screen.navigationItem.leftBarButtonItem == nil,
+              screen.navigationItem.leftBarButtonItems?.isEmpty != false else { return }
+        screen.navigationItem.leftBarButtonItem = closeItem
+    }
+
+    private lazy var closeItem: UIBarButtonItem = {
+        let item = UIBarButtonItem(
+            image: DesignSystem.icon("xmark", pointSize: 15, weight: .semibold),
+            primaryAction: UIAction { [weak self] _ in self?.closeDetail() })
+        item.accessibilityLabel = "Close"
+        return item
+    }()
+
+    /// Empties the second column, which gives the list its board back.
+    func closeDetail() {
+        guard tabs.indices.contains(selectedIndex), let nav = details[tabs[selectedIndex]] else { return }
+        nav.setViewControllers([], animated: false)
+        detachChildren(of: detail)
+        layoutColumns()
+        applySelection()
+        animateLayout()
+    }
+
+    /// Tells the open tab's own feed whether to spread into a board. A pushed
+    /// screen is a reading view and keeps its single column.
+    private func applyBoard() {
+        for (index, controller) in controllers.enumerated() {
+            guard let nav = controller as? UINavigationController else { continue }
+            let root = nav.viewControllers.first as? FeedViewController
+            root?.setGrid(index == selectedIndex && showsBoard && nav.viewControllers.count == 1)
+        }
+    }
+
     private lazy var revealButton: UIBarButtonItem = {
         let item = UIBarButtonItem(
             image: DesignSystem.icon("sidebar.leading", pointSize: 17),
@@ -288,6 +334,7 @@ final class PadTabsController: UIViewController {
         if wasShowingDetail, !resolved.showsDetail { foldDetailIntoStacks() }
         applySelection()
         applySidebarButton()
+        applyBoard()
     }
 
     private func layoutChrome() {
@@ -308,12 +355,17 @@ final class PadTabsController: UIViewController {
         view.bringSubviewToFront(chrome)
     }
 
+    /// A post opened beside the list takes the second column; with nothing open
+    /// the list keeps the whole window — as a board of two columns where there
+    /// is room for one.
+    private var detailOnScreen: Bool { layout.showsDetail && tabUsesDetail && detailHasScreens }
+
     private func layoutColumns() {
         NSLayoutConstraint.deactivate(columnConstraints)
         contentLeading.constant = layout.railWidth
-        detail.isHidden = !showsDetail
-        divider.isHidden = !showsDetail
-        if let primaryWidth = layout.primaryWidth, let detailWidth = layout.detailWidth, showsDetail {
+        detail.isHidden = !detailOnScreen
+        divider.isHidden = !detailOnScreen
+        if let primaryWidth = layout.primaryWidth, let detailWidth = layout.detailWidth, detailOnScreen {
             columnConstraints = [
                 primary.widthAnchor.constraint(equalToConstant: primaryWidth),
                 detail.widthAnchor.constraint(equalToConstant: detailWidth),
@@ -341,17 +393,16 @@ final class PadTabsController: UIViewController {
         showDetailIfAny()
         applySafeArea()
         applySidebarButton()
+        applyBoard()
     }
 
     private func showDetailIfAny() {
         let nav = tabs.indices.contains(selectedIndex) ? details[tabs[selectedIndex]] : nil
-        guard showsDetail, let nav, !nav.viewControllers.isEmpty else {
+        guard detailOnScreen, let nav, !nav.viewControllers.isEmpty else {
             detachChildren(of: detail)
-            placeholder.isHidden = false
             return
         }
         show(nav, in: detail)
-        placeholder.isHidden = true
     }
 
     /// Puts `controller` in `host`, taking out whatever lived there and keeping
@@ -414,8 +465,10 @@ final class PadTabsController: UIViewController {
         let nav = detailStack(for: tabs[selectedIndex])
         let arrives = nav.view.superview !== detail
         nav.setViewControllers([controller], animated: false)
+        giveCloseButton(to: controller)
+        layoutColumns()
         show(nav, in: detail)
-        placeholder.isHidden = true
+        applyBoard()
         guard arrives, !UIAccessibility.isReduceMotionEnabled else { return }
         nav.view.alpha = 0
         nav.view.transform = CGAffineTransform(translationX: 12, y: 0)
@@ -445,51 +498,12 @@ final class PadTabsController: UIViewController {
             stack.setViewControllers(stack.viewControllers + screens, animated: false)
         }
         detachChildren(of: detail)
-        placeholder.isHidden = false
+        applyBoard()
     }
 
     private func stack(for tab: TabItem) -> UIViewController? {
         zip(tabs, controllers).first { $0.0 == tab }?.1
     }
-}
-
-/// What the detail column says before the first post is opened in it: a quiet
-/// glyph and one line, never an empty pane.
-private final class DetailPlaceholderView: UIView {
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        let glyph = UIImageView(image: DesignSystem.icon("rectangle.split.2x1", pointSize: 34, weight: .light))
-        glyph.tintColor = DesignSystem.Color.tertiaryLabel
-        glyph.contentMode = .scaleAspectFit
-        let title = UILabel()
-        title.text = "Nothing open"
-        title.font = DesignSystem.Typography.name()
-        title.textColor = DesignSystem.Color.secondaryLabel
-        title.textAlignment = .center
-        let subtitle = UILabel()
-        subtitle.text = "A post you tap opens here,\nbeside the list."
-        subtitle.font = DesignSystem.Typography.metric()
-        subtitle.textColor = DesignSystem.Color.tertiaryLabel
-        subtitle.textAlignment = .center
-        subtitle.numberOfLines = 0
-        let stack = UIStackView(arrangedSubviews: [glyph, title, subtitle])
-        stack.axis = .vertical
-        stack.alignment = .center
-        stack.spacing = DesignSystem.Spacing.s
-        stack.setCustomSpacing(DesignSystem.Spacing.m, after: glyph)
-        addManaged(stack)
-        NSLayoutConstraint.activate([
-            stack.centerXAnchor.constraint(equalTo: centerXAnchor),
-            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
-            stack.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 24),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -24),
-        ])
-        isAccessibilityElement = true
-        accessibilityLabel = "Nothing open. A post you tap opens here, beside the list."
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
 }
 
 extension NSLayoutConstraint {

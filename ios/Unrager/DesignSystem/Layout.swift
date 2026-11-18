@@ -28,13 +28,16 @@ extension UIView {
         addSubview(subview)
     }
 
-    func pinEdges(to guide: UILayoutGuide, insets: UIEdgeInsets = .zero) {
-        NSLayoutConstraint.activate([
+    @discardableResult
+    func pinEdges(to guide: UILayoutGuide, insets: UIEdgeInsets = .zero) -> [NSLayoutConstraint] {
+        let constraints = [
             leadingAnchor.constraint(equalTo: guide.leadingAnchor, constant: insets.left),
             trailingAnchor.constraint(equalTo: guide.trailingAnchor, constant: -insets.right),
             topAnchor.constraint(equalTo: guide.topAnchor, constant: insets.top),
             bottomAnchor.constraint(equalTo: guide.bottomAnchor, constant: -insets.bottom),
-        ])
+        ]
+        NSLayoutConstraint.activate(constraints)
+        return constraints
     }
 
     /// Horizontal edges to a centred content guide, vertical edges to a view's

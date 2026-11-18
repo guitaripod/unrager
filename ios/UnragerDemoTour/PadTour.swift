@@ -73,6 +73,19 @@ final class PadTour: XCTestCase {
         snap("17-sidebar-wide")
     }
 
+    /// The board: two columns of posts while nothing is open, a single column
+    /// beside the post you opened, and the board again once it is closed.
+    func testPadBoard() {
+        launch(.landscapeLeft, screen: "home")
+        snap("18-board")
+        tapPost(0)
+        snap("19-board-detail")
+        let close = app.buttons["Close"].firstMatch
+        if close.waitForExistence(timeout: 4) { close.tap() } else { XCTFail("no close button") }
+        pause(2)
+        snap("20-board-again")
+    }
+
     /// A window that loses its second column: the thread that was open beside
     /// the feed has to come forward rather than vanish.
     func testPadFold() {

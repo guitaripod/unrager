@@ -271,12 +271,32 @@ final class HomeViewController: FeedViewController {
         button.accessibilityLabel = "Compose"
         button.accessibilityHint = "Starts a new post. Touch and hold for more."
         view.addManaged(button)
-        NSLayoutConstraint.activate([
-            button.trailingAnchor.constraint(equalTo: contentGuide.trailingAnchor, constant: -DesignSystem.Spacing.l),
+        composeButton = button
+        composeInColumn = button.trailingAnchor.constraint(
+            equalTo: contentGuide.trailingAnchor, constant: -DesignSystem.Spacing.l)
+        composeAtEdge = button.trailingAnchor.constraint(
+            equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -DesignSystem.Spacing.l)
+        var placement = [
             button.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -DesignSystem.Spacing.l),
             button.widthAnchor.constraint(equalToConstant: 56),
             button.heightAnchor.constraint(equalToConstant: 56),
-        ])
+        ]
+        if let composeInColumn { placement.append(composeInColumn) }
+        NSLayoutConstraint.activate(placement)
+    }
+
+    /// The compose button rides the column's corner, or the window's when the
+    /// feed is a board across the whole window.
+    private weak var composeButton: UIButton?
+    private var composeInColumn: NSLayoutConstraint?
+    private var composeAtEdge: NSLayoutConstraint?
+
+    override func setGrid(_ on: Bool) {
+        super.setGrid(on)
+        guard let composeButton else { return }
+        composeInColumn?.isActive = !usesGrid
+        composeAtEdge?.isActive = usesGrid
+        UIView.animate(withDuration: 0.25) { composeButton.superview?.layoutIfNeeded() }
     }
 
     private func presentCompose(opensPhotoPicker: Bool = false) {

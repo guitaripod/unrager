@@ -100,15 +100,9 @@ class FeedViewController: UIViewController, TweetActionHandling {
     private lazy var cellRegistration = UICollectionView.CellRegistration<TweetCell, String> {
         [weak self] cell, indexPath, id in
         guard let self, let tweet = self.tweetsByID[id] else { return }
-        PerfProbe.time("configure") { cell.configure(with: tweet, imagesEnabled: AppSettings.imagesEnabled,
-                       contentWidth: max(120, self.collectionView.bounds.width), seen: self.viewModel.isSeen(tweet.restID),
-                       bodyLineLimit: self.expandedBodies.contains(id) ? 0 : TweetCell.feedBodyLineLimit,
-                       stats: PostStatsPolicy.content(
-                           for: tweet, expanded: self.expandedStats.contains(id), isOwn: self.isOwnTweet(tweet),
-                           changed: { [weak self] in self?.reconfigure(id, animated: true) }),
-                       viewerHandle: AppEnvironment.shared.currentHandle,
-                       pinned: self.viewModel.pinnedID == id,
-                       showsStanding: self.showsAuthorStanding) }
+        PerfProbe.time("configure") {
+            self.configure(cell, with: tweet, id: id, width: self.contentWidth)
+        }
         self.applyFlag(to: cell, author: tweet.author)
         cell.onTapAuthor = { [weak self] in self?.handleProfile(tweet.author.handle) }
         if let reposter = tweet.retweetedBy {
@@ -140,6 +134,28 @@ class FeedViewController: UIViewController, TweetActionHandling {
                 self?.navigationController?.pushViewController(LikersViewController(tweetID: tweet.restID, tweet: tweet), animated: true)
             }
         }
+    }
+
+    /// The width a post's text and pictures are measured against: the list on a
+    /// phone or a narrow window, one column of the board when it is wide.
+    private var contentWidth: CGFloat {
+        if usesGrid, let gridLayout { return gridLayout.columnWidth }
+        return max(120, collectionView.bounds.width)
+    }
+
+    /// Lays a post out for the list or for the board, from one place, so a
+    /// measured height is measured against exactly what the cell will show.
+    private func configure(_ cell: TweetCell, with tweet: Tweet, id: String, width: CGFloat) {
+        cell.configure(
+            with: tweet, imagesEnabled: AppSettings.imagesEnabled,
+            contentWidth: max(120, width), seen: viewModel.isSeen(tweet.restID),
+            bodyLineLimit: expandedBodies.contains(id) ? 0 : TweetCell.feedBodyLineLimit,
+            stats: PostStatsPolicy.content(
+                for: tweet, expanded: expandedStats.contains(id), isOwn: isOwnTweet(tweet),
+                changed: { [weak self] in self?.reconfigure(id, animated: true) }),
+            viewerHandle: AppEnvironment.shared.currentHandle,
+            pinned: viewModel.pinnedID == id,
+            showsStanding: showsAuthorStanding)
     }
 
     /// Tweet ids the user expanded past the feed's body line cap; those rows
@@ -197,6 +213,71 @@ class FeedViewController: UIViewController, TweetActionHandling {
         viewModel.first()
     }
 
+    /// Whether this feed shows its posts as a two-column board — a wide iPad
+    /// window with nothing open beside it. A feed with a header of its own (a
+    /// profile) always keeps its single list.
+    private(set) var usesGrid = false
+    private var gridLayout: MasonryLayout?
+    /// The list sits in the reading column; the board takes the window, so a
+    /// wide screen is filled instead of bordered by margins.
+    private var guidePins: [NSLayoutConstraint] = []
+    private var boardPins: [NSLayoutConstraint] = []
+    private var gridHeights: [String: CGFloat] = [:]
+    private var measuringCell: TweetCell?
+
+    /// Switches between the list and the board. The collection view keeps its
+    /// place by index, so a post open beside the list lands in the same column
+    /// it came from.
+    func setGrid(_ on: Bool) {
+        let wanted = on && headerView == nil
+        guard wanted != usesGrid else { return }
+        usesGrid = wanted
+        guard isViewLoaded else { return }
+        NSLayoutConstraint.deactivate(wanted ? guidePins : boardPins)
+        NSLayoutConstraint.activate(wanted ? boardPins : guidePins)
+        collectionView.setCollectionViewLayout(wanted ? makeGridLayout() : makeLayout(), animated: false)
+        gridHeights.removeAll()
+        var snapshot = dataSource.snapshot()
+        if snapshot.numberOfItems > 0 {
+            snapshot.reconfigureItems(snapshot.itemIdentifiers)
+            dataSource.apply(snapshot, animatingDifferences: false)
+        }
+    }
+
+    private func makeGridLayout() -> MasonryLayout {
+        let layout = MasonryLayout()
+        layout.numberOfItems = { [weak self] in
+            guard let self, self.dataSource != nil else { return 0 }
+            return self.dataSource.snapshot().numberOfItems
+        }
+        layout.heightForItem = { [weak self] indexPath in self?.gridHeight(at: indexPath) ?? 320 }
+        gridLayout = layout
+        return layout
+    }
+
+    /// The post's height at the current column width, measured once with a
+    /// stand-in cell and kept until the width or the post's shape changes.
+    private func gridHeight(at indexPath: IndexPath) -> CGFloat {
+        guard let id = dataSource.itemIdentifier(for: indexPath), let tweet = tweetsByID[id] else { return 320 }
+        let key = gridHeightKey(id: id)
+        if let known = gridHeights[key] { return known }
+        let cell = measuringCell ?? {
+            let made = TweetCell(frame: .zero)
+            measuringCell = made
+            return made
+        }()
+        configure(cell, with: tweet, id: id, width: contentWidth)
+        let height = cell.fittedHeight(forWidth: max(120, contentWidth))
+        gridHeights[key] = height
+        return height
+    }
+
+    private func gridHeightKey(id: String) -> String {
+        let stats = expandedStats.contains(id) ? "s1" : "s0"
+        let body = expandedBodies.contains(id) ? "b1" : "b0"
+        return "\(id)|\(Int(contentWidth))|\(stats)|\(body)|\(Int(DesignSystem.Typography.scale * 100))"
+    }
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         positionSkeleton()
@@ -210,6 +291,10 @@ class FeedViewController: UIViewController, TweetActionHandling {
         let width = collectionView.bounds.width
         guard width > 0, width != laidOutWidth else { return }
         laidOutWidth = width
+        if usesGrid {
+            gridHeights.removeAll()
+            collectionView.collectionViewLayout.invalidateLayout()
+        }
         guard dataSource != nil else { return }
         dataSource.reconfigureVisibleItems(of: collectionView)
     }
@@ -308,7 +393,8 @@ class FeedViewController: UIViewController, TweetActionHandling {
     }
 
     private func configureCollectionView() {
-        collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: makeLayout())
+        let layout: UICollectionViewLayout = usesGrid ? makeGridLayout() : makeLayout()
+        collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: layout)
         collectionView.selfSizingInvalidation = .enabled
         collectionView.backgroundColor = .clear
         collectionView.alwaysBounceVertical = true
@@ -317,7 +403,18 @@ class FeedViewController: UIViewController, TweetActionHandling {
         collectionView.keyboardDismissMode = .onDrag
         contentGuide = makeContentGuide()
         view.addManaged(collectionView)
-        collectionView.pinEdges(to: contentGuide)
+        guidePins = collectionView.pinEdges(to: contentGuide)
+        boardPins = [
+            collectionView.topAnchor.constraint(equalTo: view.topAnchor),
+            collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            collectionView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            collectionView.widthAnchor.constraint(equalTo: view.widthAnchor, constant: -16).priority(.defaultHigh),
+            collectionView.widthAnchor.constraint(lessThanOrEqualToConstant: 1240),
+        ]
+        if usesGrid {
+            NSLayoutConstraint.deactivate(guidePins)
+            NSLayoutConstraint.activate(boardPins)
+        }
 
         let refresh = UIRefreshControl()
         refresh.tintColor = refreshTextColor
@@ -600,6 +697,8 @@ class FeedViewController: UIViewController, TweetActionHandling {
     /// Re-renders every row (on- and off-screen) after a text-size change so
     /// fonts re-resolve and self-sizing heights re-measure.
     private func reloadForFontScale() {
+        gridHeights.removeAll()
+        collectionView.collectionViewLayout.invalidateLayout()
         var snapshot = dataSource.snapshot()
         guard snapshot.numberOfItems > 0 else { return }
         snapshot.reconfigureItems(snapshot.itemIdentifiers)
@@ -1227,6 +1326,6 @@ extension FeedViewController: UICollectionViewDataSourcePrefetching {
     /// at, so a prefetched decode is the one the row asks for (or joins).
     private func mediaRequests(for tweet: Tweet) -> [(url: URL, size: CGSize)] {
         MediaContentView.imageRequests(
-            for: tweet, contentWidth: max(120, collectionView.bounds.width), bleedsEdgeToEdge: true)
+            for: tweet, contentWidth: contentWidth, bleedsEdgeToEdge: true)
     }
 }

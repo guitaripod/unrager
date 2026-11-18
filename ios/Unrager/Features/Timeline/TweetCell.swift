@@ -170,7 +170,10 @@ final class TweetCell: UICollectionViewCell {
     /// row whose content got shorter (a stats card whose chart gave way to a
     /// bar, a strip closing) would keep its old height with the slack stretched
     /// into the content.
-    private func fittedHeight(forWidth width: CGFloat) -> CGFloat {
+    /// The height the cell's content needs at `width` — what a list asks for
+    /// through `preferredLayoutAttributesFitting`, and what the board measures
+    /// its columns with, from a stand-in cell.
+    func fittedHeight(forWidth width: CGFloat) -> CGFloat {
         let target = CGSize(width: width, height: UIView.layoutFittingCompressedSize.height)
         return ceil(contentView.systemLayoutSizeFitting(
             target, withHorizontalFittingPriority: .required, verticalFittingPriority: .fittingSizeLevel).height)

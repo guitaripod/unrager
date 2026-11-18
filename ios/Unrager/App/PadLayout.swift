@@ -40,13 +40,13 @@ struct PadLayout: Equatable {
     /// the sidebar at `rail` points wide — or closed, which gives its room back
     /// to the columns.
     static func resolve(window: CGSize, rail: CGFloat = railWidth, closed: Bool = false) -> PadLayout {
-        guard window.width > window.height, window.width >= railWindowMinimum else {
+        guard window.width > window.height, window.width >= railWindowMinimum, !closed else {
             return PadLayout(chrome: .bottom, railWidth: 0)
         }
         // A rail is a fixed slice of the window: on a mini 248 pt would be a
         // fifth of the screen, so it gives way to the board there.
         let share = min(widestRailWidth, max(narrowestRailWidth, (window.width * 0.18).rounded()))
-        let width = closed ? 0 : min(max(rail, narrowestRailWidth), share)
+        let width = min(max(rail, narrowestRailWidth), share)
         let content = window.width - width
         let panel = min(560, content - Self.minimumBoardWidth)
         return PadLayout(chrome: .rail, railWidth: width,

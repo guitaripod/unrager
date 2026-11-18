@@ -217,7 +217,10 @@ final class PadTabsController: UIViewController {
     /// Closes the sidebar, or opens it again — the button the rail carries, and
     /// ⌘\ from anywhere.
     func toggleSidebar() {
-        guard layout.chrome == .rail else { return }
+        // A closed rail gives its tabs back to the bottom bar, so the toggle has
+        // to answer to the window, not to what is on screen now.
+        guard view.bounds.width > view.bounds.height,
+              view.bounds.width >= PadLayout.railWindowMinimum else { return }
         sidebarShown.toggle()
         ClientSettings.padSidebarShown = sidebarShown
         sidebarWidth = ClientSettings.padSidebarWidth

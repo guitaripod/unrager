@@ -73,12 +73,16 @@ final class PadTour: XCTestCase {
         launch(.landscapeLeft, screen: "home", sidebarWidth: 248)
         let show = app.buttons["Show sidebar"].firstMatch
         if show.waitForExistence(timeout: 2.5) { show.tap(); pause(1.5) }
+        if app.buttons["Hide sidebar"].firstMatch.waitForExistence(timeout: 2) == false {
+            app.typeKey("\\", modifierFlags: .command)
+            pause(1.5)
+        }
         snap("15-sidebar-open")
         let hide = app.buttons["Hide sidebar"].firstMatch
         if hide.waitForExistence(timeout: 4) { hide.tap() } else { XCTFail("no hide button") }
         pause(2)
         snap("16-sidebar-closed")
-        if show.waitForExistence(timeout: 4) { show.tap() } else { XCTFail("no show button") }
+        app.typeKey("\\", modifierFlags: .command)
         pause(2)
         let grip = app.coordinate(withNormalizedOffset: CGVector(dx: 0.172, dy: 0.6))
         grip.press(forDuration: 0.3, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.255, dy: 0.6)))
@@ -130,6 +134,15 @@ final class PadTour: XCTestCase {
         tapPost(0)
         pause(4)
         snap("45-notifications-panel")
+    }
+
+    /// Settings in a wide window: the rail must still be there, on the root and
+    /// on a pushed page.
+    func testPadSettingsLandscape() {
+        launch(.landscapeLeft, screen: "settings")
+        snap("60-settings-landscape")
+        launch(.landscapeLeft, screen: "filter")
+        snap("61-settings-landscape-page")
     }
 
     /// Every settings screen in a tall window, where its rows must fit a Mini.

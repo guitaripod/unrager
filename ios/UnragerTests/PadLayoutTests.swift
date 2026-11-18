@@ -79,15 +79,14 @@ struct PadLayoutTests {
         }
     }
 
-    @Test("A closed sidebar gives its room to the columns")
+    @Test("Closing the sidebar hands the tabs back to the bottom bar")
     func closedSidebar() {
         let open = PadLayout.resolve(window: CGSize(width: 1376, height: 1032), rail: 248)
         let closed = PadLayout.resolve(window: CGSize(width: 1376, height: 1032), rail: 248, closed: true)
+        #expect(open.chrome == .rail)
+        #expect(closed.chrome == .bottom)
         #expect(closed.railWidth == 0)
-        #expect(closed.showsDetail)
-        let openBoard = 1376 - 248 - (open.detailWidth ?? 0)
-        let closedBoard = 1376 - (closed.detailWidth ?? 0)
-        #expect(closedBoard > openBoard)
+        #expect(!closed.showsDetail)
     }
 
     @Test("The board adds a column as the window widens, and drops one as it narrows")

@@ -90,7 +90,12 @@ enum TabItem: String, CaseIterable, Sendable {
     }
 
     @MainActor
-    func makeViewController() -> StatusNavigationController {
+    func makeViewController() -> UIViewController {
+        if self == .settings, UIDevice.current.userInterfaceIdiom == .pad {
+            let split = SettingsSplitViewController()
+            split.tabBarItem = UITabBarItem(title: title, image: DesignSystem.icon(symbol), selectedImage: nil)
+            return split
+        }
         let root = makeRoot()
         root.title = title
         root.tabBarItem = UITabBarItem(title: title, image: DesignSystem.icon(symbol), selectedImage: nil)

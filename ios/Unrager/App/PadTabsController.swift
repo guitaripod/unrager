@@ -481,8 +481,13 @@ final class PadTabsController: UIViewController {
             case "tabs": EditTabsViewController()
             default: ChangelogViewController()
             }
-            (controllers.indices.contains(selectedIndex) ? controllers[selectedIndex] as? UINavigationController : nil)?
-                .pushViewController(destination, animated: true)
+            if let split = controllers.indices.contains(selectedIndex)
+                ? controllers[selectedIndex] as? SettingsSplitViewController : nil {
+                split.push(destination)
+            } else {
+                (controllers.indices.contains(selectedIndex) ? controllers[selectedIndex] as? UINavigationController : nil)?
+                    .pushViewController(destination, animated: true)
+            }
             refreshRows()
         case "hidden":
             selectTab(.home)

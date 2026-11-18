@@ -39,6 +39,23 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     #if DEBUG
+    /// The Settings tab is a split view controller on iPad and a plain stack on
+    /// the phone; the routes want the rows column either way.
+    private static func settingsRows(in root: RootViewController) -> SettingsViewController? {
+        if let split = root.viewControllers?[3] as? SettingsSplitViewController {
+            return split.rowsNavigation?.viewControllers.first as? SettingsViewController
+        }
+        return (root.viewControllers?[3] as? UINavigationController)?.topViewController as? SettingsViewController
+    }
+
+    private static func pushSettings(_ page: UIViewController, in root: RootViewController) {
+        if let split = root.viewControllers?[3] as? SettingsSplitViewController {
+            split.push(page)
+            return
+        }
+        (root.viewControllers?[3] as? UINavigationController)?.pushViewController(page, animated: false)
+    }
+
     /// The posts the `hidden` route lists: each `<id>=<reason>` argument (an
     /// underscore stands for a space in the reason) fetches that post and
     /// labels it, and without arguments the first four Home posts get
@@ -98,31 +115,26 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             case "notifsettings":
                 root.selectedIndex = 3
                 let notificationSettings = NotificationSettingsViewController()
-                (root.viewControllers?[3] as? UINavigationController)?
-                    .pushViewController(notificationSettings, animated: false)
+                Self.pushSettings(notificationSettings, in: root)
                 if parts.count > 1, let points = Double(parts[1]) {
                     notificationSettings.debugScroll(by: CGFloat(points))
                 }
             case "settings":
                 root.selectedIndex = 3
                 if parts.count > 1, let points = Double(parts[1]),
-                   let settings = (root.viewControllers?[3] as? UINavigationController)?.topViewController
-                    as? SettingsViewController {
+                   let settings = Self.settingsRows(in: root) {
                     settings.debugScroll(by: CGFloat(points))
                 }
             case "filter":
                 root.selectedIndex = 3
-                (root.viewControllers?[3] as? UINavigationController)?
-                    .pushViewController(FilterSettingsViewController(), animated: false)
+                Self.pushSettings(FilterSettingsViewController(), in: root)
             case "edittabs":
                 root.selectedIndex = 3
-                (root.viewControllers?[3] as? UINavigationController)?
-                    .pushViewController(EditTabsViewController(), animated: false)
+                Self.pushSettings(EditTabsViewController(), in: root)
             case "changelog":
                 root.selectedIndex = 3
                 let changelog = ChangelogViewController()
-                (root.viewControllers?[3] as? UINavigationController)?
-                    .pushViewController(changelog, animated: false)
+                Self.pushSettings(changelog, in: root)
                 if parts.count > 1, parts[1] == "end" { changelog.debugScrollToEnd() }
             case "userlist" where parts.count > 2:
                 let mode: UserListViewController.Mode = parts[2] == "following" ? .following : .followers

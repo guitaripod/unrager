@@ -66,18 +66,32 @@ final class SettingsViewController: UIViewController {
     /// On a window with room, the sections become an index down the left and
     /// the chosen one's rows fill the right: a settings list that uses an
     /// iPad's width instead of scrolling a phone's column.
-    private var indexCollection: UICollectionView?
-    private var indexSource: UICollectionViewDiffableDataSource<Int, Section>?
-    private var chosen: Section = .server
-    private var laidOutPaneWidth: CGFloat = 0
-    private var singlePins: [NSLayoutConstraint] = []
-    private var panePins: [NSLayoutConstraint] = []
-
-    private var showsIndex: Bool {
-        traitCollection.userInterfaceIdiom == .pad && view.bounds.width >= 760 && !isAccessibilitySize
+    /// Which section the rows show. The index that picks it is the split view's
+    /// own sidebar when this screen is hosted there, and this screen's own
+    /// scrolling list of every section when it stands alone.
+    var chosen: Section = .server {
+        didSet { refreshIfLoaded() }
     }
 
-    private var displayedSections: [Section] { showsIndex ? [chosen] : Section.allCases }
+    /// Whether the screen is its own settings tab (one list of every section) or
+    /// the rows half of `SettingsSplitViewController`.
+    var standsAlone = true {
+        didSet { refreshIfLoaded() }
+    }
+
+    /// State can be set before the rows exist (the split view builds them on
+    /// demand), so the first snapshot is the one `viewDidLoad` applies.
+    private func refreshIfLoaded() {
+        guard isViewLoaded, dataSource != nil else { return }
+        title = standsAlone ? "Settings" : chosen.indexTitle
+        applySnapshot()
+    }
+
+    /// Told when the server check or the summaries change, so an index built
+    /// elsewhere can stay in step.
+    var onStateChange: (() -> Void)?
+
+    private var displayedSections: [Section] { standsAlone ? Section.allCases : [chosen] }
     private var connection = Connection.checking
     private var account: Whoami?
     private var imageCacheBytes: Int?
@@ -92,7 +106,7 @@ final class SettingsViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "Settings"
+        title = standsAlone ? "Settings" : chosen.indexTitle
         view.backgroundColor = DesignSystem.Color.background
         navigationItem.largeTitleDisplayMode = .never
         configureCollectionView()
@@ -117,10 +131,6 @@ final class SettingsViewController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        if view.bounds.width != laidOutPaneWidth {
-            laidOutPaneWidth = view.bounds.width
-            applyLayout()
-        }
         let width = collectionView.bounds.width
         guard width > 0, width != laidOutWidth else { return }
         laidOutWidth = width
@@ -170,23 +180,8 @@ final class SettingsViewController: UIViewController {
         collectionView.delegate = self
         collectionView.alwaysBounceVertical = true
         view.addManaged(collectionView)
-        singlePins = collectionView.pinEdges(to: makeContentGuide(maxWidth: DesignSystem.padWideWidth))
-        let pane = UILayoutGuide()
-        view.addLayoutGuide(pane)
-        NSLayoutConstraint.activate([
-            pane.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: Self.indexWidth),
-            pane.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            pane.topAnchor.constraint(equalTo: view.topAnchor),
-            pane.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-        ])
-        panePins = [
-            collectionView.topAnchor.constraint(equalTo: pane.topAnchor),
-            collectionView.bottomAnchor.constraint(equalTo: pane.bottomAnchor),
-            collectionView.centerXAnchor.constraint(equalTo: pane.centerXAnchor),
-            collectionView.widthAnchor.constraint(equalTo: pane.widthAnchor).priority(.defaultHigh),
-            collectionView.widthAnchor.constraint(lessThanOrEqualToConstant: 760),
-        ]
-        configureIndex()
+        collectionView.pinEdges(to: makeContentGuide(maxWidth: 760))
+
 
         let rows = UICollectionView.CellRegistration<UICollectionViewListCell, Item> { [weak self] cell, _, item in
             self?.configure(cell, for: item)
@@ -237,13 +232,13 @@ final class SettingsViewController: UIViewController {
             snapshot.appendItems(items(of: section), toSection: section)
         }
         dataSource.apply(snapshot, animatingDifferences: false)
-        applyIndexSnapshot()
+        onStateChange?()
     }
 
     private func items(of section: Section) -> [Item] {
         switch section {
         case .hero: return [.hero]
-        case .server: return showsIndex ? [.hero, .serverAddress, .serverStatus] : [.serverAddress, .serverStatus]
+        case .server: return standsAlone ? [.serverAddress, .serverStatus] : [.hero, .serverAddress, .serverStatus]
         case .reading: return [.rageFilter, .filterRules, .postStats, .markSeen, .images]
         case .appearance: return [.theme, .textSize, .tabs]
         case .writing: return [.officialCompose]
@@ -257,53 +252,8 @@ final class SettingsViewController: UIViewController {
         displayedSections.indices.contains(index) ? displayedSections[index] : nil
     }
 
-    static let indexWidth: CGFloat = 268
-
-    /// The index: one row per section, with the one thing worth knowing about
-    /// it, so the reader picks a section instead of scrolling to find it.
-    private func configureIndex() {
-        var configuration = UICollectionLayoutListConfiguration(appearance: .insetGrouped)
-        configuration.backgroundColor = DesignSystem.Color.background
-        let layout = UICollectionViewCompositionalLayout.list(using: configuration)
-        let index = UICollectionView(frame: .zero, collectionViewLayout: layout)
-        index.backgroundColor = DesignSystem.Color.background
-        index.delegate = self
-        index.alwaysBounceVertical = true
-        index.isHidden = true
-        view.addManaged(index)
-        NSLayoutConstraint.activate([
-            index.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            index.topAnchor.constraint(equalTo: view.topAnchor),
-            index.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            index.widthAnchor.constraint(equalToConstant: Self.indexWidth),
-        ])
-        let rows = UICollectionView.CellRegistration<UICollectionViewListCell, Section> { [weak self] cell, _, section in
-            guard let self else { return }
-            var content = UIListContentConfiguration.subtitleCell()
-            content.text = section.indexTitle
-            content.secondaryText = self.summary(of: section)
-            content.secondaryTextProperties.color = DesignSystem.Color.secondaryLabel
-            content.textProperties.font = DesignSystem.Typography.rowName()
-            cell.contentConfiguration = content
-            cell.backgroundConfiguration = Self.cardBackground()
-            cell.accessories = section == self.chosen ? [.checkmark()] : []
-        }
-        indexSource = UICollectionViewDiffableDataSource<Int, Section>(collectionView: index) { view, indexPath, section in
-            view.dequeueConfiguredReusableCell(using: rows, for: indexPath, item: section)
-        }
-        indexCollection = index
-    }
-
-    private func applyIndexSnapshot() {
-        guard let indexSource else { return }
-        var snapshot = NSDiffableDataSourceSnapshot<Int, Section>()
-        snapshot.appendSections([0])
-        snapshot.appendItems(Section.allCases.filter { $0 != .hero }, toSection: 0)
-        indexSource.apply(snapshot, animatingDifferences: false)
-    }
-
     /// One line per section in the index: the state of the thing it holds.
-    private func summary(of section: Section) -> String {
+    func summary(of section: Section) -> String {
         switch section {
         case .hero: return ""
         case .server:
@@ -322,16 +272,6 @@ final class SettingsViewController: UIViewController {
             let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
             return version
         }
-    }
-
-    /// Shows the index when the window has room for it, and re-pins the rows
-    /// beside it; otherwise the list keeps the whole width.
-    private func applyLayout() {
-        let panes = showsIndex
-        indexCollection?.isHidden = !panes
-        NSLayoutConstraint.deactivate(panes ? singlePins : panePins)
-        NSLayoutConstraint.activate(panes ? panePins : singlePins)
-        applySnapshot()
     }
 
     private func reconfigure(_ items: [Item]) {
@@ -796,15 +736,6 @@ extension SettingsViewController.Item {
 extension SettingsViewController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         collectionView.deselectItem(at: indexPath, animated: true)
-        if collectionView === indexCollection {
-            guard let section = indexSource?.itemIdentifier(for: indexPath), section != chosen else { return }
-            Haptics.selection()
-            chosen = section
-            applySnapshot()
-            collectionView.scrollToItem(at: indexPath, at: .centeredVertically, animated: true)
-            self.collectionView.setContentOffset(CGPoint(x: 0, y: -self.collectionView.adjustedContentInset.top), animated: false)
-            return
-        }
         guard let item = dataSource.itemIdentifier(for: indexPath) else { return }
         switch item {
         case .hero:
@@ -839,7 +770,6 @@ extension SettingsViewController: UICollectionViewDelegate {
     }
 
     func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
-        if collectionView === indexCollection { return true }
         switch dataSource.itemIdentifier(for: indexPath) {
         case .postStats?, .theme?:
             return isAccessibilitySize

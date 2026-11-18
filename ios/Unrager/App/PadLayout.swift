@@ -20,9 +20,10 @@ struct PadLayout: Equatable {
     /// panel is inset across the whole board instead of sitting beside it.
     var detailWidth: CGFloat?
 
-    /// Room the board keeps when a post opens beside it — two columns and their
-    /// gutter. Below this the panel lies across the board instead.
-    static let minimumBoardWidth: CGFloat = 620
+    /// Room the board keeps when a post opens beside it: one comfortable
+    /// column. Below this the panel lies across the board instead.
+    static let minimumBoardWidth: CGFloat = 380
+    static let minimumPanelWidth: CGFloat = 340
     static let railWidth: CGFloat = 248
     static let narrowestRailWidth: CGFloat = 200
     static let widestRailWidth: CGFloat = 360
@@ -45,6 +46,7 @@ struct PadLayout: Equatable {
         let width = closed ? 0 : min(max(rail, narrowestRailWidth), widestRailWidth)
         let content = window.width - width
         let panel = min(560, content - Self.minimumBoardWidth)
-        return PadLayout(chrome: .rail, railWidth: width, detailWidth: panel >= 360 ? panel : nil)
+        return PadLayout(chrome: .rail, railWidth: width,
+                         detailWidth: panel >= Self.minimumPanelWidth ? panel : nil)
     }
 }

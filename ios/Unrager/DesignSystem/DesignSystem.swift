@@ -114,6 +114,9 @@ enum DesignSystem {
     /// The reading column on iPad: wider than a phone's, so a portrait window
     /// fills instead of leaving a hand's width of empty page on both sides.
     static let padContentWidth: CGFloat = 880
+    /// A list that carries the window itself — notifications, settings — on a
+    /// wide iPad, where a centred stripe would waste the third column.
+    static let padWideWidth: CGFloat = 1120
 
     enum Spacing {
         static let xxs: CGFloat = 2

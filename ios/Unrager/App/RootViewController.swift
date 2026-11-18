@@ -230,6 +230,7 @@ final class RootViewController: UIViewController {
     /// the name the bar shows, which follows For You / Following.
     func refreshWindowTitle() {
         padChrome?.refreshItems()
+        padChrome?.refreshBoard()
         guard let scene = view.window?.windowScene else { return }
         let nav = selectedViewController as? UINavigationController
         let pushed = (nav?.viewControllers.count ?? 0) > 1

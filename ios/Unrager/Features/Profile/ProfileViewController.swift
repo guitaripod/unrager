@@ -267,7 +267,7 @@ final class ProfileViewController: FeedViewController {
             header.setInsights(isOwnProfile && loadState == .loaded ? insights : nil)
             header.setModerationActions(accessibilityActions())
             header.setSegment(section.rawValue)
-            header.placeActions(width: width)
+            header.placeActions(width: min(width - 32, ProfileHeaderView.readingWidth))
         }
         let blank = loadState.isFinal || postsLocked
         hidesEmptyState = blank
@@ -595,6 +595,7 @@ final class ProfileViewController: FeedViewController {
         settleVideoPlayback()
         repliesController?.settleVideoPlayback()
         applyHeaderState()
+        noteScreenForWindow()
         publishScrollView(activeScrollView)
         updateBanner(for: activeScrollView)
     }

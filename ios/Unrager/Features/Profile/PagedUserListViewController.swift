@@ -227,6 +227,23 @@ class PagedUserListViewController: UIViewController {
         dataSource.reconfigureVisibleItems(of: collectionView)
     }
 
+    /// People read well two up: a wide window shows twice as many faces and
+    /// names instead of one column with a gutter of page on either side.
+    private static func twoColumnSection(
+        using config: UICollectionLayoutListConfiguration, environment: NSCollectionLayoutEnvironment
+    ) -> NSCollectionLayoutSection {
+        let item = NSCollectionLayoutItem(layoutSize: NSCollectionLayoutSize(
+            widthDimension: .fractionalWidth(0.5), heightDimension: .estimated(96)))
+        let group = NSCollectionLayoutGroup.horizontal(
+            layoutSize: NSCollectionLayoutSize(widthDimension: .fractionalWidth(1),
+                                               heightDimension: .estimated(96)),
+            subitems: [item])
+        let section = NSCollectionLayoutSection(group: group)
+        section.interGroupSpacing = 10
+        section.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 10, bottom: 24, trailing: 10)
+        return section
+    }
+
     private func makeLayout() -> UICollectionViewCompositionalLayout {
         let hasHeader = hasHeader
         let supportsLens = supportsLens
@@ -242,7 +259,11 @@ class PagedUserListViewController: UIViewController {
                 }
                 return configuration
             }
-            let section = NSCollectionLayoutSection.list(using: config, layoutEnvironment: environment)
+            let wide = self.traitCollection.userInterfaceIdiom == .pad
+                && environment.container.effectiveContentSize.width >= 900
+            let section = wide && !isHeader
+                ? Self.twoColumnSection(using: config, environment: environment)
+                : NSCollectionLayoutSection.list(using: config, layoutEnvironment: environment)
             if !isHeader {
                 var edges: [NSCollectionLayoutBoundarySupplementaryItem] = []
                 if supportsLens { edges.append(LensBarView.boundaryItem()) }

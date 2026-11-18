@@ -109,6 +109,29 @@ final class PadTour: XCTestCase {
         snap("27-profile-panel")
     }
 
+    /// Every tab of a profile, and a list of people, on a wide window: posts,
+    /// replies and media each use the width, people sit two up.
+    func testPadWideTabs() {
+        launch(.landscapeLeft, screen: "myprofile")
+        pause(4)
+        snap("40-profile-posts")
+        app.buttons["Replies"].firstMatch.tap()
+        pause(4)
+        snap("41-profile-replies")
+        app.buttons["Media"].firstMatch.tap()
+        pause(5)
+        snap("42-profile-media")
+        launch(.landscapeLeft, screen: "userlist/1001/followers")
+        pause(5)
+        snap("43-people")
+        launch(.landscapeLeft, screen: "notifications")
+        pause(4)
+        snap("44-notifications-cards")
+        tapPost(0)
+        pause(4)
+        snap("45-notifications-panel")
+    }
+
     /// The sidebar's sections: the feeds normally behind the title menu, and the
     /// notification lenses behind the chip bar.
     func testPadSidebarSections() {

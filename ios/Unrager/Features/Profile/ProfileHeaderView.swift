@@ -18,6 +18,9 @@ final class ProfileHeaderView: UIView {
     private let avatar = ProfileAvatarView()
     private let panel = UIView()
     private let column = UIStackView()
+    /// The name, bio, facts and stats keep a readable measure on a wide iPad
+    /// board: the banner runs the window, the writing inside it does not.
+    static let readingWidth: CGFloat = 680
     private let topRow = UIStackView()
     private let actions = UIStackView()
     private let nameLabel = UILabel()
@@ -182,8 +185,9 @@ final class ProfileHeaderView: UIView {
             panel.bottomAnchor.constraint(equalTo: bottomAnchor),
             column.topAnchor.constraint(equalTo: panel.topAnchor, constant: DesignSystem.Spacing.s),
             column.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 16),
-            column.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -16),
             column.bottomAnchor.constraint(equalTo: panel.bottomAnchor, constant: -12),
+            column.trailingAnchor.constraint(lessThanOrEqualTo: panel.trailingAnchor, constant: -16),
+            column.widthAnchor.constraint(lessThanOrEqualToConstant: Self.readingWidth),
             avatar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
             avatar.centerYAnchor.constraint(equalTo: panel.topAnchor, constant: 8),
             separator.leadingAnchor.constraint(equalTo: panel.leadingAnchor),

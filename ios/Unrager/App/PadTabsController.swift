@@ -333,20 +333,26 @@ final class PadTabsController: UIViewController {
     private func applyBoard() {
         for (index, controller) in controllers.enumerated() {
             guard let nav = controller as? UINavigationController else { continue }
-            boardHost(in: nav.topViewController)?.setGrid(index == selectedIndex && showsBoard)
+            for host in boardHosts(in: nav.topViewController) {
+                host.setGrid(index == selectedIndex && showsBoard)
+            }
         }
     }
 
-    /// The feed a tab is showing, whether it is the stack's own screen (Home) or
-    /// one a root screen wraps (My Profile). A pushed list is a reading screen
-    /// and returns nothing, so nothing behind it animates.
+    /// Every feed in the tab's front screen — a profile's own posts, and the
+    /// replies list it holds under the same header, so switching tabs on a
+    /// profile keeps the board. A pushed list is a reading screen and returns
+    /// nothing, so nothing behind it animates.
+    private func boardHosts(in controller: UIViewController?) -> [FeedViewController] {
+        guard let controller else { return [] }
+        var hosts: [FeedViewController] = []
+        if let feed = controller as? FeedViewController { hosts.append(feed) }
+        for child in controller.children { hosts.append(contentsOf: boardHosts(in: child)) }
+        return hosts
+    }
+
     private func boardHost(in controller: UIViewController?) -> FeedViewController? {
-        guard let controller else { return nil }
-        if let feed = controller as? FeedViewController { return feed }
-        for child in controller.children {
-            if let feed = boardHost(in: child) { return feed }
-        }
-        return nil
+        boardHosts(in: controller).first
     }
 
     private lazy var revealButton: UIBarButtonItem = {
@@ -531,7 +537,10 @@ final class PadTabsController: UIViewController {
             return CGRect(x: view.bounds.width - width - 12, y: 12,
                           width: width, height: view.bounds.height - 24)
         }
-        return view.bounds.insetBy(dx: 16, dy: 16)
+        // Without room beside the board the panel lies across it — inside the
+        // content area, never under the rail, which is drawn above it.
+        let area = contentArea.layoutFrame.insetBy(dx: 16, dy: 16)
+        return area.isEmpty ? view.bounds.insetBy(dx: 16, dy: 16) : area
     }
 
     /// A post opens as a card over the feed, not as another screen: it keeps its

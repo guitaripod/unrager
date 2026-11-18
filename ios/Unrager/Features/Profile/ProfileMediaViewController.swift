@@ -245,7 +245,7 @@ final class ProfileMediaViewController: UIViewController {
         collectionView.alwaysBounceVertical = true
         collectionView.delegate = self
         view.addManaged(collectionView)
-        collectionView.pinEdges(to: makeContentGuide())
+        contentPins = collectionView.pinEdges(to: makeContentGuide())
         let refresh = UIRefreshControl()
         refresh.tintColor = .white
         refresh.addTarget(self, action: #selector(pullToRefresh), for: .valueChanged)
@@ -266,6 +266,7 @@ final class ProfileMediaViewController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        applyContentWidth()
         let width = collectionView.bounds.width
         if width > 0, width != laidOutWidth { rebuild() }
         positionPlaceholders()
@@ -278,6 +279,31 @@ final class ProfileMediaViewController: UIViewController {
     }
 
     // MARK: - Layout
+
+    /// The reading column, or the whole window on a wide iPad: a grid of
+    /// pictures is what fills a screen, so it stops being a striped column.
+    private var contentPins: [NSLayoutConstraint] = []
+    private var widePins: [NSLayoutConstraint] = []
+
+    private var wantsWide: Bool {
+        traitCollection.userInterfaceIdiom == .pad && view.bounds.width >= 900
+    }
+
+    private func applyContentWidth() {
+        guard collectionView != nil else { return }
+        if widePins.isEmpty {
+            widePins = [
+                collectionView.topAnchor.constraint(equalTo: view.topAnchor),
+                collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+                collectionView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+                collectionView.widthAnchor.constraint(equalTo: view.widthAnchor, constant: -16).priority(.defaultHigh),
+                collectionView.widthAnchor.constraint(lessThanOrEqualToConstant: 1240),
+            ]
+        }
+        let wide = wantsWide
+        NSLayoutConstraint.deactivate(wide ? contentPins : widePins)
+        NSLayoutConstraint.activate(wide ? widePins : contentPins)
+    }
 
     private func makeLayout() -> UICollectionViewCompositionalLayout {
         let hasHeader = headerView != nil

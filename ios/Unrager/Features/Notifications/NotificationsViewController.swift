@@ -273,12 +273,37 @@ final class NotificationsViewController: UIViewController {
             config.leadingSwipeActionsConfigurationProvider = { [weak self] indexPath in
                 self?.leadingSwipe(at: indexPath)
             }
-            let section = NSCollectionLayoutSection.list(using: config, layoutEnvironment: environment)
+            let wide = self?.traitCollection.userInterfaceIdiom == .pad
+                && environment.container.effectiveContentSize.width >= 900
+            let section = wide
+                ? Self.twoUpSection(environment: environment)
+                : NSCollectionLayoutSection.list(using: config, layoutEnvironment: environment)
             if let self, let sections = self.dataSource?.snapshot().numberOfSections, sectionIndex == sections - 1 {
                 section.boundarySupplementaryItems.append(PagingFooter.boundaryItem())
             }
             return section
         }
+    }
+
+    /// Two notifications to a row on a wide iPad: the day heading keeps the
+    /// whole width as a band, and the activity under it reads as cards instead
+    /// of one stretched list.
+    private static func twoUpSection(environment: NSCollectionLayoutEnvironment) -> NSCollectionLayoutSection {
+        let item = NSCollectionLayoutItem(layoutSize: NSCollectionLayoutSize(
+            widthDimension: .fractionalWidth(0.5), heightDimension: .estimated(120)))
+        let group = NSCollectionLayoutGroup.horizontal(
+            layoutSize: NSCollectionLayoutSize(widthDimension: .fractionalWidth(1),
+                                               heightDimension: .estimated(120)),
+            subitems: [item])
+        let section = NSCollectionLayoutSection(group: group)
+        section.interGroupSpacing = 10
+        section.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 10, bottom: 18, trailing: 10)
+        let header = NSCollectionLayoutBoundarySupplementaryItem(
+            layoutSize: NSCollectionLayoutSize(widthDimension: .fractionalWidth(1),
+                                               heightDimension: .estimated(44)),
+            elementKind: UICollectionView.elementKindSectionHeader, alignment: .top)
+        section.boundarySupplementaryItems = [header]
+        return section
     }
 
     /// A trailing swipe that lists everyone behind a row: all the likes of a
@@ -335,7 +360,7 @@ final class NotificationsViewController: UIViewController {
         navigationItem.largeTitleDisplayMode = .never
         navigationItem.rightBarButtonItem = makeMoreButton()
 
-        let contentGuide = makeContentGuide()
+        let contentGuide = makeContentGuide(maxWidth: DesignSystem.padWideWidth)
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: makeLayout())
         collectionView.selfSizingInvalidation = .enabled
         collectionView.backgroundColor = .clear

@@ -58,14 +58,23 @@ struct PadLayoutTests {
         #expect(window.width - layout.railWidth - panel > 800)
     }
 
-    @Test("A panel beside the board always leaves it room for two columns")
+    @Test("A panel opens beside a one-column board in a split window")
+    func splitWindowPanel() {
+        let layout = PadLayout.resolve(window: CGSize(width: 990, height: 744))
+        #expect(layout.chrome == .rail)
+        let panel = layout.detailWidth ?? 0
+        #expect(panel >= PadLayout.minimumPanelWidth)
+        #expect(990 - PadLayout.railWidth - panel >= PadLayout.minimumBoardWidth)
+    }
+
+    @Test("A panel beside the board always leaves it a column, never less")
     func panelFits() {
         for width in stride(from: 760.0, through: 2000.0, by: 80) {
             let layout = PadLayout.resolve(window: CGSize(width: width, height: 800))
             guard let panel = layout.detailWidth else { continue }
             #expect(panel <= 560)
             #expect(width - layout.railWidth - panel >= PadLayout.minimumBoardWidth)
-            #expect(MasonryLayout.columns(for: width - layout.railWidth - panel) >= 2)
+            #expect(MasonryLayout.columns(for: width - layout.railWidth - panel) >= 1)
         }
     }
 

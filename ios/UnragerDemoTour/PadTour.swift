@@ -1,0 +1,123 @@
+import XCTest
+
+/// Screenshot walks over the iPad layout, one shape per test: the device is
+/// rotated, the app opens on a screen, and each state is attached so a layout
+/// change can be looked at instead of guessed at. `ios/scripts/pad-shots.sh`
+/// builds these once, runs them, and unpacks the attachments.
+final class PadTour: XCTestCase {
+    private var app: XCUIApplication!
+
+    override func setUp() {
+        continueAfterFailure = true
+        app = XCUIApplication()
+    }
+
+    override func tearDown() {
+        XCUIDevice.shared.orientation = .portrait
+    }
+
+    /// A tall window: the tabs belong along the bottom, one column, and a post
+    /// opens over the list rather than beside it.
+    func testPadPortrait() {
+        launch(.portrait, screen: "home")
+        snap("01-portrait-feed")
+        tapPost(0)
+        snap("02-portrait-thread")
+    }
+
+    /// A wide window: the tabs belong down the side, and a post opens beside
+    /// the feed instead of over it.
+    func testPadLandscape() {
+        launch(.landscapeLeft, screen: "home")
+        snap("03-landscape-feed")
+        tapPost(0)
+        snap("04-landscape-thread")
+        tapPost(1)
+        snap("05-landscape-next-post")
+    }
+
+    /// The other tabs in a wide window: search and notifications beside the
+    /// empty column, settings across the window.
+    func testPadLandscapeTabs() {
+        launch(.landscapeLeft, screen: "home")
+        selectTab("Search", snapAs: "07-landscape-search")
+        selectTab("Notifications", snapAs: "08-landscape-notifications")
+        selectTab("Settings", snapAs: "09-landscape-settings")
+    }
+
+    /// The wide window in the dark, where the rail and the glass have to carry
+    /// themselves without a page colour underneath.
+    func testPadLandscapeDark() {
+        launch(.landscapeLeft, screen: "home", appearance: 2)
+        snap("10-landscape-dark-feed")
+        tapPost(0)
+        snap("11-landscape-dark-thread")
+    }
+
+    /// A window that loses its second column: the thread that was open beside
+    /// the feed has to come forward rather than vanish.
+    func testPadFold() {
+        launch(.landscapeLeft, screen: "home")
+        tapPost(0)
+        XCUIDevice.shared.orientation = .portrait
+        pause(4)
+        snap("13-portrait-after-fold")
+        XCUIDevice.shared.orientation = .landscapeLeft
+        pause(4)
+        snap("14-landscape-after-unfold")
+    }
+
+    /// What the composer looks like on a wide screen: a centred card, not a
+    /// full-height sheet.
+    func testPadLandscapeCompose() {
+        launch(.landscapeLeft, screen: "compose")
+        snap("12-landscape-compose")
+    }
+
+    // MARK: - Steps
+
+    private func launch(_ orientation: UIDeviceOrientation, screen: String, appearance: Int = 1) {
+        app.launchArguments = [
+            "-unrager.serverURL", "http://127.0.0.1:8790",
+            "-unrager.filterEnabled", "0",
+            "-unrager.postStatsMode", "0",
+            "-unrager.appearance", "\(appearance)",
+            "-AppleLanguages", "(en)",
+            "-AppleLocale", "en_US",
+        ]
+        XCUIDevice.shared.orientation = orientation
+        app.launchEnvironment["UNRAGER_SCREEN"] = screen
+        app.launch()
+        pause(9)
+    }
+
+    /// Taps a post's text, not its picture: a tap on a photo opens the viewer.
+    private func tapPost(_ index: Int) {
+        let cell = app.cells.element(boundBy: index)
+        guard cell.waitForExistence(timeout: 6) else { return }
+        cell.coordinate(withNormalizedOffset: CGVector(dx: 0.62, dy: 0.11)).tap()
+        pause(4)
+    }
+
+    private func selectTab(_ name: String, snapAs shot: String) {
+        let tab = app.buttons[name].firstMatch
+        guard tab.waitForExistence(timeout: 4) else {
+            XCTFail("no \(name) tab in the rail")
+            return
+        }
+        tab.tap()
+        pause(4)
+        snap(shot)
+    }
+
+    private func snap(_ name: String) {
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    private func pause(_ seconds: TimeInterval) {
+        Thread.sleep(forTimeInterval: seconds)
+    }
+}

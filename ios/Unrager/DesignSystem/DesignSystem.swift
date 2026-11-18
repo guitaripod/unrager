@@ -175,6 +175,13 @@ enum DesignSystem {
             UIFontMetrics(forTextStyle: .subheadline).scaledFont(
                 for: .systemFont(ofSize: 15 * scale, weight: .bold), maximumPointSize: 20)
         }
+        /// The label under a bottom bar's icon: small enough for five tabs on
+        /// one row, capped so a large text size can't push the bar taller than
+        /// the screens have room for.
+        static func tabLabel() -> UIFont {
+            UIFontMetrics(forTextStyle: .caption2).scaledFont(
+                for: .systemFont(ofSize: 10 * scale, weight: .medium), maximumPointSize: 13)
+        }
         /// A person's name in a people list.
         static func rowName() -> UIFont { scaled(.callout, size: 16, weight: .semibold) }
         /// `metric()` in semibold, for a phrase that stands out beside it.

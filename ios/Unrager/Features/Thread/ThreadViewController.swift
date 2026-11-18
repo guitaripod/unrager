@@ -754,7 +754,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
             self.postedReplyID = posted.id
             self.load()
         }
-        present(UINavigationController(rootViewController: compose), animated: true)
+        present(UINavigationController.sheet(rootViewController: compose), animated: true)
     }
 
     /// Scrolls to the reply the user just posted once the reloaded thread
@@ -771,7 +771,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
 
     func presentQuote(_ tweet: Tweet) {
         let compose = ComposeViewController(mode: .quote(of: tweet))
-        present(UINavigationController(rootViewController: compose), animated: true)
+        present(UINavigationController.sheet(rootViewController: compose), animated: true)
     }
 
     func tweetCell(for tweet: Tweet) -> TweetCell? {

@@ -20,6 +20,11 @@ enum InlineVideoPlayback {
         UIAccessibility.isVideoAutoplayEnabled && !UIAccessibility.isReduceMotionEnabled && AppSettings.imagesEnabled
     }
 
+    /// The clip playing right now, whichever list it belongs to. Two columns on
+    /// an iPad are two lists at rest, and only one clip may play at a time, so a
+    /// list that settles takes the sound from the one beside it.
+    private static weak var playing: MediaContentView?
+
     static func pauseAll(in collectionView: UICollectionView) {
         for case let cell as TweetCell in collectionView.visibleCells { cell.pauseVideo() }
     }
@@ -43,6 +48,7 @@ enum InlineVideoPlayback {
             }
         }
         let best = clips.max { $0.visible < $1.visible }
+        if let other = playing, other !== best?.surface { other.pauseVideo() }
         for clip in clips {
             if clip.surface === best?.surface, clip.visible > 0 {
                 clip.surface.playVideo()
@@ -50,5 +56,6 @@ enum InlineVideoPlayback {
                 clip.surface.pauseVideo()
             }
         }
+        playing = best.flatMap { $0.visible > 0 ? $0.surface : nil }
     }
 }

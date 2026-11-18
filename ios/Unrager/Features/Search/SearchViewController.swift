@@ -26,6 +26,9 @@ final class SearchViewController: FeedViewController {
         searchController.searchBar.delegate = self
         searchController.obscuresBackgroundDuringPresentation = false
         searchController.searchBar.placeholder = "Search X"
+        if traitCollection.userInterfaceIdiom == .pad {
+            navigationItem.preferredSearchBarPlacement = .stacked
+        }
         navigationItem.rightBarButtonItem = productButton()
         configureRecents()
     }

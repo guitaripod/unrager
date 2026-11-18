@@ -304,7 +304,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
             if posted.likedReplyTarget { self.viewModel.applyLike(id: tweet.restID, favorited: true) }
             self.showToast("Reply posted")
         }
-        present(UINavigationController(rootViewController: compose), animated: true)
+        present(UINavigationController.sheet(rootViewController: compose), animated: true)
     }
 
     private func configureCollectionView() {
@@ -1066,7 +1066,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
     /// posting sends `quote_tweet_id`.
     func presentQuote(_ tweet: Tweet) {
         let compose = ComposeViewController(mode: .quote(of: tweet))
-        present(UINavigationController(rootViewController: compose), animated: true)
+        present(UINavigationController.sheet(rootViewController: compose), animated: true)
     }
 
     // MARK: - Unread navigation

@@ -247,6 +247,7 @@ final class HomeViewController: FeedViewController {
         tabBarItem.image = image
         navigationController?.tabBarItem.title = title
         navigationController?.tabBarItem.image = image
+        noteScreenForWindow()
     }
 
     private func afterSwitch() {
@@ -280,7 +281,7 @@ final class HomeViewController: FeedViewController {
 
     private func presentCompose(opensPhotoPicker: Bool = false) {
         let compose = ComposeViewController(mode: .new, opensPhotoPicker: opensPhotoPicker)
-        present(UINavigationController(rootViewController: compose), animated: true)
+        present(UINavigationController.sheet(rootViewController: compose), animated: true)
     }
 
     /// What a touch and hold on the compose button offers, built each time it

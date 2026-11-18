@@ -609,8 +609,8 @@ final class PadTabsController: UIViewController {
 
     /// Under a bar the screens keep their feet clear of it; beside a rail they
     /// run the full height.
-    /// The content area already ends above the bar (see `contentBottom`), so a
-    /// screen's own safe area is the window's — nothing here.
+    /// The content ends above the bar (see `contentBottom`), so a screen's safe
+    /// area is just the window's and nothing scrolls under the glass.
     private func applySafeArea() {
         for controller in children where controller.additionalSafeAreaInsets != .zero {
             controller.additionalSafeAreaInsets = .zero

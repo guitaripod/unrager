@@ -26,7 +26,18 @@ extension UIViewController {
 }
 
 extension UIView {
-
+    /// Leaves the height of the iPad's floating bar free at the bottom of every
+    /// list inside this view: the bar is the app's own, so no scroll view knows
+    /// to stop for it.
+    func clearBottomBar(_ clearance: CGFloat) {
+        for subview in subviews {
+            if let scroll = subview as? UIScrollView, scroll.contentInset.bottom != clearance {
+                scroll.contentInset.bottom = clearance
+                scroll.verticalScrollIndicatorInsets.bottom = clearance
+            }
+            subview.clearBottomBar(clearance)
+        }
+    }
 
     func addManaged(_ subview: UIView) {
         subview.translatesAutoresizingMaskIntoConstraints = false

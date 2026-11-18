@@ -9,6 +9,11 @@ final class SettingsViewController: UIViewController {
     enum Section: Int, CaseIterable {
         case hero, server, reading, appearance, writing, notifications, data, about
 
+        /// The name the index gives this section.
+        var indexTitle: String {
+            header ?? "Account"
+        }
+
         var header: String? {
             switch self {
             case .hero: return nil
@@ -58,6 +63,21 @@ final class SettingsViewController: UIViewController {
 
     private var collectionView: UICollectionView!
     private var dataSource: UICollectionViewDiffableDataSource<Section, Item>!
+    /// On a window with room, the sections become an index down the left and
+    /// the chosen one's rows fill the right: a settings list that uses an
+    /// iPad's width instead of scrolling a phone's column.
+    private var indexCollection: UICollectionView?
+    private var indexSource: UICollectionViewDiffableDataSource<Int, Section>?
+    private var chosen: Section = .server
+    private var laidOutPaneWidth: CGFloat = 0
+    private var singlePins: [NSLayoutConstraint] = []
+    private var panePins: [NSLayoutConstraint] = []
+
+    private var showsIndex: Bool {
+        traitCollection.userInterfaceIdiom == .pad && view.bounds.width >= 760 && !isAccessibilitySize
+    }
+
+    private var displayedSections: [Section] { showsIndex ? [chosen] : Section.allCases }
     private var connection = Connection.checking
     private var account: Whoami?
     private var imageCacheBytes: Int?
@@ -97,6 +117,10 @@ final class SettingsViewController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        if view.bounds.width != laidOutPaneWidth {
+            laidOutPaneWidth = view.bounds.width
+            applyLayout()
+        }
         let width = collectionView.bounds.width
         guard width > 0, width != laidOutWidth else { return }
         laidOutWidth = width
@@ -133,9 +157,9 @@ final class SettingsViewController: UIViewController {
         configuration.headerMode = .supplementary
         configuration.footerMode = .supplementary
         configuration.backgroundColor = DesignSystem.Color.background
-        let layout = UICollectionViewCompositionalLayout { index, environment in
+        let layout = UICollectionViewCompositionalLayout { [weak self] index, environment in
             var configuration = configuration
-            let section = Section(rawValue: index)
+            let section = self?.displayedSections.indices.contains(index) == true ? self?.displayedSections[index] : nil
             configuration.headerMode = section?.header == nil ? .none : .supplementary
             configuration.footerMode = section?.footer == nil ? .none : .supplementary
             return NSCollectionLayoutSection.list(using: configuration, layoutEnvironment: environment)
@@ -146,7 +170,23 @@ final class SettingsViewController: UIViewController {
         collectionView.delegate = self
         collectionView.alwaysBounceVertical = true
         view.addManaged(collectionView)
-        collectionView.pinEdges(to: makeContentGuide(maxWidth: DesignSystem.padWideWidth))
+        singlePins = collectionView.pinEdges(to: makeContentGuide(maxWidth: DesignSystem.padWideWidth))
+        let pane = UILayoutGuide()
+        view.addLayoutGuide(pane)
+        NSLayoutConstraint.activate([
+            pane.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: Self.indexWidth),
+            pane.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            pane.topAnchor.constraint(equalTo: view.topAnchor),
+            pane.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+        panePins = [
+            collectionView.topAnchor.constraint(equalTo: pane.topAnchor),
+            collectionView.bottomAnchor.constraint(equalTo: pane.bottomAnchor),
+            collectionView.centerXAnchor.constraint(equalTo: pane.centerXAnchor),
+            collectionView.widthAnchor.constraint(equalTo: pane.widthAnchor).priority(.defaultHigh),
+            collectionView.widthAnchor.constraint(lessThanOrEqualToConstant: 760),
+        ]
+        configureIndex()
 
         let rows = UICollectionView.CellRegistration<UICollectionViewListCell, Item> { [weak self] cell, _, item in
             self?.configure(cell, for: item)
@@ -163,17 +203,17 @@ final class SettingsViewController: UIViewController {
         }
         let header = UICollectionView.SupplementaryRegistration<UICollectionViewListCell>(
             elementKind: UICollectionView.elementKindSectionHeader
-        ) { cell, _, indexPath in
+        ) { [weak self] cell, _, indexPath in
             var content = UIListContentConfiguration.groupedHeader()
-            content.text = Section(rawValue: indexPath.section)?.header
+            content.text = self?.section(at: indexPath.section)?.header
             cell.contentConfiguration = content
         }
         let footer = UICollectionView.SupplementaryRegistration<UICollectionViewListCell>(
             elementKind: UICollectionView.elementKindSectionFooter
-        ) { cell, _, indexPath in
+        ) { [weak self] cell, _, indexPath in
             var content = UIListContentConfiguration.groupedFooter()
             content.attributedText = InlineMarkdown.render(
-                Section(rawValue: indexPath.section)?.footer ?? "", font: DesignSystem.Typography.metric(),
+                self?.section(at: indexPath.section)?.footer ?? "", font: DesignSystem.Typography.metric(),
                 color: DesignSystem.Color.secondaryLabel)
             cell.contentConfiguration = content
         }
@@ -191,16 +231,107 @@ final class SettingsViewController: UIViewController {
 
     private func applySnapshot() {
         var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
-        snapshot.appendSections(Section.allCases)
-        snapshot.appendItems([.hero], toSection: .hero)
-        snapshot.appendItems([.serverAddress, .serverStatus], toSection: .server)
-        snapshot.appendItems([.rageFilter, .filterRules, .postStats, .markSeen, .images], toSection: .reading)
-        snapshot.appendItems([.theme, .textSize, .tabs], toSection: .appearance)
-        snapshot.appendItems([.officialCompose], toSection: .writing)
-        snapshot.appendItems([.notifications], toSection: .notifications)
-        snapshot.appendItems([.savedTimelines, .imageCache, .shareLogs, .resetSettings], toSection: .data)
-        snapshot.appendItems([.whatsNew, .version, .source], toSection: .about)
+        let sections = displayedSections.filter { !items(of: $0).isEmpty }
+        snapshot.appendSections(sections)
+        for section in sections {
+            snapshot.appendItems(items(of: section), toSection: section)
+        }
         dataSource.apply(snapshot, animatingDifferences: false)
+        applyIndexSnapshot()
+    }
+
+    private func items(of section: Section) -> [Item] {
+        switch section {
+        case .hero: return [.hero]
+        case .server: return showsIndex ? [.hero, .serverAddress, .serverStatus] : [.serverAddress, .serverStatus]
+        case .reading: return [.rageFilter, .filterRules, .postStats, .markSeen, .images]
+        case .appearance: return [.theme, .textSize, .tabs]
+        case .writing: return [.officialCompose]
+        case .notifications: return [.notifications]
+        case .data: return [.savedTimelines, .imageCache, .shareLogs, .resetSettings]
+        case .about: return [.whatsNew, .version, .source]
+        }
+    }
+
+    private func section(at index: Int) -> Section? {
+        displayedSections.indices.contains(index) ? displayedSections[index] : nil
+    }
+
+    static let indexWidth: CGFloat = 268
+
+    /// The index: one row per section, with the one thing worth knowing about
+    /// it, so the reader picks a section instead of scrolling to find it.
+    private func configureIndex() {
+        var configuration = UICollectionLayoutListConfiguration(appearance: .insetGrouped)
+        configuration.backgroundColor = DesignSystem.Color.background
+        let layout = UICollectionViewCompositionalLayout.list(using: configuration)
+        let index = UICollectionView(frame: .zero, collectionViewLayout: layout)
+        index.backgroundColor = DesignSystem.Color.background
+        index.delegate = self
+        index.alwaysBounceVertical = true
+        index.isHidden = true
+        view.addManaged(index)
+        NSLayoutConstraint.activate([
+            index.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            index.topAnchor.constraint(equalTo: view.topAnchor),
+            index.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            index.widthAnchor.constraint(equalToConstant: Self.indexWidth),
+        ])
+        let rows = UICollectionView.CellRegistration<UICollectionViewListCell, Section> { [weak self] cell, _, section in
+            guard let self else { return }
+            var content = UIListContentConfiguration.subtitleCell()
+            content.text = section.indexTitle
+            content.secondaryText = self.summary(of: section)
+            content.secondaryTextProperties.color = DesignSystem.Color.secondaryLabel
+            content.textProperties.font = DesignSystem.Typography.rowName()
+            cell.contentConfiguration = content
+            cell.backgroundConfiguration = Self.cardBackground()
+            cell.accessories = section == self.chosen ? [.checkmark()] : []
+        }
+        indexSource = UICollectionViewDiffableDataSource<Int, Section>(collectionView: index) { view, indexPath, section in
+            view.dequeueConfiguredReusableCell(using: rows, for: indexPath, item: section)
+        }
+        indexCollection = index
+    }
+
+    private func applyIndexSnapshot() {
+        guard let indexSource else { return }
+        var snapshot = NSDiffableDataSourceSnapshot<Int, Section>()
+        snapshot.appendSections([0])
+        snapshot.appendItems(Section.allCases.filter { $0 != .hero }, toSection: 0)
+        indexSource.apply(snapshot, animatingDifferences: false)
+    }
+
+    /// One line per section in the index: the state of the thing it holds.
+    private func summary(of section: Section) -> String {
+        switch section {
+        case .hero: return ""
+        case .server:
+            switch connection {
+            case .checking: return "Checking…"
+            case let .online(version, _): return "Connected · v\(version)"
+            case .offline: return "Offline"
+            }
+        case .reading:
+            return AppSettings.filterEnabled ? (filterSummary ?? "On") : "Off"
+        case .appearance: return AppSettings.appearance.title
+        case .writing: return AppSettings.composeViaOfficialApp ? "In the X app" : "Here"
+        case .notifications: return NotificationSettingsViewController.summary
+        case .data: return imageCacheBytes.map(SettingsFormat.bytes) ?? "…"
+        case .about:
+            let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+            return version
+        }
+    }
+
+    /// Shows the index when the window has room for it, and re-pins the rows
+    /// beside it; otherwise the list keeps the whole width.
+    private func applyLayout() {
+        let panes = showsIndex
+        indexCollection?.isHidden = !panes
+        NSLayoutConstraint.deactivate(panes ? singlePins : panePins)
+        NSLayoutConstraint.activate(panes ? panePins : singlePins)
+        applySnapshot()
     }
 
     private func reconfigure(_ items: [Item]) {
@@ -665,6 +796,15 @@ extension SettingsViewController.Item {
 extension SettingsViewController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         collectionView.deselectItem(at: indexPath, animated: true)
+        if collectionView === indexCollection {
+            guard let section = indexSource?.itemIdentifier(for: indexPath), section != chosen else { return }
+            Haptics.selection()
+            chosen = section
+            applySnapshot()
+            collectionView.scrollToItem(at: indexPath, at: .centeredVertically, animated: true)
+            self.collectionView.setContentOffset(CGPoint(x: 0, y: -self.collectionView.adjustedContentInset.top), animated: false)
+            return
+        }
         guard let item = dataSource.itemIdentifier(for: indexPath) else { return }
         switch item {
         case .hero:
@@ -699,6 +839,7 @@ extension SettingsViewController: UICollectionViewDelegate {
     }
 
     func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
+        if collectionView === indexCollection { return true }
         switch dataSource.itemIdentifier(for: indexPath) {
         case .postStats?, .theme?:
             return isAccessibilitySize

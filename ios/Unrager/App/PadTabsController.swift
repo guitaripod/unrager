@@ -41,6 +41,9 @@ final class PadTabsController: UIViewController {
     private var details: [TabItem: StatusNavigationController] = [:]
 
     private let chrome = TabChromeBar()
+    /// The page colour dissolving upward behind the bar, so lists scroll into
+    /// it rather than showing through the glass as a band of raw content.
+    private let foot = BottomFadeView()
     private let contentArea = UILayoutGuide()
     private let primary = UIView()
     /// The panel a post grows into: `detailSurface` carries the shadow and the
@@ -84,6 +87,14 @@ final class PadTabsController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = DesignSystem.Color.background
+
+        view.addManaged(foot)
+        NSLayoutConstraint.activate([
+            foot.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            foot.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            foot.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            foot.heightAnchor.constraint(equalToConstant: TabChromeBar.bottomClearance + 72),
+        ])
 
         view.addManaged(chrome)
         chrome.onSelect = { [weak self] index in self?.choose(index) }
@@ -509,9 +520,7 @@ final class PadTabsController: UIViewController {
         chrome.apply(form: TabChromeBar.Form(resolved.chrome))
         layoutChrome()
         contentLeading.constant = resolved.railWidth
-        contentBottom.constant = resolved.chrome == .bottom
-            ? -(TabChromeBar.bottomHeight + 22)
-            : 0
+        contentBottom.constant = 0
         layoutPanel()
         applySelection()
         applySidebarButton()
@@ -532,6 +541,8 @@ final class PadTabsController: UIViewController {
                chrome.widthAnchor.constraint(equalTo: view.widthAnchor, constant: -48).priority(.defaultHigh),
                chrome.widthAnchor.constraint(lessThanOrEqualToConstant: 560)]
         NSLayoutConstraint.activate(chromeConstraints)
+        foot.isHidden = layout.chrome == .rail
+        view.bringSubviewToFront(foot)
         view.bringSubviewToFront(detailSurface)
         view.bringSubviewToFront(chrome)
     }
@@ -609,11 +620,16 @@ final class PadTabsController: UIViewController {
 
     /// Under a bar the screens keep their feet clear of it; beside a rail they
     /// run the full height.
-    /// The content ends above the bar (see `contentBottom`), so a screen's safe
-    /// area is just the window's and nothing scrolls under the glass.
+    /// The bar floats over the page, so every list inside a tab is given its
+    /// height as a bottom inset: the content scrolls under the glass, as it does
+    /// under the system's own bars, but its last row can always come clear.
     private func applySafeArea() {
-        for controller in children where controller.additionalSafeAreaInsets != .zero {
-            controller.additionalSafeAreaInsets = .zero
+        let clearance = layout.chrome == .bottom ? TabChromeBar.bottomClearance : 0
+        for controller in children {
+            guard let nav = controller as? UINavigationController else { continue }
+            for screen in nav.viewControllers {
+                screen.view.clearBottomBar(clearance)
+            }
         }
     }
 
@@ -637,6 +653,8 @@ final class PadTabsController: UIViewController {
             return
         }
         show(nav, in: detail)
+        foot.isHidden = layout.chrome == .rail
+        view.bringSubviewToFront(foot)
         view.bringSubviewToFront(detailSurface)
         view.bringSubviewToFront(chrome)
     }
@@ -714,6 +732,8 @@ final class PadTabsController: UIViewController {
         scrim.isHidden = false
         scrim.frame = view.bounds
         view.bringSubviewToFront(scrim)
+        foot.isHidden = layout.chrome == .rail
+        view.bringSubviewToFront(foot)
         view.bringSubviewToFront(detailSurface)
         view.bringSubviewToFront(chrome)
         let target = panelFrame
@@ -772,6 +792,34 @@ final class PadTabsController: UIViewController {
 
     private func stack(for tab: TabItem) -> UIViewController? {
         zip(tabs, controllers).first { $0.0 == tab }?.1
+    }
+}
+
+/// The page colour, opaque at the bottom and clear at the top, drawn behind the
+/// floating bar: what makes a list end at the bar rather than run under it.
+final class BottomFadeView: UIView {
+    override class var layerClass: AnyClass { CAGradientLayer.self }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        let gradient = layer as! CAGradientLayer
+        gradient.startPoint = CGPoint(x: 0.5, y: 1)
+        gradient.endPoint = CGPoint(x: 0.5, y: 0)
+        gradient.locations = [0, 0.68, 1]
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: BottomFadeView, _) in
+            view.refreshColors()
+        }
+        refreshColors()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func refreshColors() {
+        let page = DesignSystem.Color.background.resolvedColor(with: traitCollection)
+        (layer as! CAGradientLayer).colors = [page.cgColor, page.cgColor,
+                                              page.withAlphaComponent(0).cgColor]
     }
 }
 

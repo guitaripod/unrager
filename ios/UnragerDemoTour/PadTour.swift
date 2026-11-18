@@ -159,6 +159,13 @@ final class PadTour: XCTestCase {
         snap("54-settings-changelog")
     }
 
+    /// The bar in the dark, where a strip of the wrong colour shows.
+    func testPadDarkPortrait() {
+        launch(.portrait, screen: "home", appearance: 2)
+        snap("70-dark-home")
+        selectTab("Settings", snapAs: "71-dark-settings")
+    }
+
     /// The sidebar's sections: the feeds normally behind the title menu, and the
     /// notification lenses behind the chip bar.
     func testPadSidebarSections() {

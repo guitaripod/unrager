@@ -11,15 +11,26 @@ final class TabChromeBar: UIView {
         case bottom
     }
 
-    struct Item {
+    /// One line of the chrome: a tab, or a place inside a tab that normally
+    /// takes several taps to reach. `depth` indents a line under its section,
+    /// and a group carries a chevron the reader can fold.
+    struct Row {
+        var id: String
         var title: String
         var image: UIImage?
         var badge: String?
+        var depth = 0
+        var isGroup = false
+        var isExpanded = false
+        var chosen = false
     }
 
     var onSelect: ((Int) -> Void)?
     var onReselect: ((Int) -> Void)?
     var onCompose: (() -> Void)?
+    /// A row was tapped: a tab row, a row inside a section, or a section's own
+    /// line, which folds and unfolds.
+    var onRow: ((String) -> Void)?
     /// The sidebar's own close button, and the way back once it is closed.
     var onToggleSidebar: (() -> Void)?
     /// A drag on the sidebar's trailing edge, as the points it moved since the
@@ -39,7 +50,8 @@ final class TabChromeBar: UIView {
     private let gripLine = UIView()
     private let stack = UIStackView()
     private let postButton = UIButton(configuration: .unragerProminentGlass())
-    private var rows: [TabChromeRow] = []
+    private var rows: [Row] = []
+    private var rowViews: [TabChromeRow] = []
     /// Where the last grip report left the finger, so each report is a step and
     /// not the whole drag again.
     private var lastGripTravel: CGFloat = 0
@@ -150,29 +162,31 @@ final class TabChromeBar: UIView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    /// Shows `items`, chosen at `selected`. Rows are reused while the tabs keep
-    /// their count, so a retitled Home tab (For You ↔ Following) updates in
-    /// place instead of being rebuilt under a finger.
-    func setItems(_ items: [Item], selected: Int) {
-        if items.count != rows.count {
-            for row in rows {
+    /// Shows `rows` — the tabs, plus whatever a folded section is showing. The
+    /// bar carries no idea of what a row means; the owner does, and hears about
+    /// a tap through `onRow`. A bar at the bottom only ever shows the tabs
+    /// themselves: a section's places are a sidebar's to hold.
+    func setRows(_ newRows: [Row]) {
+        rows = newRows
+        rebuild()
+    }
+
+    private func rebuild() {
+        let visible = form == .rail ? rows : rows.filter { $0.depth == 0 }
+        if visible.count != rowViews.count {
+            for row in rowViews {
                 stack.removeArrangedSubview(row)
                 row.removeFromSuperview()
             }
-            rows = items.indices.map { index in
-                let row = TabChromeRow(index: index, form: form)
-                row.onTap = { [weak self] in self?.choose(index) }
+            rowViews = visible.map { _ in
+                let row = TabChromeRow(form: form)
                 stack.addArrangedSubview(row)
                 return row
             }
         }
-        update(items, selected: selected)
-    }
-
-    func update(_ items: [Item], selected: Int) {
-        selectedIndex = selected
-        for (row, item) in zip(rows, items) {
-            row.configure(item, chosen: row.index == selected)
+        for (view, row) in zip(rowViews, visible) {
+            view.onTap = { [weak self] in self?.onRow?(row.id) }
+            view.configure(row)
         }
     }
 
@@ -211,7 +225,8 @@ final class TabChromeBar: UIView {
             stack.spacing = 2
             stack.distribution = .fillEqually
         }
-        for row in rows { row.form = newForm }
+        for row in rowViews { row.form = newForm }
+        rebuild()
     }
 
     @objc private func gripPanned(_ gesture: UIPanGestureRecognizer) {
@@ -230,16 +245,7 @@ final class TabChromeBar: UIView {
         }
     }
 
-    private func choose(_ index: Int) {
-        guard index != selectedIndex else {
-            onReselect?(index)
-            return
-        }
-        guard rows.indices.contains(index) else { return }
-        selectedIndex = index
-        for row in rows { row.setChosen(row.index == index) }
-        onSelect?(index)
-    }
+
 }
 
 extension TabChromeBar.Form {
@@ -254,14 +260,14 @@ extension TabChromeBar.Form {
 /// in the bottom bar, with an unread badge where the form leaves room for one.
 /// A real button, so VoiceOver, hover and the highlight all behave.
 private final class TabChromeRow: UIView {
-    let index: Int
     var onTap: (() -> Void)?
 
     private let button = UIButton(configuration: .plain())
+    private let chevron = UIImageView()
     private let badge = BadgeCapsule()
-    private var chosen = false
-    private var item = TabChromeBar.Item(title: "", image: nil, badge: nil)
+    private var row = TabChromeBar.Row(id: "", title: "")
     private var badgeConstraints: [NSLayoutConstraint] = []
+    private var chevronConstraints: [NSLayoutConstraint] = []
 
     var form: TabChromeBar.Form = .rail {
         didSet {
@@ -270,8 +276,7 @@ private final class TabChromeRow: UIView {
         }
     }
 
-    init(index: Int, form: TabChromeBar.Form) {
-        self.index = index
+    init(form: TabChromeBar.Form) {
         self.form = form
         super.init(frame: .zero)
         addManaged(button)
@@ -279,56 +284,68 @@ private final class TabChromeRow: UIView {
         button.addAction(UIAction { [weak self] _ in self?.onTap?() }, for: .touchUpInside)
         addManaged(badge)
         badge.isUserInteractionEnabled = false
+        chevron.tintColor = DesignSystem.Color.secondaryLabel
+        chevron.contentMode = .center
+        addManaged(chevron)
+        cheerPlacement()
         build()
+    }
+
+    private func cheerPlacement() {
+        NSLayoutConstraint.activate([
+            chevron.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            chevron.centerYAnchor.constraint(equalTo: centerYAnchor),
+            chevron.widthAnchor.constraint(equalToConstant: 16),
+            chevron.heightAnchor.constraint(equalToConstant: 16),
+        ])
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(_ item: TabChromeBar.Item, chosen: Bool) {
-        guard chosen != self.chosen
-            || item.title != self.item.title
-            || item.badge != self.item.badge
-            || item.image !== self.item.image else { return }
-        self.item = item
-        self.chosen = chosen
+    func configure(_ newRow: TabChromeBar.Row) {
+        guard newRow.title != row.title || newRow.badge != row.badge
+            || newRow.chosen != row.chosen || newRow.isExpanded != row.isExpanded
+            || newRow.depth != row.depth || newRow.image !== row.image else { return }
+        row = newRow
         build()
-    }
-
-    func setChosen(_ chosen: Bool) {
-        guard chosen != self.chosen else { return }
-        self.chosen = chosen
-        style()
     }
 
     /// Rebuilds the row around the current form, title and count. Cheap enough
     /// to run on a tab rename and on a rotation; never on a scroll.
     private func build() {
         let rail = form == .rail
+        let child = rail && row.depth > 0
         var config = UIButton.Configuration.plain()
-        config.title = item.title
-        config.image = item.image?.applyingSymbolConfiguration(
-            UIImage.SymbolConfiguration(pointSize: rail ? 19 : 20, weight: .regular))
+        config.title = row.title
+        config.image = row.image?.applyingSymbolConfiguration(
+            UIImage.SymbolConfiguration(pointSize: rail ? (child ? 15 : 19) : 20, weight: .regular))
         config.imagePlacement = rail ? .leading : .top
-        config.imagePadding = rail ? 12 : 2
+        config.imagePadding = rail ? (child ? 10 : 12) : 2
         button.contentHorizontalAlignment = rail ? .leading : .center
         config.contentInsets = rail
-            ? NSDirectionalEdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12)
+            ? NSDirectionalEdgeInsets(top: child ? 7 : 10, leading: child ? 38 : 12,
+                                      bottom: child ? 7 : 10, trailing: 34)
             : NSDirectionalEdgeInsets(top: 4, leading: 2, bottom: 4, trailing: 2)
         config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
             var out = incoming
-            out.font = rail ? DesignSystem.Typography.rowName() : DesignSystem.Typography.tabLabel()
+            out.font = rail
+                ? (child ? DesignSystem.Typography.handle() : DesignSystem.Typography.rowName())
+                : DesignSystem.Typography.tabLabel()
             return out
         }
         config.background.cornerRadius = rail ? 12 : 16
         button.configuration = config
-        button.accessibilityLabel = item.badge.map { "\(item.title), \($0) new" } ?? item.title
-        button.accessibilityTraits = chosen ? [.button, .selected] : .button
-        badge.text = item.badge
+        button.accessibilityLabel = row.badge.map { "\(row.title), \($0) new" } ?? row.title
+        chevron.isHidden = !(rail && row.isGroup)
+        chevron.image = DesignSystem.icon(row.isExpanded ? "chevron.down" : "chevron.right",
+                                          pointSize: 11, weight: .semibold)
+        badge.text = row.badge
         NSLayoutConstraint.deactivate(badgeConstraints)
         badgeConstraints = rail
             ? [badge.centerYAnchor.constraint(equalTo: centerYAnchor),
-               badge.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14)]
+               badge.trailingAnchor.constraint(equalTo: trailingAnchor,
+                                              constant: row.isGroup ? -34 : -14)]
             : [badge.centerXAnchor.constraint(equalTo: centerXAnchor, constant: 15),
                badge.topAnchor.constraint(equalTo: topAnchor, constant: 2)]
         NSLayoutConstraint.activate(badgeConstraints)
@@ -337,11 +354,11 @@ private final class TabChromeRow: UIView {
 
     private func style() {
         var config = button.configuration ?? .plain()
-        config.baseForegroundColor = chosen ? DesignSystem.Color.accent : DesignSystem.Color.label
-        config.background.backgroundColor = chosen && form == .rail
+        config.baseForegroundColor = row.chosen ? DesignSystem.Color.accent : DesignSystem.Color.label
+        config.background.backgroundColor = row.chosen && form == .rail
             ? DesignSystem.Color.accent.withAlphaComponent(0.16) : .clear
         button.configuration = config
-        button.accessibilityTraits = chosen ? [.button, .selected] : .button
+        button.accessibilityTraits = row.chosen ? [.button, .selected] : .button
     }
 }
 

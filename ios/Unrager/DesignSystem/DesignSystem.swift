@@ -111,6 +111,9 @@ enum DesignSystem {
     /// The widest a content column grows on a large canvas (iPad, a resized
     /// window): feeds, lists and text stay readable instead of stretching.
     static let maxContentWidth: CGFloat = 640
+    /// The reading column on iPad: wider than a phone's, so a portrait window
+    /// fills instead of leaving a hand's width of empty page on both sides.
+    static let padContentWidth: CGFloat = 880
 
     enum Spacing {
         static let xxs: CGFloat = 2

@@ -2,10 +2,10 @@ import UIKit
 import UnragerKit
 
 /// The iPad's tabs: a rail down the side or a bar along the bottom, around the
-/// chosen tab, and — when the window is wide enough — a second column where a
-/// post, a profile or a list of people opens beside the list instead of
-/// covering it. A window too narrow for two columns puts those screens on the
-/// tab's own stack, exactly as the phone does.
+/// chosen tab. The tab's own feed fills whatever is left — as a board of cards
+/// where the window allows — and a post, a profile or a list of people opens by
+/// growing out of the card that was tapped and settling over the board, which
+/// never moves: no cell reflows and nothing behind it is rebuilt.
 final class PadTabsController: UIViewController {
     /// A tab was chosen from the rail or the bar.
     var onSelect: ((Int) -> Void)?
@@ -42,15 +42,16 @@ final class PadTabsController: UIViewController {
 
     private let chrome = TabChromeBar()
     private let contentArea = UILayoutGuide()
-    private let columns = UIStackView()
     private let primary = UIView()
+    /// The panel a post grows into: `detailSurface` carries the shadow and the
+    /// frame that animates, `detail` clips the screen inside it.
+    private let detailSurface = UIView()
     private let detail = UIView()
-    private let divider = HairlineView()
 
-    /// Whether the open tab's own list can spread into a board: only while
-    /// nothing is open beside it, and only where the window has room for two
-    /// columns at all.
-    private var showsBoard: Bool { tabUsesDetail && !detailHasScreens }
+    /// Whether the open tab's own list spreads into a board. The board never
+    /// folds: what a tap opens grows over it, so the reader's place in the feed
+    /// survives.
+    private var showsBoard: Bool { tabUsesDetail }
 
     private var detailHasScreens: Bool {
         guard tabs.indices.contains(selectedIndex) else { return false }
@@ -63,11 +64,7 @@ final class PadTabsController: UIViewController {
         tabs.indices.contains(selectedIndex) && tabs[selectedIndex].offersDetailColumn
     }
 
-    /// Whether the second column is on screen at all.
-    private var showsDetail: Bool { layout.showsDetail && tabUsesDetail }
-
     private var chromeConstraints: [NSLayoutConstraint] = []
-    private var columnConstraints: [NSLayoutConstraint] = []
     private var contentLeading: NSLayoutConstraint!
 
     /// How long the column change takes. A screenshot run can stretch it, so a
@@ -92,6 +89,7 @@ final class PadTabsController: UIViewController {
         chrome.onCompose = { [weak self] in self?.onCompose?() }
         chrome.onToggleSidebar = { [weak self] in self?.toggleSidebar() }
         chrome.onResize = { [weak self] travel in self?.resizeSidebar(by: travel) }
+        chrome.onRow = { [weak self] id in self?.chooseRow(id) }
 
         view.addLayoutGuide(contentArea)
         contentLeading = contentArea.leadingAnchor.constraint(equalTo: view.leadingAnchor)
@@ -102,26 +100,26 @@ final class PadTabsController: UIViewController {
             contentArea.trailingAnchor.constraint(equalTo: view.trailingAnchor),
         ])
 
-        columns.axis = .horizontal
-        columns.spacing = PadLayout.columnGap
-        columns.distribution = .fill
-        columns.addArrangedSubview(primary)
-        columns.addArrangedSubview(detail)
-        view.addManaged(columns)
-
-        view.addManaged(divider)
+        view.addManaged(primary)
         NSLayoutConstraint.activate([
-            divider.topAnchor.constraint(equalTo: view.topAnchor),
-            divider.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            divider.leadingAnchor.constraint(equalTo: detail.leadingAnchor),
-            divider.widthAnchor.constraint(equalToConstant: 1),
+            primary.topAnchor.constraint(equalTo: view.topAnchor),
+            primary.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            primary.leadingAnchor.constraint(equalTo: contentArea.leadingAnchor),
+            primary.trailingAnchor.constraint(equalTo: contentArea.trailingAnchor),
         ])
 
-        NSLayoutConstraint.activate([
-            columns.topAnchor.constraint(equalTo: view.topAnchor),
-            columns.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            columns.centerXAnchor.constraint(equalTo: contentArea.centerXAnchor),
-        ])
+        detailSurface.isHidden = true
+        detailSurface.layer.shadowColor = UIColor.black.cgColor
+        detailSurface.layer.shadowOpacity = 0.18
+        detailSurface.layer.shadowRadius = 28
+        detailSurface.layer.shadowOffset = CGSize(width: 0, height: 10)
+        detailSurface.backgroundColor = DesignSystem.Color.background
+        detailSurface.translatesAutoresizingMaskIntoConstraints = true
+        detailSurface.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(detailSurface)
+        detail.clipsToBounds = true
+        detailSurface.addManaged(detail)
+        detail.pinEdges(to: detailSurface)
         apply(PadLayout.resolve(window: view.bounds.size, rail: sidebarWidth, closed: !sidebarShown), force: true)
     }
 
@@ -164,8 +162,11 @@ final class PadTabsController: UIViewController {
             details[tab] = nil
         }
         installRouters()
-        chrome.setItems(chromeItems(), selected: selectedIndex)
-        layoutColumns()
+        if expandedSections.isEmpty, tabs.indices.contains(selectedIndex) {
+            expandedSections.insert(tabs[selectedIndex].rawValue)
+        }
+        refreshRows()
+        layoutPanel()
         applySelection()
         applySidebarButton()
     }
@@ -174,21 +175,22 @@ final class PadTabsController: UIViewController {
     /// rail and the bar, so ⌘1…⌘5 land here too.
     func select(_ index: Int) {
         guard controllers.indices.contains(index) else { return }
-        let showedDetail = showsDetail
         selectedIndex = index
-        chrome.update(chromeItems(), selected: index)
-        layoutColumns()
-        _ = showedDetail
+        refreshRows()
+        layoutPanel()
         applySelection()
         applySidebarButton()
     }
 
-    /// Re-reads each tab's `tabBarItem` — a Home tab that renames itself to
-    /// Following, and the unread count — so the chrome never disagrees with the
+    /// Re-reads each tab's `tabBarItem` — a Home tab that names the feed it is
+    /// on, and the unread count — so the chrome never disagrees with the
     /// screens behind it.
     func refreshItems() {
-        chrome.update(chromeItems(), selected: selectedIndex)
+        refreshRows()
     }
+
+    /// The sections the reader has folded open, by tab raw value.
+    private var expandedSections = Set<String>()
 
     private func choose(_ index: Int) {
         guard index != selectedIndex else { return }
@@ -293,17 +295,20 @@ final class PadTabsController: UIViewController {
         return item
     }()
 
-    /// Empties the second column, which gives the list its board back.
+    /// Shrinks the open post back into its card, or off the edge when the card
+    /// has scrolled away.
     func closeDetail() {
         guard tabs.indices.contains(selectedIndex), let nav = details[tabs[selectedIndex]] else { return }
         let feed = (controllers[selectedIndex] as? UINavigationController)?
             .viewControllers.first as? FeedViewController
-        let post = nav.viewControllers.compactMap { ($0 as? ThreadViewController)?.tweetID }.last
-        let top = post.flatMap { feed?.visibleTop(of: $0) }
-        nav.setViewControllers([], animated: false)
-        showColumns(opening: false, into: nil, change: {
+        let card = nav.viewControllers.compactMap { ($0 as? ThreadViewController)?.tweetID }
+            .last.flatMap { feed?.visibleCell(for: $0) }
+        let home = card.map { $0.convert($0.bounds, to: view) } ?? panelFrame.offsetBy(dx: 40, dy: 0)
+        hidePanel(towards: home) {
+            nav.setViewControllers([], animated: false)
             self.detachChildren(of: self.detail)
-        }, feed: feed, post: post, top: top)
+            self.detailSurface.isHidden = true
+        }
     }
 
     /// Tells the open tab's own feed whether to spread into a board. A pushed
@@ -324,27 +329,146 @@ final class PadTabsController: UIViewController {
         return item
     }()
 
-    private func chromeItems() -> [TabChromeBar.Item] {
-        zip(tabs, controllers).map { tab, controller in
-            let item = controller.tabBarItem
-            return TabChromeBar.Item(
-                title: item?.title ?? tab.title,
+    // MARK: - Rows
+
+    /// The rail's lines: the tabs, and under the ones that have somewhere else
+    /// to go, the places that normally take several taps — the feeds the title
+    /// menu hides, the notification lenses, the settings pages, the posts the
+    /// filter hid.
+    private func refreshRows() {
+        chrome.setRows(rows())
+    }
+
+    private func rows() -> [TabChromeBar.Row] {
+        var rows: [TabChromeBar.Row] = []
+        for (index, tab) in tabs.enumerated() {
+            let item = controllers.indices.contains(index) ? controllers[index].tabBarItem : nil
+            let expanded = expandedSections.contains(tab.rawValue)
+            let isGroup = !children(of: tab).isEmpty
+            rows.append(TabChromeBar.Row(
+                id: "tab:\(tab.rawValue)",
+                title: isGroup ? tab.title : (item?.title ?? tab.title),
                 image: item?.image ?? DesignSystem.icon(tab.symbol),
-                badge: item?.badgeValue)
+                badge: item?.badgeValue,
+                isGroup: isGroup,
+                isExpanded: expanded,
+                chosen: index == selectedIndex))
+            if expanded {
+                rows.append(contentsOf: children(of: tab))
+            }
         }
+        return rows
+    }
+
+    /// What lives under a tab in the rail, marked for where the reader is now.
+    private func children(of tab: TabItem) -> [TabChromeBar.Row] {
+        switch tab {
+        case .home:
+            let home = controller(for: .home) as? HomeViewController
+            let current = home?.currentChoice
+            return homeFeeds.map { choice in
+                TabChromeBar.Row(id: "feed:\(choice.key)", title: choice.title,
+                                 image: DesignSystem.icon(choice.symbol), depth: 1,
+                                 chosen: current == choice)
+            } + [
+                TabChromeBar.Row(id: "hidden", title: "Hidden posts",
+                                 image: DesignSystem.icon("eye.slash"), depth: 1),
+            ]
+        case .notifications:
+            let current = (controller(for: .notifications) as? NotificationsViewController)?.currentCategory
+            return NotificationCategory.allCases.map { category in
+                TabChromeBar.Row(id: "notif:\(category.rawValue)", title: category.title,
+                                 image: nil, depth: 1, chosen: current == category)
+            }
+        case .settings:
+            return settingsPages.map { page in
+                TabChromeBar.Row(id: "settings:\(page.id)", title: page.title,
+                                 image: DesignSystem.icon(page.symbol), depth: 1)
+            }
+        default:
+            return []
+        }
+    }
+
+    private var homeFeeds: [HomeFeedChoice] { [.forYou, .following, .mentions, .bookmarks] }
+
+    private var settingsPages: [(id: String, title: String, symbol: String)] {
+        [("filter", "Rage filter", "line.3.horizontal.decrease.circle"),
+         ("notifications", "Notifications", "bell"),
+         ("tabs", "Edit tabs", "square.grid.2x2"),
+         ("changelog", "What's new", "sparkles")]
+    }
+
+    private func controller(for tab: TabItem) -> UIViewController? {
+        guard let index = tabs.firstIndex(of: tab), controllers.indices.contains(index) else { return nil }
+        return (controllers[index] as? UINavigationController)?.viewControllers.first ?? controllers[index]
+    }
+
+    private func chooseRow(_ id: String) {
+        let parts = id.split(separator: ":", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return }
+        switch parts[0] {
+        case "tab":
+            guard let tab = TabItem(rawValue: parts[1]), let index = tabs.firstIndex(of: tab) else { return }
+            if index == selectedIndex, !children(of: tab).isEmpty {
+                if expandedSections.contains(tab.rawValue) {
+                    expandedSections.remove(tab.rawValue)
+                } else {
+                    expandedSections.insert(tab.rawValue)
+                }
+                refreshRows()
+                return
+            }
+            if children(of: tab).isEmpty == false { expandedSections.insert(tab.rawValue) }
+            choose(index)
+        case "feed":
+            guard let choice = homeFeeds.first(where: { $0.key == parts[1] }) else { return }
+            selectTab(.home)
+            (controller(for: .home) as? HomeViewController)?.selectFeed(choice)
+            refreshRows()
+        case "notif":
+            guard let category = NotificationCategory(rawValue: parts[1]) else { return }
+            selectTab(.notifications)
+            (controller(for: .notifications) as? NotificationsViewController)?.selectCategory(category)
+            refreshRows()
+        case "settings":
+            guard let page = settingsPages.first(where: { $0.id == parts[1] }) else { return }
+            selectTab(.settings)
+            let destination: UIViewController = switch page.id {
+            case "filter": FilterSettingsViewController()
+            case "notifications": NotificationSettingsViewController()
+            case "tabs": EditTabsViewController()
+            default: ChangelogViewController()
+            }
+            (controllers.indices.contains(selectedIndex) ? controllers[selectedIndex] as? UINavigationController : nil)?
+                .pushViewController(destination, animated: true)
+            refreshRows()
+        case "hidden":
+            selectTab(.home)
+            guard let home = controller(for: .home) as? HomeViewController else { return }
+            (controllers.indices.contains(selectedIndex) ? controllers[selectedIndex] as? UINavigationController : nil)?
+                .pushViewController(HiddenPostsViewController(viewModel: home.viewModel), animated: true)
+        default:
+            break
+        }
+    }
+
+    /// Moves the tabs to `tab` through the same path the rail uses.
+    private func selectTab(_ tab: TabItem) {
+        guard let index = tabs.firstIndex(of: tab), index != selectedIndex else { return }
+        choose(index)
     }
 
     // MARK: - Placement
 
-    /// Resolves the chrome, the columns and the safe area for a new window size.
+    /// Resolves the chrome, the board and the panel for a new window size.
     private func apply(_ resolved: PadLayout, force: Bool = false) {
         guard force || resolved != layout else { return }
-        let wasShowingDetail = layout.showsDetail
         layout = resolved
         chrome.apply(form: TabChromeBar.Form(resolved.chrome))
         layoutChrome()
-        layoutColumns()
-        if wasShowingDetail, !resolved.showsDetail { foldDetailIntoStacks() }
+        contentLeading.constant = resolved.railWidth
+        layoutPanel()
         applySelection()
         applySidebarButton()
         applyBoard()
@@ -364,29 +488,34 @@ final class PadTabsController: UIViewController {
                chrome.widthAnchor.constraint(equalTo: view.widthAnchor, constant: -48).priority(.defaultHigh),
                chrome.widthAnchor.constraint(lessThanOrEqualToConstant: 560)]
         NSLayoutConstraint.activate(chromeConstraints)
-        view.bringSubviewToFront(divider)
+        view.bringSubviewToFront(detailSurface)
         view.bringSubviewToFront(chrome)
     }
 
-    /// A post opened beside the list takes the second column; with nothing open
-    /// the list keeps the whole window — as a board of two columns where there
-    /// is room for one.
-    private var detailOnScreen: Bool { layout.showsDetail && tabUsesDetail && detailHasScreens }
+    /// Whether a post is open over the board at all.
+    private var detailOnScreen: Bool { tabUsesDetail && detailHasScreens }
 
-    private func layoutColumns() {
-        NSLayoutConstraint.deactivate(columnConstraints)
-        contentLeading.constant = layout.railWidth
-        detail.isHidden = !detailOnScreen
-        divider.isHidden = !detailOnScreen
-        if let primaryWidth = layout.primaryWidth, let detailWidth = layout.detailWidth, detailOnScreen {
-            columnConstraints = [
-                primary.widthAnchor.constraint(equalToConstant: primaryWidth),
-                detail.widthAnchor.constraint(equalToConstant: detailWidth),
-            ]
-        } else {
-            columnConstraints = [primary.widthAnchor.constraint(equalTo: contentArea.widthAnchor)]
+    /// Where the open post sits: the trailing column beside a board in a wide
+    /// window, inset across the window in a narrow one — always over the feed,
+    /// never beside it in a way that moves the feed.
+    private var panelFrame: CGRect {
+        if let width = layout.detailWidth {
+            return CGRect(x: view.bounds.width - width, y: 0, width: width, height: view.bounds.height)
         }
-        NSLayoutConstraint.activate(columnConstraints)
+        return view.bounds.insetBy(dx: 10, dy: 0)
+    }
+
+    private func layoutPanel() {
+        guard detailOnScreen else {
+            detailSurface.isHidden = true
+            return
+        }
+        detailSurface.isHidden = false
+        detailSurface.frame = panelFrame
+        detailSurface.layer.cornerRadius = 24
+        detailSurface.layer.cornerCurve = .continuous
+        detail.layer.cornerRadius = 24
+        detail.layer.cornerCurve = .continuous
     }
 
     /// Under a bar the screens keep their feet clear of it; beside a rail they
@@ -413,9 +542,12 @@ final class PadTabsController: UIViewController {
         let nav = tabs.indices.contains(selectedIndex) ? details[tabs[selectedIndex]] : nil
         guard detailOnScreen, let nav, !nav.viewControllers.isEmpty else {
             detachChildren(of: detail)
+            detailSurface.isHidden = true
             return
         }
         show(nav, in: detail)
+        view.bringSubviewToFront(detailSurface)
+        view.bringSubviewToFront(chrome)
     }
 
     /// Puts `controller` in `host`, taking out whatever lived there and keeping
@@ -462,7 +594,7 @@ final class PadTabsController: UIViewController {
         for controller in controllers {
             guard let nav = controller as? StatusNavigationController else { continue }
             nav.detailRouter = { [weak self] pushed in
-                guard let self, self.showsDetail,
+                guard let self, self.tabUsesDetail,
                       Self.opensBesideTheList(pushed) else { return false }
                 self.openInDetail(pushed)
                 return true
@@ -470,94 +602,66 @@ final class PadTabsController: UIViewController {
         }
     }
 
-    /// Shows `controller` in this tab's detail column, replacing whatever it was
-    /// showing: the column follows the list, it doesn't build a history of its
-    /// own. Pushes made from inside it still stack there.
+    /// Shows `controller` over the board, replacing whatever was there. It grows
+    /// out of the card that was tapped and settles as a panel; the board and
+    /// every card on it stay exactly where they were.
     private func openInDetail(_ controller: UIViewController) {
-        guard showsDetail, tabs.indices.contains(selectedIndex) else { return }
+        guard tabUsesDetail, tabs.indices.contains(selectedIndex) else { return }
         let nav = detailStack(for: tabs[selectedIndex])
         nav.setViewControllers([controller], animated: false)
         giveCloseButton(to: controller)
-        let feed = (controllers[selectedIndex] as? UINavigationController)?
-            .viewControllers.first as? FeedViewController
-        let post = (controller as? ThreadViewController)?.tweetID
-        let top = post.flatMap { feed?.visibleTop(of: $0) }
-        showColumns(opening: true, into: controller as? ThreadViewController, change: {
-            self.show(nav, in: self.detail)
-        }, feed: feed, post: post, top: top)
+        let card = (controller as? ThreadViewController)
+            .flatMap { thread in (controllers[selectedIndex] as? UINavigationController)?
+                .viewControllers.first.flatMap { ($0 as? FeedViewController)?.visibleCell(for: thread.tweetID) } }
+        showPanel(nav, growingFrom: card)
     }
 
-    /// Opens or closes the column beside the list in one commit: the new widths,
-    /// the board folding back into a row and the sidebar all land together under
-    /// a snapshot of the feed, which then dissolves. Changing all of that one
-    /// step at a time is what made the screen tear.
-    private func showColumns(opening: Bool, into thread: ThreadViewController?, change: @escaping () -> Void,
-                             feed: FeedViewController?, post: String?, top: CGFloat?) {
+    /// Grows the panel out of `card`, or drops it in when there is no card to
+    /// grow from (a deep link, a notification).
+    private func showPanel(_ nav: StatusNavigationController, growingFrom card: UIView?) {
+        show(nav, in: detail)
+        detailSurface.isHidden = false
+        view.bringSubviewToFront(detailSurface)
+        view.bringSubviewToFront(chrome)
+        let target = panelFrame
         let reduceMotion = UIAccessibility.isReduceMotionEnabled
-        let cover = reduceMotion ? nil : primary.snapshotView(afterScreenUpdates: false)
-        if let cover {
-            cover.frame = primary.bounds
-            cover.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            primary.addSubview(cover)
-        }
-        // The card the reader touched leaves the board before the board changes
-        // shape, so the snapshot is of a card and not of a list row.
-        var flight: (view: UIView, source: CGRect)?
-        if opening, !reduceMotion, let card = post.flatMap({ feed?.visibleCell(for: $0) }) {
-            let frame = card.convert(card.bounds, to: view)
-            if let hero = card.snapshotView(afterScreenUpdates: false) {
-                hero.frame = frame
-                view.insertSubview(hero, belowSubview: chrome)
-                flight = (hero, frame)
-            }
-        }
-
-        feed?.beginPromotion()
-        detail.alpha = opening ? 0 : 1
-        detail.transform = opening ? CGAffineTransform(translationX: 32, y: 0) : .identity
-        UIView.performWithoutAnimation {
-            change()
-            layoutColumns()
-            applyBoard()
-            view.layoutIfNeeded()
-        }
-        feed?.restore(top: top, for: post ?? "")
-
-        let finish = { [weak self] in
-            cover?.removeFromSuperview()
-            feed?.endPromotion()
-            self?.detail.alpha = 1
-            self?.detail.transform = .identity
-        }
-        guard !reduceMotion else {
-            UIView.performWithoutAnimation(finish)
+        guard !reduceMotion, let card else {
+            detailSurface.frame = target
+            detailSurface.layer.cornerRadius = 24
+            detail.alpha = 1
             return
         }
-        let landing = thread.flatMap { controller in
-            controller.focalFrame(in: view).map { (cell: controller.focalCell(), target: $0) }
-        }
-        landing?.cell?.alpha = 0
+        let source = card.convert(card.bounds, to: view)
+        detailSurface.frame = source
+        detailSurface.layer.cornerRadius = 18
+        detail.alpha = 0
         UIView.animate(withDuration: Self.transitionDuration, delay: 0,
-                       usingSpringWithDamping: 0.9, initialSpringVelocity: 0.2,
+                       usingSpringWithDamping: 0.86, initialSpringVelocity: 0.2,
                        options: [.allowUserInteraction, .beginFromCurrentState]) {
-            cover?.alpha = 0
+            self.detailSurface.frame = target
+            self.detailSurface.layer.cornerRadius = 24
+        }
+        UIView.animate(withDuration: Self.transitionDuration * 0.7,
+                       delay: Self.transitionDuration * 0.35,
+                       options: [.allowUserInteraction, .beginFromCurrentState]) {
             self.detail.alpha = 1
-            self.detail.transform = .identity
-        } completion: { _ in finish() }
+        }
+    }
 
-        guard let flight else {
-            landing?.cell?.alpha = 1
+    /// The way back: the panel shrinks into `frame` and hands over to what it
+    /// was covering.
+    private func hidePanel(towards frame: CGRect, completion: @escaping () -> Void) {
+        guard !UIAccessibility.isReduceMotionEnabled else {
+            UIView.performWithoutAnimation(completion)
             return
         }
-        UIView.animate(withDuration: Self.transitionDuration * 1.13, delay: 0,
-                       usingSpringWithDamping: 0.86, initialSpringVelocity: 0.25,
+        UIView.animate(withDuration: Self.transitionDuration * 0.9, delay: 0,
+                       usingSpringWithDamping: 0.92, initialSpringVelocity: 0.1,
                        options: [.allowUserInteraction, .beginFromCurrentState]) {
-            if let landing { flight.view.frame = landing.target }
-            flight.view.alpha = landing == nil ? 0 : 1
-        } completion: { _ in
-            landing?.cell?.alpha = 1
-            flight.view.removeFromSuperview()
-        }
+            self.detailSurface.frame = frame
+            self.detailSurface.layer.cornerRadius = 18
+            self.detail.alpha = 0
+        } completion: { _ in completion() }
     }
 
     private func detailStack(for tab: TabItem) -> StatusNavigationController {
@@ -565,21 +669,6 @@ final class PadTabsController: UIViewController {
         let nav = StatusNavigationController()
         details[tab] = nav
         return nav
-    }
-
-    /// A window that lost its second column gives every detail screen back to
-    /// the tab it belongs to, so nothing the reader opened is lost: the thread
-    /// they were reading becomes the screen in front.
-    private func foldDetailIntoStacks() {
-        for (tab, nav) in details {
-            let screens = nav.viewControllers
-            guard !screens.isEmpty else { continue }
-            nav.setViewControllers([], animated: false)
-            guard let stack = stack(for: tab) as? UINavigationController else { continue }
-            stack.setViewControllers(stack.viewControllers + screens, animated: false)
-        }
-        detachChildren(of: detail)
-        applyBoard()
     }
 
     private func stack(for tab: TabItem) -> UIViewController? {

@@ -248,48 +248,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
         NSLayoutConstraint.deactivate(wanted ? guidePins : boardPins)
         NSLayoutConstraint.activate(wanted ? boardPins : guidePins)
         collectionView.setCollectionViewLayout(wanted ? makeGridLayout() : makeLayout(), animated: false)
-        guard !isPromoting else { return }
         dataSource.reconfigureVisibleItems(of: collectionView)
-    }
-
-    /// Set while a post is being promoted into the column beside the list: the
-    /// feed is changing width and shape under a snapshot, so it must not
-    /// rebuild its rows at every intermediate width — once, at the end, is
-    /// enough, and anything more is what used to flash.
-    private var isPromoting = false
-
-    func beginPromotion() {
-        isPromoting = true
-        collectionView.isUserInteractionEnabled = false
-    }
-
-    /// Ends the promotion at the feed's final width and rebuilds the rows that
-    /// can be seen once — never the ones off screen, which re-measure when they
-    /// next dequeue.
-    func endPromotion() {
-        isPromoting = false
-        collectionView.isUserInteractionEnabled = true
-        collectionView.layoutIfNeeded()
-        dataSource.reconfigureVisibleItems(of: collectionView)
-    }
-
-    /// The top of `id`'s row in this feed's coordinates, for holding a post
-    /// still while the feed changes shape beneath it.
-    func visibleTop(of id: String) -> CGFloat? {
-        guard let indexPath = dataSource.indexPath(for: id),
-              let attributes = collectionView.layoutAttributesForItem(at: indexPath) else { return nil }
-        return attributes.frame.minY - collectionView.contentOffset.y
-    }
-
-    /// Puts `id` back at `top` on screen after the feed changed shape.
-    func restore(top: CGFloat?, for id: String) {
-        guard let top, let indexPath = dataSource.indexPath(for: id),
-              let attributes = collectionView.layoutAttributesForItem(at: indexPath) else { return }
-        let inset = collectionView.adjustedContentInset.top
-        let lowest = max(-inset, collectionView.contentSize.height - collectionView.bounds.height
-                            + collectionView.adjustedContentInset.bottom)
-        let offset = min(max(attributes.frame.minY - top, -inset), max(-inset, lowest))
-        collectionView.setContentOffset(CGPoint(x: collectionView.contentOffset.x, y: offset), animated: false)
     }
 
     private var wantsGrid = false
@@ -341,12 +300,12 @@ class FeedViewController: UIViewController, TweetActionHandling {
         let width = collectionView.bounds.width
         guard width > 0, width != laidOutWidth else { return }
         laidOutWidth = width
-        if usesGrid, !isPromoting {
+        if usesGrid {
             gridHeights.removeAll()
             collectionView.collectionViewLayout.invalidateLayout()
         }
         applyGridMode()
-        if !isPromoting { collectionView.collectionViewLayout.invalidateLayout() }
+        collectionView.collectionViewLayout.invalidateLayout()
         guard dataSource != nil else { return }
         dataSource.reconfigureVisibleItems(of: collectionView)
     }

@@ -6,7 +6,10 @@ extension UIViewController {
     /// (iPad, a resized window) and fill it on a narrow one. Pin a screen's
     /// content to this instead of the view's edges; the page colour still runs
     /// edge to edge behind it.
-    func makeContentGuide(maxWidth: CGFloat = DesignSystem.maxContentWidth) -> UILayoutGuide {
+    func makeContentGuide(maxWidth: CGFloat = 0) -> UILayoutGuide {
+        let cap = maxWidth > 0
+            ? maxWidth
+            : (traitCollection.userInterfaceIdiom == .pad ? DesignSystem.padContentWidth : DesignSystem.maxContentWidth)
         let guide = UILayoutGuide()
         view.addLayoutGuide(guide)
         let fillWidth = guide.widthAnchor.constraint(equalTo: view.widthAnchor)
@@ -15,7 +18,7 @@ extension UIViewController {
             guide.topAnchor.constraint(equalTo: view.topAnchor),
             guide.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             guide.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            guide.widthAnchor.constraint(lessThanOrEqualToConstant: maxWidth),
+            guide.widthAnchor.constraint(lessThanOrEqualToConstant: cap),
             fillWidth,
         ])
         return guide

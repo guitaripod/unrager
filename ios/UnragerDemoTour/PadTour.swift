@@ -25,6 +25,19 @@ final class PadTour: XCTestCase {
         snap("02-portrait-thread")
     }
 
+    /// Every tab in a tall window: the bar at the bottom, the board above it,
+    /// and each screen's own shape.
+    func testPadPortraitTabs() {
+        launch(.portrait, screen: "home")
+        snap("30-portrait-home")
+        selectTab("Search", snapAs: "31-portrait-search")
+        selectTab("Notifications", snapAs: "32-portrait-notifications")
+        selectTab("Settings", snapAs: "33-portrait-settings")
+        selectTab("Home", snapAs: "34-portrait-home-again")
+        tapPost(0)
+        snap("35-portrait-thread")
+    }
+
     /// A wide window: the tabs belong down the side, and a post opens beside
     /// the feed instead of over it.
     func testPadLandscape() {
@@ -84,6 +97,23 @@ final class PadTour: XCTestCase {
         if close.waitForExistence(timeout: 4) { close.tap() } else { XCTFail("no close button") }
         pause(2)
         snap("20-board-again")
+    }
+
+    /// The sidebar's sections: the feeds normally behind the title menu, and the
+    /// notification lenses behind the chip bar.
+    func testPadSidebarSections() {
+        launch(.landscapeLeft, screen: "home")
+        snap("23-sidebar-feeds")
+        let following = app.buttons["Following"].firstMatch
+        if following.waitForExistence(timeout: 3) { following.tap() } else { XCTFail("no Following row") }
+        pause(4)
+        snap("24-sidebar-following")
+        app.buttons["Notifications"].firstMatch.tap()
+        pause(2)
+        let likes = app.buttons["Likes"].firstMatch
+        if likes.waitForExistence(timeout: 3) { likes.tap() } else { XCTFail("no Likes row") }
+        pause(4)
+        snap("25-sidebar-likes")
     }
 
     /// A card lifted into the sidebar, caught in flight by stretching the

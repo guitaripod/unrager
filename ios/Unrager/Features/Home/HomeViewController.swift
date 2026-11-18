@@ -157,6 +157,23 @@ final class HomeViewController: FeedViewController {
         })
     }
 
+    /// The feed the Home tab is showing, for the sidebar to mark.
+    var currentChoice: HomeFeedChoice? { HomeFeedChoice(source: viewModel.source) }
+
+    /// Opens one of the feeds the title menu offers, for the sidebar's own rows.
+    func selectFeed(_ choice: HomeFeedChoice) {
+        switch choice {
+        case .forYou: switchHome(following: false)
+        case .following: switchHome(following: true)
+        case .mentions:
+            viewModel.updateSource(.mentions)
+            afterSwitch()
+        case .bookmarks:
+            viewModel.updateSource(.bookmarks(query: ""))
+            afterSwitch()
+        }
+    }
+
     private func choose(_ choice: HomeFeedChoice) {
         switch choice {
         case .forYou: switchHome(following: false)
@@ -360,6 +377,16 @@ enum HomeFeedChoice: CaseIterable {
         case .mentions: self = .mentions
         case .bookmarks: self = .bookmarks
         default: return nil
+        }
+    }
+
+    /// A stable name for the sidebar's rows.
+    var key: String {
+        switch self {
+        case .forYou: "forYou"
+        case .following: "following"
+        case .mentions: "mentions"
+        case .bookmarks: "bookmarks"
         }
     }
 

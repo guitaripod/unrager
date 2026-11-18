@@ -16,12 +16,13 @@ struct PadLayout: Equatable {
     /// Width of the rail; zero when the chrome is a bar, or when the reader has
     /// closed the sidebar.
     var railWidth: CGFloat
-    /// Width of the browsing column and of the detail column beside it. Both
-    /// nil when the window only has room for one column, which then fills the
-    /// space and caps its own reading width.
-    var primaryWidth: CGFloat?
+    /// Width of the panel a post opens into. Nil in a narrow window, where the
+    /// panel is inset across the whole board instead of sitting beside it.
     var detailWidth: CGFloat?
 
+    /// Room the board keeps when a post opens beside it — two columns and their
+    /// gutter. Below this the panel lies across the board instead.
+    static let minimumBoardWidth: CGFloat = 620
     static let railWidth: CGFloat = 248
     static let narrowestRailWidth: CGFloat = 200
     static let widestRailWidth: CGFloat = 360
@@ -30,11 +31,8 @@ struct PadLayout: Equatable {
     /// A window has to be at least this wide — and wider than it is tall —
     /// before the tabs move off the bottom.
     static let railWindowMinimum: CGFloat = 760
-    /// Room the two columns need side by side: two posts at a comfortable
-    /// measure, plus the gutter.
-    static let twoColumnMinimum: CGFloat = 880
 
-    /// Whether the window is wide enough to keep a post open beside the list.
+    /// Whether the window is wide enough to keep a post open beside the board.
     var showsDetail: Bool { detailWidth != nil }
 
     /// Resolves the chrome and the columns for a window of `window` points, with
@@ -46,10 +44,7 @@ struct PadLayout: Equatable {
         }
         let width = closed ? 0 : min(max(rail, narrowestRailWidth), widestRailWidth)
         let content = window.width - width
-        guard content >= twoColumnMinimum else {
-            return PadLayout(chrome: .rail, railWidth: width)
-        }
-        let column = min(DesignSystem.maxContentWidth, ((content - columnGap) / 2).rounded(.down))
-        return PadLayout(chrome: .rail, railWidth: width, primaryWidth: column, detailWidth: column)
+        let panel = min(560, content - Self.minimumBoardWidth)
+        return PadLayout(chrome: .rail, railWidth: width, detailWidth: panel >= 360 ? panel : nil)
     }
 }

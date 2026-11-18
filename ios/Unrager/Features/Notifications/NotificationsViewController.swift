@@ -90,6 +90,14 @@ final class NotificationsViewController: UIViewController {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    /// The lens the list is showing, for the sidebar to mark.
+    var currentCategory: NotificationCategory { category }
+
+    /// Opens one of the notification lenses, for the sidebar's own rows.
+    func selectCategory(_ newCategory: NotificationCategory) {
+        setCategory(newCategory)
+    }
+
     private func setCategory(_ newCategory: NotificationCategory) {
         guard newCategory != category else { return }
         category = newCategory

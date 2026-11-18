@@ -6,7 +6,7 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
-- **Posts on iPad read as cards on a board, and opening one no longer tears the screen.** A card is a rounded surface with its picture inset and a press that lifts it; a single tap folds the board back into one column and slides the post in beside it in one motion — the feed redraws once behind a snapshot instead of re-laying every row at two widths, and the post stays where your eye left it. Closing it runs the same motion backwards.
+- **Posts on iPad read as cards on a board, and opening one no longer tears the screen.** A card is a rounded surface with its picture inset, its own three actions (reply, repost, like, plus views) and a press that lifts it; a single tap lifts the card itself and flies it into the thread beside the feed while the board folds back into one column in the same motion — the feed redraws once behind a snapshot instead of re-laying every row at two widths, and the post stays where your eye left it. Closing it runs the same motion backwards.
 
 - **The iPad app uses the window controls, menu bar and window names iPadOS gives every app.** The controls sit in the toolbar instead of a strip above it, so a resized window spends that space on the feed. Swiping down from the top, or moving the pointer there, opens the menu bar: New Post, Refresh, Search and a jump to each tab, the same ⌘N, ⌘R, ⌘F and ⌘1…⌘5 as the keyboard. A window is named for the screen in it, so For You, a profile or a thread can be found in the window list, and a window can't be shrunk past the width of a post.
 

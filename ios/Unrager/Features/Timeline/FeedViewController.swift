@@ -403,6 +403,13 @@ class FeedViewController: UIViewController, TweetActionHandling {
 
     func tweetCell(for tweet: Tweet) -> TweetCell? { cell(for: tweet) }
 
+    /// The on-screen card for `id`, for a screen that wants to lift it into
+    /// wherever the post is going.
+    func visibleCell(for id: String) -> TweetCell? {
+        guard let indexPath = dataSource.indexPath(for: id) else { return nil }
+        return collectionView.cellForItem(at: indexPath) as? TweetCell
+    }
+
     private func cell(for tweet: Tweet) -> TweetCell? {
         guard let index = dataSource.indexPath(for: tweet.restID) else { return nil }
         return collectionView.cellForItem(at: index) as? TweetCell

@@ -86,6 +86,19 @@ final class PadTour: XCTestCase {
         snap("20-board-again")
     }
 
+    /// A card lifted into the sidebar, caught in flight by stretching the
+    /// transition, then the settled thread.
+    func testPadPromotion() {
+        launch(.landscapeLeft, screen: "home", transitionSeconds: 3)
+        let cell = app.cells.element(boundBy: 0)
+        guard cell.waitForExistence(timeout: 6) else { XCTFail("no card"); return }
+        cell.coordinate(withNormalizedOffset: CGVector(dx: 0.62, dy: 0.11)).tap()
+        pause(1.1)
+        snap("21-promotion-mid")
+        pause(4)
+        snap("22-promotion-end")
+    }
+
     /// A window that loses its second column: the thread that was open beside
     /// the feed has to come forward rather than vanish.
     func testPadFold() {
@@ -109,7 +122,7 @@ final class PadTour: XCTestCase {
     // MARK: - Steps
 
     private func launch(_ orientation: UIDeviceOrientation, screen: String, appearance: Int = 1,
-                        sidebarWidth: Int? = nil) {
+                        sidebarWidth: Int? = nil, transitionSeconds: Int? = nil) {
         app.launchArguments = [
             "-unrager.serverURL", "http://127.0.0.1:8790",
             "-unrager.filterEnabled", "0",
@@ -121,6 +134,7 @@ final class PadTour: XCTestCase {
         XCUIDevice.shared.orientation = orientation
         app.launchEnvironment["UNRAGER_SCREEN"] = screen
         if let sidebarWidth { app.launchEnvironment["UNRAGER_PAD_SIDEBAR"] = "\(sidebarWidth)" }
+        if let transitionSeconds { app.launchEnvironment["UNRAGER_TRANSITION_SECONDS"] = "\(transitionSeconds)" }
         app.launch()
         pause(9)
     }

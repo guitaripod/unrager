@@ -177,6 +177,15 @@ final class TweetCell: UICollectionViewCell {
         separator.isHidden = showsCardSurface
         contentView.backgroundColor = showsCardSurface ? .clear : DesignSystem.Color.background
         contentView.isOpaque = !showsCardSurface
+        applyCardActions()
+    }
+
+    /// A card carries the three things a reader does from a board — reply,
+    /// repost, like — and the views count; bookmarking and sharing live in the
+    /// post's menu and in the thread, where a tap has already said "this one".
+    private func applyCardActions() {
+        bookmarkButton.isHidden = showsCardSurface
+        shareButton.isHidden = showsCardSurface
     }
 
     @available(*, unavailable)

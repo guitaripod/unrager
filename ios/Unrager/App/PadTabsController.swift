@@ -70,6 +70,18 @@ final class PadTabsController: UIViewController {
     private var columnConstraints: [NSLayoutConstraint] = []
     private var contentLeading: NSLayoutConstraint!
 
+    /// How long the column change takes. A screenshot run can stretch it, so a
+    /// still frame can catch a card in flight.
+    private static var transitionDuration: TimeInterval {
+        #if DEBUG
+        if let raw = ProcessInfo.processInfo.environment["UNRAGER_TRANSITION_SECONDS"], let value = Double(raw),
+           value > 0 {
+            return value
+        }
+        #endif
+        return 0.3
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = DesignSystem.Color.background
@@ -289,7 +301,7 @@ final class PadTabsController: UIViewController {
         let post = nav.viewControllers.compactMap { ($0 as? ThreadViewController)?.tweetID }.last
         let top = post.flatMap { feed?.visibleTop(of: $0) }
         nav.setViewControllers([], animated: false)
-        showColumns(opening: false, change: {
+        showColumns(opening: false, into: nil, change: {
             self.detachChildren(of: self.detail)
         }, feed: feed, post: post, top: top)
     }
@@ -470,7 +482,7 @@ final class PadTabsController: UIViewController {
             .viewControllers.first as? FeedViewController
         let post = (controller as? ThreadViewController)?.tweetID
         let top = post.flatMap { feed?.visibleTop(of: $0) }
-        showColumns(opening: true, change: {
+        showColumns(opening: true, into: controller as? ThreadViewController, change: {
             self.show(nav, in: self.detail)
         }, feed: feed, post: post, top: top)
     }
@@ -479,7 +491,7 @@ final class PadTabsController: UIViewController {
     /// the board folding back into a row and the sidebar all land together under
     /// a snapshot of the feed, which then dissolves. Changing all of that one
     /// step at a time is what made the screen tear.
-    private func showColumns(opening: Bool, change: @escaping () -> Void,
+    private func showColumns(opening: Bool, into thread: ThreadViewController?, change: @escaping () -> Void,
                              feed: FeedViewController?, post: String?, top: CGFloat?) {
         let reduceMotion = UIAccessibility.isReduceMotionEnabled
         let cover = reduceMotion ? nil : primary.snapshotView(afterScreenUpdates: false)
@@ -488,6 +500,18 @@ final class PadTabsController: UIViewController {
             cover.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             primary.addSubview(cover)
         }
+        // The card the reader touched leaves the board before the board changes
+        // shape, so the snapshot is of a card and not of a list row.
+        var flight: (view: UIView, source: CGRect)?
+        if opening, !reduceMotion, let card = post.flatMap({ feed?.visibleCell(for: $0) }) {
+            let frame = card.convert(card.bounds, to: view)
+            if let hero = card.snapshotView(afterScreenUpdates: false) {
+                hero.frame = frame
+                view.insertSubview(hero, belowSubview: chrome)
+                flight = (hero, frame)
+            }
+        }
+
         feed?.beginPromotion()
         detail.alpha = opening ? 0 : 1
         detail.transform = opening ? CGAffineTransform(translationX: 32, y: 0) : .identity
@@ -509,12 +533,31 @@ final class PadTabsController: UIViewController {
             UIView.performWithoutAnimation(finish)
             return
         }
-        UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0.2,
+        let landing = thread.flatMap { controller in
+            controller.focalFrame(in: view).map { (cell: controller.focalCell(), target: $0) }
+        }
+        landing?.cell?.alpha = 0
+        UIView.animate(withDuration: Self.transitionDuration, delay: 0,
+                       usingSpringWithDamping: 0.9, initialSpringVelocity: 0.2,
                        options: [.allowUserInteraction, .beginFromCurrentState]) {
             cover?.alpha = 0
             self.detail.alpha = 1
             self.detail.transform = .identity
         } completion: { _ in finish() }
+
+        guard let flight else {
+            landing?.cell?.alpha = 1
+            return
+        }
+        UIView.animate(withDuration: Self.transitionDuration * 1.13, delay: 0,
+                       usingSpringWithDamping: 0.86, initialSpringVelocity: 0.25,
+                       options: [.allowUserInteraction, .beginFromCurrentState]) {
+            if let landing { flight.view.frame = landing.target }
+            flight.view.alpha = landing == nil ? 0 : 1
+        } completion: { _ in
+            landing?.cell?.alpha = 1
+            flight.view.removeFromSuperview()
+        }
     }
 
     private func detailStack(for tab: TabItem) -> StatusNavigationController {

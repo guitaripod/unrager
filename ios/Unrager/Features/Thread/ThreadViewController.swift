@@ -45,6 +45,19 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
 
     private enum Section: Int { case ancestors, focal, replies }
 
+    /// The focal post's cell, and where it sits in another view's coordinates —
+    /// what a card lifted off the board flies into.
+    func focalCell() -> TweetCell? {
+        guard let focalID, let indexPath = dataSource.indexPath(for: focalID) else { return nil }
+        return collectionView.cellForItem(at: indexPath) as? TweetCell
+    }
+
+    func focalFrame(in view: UIView) -> CGRect? {
+        guard let focalID, let indexPath = dataSource.indexPath(for: focalID),
+              let attributes = collectionView.layoutAttributesForItem(at: indexPath) else { return nil }
+        return collectionView.convert(attributes.frame, to: view)
+    }
+
     private let footer = PagingFooter()
     private var cancellables = Set<AnyCancellable>()
     private var videoSettle: DispatchWorkItem?

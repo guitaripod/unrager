@@ -53,6 +53,7 @@ enum AppMenu {
         UIMenu(options: .displayInline, children: [
             command("Refresh", symbol: "arrow.clockwise", action: #selector(RootViewController.refreshCommand), input: "r", repeats: true),
             command("Search", symbol: "magnifyingglass", action: #selector(RootViewController.searchCommand), input: "f"),
+            command("Toggle Sidebar", symbol: "sidebar.leading", action: #selector(RootViewController.toggleSidebarCommand), input: "\\"),
         ])
     }
 

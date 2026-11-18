@@ -12,6 +12,26 @@ enum ClientSettings {
         static let homeOriginals = "unrager.ios.homeOriginals"
         static let followingChronological = "unrager.ios.followingChronological"
         static let recentSearches = "unrager.ios.recentSearches"
+        static let padSidebarWidth = "unrager.ios.padSidebarWidth"
+        static let padSidebarShown = "unrager.ios.padSidebarShown"
+    }
+
+    /// How wide the iPad's sidebar was dragged to, in points. Clamped to the
+    /// range its grip allows so a stale or hand-edited value can't leave the
+    /// feed without room.
+    static var padSidebarWidth: CGFloat {
+        get {
+            let stored = defaults.double(forKey: Key.padSidebarWidth)
+            return stored > 0 ? min(max(stored, 200), 360) : 248
+        }
+        set { defaults.set(min(max(newValue, 200), 360), forKey: Key.padSidebarWidth) }
+    }
+
+    /// Whether the iPad's sidebar is open. Persisted so a window reopens the
+    /// way it was left, like the system's own sidebars.
+    static var padSidebarShown: Bool {
+        get { defaults.object(forKey: Key.padSidebarShown) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Key.padSidebarShown) }
     }
 
     /// Whether the Following feed is sorted strictly newest-first. X's

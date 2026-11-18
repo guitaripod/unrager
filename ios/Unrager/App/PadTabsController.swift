@@ -17,6 +17,22 @@ final class PadTabsController: UIViewController {
     private(set) var selectedIndex = 0
     private(set) var layout = PadLayout(chrome: .bottom, railWidth: 0)
 
+    /// The sidebar's width and whether it is open; both survive a relaunch, the
+    /// way the system's own sidebars do.
+    private var sidebarWidth = PadTabsController.initialSidebarWidth
+    private var sidebarShown = ClientSettings.padSidebarShown
+
+    /// The width the sidebar opens at: the reader's own, or what a screenshot
+    /// run asks for so its drags start from the same place every time.
+    private static var initialSidebarWidth: CGFloat {
+        #if DEBUG
+        if let raw = ProcessInfo.processInfo.environment["UNRAGER_PAD_SIDEBAR"], let width = Double(raw) {
+            return min(max(width, PadLayout.narrowestRailWidth), PadLayout.widestRailWidth)
+        }
+        #endif
+        return ClientSettings.padSidebarWidth
+    }
+
     private var tabs: [TabItem] = []
     private var controllers: [UIViewController] = []
     /// The detail column's stack per tab, built the first time that tab opens
@@ -53,6 +69,8 @@ final class PadTabsController: UIViewController {
         chrome.onSelect = { [weak self] index in self?.choose(index) }
         chrome.onReselect = { [weak self] index in self?.onReselect?(index) }
         chrome.onCompose = { [weak self] in self?.onCompose?() }
+        chrome.onToggleSidebar = { [weak self] in self?.toggleSidebar() }
+        chrome.onResize = { [weak self] travel in self?.resizeSidebar(by: travel) }
 
         view.addLayoutGuide(contentArea)
         contentLeading = contentArea.leadingAnchor.constraint(equalTo: view.leadingAnchor)
@@ -86,14 +104,22 @@ final class PadTabsController: UIViewController {
             columns.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             columns.centerXAnchor.constraint(equalTo: contentArea.centerXAnchor),
         ])
-        apply(PadLayout.resolve(window: view.bounds.size), force: true)
+        apply(PadLayout.resolve(window: view.bounds.size, rail: sidebarWidth, closed: !sidebarShown), force: true)
+    }
+
+    /// A screen's navigation item only holds what the screen has put there once
+    /// its view has loaded, which happens as the window appears — so the way
+    /// back to a closed sidebar is placed again here, after that.
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        applySidebarButton()
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         let size = view.bounds.size
         guard size.width > 0, size.height > 0 else { return }
-        apply(PadLayout.resolve(window: size))
+        apply(PadLayout.resolve(window: size, rail: sidebarWidth, closed: !sidebarShown))
         #if DEBUG
         if ProcessInfo.processInfo.environment["UNRAGER_LAYOUT_LOG"] != nil, size != loggedSize {
             loggedSize = size
@@ -123,6 +149,7 @@ final class PadTabsController: UIViewController {
         chrome.setItems(chromeItems(), selected: selectedIndex)
         layoutColumns()
         applySelection()
+        applySidebarButton()
     }
 
     /// Moves the tabs to `index` — the phone's `selectedIndex`, shared with the
@@ -134,6 +161,7 @@ final class PadTabsController: UIViewController {
         chrome.update(chromeItems(), selected: index)
         if showsDetail != showedDetail { layoutColumns() }
         applySelection()
+        applySidebarButton()
     }
 
     /// Re-reads each tab's `tabBarItem` — a Home tab that renames itself to
@@ -147,6 +175,95 @@ final class PadTabsController: UIViewController {
         guard index != selectedIndex else { return }
         onSelect?(index)
     }
+
+    // MARK: - Sidebar
+
+    /// Closes the sidebar, or opens it again — the button the rail carries, and
+    /// ⌘\ from anywhere.
+    func toggleSidebar() {
+        guard layout.chrome == .rail else { return }
+        sidebarShown.toggle()
+        ClientSettings.padSidebarShown = sidebarShown
+        sidebarWidth = ClientSettings.padSidebarWidth
+        apply(PadLayout.resolve(window: view.bounds.size, rail: sidebarWidth, closed: !sidebarShown))
+        applySidebarButton()
+        animateLayout()
+    }
+
+    /// Narrows or widens the sidebar as its grip is dragged, with the columns
+    /// taking up the difference.
+    private func resizeSidebar(by travel: CGFloat) {
+        guard layout.chrome == .rail, sidebarShown else { return }
+        let proposed = min(max(sidebarWidth + travel, PadLayout.narrowestRailWidth), PadLayout.widestRailWidth)
+        guard proposed != sidebarWidth else { return }
+        sidebarWidth = proposed
+        ClientSettings.padSidebarWidth = proposed
+        apply(PadLayout.resolve(window: view.bounds.size, rail: proposed, closed: false))
+        animateLayout()
+    }
+
+    private func animateLayout() {
+        guard !UIAccessibility.isReduceMotionEnabled else { return }
+        UIView.animate(withDuration: 0.28, delay: 0, usingSpringWithDamping: 0.92, initialSpringVelocity: 0.2,
+                       options: [.allowUserInteraction, .beginFromCurrentState]) {
+            self.view.layoutIfNeeded()
+        }
+    }
+
+    /// A closed sidebar leaves nothing to tap, so the tab's own navigation bar
+    /// carries the standard way back — the way the system's sidebars do.
+    private func applySidebarButton() {
+        let shows = layout.chrome == .rail && !sidebarShown
+        for (index, controller) in controllers.enumerated() {
+            guard let nav = controller as? UINavigationController else { continue }
+            let wanted = shows && index == selectedIndex
+            for screen in nav.viewControllers {
+                setSidebarButton(on: screen, shows: wanted)
+            }
+        }
+    }
+
+    /// Puts the way back in front of whatever the screen keeps in its leading
+    /// items — the title menu on a feed, a back button on a pushed screen — and
+    /// puts them back exactly as they were when the sidebar returns.
+    private func setSidebarButton(on screen: UIViewController, shows: Bool) {
+        let key = ObjectIdentifier(screen)
+        let item = screen.navigationItem
+        if shows {
+            if savedLeading[key] == nil {
+                savedLeading[key] = (item.leftBarButtonItems, item.leftBarButtonItem)
+            }
+            var items = item.leftBarButtonItems ?? []
+            if let single = item.leftBarButtonItem, !items.contains(where: { $0 === single }) {
+                items.insert(single, at: 0)
+            }
+            items.removeAll { $0 === revealButton }
+            item.leftBarButtonItem = nil
+            item.leftBarButtonItems = [revealButton] + items
+        } else if let saved = savedLeading.removeValue(forKey: key) {
+            var items = item.leftBarButtonItems ?? []
+            items.removeAll { $0 === revealButton }
+            if saved.items == nil, saved.single == nil {
+                item.leftBarButtonItems = nil
+                item.leftBarButtonItem = items.first
+            } else {
+                item.leftBarButtonItems = saved.items
+                item.leftBarButtonItem = saved.single
+            }
+        }
+    }
+
+    /// Each screen's own leading items while the sidebar is closed and ours is
+    /// in front of them.
+    private var savedLeading: [ObjectIdentifier: (items: [UIBarButtonItem]?, single: UIBarButtonItem?)] = [:]
+
+    private lazy var revealButton: UIBarButtonItem = {
+        let item = UIBarButtonItem(
+            image: DesignSystem.icon("sidebar.leading", pointSize: 17),
+            primaryAction: UIAction { [weak self] _ in self?.toggleSidebar() })
+        item.accessibilityLabel = "Show sidebar"
+        return item
+    }()
 
     private func chromeItems() -> [TabChromeBar.Item] {
         zip(tabs, controllers).map { tab, controller in
@@ -170,10 +287,12 @@ final class PadTabsController: UIViewController {
         layoutColumns()
         if wasShowingDetail, !resolved.showsDetail { foldDetailIntoStacks() }
         applySelection()
+        applySidebarButton()
     }
 
     private func layoutChrome() {
         NSLayoutConstraint.deactivate(chromeConstraints)
+        chrome.isHidden = layout.chrome == .rail && layout.railWidth == 0
         chromeConstraints = layout.chrome == .rail
             ? [chrome.leadingAnchor.constraint(equalTo: view.leadingAnchor),
                chrome.topAnchor.constraint(equalTo: view.topAnchor),
@@ -221,6 +340,7 @@ final class PadTabsController: UIViewController {
         show(controllers[selectedIndex], in: primary)
         showDetailIfAny()
         applySafeArea()
+        applySidebarButton()
     }
 
     private func showDetailIfAny() {

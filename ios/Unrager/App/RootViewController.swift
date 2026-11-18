@@ -154,6 +154,7 @@ final class RootViewController: UIViewController {
             command("n", title: "New Post", action: #selector(newTweetCommand)),
             command("r", title: "Refresh", action: #selector(refreshCommand)),
             command("f", title: "Search", action: #selector(searchCommand)),
+            command("\\", title: "Toggle Sidebar", action: #selector(toggleSidebarCommand)),
         ]
     }
 
@@ -193,8 +194,15 @@ final class RootViewController: UIViewController {
         (nav?.viewControllers.first as? SearchViewController)?.focusSearchField()
     }
 
+    /// Hides or shows the iPad's sidebar, the way the system sidebars toggle.
+    @objc func toggleSidebarCommand() {
+        padChrome?.toggleSidebar()
+    }
+
     override func validate(_ command: UICommand) {
         switch command.action {
+        case #selector(toggleSidebarCommand):
+            command.attributes = padChrome != nil && layoutAllowsSidebar ? [] : .disabled
         case #selector(newTweetCommand):
             command.attributes = presentedViewController == nil ? [] : .disabled
         case #selector(refreshCommand):
@@ -205,6 +213,12 @@ final class RootViewController: UIViewController {
         default:
             super.validate(command)
         }
+    }
+
+    /// Whether this window has a sidebar to toggle at all.
+    private var layoutAllowsSidebar: Bool {
+        let size = view.bounds.size
+        return size.width > size.height && size.width >= PadLayout.railWindowMinimum
     }
 
     private func topFeed() -> FeedViewController? {

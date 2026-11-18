@@ -24,11 +24,11 @@ struct PadLayoutTests {
         #expect(layout.detailWidth == 552)
     }
 
-    @Test("A small landscape window keeps one column beside its tab rail")
+    @Test("A narrow rail is clamped to the range its grip allows")
     func narrowLandscape() {
-        let layout = PadLayout.resolve(window: CGSize(width: 900, height: 700))
+        let layout = PadLayout.resolve(window: CGSize(width: 900, height: 700), rail: 80)
         #expect(layout.chrome == .rail)
-        #expect(layout.railWidth == PadLayout.narrowRailWidth)
+        #expect(layout.railWidth == PadLayout.narrowestRailWidth)
         #expect(!layout.showsDetail)
     }
 
@@ -63,6 +63,15 @@ struct PadLayoutTests {
             #expect(layout.railWidth + primary + PadLayout.columnGap + detail <= width)
         }
         #expect(twoColumnWidths > 0)
+    }
+
+    @Test("A closed sidebar gives its room to the columns")
+    func closedSidebar() {
+        let open = PadLayout.resolve(window: CGSize(width: 1376, height: 1032), rail: 248)
+        let closed = PadLayout.resolve(window: CGSize(width: 1376, height: 1032), rail: 248, closed: true)
+        #expect(closed.railWidth == 0)
+        #expect(closed.showsDetail)
+        #expect(closed.primaryWidth! > open.primaryWidth!)
     }
 
     @Test("Settings is the one tab with nowhere to put a second column")

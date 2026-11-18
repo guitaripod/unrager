@@ -54,6 +54,25 @@ final class PadTour: XCTestCase {
         snap("11-landscape-dark-thread")
     }
 
+    /// The sidebar itself: closed from its own button, reopened from the
+    /// navigation bar, and dragged wider.
+    func testPadSidebar() {
+        launch(.landscapeLeft, screen: "home", sidebarWidth: 248)
+        let show = app.buttons["Show sidebar"].firstMatch
+        if show.waitForExistence(timeout: 2.5) { show.tap(); pause(1.5) }
+        snap("15-sidebar-open")
+        let hide = app.buttons["Hide sidebar"].firstMatch
+        if hide.waitForExistence(timeout: 4) { hide.tap() } else { XCTFail("no hide button") }
+        pause(2)
+        snap("16-sidebar-closed")
+        if show.waitForExistence(timeout: 4) { show.tap() } else { XCTFail("no show button") }
+        pause(2)
+        let grip = app.coordinate(withNormalizedOffset: CGVector(dx: 0.172, dy: 0.6))
+        grip.press(forDuration: 0.3, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.255, dy: 0.6)))
+        pause(2)
+        snap("17-sidebar-wide")
+    }
+
     /// A window that loses its second column: the thread that was open beside
     /// the feed has to come forward rather than vanish.
     func testPadFold() {
@@ -76,7 +95,8 @@ final class PadTour: XCTestCase {
 
     // MARK: - Steps
 
-    private func launch(_ orientation: UIDeviceOrientation, screen: String, appearance: Int = 1) {
+    private func launch(_ orientation: UIDeviceOrientation, screen: String, appearance: Int = 1,
+                        sidebarWidth: Int? = nil) {
         app.launchArguments = [
             "-unrager.serverURL", "http://127.0.0.1:8790",
             "-unrager.filterEnabled", "0",
@@ -87,6 +107,7 @@ final class PadTour: XCTestCase {
         ]
         XCUIDevice.shared.orientation = orientation
         app.launchEnvironment["UNRAGER_SCREEN"] = screen
+        if let sidebarWidth { app.launchEnvironment["UNRAGER_PAD_SIDEBAR"] = "\(sidebarWidth)" }
         app.launch()
         pause(9)
     }

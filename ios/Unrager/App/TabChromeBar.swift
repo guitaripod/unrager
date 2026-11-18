@@ -20,18 +20,33 @@ final class TabChromeBar: UIView {
     var onSelect: ((Int) -> Void)?
     var onReselect: ((Int) -> Void)?
     var onCompose: (() -> Void)?
+    /// The sidebar's own close button, and the way back once it is closed.
+    var onToggleSidebar: (() -> Void)?
+    /// A drag on the sidebar's trailing edge, as the points it moved since the
+    /// last report; the owner keeps the width.
+    var onResize: ((CGFloat) -> Void)?
 
     private(set) var form: Form = .bottom
     private(set) var selectedIndex = 0
 
+    private let panel = UIView()
     private let glass = UIVisualEffectView.glass()
     private let edge = HairlineView()
+    private let header = UIView()
+    private let wordmark = UILabel()
+    private let hideButton = UIButton(type: .system)
+    private let grip = UIView()
+    private let gripLine = UIView()
     private let stack = UIStackView()
     private let postButton = UIButton(configuration: .unragerProminentGlass())
     private var rows: [TabChromeRow] = []
+    /// Where the last grip report left the finger, so each report is a step and
+    /// not the whole drag again.
+    private var lastGripTravel: CGFloat = 0
 
     private var edgeWidth: NSLayoutConstraint!
     private var stackTop: NSLayoutConstraint!
+    private var stackUnderHeader: NSLayoutConstraint!
     private var stackSide: NSLayoutConstraint!
     private var stackBottom: NSLayoutConstraint!
     private var postHeight: NSLayoutConstraint!
@@ -45,13 +60,39 @@ final class TabChromeBar: UIView {
         accessibilityContainerType = .semanticGroup
         isAccessibilityElement = false
 
+        panel.backgroundColor = DesignSystem.Color.elevatedBackground
+        panel.isUserInteractionEnabled = false
+        addManaged(panel)
+        panel.pinEdges(to: self)
+
         glass.isUserInteractionEnabled = false
         glass.clipsToBounds = true
         addManaged(glass)
         glass.pinEdges(to: self)
 
+        header.isHidden = true
+        addManaged(header)
+        wordmark.text = "Unrager"
+        wordmark.font = DesignSystem.Typography.title()
+        wordmark.textColor = DesignSystem.Color.label
+        header.addManaged(wordmark)
+        hideButton.setImage(DesignSystem.icon("sidebar.leading", pointSize: 17), for: .normal)
+        hideButton.tintColor = DesignSystem.Color.secondaryLabel
+        hideButton.accessibilityLabel = "Hide sidebar"
+        hideButton.addAction(UIAction { [weak self] _ in self?.onToggleSidebar?() }, for: .touchUpInside)
+        header.addManaged(hideButton)
+
         addManaged(edge)
         edgeWidth = edge.widthAnchor.constraint(equalToConstant: 0)
+
+        gripLine.backgroundColor = DesignSystem.Color.separator
+        gripLine.setFixedCorners(1.5)
+        gripLine.alpha = 0
+        grip.addManaged(gripLine)
+        grip.isHidden = true
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(gripPanned))
+        grip.addGestureRecognizer(pan)
+        addManaged(grip)
 
         stack.axis = .vertical
         stack.alignment = .fill
@@ -68,11 +109,30 @@ final class TabChromeBar: UIView {
         addManaged(postButton)
         postHeight = postButton.heightAnchor.constraint(equalToConstant: 0)
 
-        stackTop = stack.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 0)
+        stackTop = stack.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 8)
+        stackUnderHeader = stack.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 4)
         stackSide = stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10)
         stackBottom = stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
         NSLayoutConstraint.activate([
             edgeWidth,
+            header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
+            header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+            header.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 6),
+            header.heightAnchor.constraint(equalToConstant: 40),
+            wordmark.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            wordmark.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            hideButton.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+            hideButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            hideButton.widthAnchor.constraint(equalToConstant: 32),
+            hideButton.heightAnchor.constraint(equalToConstant: 32),
+            grip.trailingAnchor.constraint(equalTo: trailingAnchor),
+            grip.topAnchor.constraint(equalTo: topAnchor),
+            grip.bottomAnchor.constraint(equalTo: bottomAnchor),
+            grip.widthAnchor.constraint(equalToConstant: 18),
+            gripLine.centerXAnchor.constraint(equalTo: grip.centerXAnchor),
+            gripLine.centerYAnchor.constraint(equalTo: grip.centerYAnchor),
+            gripLine.widthAnchor.constraint(equalToConstant: 3),
+            gripLine.heightAnchor.constraint(equalToConstant: 44),
             edge.trailingAnchor.constraint(equalTo: trailingAnchor),
             edge.topAnchor.constraint(equalTo: topAnchor),
             edge.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -131,12 +191,16 @@ final class TabChromeBar: UIView {
         glass.setFixedCorners(rail ? 0 : Self.bottomHeight / 2)
         edge.isHidden = !rail
         edgeWidth.constant = rail ? 1 / max(1, traitCollection.displayScale) : 0
+        header.isHidden = !rail
+        grip.isHidden = !rail
+        panel.isHidden = !rail
+        glass.isHidden = rail
         postButton.isHidden = !rail
         postHeight.constant = rail ? 50 : 0
-        stackTop.isActive = rail
+        stackTop.isActive = !rail
+        stackUnderHeader.isActive = rail
         stackBottom.isActive = !rail
         if rail {
-            stackTop.constant = 24
             stackSide.constant = 16
             stack.axis = .vertical
             stack.spacing = 2
@@ -148,6 +212,22 @@ final class TabChromeBar: UIView {
             stack.distribution = .fillEqually
         }
         for row in rows { row.form = newForm }
+    }
+
+    @objc private func gripPanned(_ gesture: UIPanGestureRecognizer) {
+        let travelled = gesture.translation(in: superview).x
+        switch gesture.state {
+        case .began:
+            gripLine.alpha = 1
+            lastGripTravel = 0
+        case .changed:
+            gripLine.alpha = 1
+            onResize?(travelled - lastGripTravel)
+            lastGripTravel = travelled
+        default:
+            gripLine.alpha = 0
+            lastGripTravel = 0
+        }
     }
 
     private func choose(_ index: Int) {
@@ -231,6 +311,7 @@ private final class TabChromeRow: UIView {
             UIImage.SymbolConfiguration(pointSize: rail ? 19 : 20, weight: .regular))
         config.imagePlacement = rail ? .leading : .top
         config.imagePadding = rail ? 12 : 2
+        button.contentHorizontalAlignment = rail ? .leading : .center
         config.contentInsets = rail
             ? NSDirectionalEdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12)
             : NSDirectionalEdgeInsets(top: 4, leading: 2, bottom: 4, trailing: 2)

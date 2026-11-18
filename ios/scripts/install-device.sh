@@ -16,6 +16,8 @@
 #   VERSION         version shown in Settings (default: the crate version in
 #                   ../Cargo.toml without any pre-release suffix, so a stale
 #                   phone build stands out against the server's version)
+#   SKIP_INSTALL    build and sign only, for a device installed from another
+#                   machine (a Linux box over USB with pymobiledevice3)
 set -euo pipefail
 SCRIPT="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 cd "$(dirname "$0")/.."
@@ -58,7 +60,7 @@ run_in_signed_in_session() {
   <array>
     <string>/bin/bash</string>
     <string>-lc</string>
-    <string>cd '$(pwd)' &amp;&amp; UNRAGER_IN_GUI_SESSION=1 UDID='$UDID' TEAM='$TEAM' IDENTITY='$IDENTITY' PROFILE='$PROFILE' SERVER='$SERVER' VERSION='$VERSION' bash '$SCRIPT'; echo "$marker \$?"</string>
+    <string>cd '$(pwd)' &amp;&amp; UNRAGER_IN_GUI_SESSION=1 UDID='$UDID' TEAM='$TEAM' IDENTITY='$IDENTITY' PROFILE='$PROFILE' SERVER='$SERVER' VERSION='$VERSION' SKIP_INSTALL='${SKIP_INSTALL:-0}' bash '$SCRIPT'; echo "$marker \$?"</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>StandardOutPath</key><string>$log</string>
@@ -111,6 +113,11 @@ xcodebuild -project Unrager.xcodeproj -scheme Unrager \
   build | tail -1
 
 APP="build-device/Build/Products/Release-iphoneos/Unrager.app"
+
+if [[ "${SKIP_INSTALL:-0}" == "1" ]]; then
+  echo "signed app: $(pwd)/$APP"
+  exit 0
+fi
 
 
 echo "==> installing to $UDID"

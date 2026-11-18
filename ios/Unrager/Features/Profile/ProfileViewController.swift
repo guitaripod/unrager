@@ -69,7 +69,7 @@ final class ProfileViewController: FeedViewController {
     override func viewDidLoad() {
         headerView = profileHeader
         super.viewDidLoad()
-        title = "@\(handle)"
+        setScreenTitle("@\(handle)")
         for header in headers {
             wire(header)
             header.setHandle(handle)
@@ -144,7 +144,7 @@ final class ProfileViewController: FeedViewController {
             loadState = .loaded
             isFollowing = cached.followedByMe
             isOwnProfile = AppEnvironment.shared.currentHandle?.caseInsensitiveCompare(handle) == .orderedSame
-            title = cached.user.name
+            setScreenTitle(cached.user.name)
             titleLabel.text = cached.user.name
             titleLabel.sizeToFit()
             banner.configure(url: cached.user.bannerURL.flatMap(URL.init), handle: handle,
@@ -197,7 +197,7 @@ final class ProfileViewController: FeedViewController {
                                  imagesEnabled: AppSettings.imagesEnabled)
                 isOwnProfile = await me?.handle.caseInsensitiveCompare(handle) == .orderedSame
                 if !followRequestInFlight { isFollowing = profile.followedByMe }
-                title = profile.user.name
+                setScreenTitle(profile.user.name)
                 titleLabel.text = profile.user.name
                 titleLabel.sizeToFit()
                 moderation.update(muting: profile.user.isMuting, blocking: profile.user.isBlocking)
@@ -231,10 +231,18 @@ final class ProfileViewController: FeedViewController {
         user = nil
         isFollowing = nil
         basedIn = nil
-        title = "@\(handle)"
+        setScreenTitle("@\(handle)")
         titleLabel.text = "@\(handle)"
         titleLabel.sizeToFit()
         banner.configure(url: nil, handle: handle, imagesEnabled: false)
+    }
+
+    /// Sets the navigation title and the iPad window name together, so a
+    /// profile that loads its display name after appearing is still findable
+    /// in the window list.
+    private func setScreenTitle(_ name: String) {
+        title = name
+        noteScreenForWindow()
     }
 
     /// Whether the viewer is shut out of a protected account's posts.

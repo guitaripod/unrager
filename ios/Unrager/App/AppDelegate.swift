@@ -7,6 +7,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        AppMenu.install()
         #if DEBUG
         if let server = ProcessInfo.processInfo.environment["UNRAGER_SERVER"], !server.isEmpty {
             AppSettings.serverURLString = server

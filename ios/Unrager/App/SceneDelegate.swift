@@ -7,6 +7,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession,
                options connectionOptions: UIScene.ConnectionOptions) {
         guard let windowScene = scene as? UIWindowScene else { return }
+        applyWindowPreferences(to: windowScene)
         AppSettings.migrateAppearanceIfNeeded()
         let window = UIWindow(windowScene: windowScene)
         window.overrideUserInterfaceStyle = UIUserInterfaceStyle(rawValue: AppSettings.appearance.rawValue) ?? .unspecified
@@ -22,6 +23,19 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         #if DEBUG
         handleDebugLaunch(root)
         #endif
+    }
+
+    /// Puts the window controls in the toolbar, in line with the tab bar,
+    /// instead of a permanent strip above it.
+    func preferredWindowingControlStyle(for windowScene: UIWindowScene) -> UIWindowScene.WindowingControlStyle {
+        .unified
+    }
+
+    /// A window stays at least wide enough for a post, and has a name before
+    /// the first screen publishes one.
+    private func applyWindowPreferences(to windowScene: UIWindowScene) {
+        windowScene.sizeRestrictions?.minimumSize = CGSize(width: 320, height: 480)
+        windowScene.title = "Unrager"
     }
 
     #if DEBUG
@@ -206,19 +220,19 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             case "bookmarks":
                 homeNav()?.pushViewController(BookmarksViewController(), animated: false)
             case "compose":
-                root.present(UINavigationController(rootViewController: ComposeViewController(mode: .new)), animated: false)
+                root.present(UINavigationController.sheet(rootViewController: ComposeViewController(mode: .new)), animated: false)
             case "quote" where parts.count > 1:
                 let id = parts[1]
                 Task {
                     guard let tweet = try? await api.tweet(id: id) else { return }
-                    root.present(UINavigationController(
+                    root.present(UINavigationController.sheet(
                         rootViewController: ComposeViewController(mode: .quote(of: tweet))), animated: false)
                 }
             case "reply" where parts.count > 1:
                 let id = parts[1]
                 Task {
                     guard let tweet = try? await api.tweet(id: id) else { return }
-                    root.present(UINavigationController(
+                    root.present(UINavigationController.sheet(
                         rootViewController: ComposeViewController(mode: .reply(to: tweet))), animated: false)
                 }
             case "brief" where parts.count > 1:

@@ -92,11 +92,12 @@ final class NotificationToast: UIView {
         let fillWidth = widthAnchor.constraint(
             equalTo: host.safeAreaLayoutGuide.widthAnchor, constant: -2 * DesignSystem.Spacing.m)
         fillWidth.priority = .defaultHigh
+        let dodge = host.layoutGuide(for: .margins(cornerAdaptation: .horizontal))
         NSLayoutConstraint.activate([
             top,
             centerXAnchor.constraint(equalTo: host.centerXAnchor),
-            leadingAnchor.constraint(greaterThanOrEqualTo: host.safeAreaLayoutGuide.leadingAnchor, constant: DesignSystem.Spacing.m),
-            trailingAnchor.constraint(lessThanOrEqualTo: host.safeAreaLayoutGuide.trailingAnchor, constant: -DesignSystem.Spacing.m),
+            leadingAnchor.constraint(greaterThanOrEqualTo: dodge.leadingAnchor, constant: DesignSystem.Spacing.m),
+            trailingAnchor.constraint(lessThanOrEqualTo: dodge.trailingAnchor, constant: -DesignSystem.Spacing.m),
             widthAnchor.constraint(lessThanOrEqualToConstant: DesignSystem.maxContentWidth),
             fillWidth,
         ])

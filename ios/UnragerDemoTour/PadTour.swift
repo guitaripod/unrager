@@ -132,6 +132,20 @@ final class PadTour: XCTestCase {
         snap("45-notifications-panel")
     }
 
+    /// Every settings screen in a tall window, where its rows must fit a Mini.
+    func testPadSettingsPortrait() {
+        launch(.portrait, screen: "settings")
+        snap("50-settings")
+        launch(.portrait, screen: "filter")
+        snap("51-settings-filter")
+        launch(.portrait, screen: "notifsettings")
+        snap("52-settings-notifications")
+        launch(.portrait, screen: "edittabs")
+        snap("53-settings-tabs")
+        launch(.portrait, screen: "changelog")
+        snap("54-settings-changelog")
+    }
+
     /// The sidebar's sections: the feeds normally behind the title menu, and the
     /// notification lenses behind the chip bar.
     func testPadSidebarSections() {

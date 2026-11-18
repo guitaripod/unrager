@@ -67,6 +67,7 @@ final class PadTabsController: UIViewController {
 
     private var chromeConstraints: [NSLayoutConstraint] = []
     private var contentLeading: NSLayoutConstraint!
+    private var contentBottom: NSLayoutConstraint!
 
     /// How long the column change takes. A screenshot run can stretch it, so a
     /// still frame can catch a card in flight.
@@ -94,17 +95,18 @@ final class PadTabsController: UIViewController {
 
         view.addLayoutGuide(contentArea)
         contentLeading = contentArea.leadingAnchor.constraint(equalTo: view.leadingAnchor)
+        contentBottom = contentArea.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         NSLayoutConstraint.activate([
             contentLeading,
+            contentBottom,
             contentArea.topAnchor.constraint(equalTo: view.topAnchor),
-            contentArea.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             contentArea.trailingAnchor.constraint(equalTo: view.trailingAnchor),
         ])
 
         view.addManaged(primary)
         NSLayoutConstraint.activate([
-            primary.topAnchor.constraint(equalTo: view.topAnchor),
-            primary.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            primary.topAnchor.constraint(equalTo: contentArea.topAnchor),
+            primary.bottomAnchor.constraint(equalTo: contentArea.bottomAnchor),
             primary.leadingAnchor.constraint(equalTo: contentArea.leadingAnchor),
             primary.trailingAnchor.constraint(equalTo: contentArea.trailingAnchor),
         ])
@@ -145,6 +147,7 @@ final class PadTabsController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        applySafeArea()
         let size = view.bounds.size
         guard size.width > 0, size.height > 0 else { return }
         apply(PadLayout.resolve(window: size, rail: sidebarWidth, closed: !sidebarShown))
@@ -327,6 +330,7 @@ final class PadTabsController: UIViewController {
     /// A tab pushed or popped a screen: the board belongs to whatever feed is in
     /// front now, so ask again.
     func refreshBoard() {
+        applySafeArea()
         applyBoard()
     }
 
@@ -502,6 +506,9 @@ final class PadTabsController: UIViewController {
         chrome.apply(form: TabChromeBar.Form(resolved.chrome))
         layoutChrome()
         contentLeading.constant = resolved.railWidth
+        contentBottom.constant = resolved.chrome == .bottom
+            ? -(TabChromeBar.bottomHeight + 22)
+            : 0
         layoutPanel()
         applySelection()
         applySidebarButton()
@@ -599,10 +606,11 @@ final class PadTabsController: UIViewController {
 
     /// Under a bar the screens keep their feet clear of it; beside a rail they
     /// run the full height.
+    /// The content area already ends above the bar (see `contentBottom`), so a
+    /// screen's own safe area is the window's — nothing here.
     private func applySafeArea() {
-        let bottom = layout.chrome == .bottom ? TabChromeBar.bottomClearance : 0
-        for controller in children {
-            controller.additionalSafeAreaInsets.bottom = bottom
+        for controller in children where controller.additionalSafeAreaInsets != .zero {
+            controller.additionalSafeAreaInsets = .zero
         }
     }
 

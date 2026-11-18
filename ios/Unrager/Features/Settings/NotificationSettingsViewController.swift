@@ -520,6 +520,7 @@ private final class StackedControlView: UIView, UIContentView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+
     private func apply() {
         guard let configuration = configuration as? StackedControlConfiguration else { return }
         titleLabel.font = DesignSystem.Typography.body()

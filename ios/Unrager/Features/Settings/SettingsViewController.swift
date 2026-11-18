@@ -91,6 +91,18 @@ final class SettingsViewController: UIViewController {
         traitCollection.preferredContentSizeCategory.isAccessibilityCategory
     }
 
+    /// The rows wrap their subtitles, so a window that changed width re-flowes
+    /// them instead of leaving them measured for the old one.
+    private var laidOutWidth: CGFloat = 0
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        let width = collectionView.bounds.width
+        guard width > 0, width != laidOutWidth else { return }
+        laidOutWidth = width
+        collectionView.collectionViewLayout.invalidateLayout()
+    }
+
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         refreshImageCacheSize()
@@ -129,6 +141,7 @@ final class SettingsViewController: UIViewController {
             return NSCollectionLayoutSection.list(using: configuration, layoutEnvironment: environment)
         }
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: layout)
+        collectionView.selfSizingInvalidation = .enabled
         collectionView.backgroundColor = DesignSystem.Color.background
         collectionView.delegate = self
         collectionView.alwaysBounceVertical = true

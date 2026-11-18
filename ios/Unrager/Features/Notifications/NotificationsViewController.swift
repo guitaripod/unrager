@@ -337,6 +337,7 @@ final class NotificationsViewController: UIViewController {
 
         let contentGuide = makeContentGuide()
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: makeLayout())
+        collectionView.selfSizingInvalidation = .enabled
         collectionView.backgroundColor = .clear
         collectionView.delegate = self
         collectionView.contentInset.top = NotificationChipBar.height
@@ -407,9 +408,23 @@ final class NotificationsViewController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        remeasureForWidthChange()
         guard !placedInitialOffset, collectionView.adjustedContentInset.top >= NotificationChipBar.height else { return }
         placedInitialOffset = true
         scrollToTop(animated: false)
+    }
+
+    /// Rows wrap their snippets, so a window that changed width — a Stage
+    /// Manager resize, a Split View drag — re-measures the rows on screen; the
+    /// rest re-measure as they dequeue. Without this they kept the width they
+    /// were measured at and ran off the edge of the window.
+    private var laidOutWidth: CGFloat = 0
+
+    private func remeasureForWidthChange() {
+        let width = collectionView.bounds.width
+        guard width > 0, width != laidOutWidth else { return }
+        laidOutWidth = width
+        collectionView.collectionViewLayout.invalidateLayout()
     }
 
     /// Redraws rows when the text size or display options change and when

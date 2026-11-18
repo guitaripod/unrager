@@ -32,6 +32,15 @@ struct PadLayoutTests {
         #expect(!layout.showsDetail)
     }
 
+    @Test("A third of the screen is one column with the bar at the bottom")
+    func narrowWindow() {
+        let layout = PadLayout.resolve(window: CGSize(width: 620, height: 1000))
+        #expect(layout.chrome == .bottom)
+        #expect(layout.railWidth == 0)
+        #expect(!layout.showsDetail)
+        #expect(MasonryLayout.columns(for: 604) == 1)
+    }
+
     @Test("Slide Over keeps the bottom bar whatever the height")
     func slideOver() {
         let layout = PadLayout.resolve(window: CGSize(width: 320, height: 900))

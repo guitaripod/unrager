@@ -166,6 +166,7 @@ class PagedUserListViewController: UIViewController {
         view.backgroundColor = DesignSystem.Color.background
 
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: makeLayout())
+        collectionView.selfSizingInvalidation = .enabled
         collectionView.backgroundColor = .clear
         collectionView.alwaysBounceVertical = true
         collectionView.delegate = self

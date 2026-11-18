@@ -43,8 +43,10 @@ final class NotificationActorsViewController: UIViewController {
         config.backgroundColor = .clear
         let note = Self.othersNote(othersCount)
         config.footerMode = note == nil ? .none : .supplementary
-        collectionView = UICollectionView(frame: view.bounds,
-                                          collectionViewLayout: UICollectionViewCompositionalLayout.list(using: config))
+        collectionView = UICollectionView(
+            frame: view.bounds,
+            collectionViewLayout: UICollectionViewCompositionalLayout.list(using: config))
+        collectionView.selfSizingInvalidation = .enabled
         collectionView.backgroundColor = .clear
         collectionView.delegate = self
         view.addManaged(collectionView)

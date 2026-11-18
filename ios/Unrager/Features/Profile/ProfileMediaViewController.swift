@@ -240,6 +240,7 @@ final class ProfileMediaViewController: UIViewController {
         super.viewDidLoad()
         view.backgroundColor = .clear
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: makeLayout())
+        collectionView.selfSizingInvalidation = .enabled
         collectionView.backgroundColor = .clear
         collectionView.alwaysBounceVertical = true
         collectionView.delegate = self

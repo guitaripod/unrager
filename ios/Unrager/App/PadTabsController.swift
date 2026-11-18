@@ -537,10 +537,20 @@ final class PadTabsController: UIViewController {
             return CGRect(x: view.bounds.width - width - 12, y: 12,
                           width: width, height: view.bounds.height - 24)
         }
-        // Without room beside the board the panel lies across it — inside the
-        // content area, never under the rail, which is drawn above it.
-        let area = contentArea.layoutFrame.insetBy(dx: 16, dy: 16)
-        return area.isEmpty ? view.bounds.insetBy(dx: 16, dy: 16) : area
+        // Without room beside the board the panel floats over it as a card:
+        // inset on every side, clear of the navigation bar and above the tab
+        // bar, so the feed stays visible around it and a tap outside puts it
+        // away.
+        let area = contentArea.layoutFrame
+        guard !area.isEmpty else { return view.bounds.insetBy(dx: 16, dy: 16) }
+        let side: CGFloat = 20
+        let width = min(area.width - side * 2, 680)
+        let top = area.minY + view.safeAreaInsets.top + 8
+        let bottomInset = view.safeAreaInsets.bottom
+            + (layout.chrome == .bottom ? TabChromeBar.bottomHeight + 24 : 16)
+        let bottom = area.maxY - bottomInset
+        return CGRect(x: area.midX - width / 2, y: top,
+                      width: width, height: max(280, bottom - top))
     }
 
     /// A post opens as a card over the feed, not as another screen: it keeps its

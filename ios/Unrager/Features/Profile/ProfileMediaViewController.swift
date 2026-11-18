@@ -286,7 +286,7 @@ final class ProfileMediaViewController: UIViewController {
     private var widePins: [NSLayoutConstraint] = []
 
     private var wantsWide: Bool {
-        traitCollection.userInterfaceIdiom == .pad && view.bounds.width >= 900
+        traitCollection.userInterfaceIdiom == .pad && view.bounds.width >= 820
     }
 
     private func applyContentWidth() {

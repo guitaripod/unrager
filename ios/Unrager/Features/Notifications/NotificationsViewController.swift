@@ -274,7 +274,7 @@ final class NotificationsViewController: UIViewController {
                 self?.leadingSwipe(at: indexPath)
             }
             let wide = self?.traitCollection.userInterfaceIdiom == .pad
-                && environment.container.effectiveContentSize.width >= 900
+                && environment.container.effectiveContentSize.width >= 820
             let section = wide
                 ? Self.twoUpSection(environment: environment)
                 : NSCollectionLayoutSection.list(using: config, layoutEnvironment: environment)

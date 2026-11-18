@@ -260,7 +260,7 @@ class PagedUserListViewController: UIViewController {
                 return configuration
             }
             let wide = self.traitCollection.userInterfaceIdiom == .pad
-                && environment.container.effectiveContentSize.width >= 900
+                && environment.container.effectiveContentSize.width >= 820
             let section = wide && !isHeader
                 ? Self.twoColumnSection(using: config, environment: environment)
                 : NSCollectionLayoutSection.list(using: config, layoutEnvironment: environment)

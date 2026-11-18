@@ -99,6 +99,16 @@ final class PadTour: XCTestCase {
         snap("20-board-again")
     }
 
+    /// The profile tab on a wide window: its header across the top and its
+    /// posts as a board below, and the panel floating over them.
+    func testPadProfileBoard() {
+        launch(.landscapeLeft, screen: "myprofile")
+        pause(4)
+        snap("26-profile-board")
+        tapPost(0)
+        snap("27-profile-panel")
+    }
+
     /// The sidebar's sections: the feeds normally behind the title menu, and the
     /// notification lenses behind the chip bar.
     func testPadSidebarSections() {

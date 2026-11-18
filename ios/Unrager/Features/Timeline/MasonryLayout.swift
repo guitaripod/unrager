@@ -133,7 +133,9 @@ final class MasonryLayout: UICollectionViewLayout {
     override func layoutAttributesForSupplementaryView(
         ofKind elementKind: String, at indexPath: IndexPath
     ) -> UICollectionViewLayoutAttributes? {
-        elementKind == FeedViewController.headerKind ? headerAttributes : footerAttributes
+        if elementKind == FeedViewController.headerKind { return headerAttributes }
+        if elementKind == FeedViewController.footerKind { return footerAttributes }
+        return nil
     }
 
     /// Heights are measured once and kept, so a rebuild only happens when

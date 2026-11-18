@@ -231,7 +231,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
     /// place by index, so a post open beside the list lands in the same column
     /// it came from.
     func setGrid(_ on: Bool) {
-        wantsGrid = on && headerView == nil
+        wantsGrid = on
         applyGridMode()
     }
 
@@ -247,8 +247,37 @@ class FeedViewController: UIViewController, TweetActionHandling {
         usesGrid = wanted
         NSLayoutConstraint.deactivate(wanted ? guidePins : boardPins)
         NSLayoutConstraint.activate(wanted ? boardPins : guidePins)
+        if wanted { boardHeaderHeight = measureBoardHeader() }
         collectionView.setCollectionViewLayout(wanted ? makeGridLayout() : makeLayout(), animated: false)
         dataSource.reconfigureVisibleItems(of: collectionView)
+    }
+
+    /// A feed with a header (a profile) keeps it across the top of the board and
+    /// spreads its posts underneath, so a wide window spends its width on posts
+    /// instead of stretching one column of them.
+    private var boardHeaderHeight: CGFloat = 0
+
+    private func measureBoardHeader() -> CGFloat {
+        guard let headerView, view.bounds.width > 0 else { return 0 }
+        let height = headerView.systemLayoutSizeFitting(
+            CGSize(width: boardWidth, height: 0),
+            withHorizontalFittingPriority: .required,
+            verticalFittingPriority: .fittingSizeLevel).height
+        return ceil(height)
+    }
+
+    /// Re-measures the header after its contents changed (a profile loading its
+    /// name, a banner resolving) and moves the board under it without a jump.
+    func refreshBoardHeader() {
+        guard usesGrid else {
+            if headerView != nil, collectionView != nil { collectionView.performBatchUpdates(nil) }
+            return
+        }
+        let height = measureBoardHeader()
+        guard height > 0, height != boardHeaderHeight else { return }
+        boardHeaderHeight = height
+        (collectionView.collectionViewLayout as? MasonryLayout)?.headerHeight = height
+        collectionView.collectionViewLayout.invalidateLayout()
     }
 
     private var wantsGrid = false
@@ -259,6 +288,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
             guard let self, self.dataSource != nil else { return 0 }
             return self.dataSource.snapshot().numberOfItems
         }
+        layout.headerHeight = boardHeaderHeight
         layout.heightForItem = { [weak self] indexPath in self?.gridHeight(at: indexPath) ?? 320 }
         gridLayout = layout
         return layout

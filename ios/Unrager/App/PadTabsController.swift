@@ -45,6 +45,7 @@ final class PadTabsController: UIViewController {
     private let primary = UIView()
     /// The panel a post grows into: `detailSurface` carries the shadow and the
     /// frame that animates, `detail` clips the screen inside it.
+    private let scrim = UIView()
     private let detailSurface = UIView()
     private let detail = UIView()
 
@@ -113,6 +114,14 @@ final class PadTabsController: UIViewController {
         detailSurface.layer.shadowOpacity = 0.18
         detailSurface.layer.shadowRadius = 28
         detailSurface.layer.shadowOffset = CGSize(width: 0, height: 10)
+        scrim.backgroundColor = UIColor.black.withAlphaComponent(0.18)
+        scrim.alpha = 0
+        scrim.isHidden = true
+        scrim.translatesAutoresizingMaskIntoConstraints = true
+        scrim.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(scrim)
+        scrim.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(scrimTapped)))
+
         detailSurface.backgroundColor = DesignSystem.Color.background
         detailSurface.translatesAutoresizingMaskIntoConstraints = true
         detailSurface.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -120,6 +129,9 @@ final class PadTabsController: UIViewController {
         detail.clipsToBounds = true
         detailSurface.addManaged(detail)
         detail.pinEdges(to: detailSurface)
+        let drag = UIPanGestureRecognizer(target: self, action: #selector(panelDragged(_:)))
+        drag.delegate = self
+        detailSurface.addGestureRecognizer(drag)
         apply(PadLayout.resolve(window: view.bounds.size, rail: sidebarWidth, closed: !sidebarShown), force: true)
     }
 
@@ -299,8 +311,7 @@ final class PadTabsController: UIViewController {
     /// has scrolled away.
     func closeDetail() {
         guard tabs.indices.contains(selectedIndex), let nav = details[tabs[selectedIndex]] else { return }
-        let feed = (controllers[selectedIndex] as? UINavigationController)?
-            .viewControllers.first as? FeedViewController
+        let feed = boardHost(in: (controllers[selectedIndex] as? UINavigationController)?.topViewController)
         let card = nav.viewControllers.compactMap { ($0 as? ThreadViewController)?.tweetID }
             .last.flatMap { feed?.visibleCell(for: $0) }
         let home = card.map { $0.convert($0.bounds, to: view) } ?? panelFrame.offsetBy(dx: 40, dy: 0)
@@ -313,12 +324,29 @@ final class PadTabsController: UIViewController {
 
     /// Tells the open tab's own feed whether to spread into a board. A pushed
     /// screen is a reading view and keeps its single column.
+    /// A tab pushed or popped a screen: the board belongs to whatever feed is in
+    /// front now, so ask again.
+    func refreshBoard() {
+        applyBoard()
+    }
+
     private func applyBoard() {
         for (index, controller) in controllers.enumerated() {
             guard let nav = controller as? UINavigationController else { continue }
-            let root = nav.viewControllers.first as? FeedViewController
-            root?.setGrid(index == selectedIndex && showsBoard && nav.viewControllers.count == 1)
+            boardHost(in: nav.topViewController)?.setGrid(index == selectedIndex && showsBoard)
         }
+    }
+
+    /// The feed a tab is showing, whether it is the stack's own screen (Home) or
+    /// one a root screen wraps (My Profile). A pushed list is a reading screen
+    /// and returns nothing, so nothing behind it animates.
+    private func boardHost(in controller: UIViewController?) -> FeedViewController? {
+        guard let controller else { return nil }
+        if let feed = controller as? FeedViewController { return feed }
+        for child in controller.children {
+            if let feed = boardHost(in: child) { return feed }
+        }
+        return nil
     }
 
     private lazy var revealButton: UIBarButtonItem = {
@@ -500,9 +528,41 @@ final class PadTabsController: UIViewController {
     /// never beside it in a way that moves the feed.
     private var panelFrame: CGRect {
         if let width = layout.detailWidth {
-            return CGRect(x: view.bounds.width - width, y: 0, width: width, height: view.bounds.height)
+            return CGRect(x: view.bounds.width - width - 12, y: 12,
+                          width: width, height: view.bounds.height - 24)
         }
-        return view.bounds.insetBy(dx: 10, dy: 0)
+        return view.bounds.insetBy(dx: 16, dy: 16)
+    }
+
+    /// A post opens as a card over the feed, not as another screen: it keeps its
+    /// margins, dims what is behind it, and can be put away by tapping outside
+    /// it, dragging it down from its bar, or its own close button.
+    @objc private func scrimTapped() {
+        closeDetail()
+    }
+
+    @objc private func panelDragged(_ gesture: UIPanGestureRecognizer) {
+        let travel = gesture.translation(in: view).y
+        switch gesture.state {
+        case .changed:
+            let offset = max(0, travel)
+            detailSurface.transform = CGAffineTransform(translationX: 0, y: offset)
+            scrim.alpha = 0.22 * max(0, 1 - offset / 240)
+        case .ended, .cancelled:
+            let fast = gesture.velocity(in: view).y > 900
+            if travel > 120 || fast {
+                detailSurface.transform = .identity
+                closeDetail()
+            } else {
+                UIView.animate(withDuration: 0.28, delay: 0, usingSpringWithDamping: 0.85,
+                               initialSpringVelocity: 0.2, options: [.allowUserInteraction]) {
+                    self.detailSurface.transform = .identity
+                    self.scrim.alpha = 0.22
+                }
+            }
+        default:
+            break
+        }
     }
 
     private func layoutPanel() {
@@ -543,6 +603,7 @@ final class PadTabsController: UIViewController {
         guard detailOnScreen, let nav, !nav.viewControllers.isEmpty else {
             detachChildren(of: detail)
             detailSurface.isHidden = true
+            scrim.isHidden = true
             return
         }
         show(nav, in: detail)
@@ -610,9 +671,8 @@ final class PadTabsController: UIViewController {
         let nav = detailStack(for: tabs[selectedIndex])
         nav.setViewControllers([controller], animated: false)
         giveCloseButton(to: controller)
-        let card = (controller as? ThreadViewController)
-            .flatMap { thread in (controllers[selectedIndex] as? UINavigationController)?
-                .viewControllers.first.flatMap { ($0 as? FeedViewController)?.visibleCell(for: thread.tweetID) } }
+        let feed = boardHost(in: (controllers[selectedIndex] as? UINavigationController)?.topViewController)
+        let card = (controller as? ThreadViewController).flatMap { thread in feed?.visibleCell(for: thread.tweetID) }
         showPanel(nav, growingFrom: card)
     }
 
@@ -621,14 +681,18 @@ final class PadTabsController: UIViewController {
     private func showPanel(_ nav: StatusNavigationController, growingFrom card: UIView?) {
         show(nav, in: detail)
         detailSurface.isHidden = false
+        scrim.isHidden = false
+        scrim.frame = view.bounds
+        view.bringSubviewToFront(scrim)
         view.bringSubviewToFront(detailSurface)
         view.bringSubviewToFront(chrome)
         let target = panelFrame
         let reduceMotion = UIAccessibility.isReduceMotionEnabled
         guard !reduceMotion, let card else {
             detailSurface.frame = target
-            detailSurface.layer.cornerRadius = 24
+            detailSurface.layer.cornerRadius = 26
             detail.alpha = 1
+            scrim.alpha = 0.22
             return
         }
         let source = card.convert(card.bounds, to: view)
@@ -645,6 +709,7 @@ final class PadTabsController: UIViewController {
                        delay: Self.transitionDuration * 0.35,
                        options: [.allowUserInteraction, .beginFromCurrentState]) {
             self.detail.alpha = 1
+            self.scrim.alpha = 0.22
         }
     }
 
@@ -661,7 +726,11 @@ final class PadTabsController: UIViewController {
             self.detailSurface.frame = frame
             self.detailSurface.layer.cornerRadius = 18
             self.detail.alpha = 0
-        } completion: { _ in completion() }
+            self.scrim.alpha = 0
+        } completion: { _ in
+            self.scrim.isHidden = true
+            completion()
+        }
     }
 
     private func detailStack(for tab: TabItem) -> StatusNavigationController {
@@ -673,6 +742,16 @@ final class PadTabsController: UIViewController {
 
     private func stack(for tab: TabItem) -> UIViewController? {
         zip(tabs, controllers).first { $0.0 == tab }?.1
+    }
+}
+
+extension PadTabsController: UIGestureRecognizerDelegate {
+    /// The drag follows a finger on the panel's own bar; a thread's list keeps
+    /// its scroll.
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldReceive touch: UITouch) -> Bool {
+        guard gestureRecognizer is UIPanGestureRecognizer else { return true }
+        return touch.location(in: detailSurface).y <= 120
     }
 }
 

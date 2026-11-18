@@ -386,6 +386,7 @@ extension RootViewController: UINavigationControllerDelegate {
         _ navigationController: UINavigationController, didShow viewController: UIViewController, animated: Bool
     ) {
         refreshWindowTitle()
+        padChrome?.refreshBoard()
     }
 }
 

@@ -255,6 +255,7 @@ final class ProfileViewController: FeedViewController {
     /// the Posts and Replies tabs always show the same header.
     private func applyHeaderState() {
         guard isViewLoaded else { return }
+        refreshBoardHeader()
         let width = view.bounds.width
         for header in headers {
             header.setState(loadState)

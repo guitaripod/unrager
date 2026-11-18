@@ -50,9 +50,7 @@ final class PadTabsController: UIViewController {
     /// Whether the open tab's own list can spread into a board: only while
     /// nothing is open beside it, and only where the window has room for two
     /// columns at all.
-    private var showsBoard: Bool {
-        layout.showsDetail && tabUsesDetail && !detailHasScreens
-    }
+    private var showsBoard: Bool { tabUsesDetail && !detailHasScreens }
 
     private var detailHasScreens: Bool {
         guard tabs.indices.contains(selectedIndex) else { return false }
@@ -286,11 +284,14 @@ final class PadTabsController: UIViewController {
     /// Empties the second column, which gives the list its board back.
     func closeDetail() {
         guard tabs.indices.contains(selectedIndex), let nav = details[tabs[selectedIndex]] else { return }
+        let feed = (controllers[selectedIndex] as? UINavigationController)?
+            .viewControllers.first as? FeedViewController
+        let post = nav.viewControllers.compactMap { ($0 as? ThreadViewController)?.tweetID }.last
+        let top = post.flatMap { feed?.visibleTop(of: $0) }
         nav.setViewControllers([], animated: false)
-        detachChildren(of: detail)
-        layoutColumns()
-        applySelection()
-        animateLayout()
+        showColumns(opening: false, change: {
+            self.detachChildren(of: self.detail)
+        }, feed: feed, post: post, top: top)
     }
 
     /// Tells the open tab's own feed whether to spread into a board. A pushed
@@ -463,20 +464,57 @@ final class PadTabsController: UIViewController {
     private func openInDetail(_ controller: UIViewController) {
         guard showsDetail, tabs.indices.contains(selectedIndex) else { return }
         let nav = detailStack(for: tabs[selectedIndex])
-        let arrives = nav.view.superview !== detail
         nav.setViewControllers([controller], animated: false)
         giveCloseButton(to: controller)
-        layoutColumns()
-        show(nav, in: detail)
-        applyBoard()
-        guard arrives, !UIAccessibility.isReduceMotionEnabled else { return }
-        nav.view.alpha = 0
-        nav.view.transform = CGAffineTransform(translationX: 12, y: 0)
-        UIView.animate(withDuration: 0.28, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0.2,
-                       options: [.allowUserInteraction]) {
-            nav.view.alpha = 1
-            nav.view.transform = .identity
+        let feed = (controllers[selectedIndex] as? UINavigationController)?
+            .viewControllers.first as? FeedViewController
+        let post = (controller as? ThreadViewController)?.tweetID
+        let top = post.flatMap { feed?.visibleTop(of: $0) }
+        showColumns(opening: true, change: {
+            self.show(nav, in: self.detail)
+        }, feed: feed, post: post, top: top)
+    }
+
+    /// Opens or closes the column beside the list in one commit: the new widths,
+    /// the board folding back into a row and the sidebar all land together under
+    /// a snapshot of the feed, which then dissolves. Changing all of that one
+    /// step at a time is what made the screen tear.
+    private func showColumns(opening: Bool, change: @escaping () -> Void,
+                             feed: FeedViewController?, post: String?, top: CGFloat?) {
+        let reduceMotion = UIAccessibility.isReduceMotionEnabled
+        let cover = reduceMotion ? nil : primary.snapshotView(afterScreenUpdates: false)
+        if let cover {
+            cover.frame = primary.bounds
+            cover.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            primary.addSubview(cover)
         }
+        feed?.beginPromotion()
+        detail.alpha = opening ? 0 : 1
+        detail.transform = opening ? CGAffineTransform(translationX: 32, y: 0) : .identity
+        UIView.performWithoutAnimation {
+            change()
+            layoutColumns()
+            applyBoard()
+            view.layoutIfNeeded()
+        }
+        feed?.restore(top: top, for: post ?? "")
+
+        let finish = { [weak self] in
+            cover?.removeFromSuperview()
+            feed?.endPromotion()
+            self?.detail.alpha = 1
+            self?.detail.transform = .identity
+        }
+        guard !reduceMotion else {
+            UIView.performWithoutAnimation(finish)
+            return
+        }
+        UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0.2,
+                       options: [.allowUserInteraction, .beginFromCurrentState]) {
+            cover?.alpha = 0
+            self.detail.alpha = 1
+            self.detail.transform = .identity
+        } completion: { _ in finish() }
     }
 
     private func detailStack(for tab: TabItem) -> StatusNavigationController {

@@ -104,6 +104,10 @@ final class TweetCell: UICollectionViewCell {
     private let quotedPost = QuotedPostView()
     private let actionBar = UIStackView()
     private let separator = HairlineView()
+    /// The card a board lays a post on: a rounded surface behind the row, shown
+    /// only where posts are cards. It sits inside the cell, so the list keeps
+    /// its opaque full-bleed rows and the swipe reveal keeps working.
+    private let cardSurface = UIView()
     private let threadRail = ThreadRailView()
     private var columnLeading: NSLayoutConstraint!
     private var railWidth: NSLayoutConstraint!
@@ -139,6 +143,14 @@ final class TweetCell: UICollectionViewCell {
 
     /// Feed-context body cap (v. the unlimited focal/thread rendering).
     static let feedBodyLineLimit = 10
+    /// A card on a board shows a little more before it asks for a tap.
+    static let cardBodyLineLimit = 4
+
+    /// Whether the post is drawn as a card on a surface, the way the iPad board
+    /// shows it, rather than as a full-bleed row in a list.
+    var showsCardSurface = false {
+        didSet { applyCardSurface() }
+    }
 
     static let avatarSize: CGFloat = 36
     private static let sideMargin = DesignSystem.Spacing.l
@@ -149,11 +161,44 @@ final class TweetCell: UICollectionViewCell {
         super.init(frame: frame)
         contentView.backgroundColor = DesignSystem.Color.background
         contentView.isOpaque = true
+        contentView.addManaged(cardSurface)
+        cardSurface.pinEdges(to: contentView)
+        cardSurface.isUserInteractionEnabled = false
+        cardSurface.isHidden = true
+        cardSurface.setFixedCorners(18)
+        cardSurface.backgroundColor = DesignSystem.Color.elevatedBackground
         buildHierarchy()
+    }
+
+    /// Trades the list's full-bleed row for a card: a page-coloured gap around a
+    /// rounded surface, no separator, and a press that lifts the card.
+    private func applyCardSurface() {
+        cardSurface.isHidden = !showsCardSurface
+        separator.isHidden = showsCardSurface
+        contentView.backgroundColor = showsCardSurface ? .clear : DesignSystem.Color.background
+        contentView.isOpaque = !showsCardSurface
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    /// A card answers a touch: it presses in and eases back out, so the board
+    /// says what is tappable before the detail slides in.
+    override var isHighlighted: Bool {
+        didSet {
+            guard oldValue != isHighlighted, showsCardSurface else { return }
+            UIView.animate(
+                withDuration: isHighlighted ? 0.12 : 0.26, delay: 0,
+                usingSpringWithDamping: isHighlighted ? 1 : 0.8, initialSpringVelocity: 0,
+                options: [.allowUserInteraction, .beginFromCurrentState]
+            ) {
+                self.contentView.transform = self.isHighlighted
+                    ? CGAffineTransform(scaleX: 0.984, y: 0.984) : .identity
+                self.cardSurface.backgroundColor = self.isHighlighted
+                    ? DesignSystem.Color.background : DesignSystem.Color.elevatedBackground
+            }
+        }
+    }
 
     override func preferredLayoutAttributesFitting(
         _ layoutAttributes: UICollectionViewLayoutAttributes

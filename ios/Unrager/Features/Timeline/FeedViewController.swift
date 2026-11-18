@@ -146,10 +146,12 @@ class FeedViewController: UIViewController, TweetActionHandling {
     /// Lays a post out for the list or for the board, from one place, so a
     /// measured height is measured against exactly what the cell will show.
     private func configure(_ cell: TweetCell, with tweet: Tweet, id: String, width: CGFloat) {
+        cell.showsCardSurface = usesGrid
+        let limit = expandedBodies.contains(id) ? 0 : (usesGrid ? TweetCell.cardBodyLineLimit : TweetCell.feedBodyLineLimit)
         cell.configure(
             with: tweet, imagesEnabled: AppSettings.imagesEnabled,
             contentWidth: max(120, width), seen: viewModel.isSeen(tweet.restID),
-            bodyLineLimit: expandedBodies.contains(id) ? 0 : TweetCell.feedBodyLineLimit,
+            bodyLineLimit: limit,
             stats: PostStatsPolicy.content(
                 for: tweet, expanded: expandedStats.contains(id), isOwn: isOwnTweet(tweet),
                 changed: { [weak self] in self?.reconfigure(id, animated: true) }),
@@ -229,20 +231,68 @@ class FeedViewController: UIViewController, TweetActionHandling {
     /// place by index, so a post open beside the list lands in the same column
     /// it came from.
     func setGrid(_ on: Bool) {
-        let wanted = on && headerView == nil
+        wantsGrid = on && headerView == nil
+        applyGridMode()
+    }
+
+    /// The board only makes sense with at least two columns; a window too narrow
+    /// for that keeps the list, with its swipe actions and its row per post.
+    private var boardWidth: CGFloat { max(0, min(view.bounds.width - 16, 1240)) }
+
+    private func applyGridMode() {
+        guard isViewLoaded else { return }
+        let fits = MasonryLayout.columns(for: boardWidth) >= 2
+        let wanted = wantsGrid && fits
         guard wanted != usesGrid else { return }
         usesGrid = wanted
-        guard isViewLoaded else { return }
         NSLayoutConstraint.deactivate(wanted ? guidePins : boardPins)
         NSLayoutConstraint.activate(wanted ? boardPins : guidePins)
         collectionView.setCollectionViewLayout(wanted ? makeGridLayout() : makeLayout(), animated: false)
-        gridHeights.removeAll()
-        var snapshot = dataSource.snapshot()
-        if snapshot.numberOfItems > 0 {
-            snapshot.reconfigureItems(snapshot.itemIdentifiers)
-            dataSource.apply(snapshot, animatingDifferences: false)
-        }
+        guard !isPromoting else { return }
+        dataSource.reconfigureVisibleItems(of: collectionView)
     }
+
+    /// Set while a post is being promoted into the column beside the list: the
+    /// feed is changing width and shape under a snapshot, so it must not
+    /// rebuild its rows at every intermediate width — once, at the end, is
+    /// enough, and anything more is what used to flash.
+    private var isPromoting = false
+
+    func beginPromotion() {
+        isPromoting = true
+        collectionView.isUserInteractionEnabled = false
+    }
+
+    /// Ends the promotion at the feed's final width and rebuilds the rows that
+    /// can be seen once — never the ones off screen, which re-measure when they
+    /// next dequeue.
+    func endPromotion() {
+        isPromoting = false
+        collectionView.isUserInteractionEnabled = true
+        collectionView.layoutIfNeeded()
+        dataSource.reconfigureVisibleItems(of: collectionView)
+    }
+
+    /// The top of `id`'s row in this feed's coordinates, for holding a post
+    /// still while the feed changes shape beneath it.
+    func visibleTop(of id: String) -> CGFloat? {
+        guard let indexPath = dataSource.indexPath(for: id),
+              let attributes = collectionView.layoutAttributesForItem(at: indexPath) else { return nil }
+        return attributes.frame.minY - collectionView.contentOffset.y
+    }
+
+    /// Puts `id` back at `top` on screen after the feed changed shape.
+    func restore(top: CGFloat?, for id: String) {
+        guard let top, let indexPath = dataSource.indexPath(for: id),
+              let attributes = collectionView.layoutAttributesForItem(at: indexPath) else { return }
+        let inset = collectionView.adjustedContentInset.top
+        let lowest = max(-inset, collectionView.contentSize.height - collectionView.bounds.height
+                            + collectionView.adjustedContentInset.bottom)
+        let offset = min(max(attributes.frame.minY - top, -inset), max(-inset, lowest))
+        collectionView.setContentOffset(CGPoint(x: collectionView.contentOffset.x, y: offset), animated: false)
+    }
+
+    private var wantsGrid = false
 
     private func makeGridLayout() -> MasonryLayout {
         let layout = MasonryLayout()
@@ -291,10 +341,12 @@ class FeedViewController: UIViewController, TweetActionHandling {
         let width = collectionView.bounds.width
         guard width > 0, width != laidOutWidth else { return }
         laidOutWidth = width
-        if usesGrid {
+        if usesGrid, !isPromoting {
             gridHeights.removeAll()
             collectionView.collectionViewLayout.invalidateLayout()
         }
+        applyGridMode()
+        if !isPromoting { collectionView.collectionViewLayout.invalidateLayout() }
         guard dataSource != nil else { return }
         dataSource.reconfigureVisibleItems(of: collectionView)
     }

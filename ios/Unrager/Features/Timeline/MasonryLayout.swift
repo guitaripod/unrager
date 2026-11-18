@@ -11,7 +11,10 @@ import UIKit
 /// rebuilt when the column width, the number of posts or the header changes, and
 /// left alone while scrolling.
 final class MasonryLayout: UICollectionViewLayout {
-    var columns = 2
+    /// How narrow a column may get before the board drops one: about a phone's
+    /// width of text, so a picture post still reads.
+    static let minimumColumnWidth: CGFloat = 300
+    static let maximumColumns = 4
     var columnSpacing: CGFloat = 10
     var itemSpacing: CGFloat = 10
     var sectionInset = UIEdgeInsets(top: 8, left: 10, bottom: 24, right: 10)
@@ -23,6 +26,7 @@ final class MasonryLayout: UICollectionViewLayout {
     /// can't be queried while its layout is being installed.
     var numberOfItems: (() -> Int)?
 
+    private(set) var resolvedColumns = 1
     private var itemAttributes: [UICollectionViewLayoutAttributes] = []
     private var headerAttributes: UICollectionViewLayoutAttributes?
     private var footerAttributes: UICollectionViewLayoutAttributes?
@@ -39,10 +43,22 @@ final class MasonryLayout: UICollectionViewLayout {
     /// The width of one column in the current layout, for the cells that
     /// measure their text and pictures against it.
     var columnWidth: CGFloat {
-        let inset = sectionInset.left + sectionInset.right
-        let spacing = CGFloat(columns - 1) * columnSpacing
-        let available = (collectionView?.bounds.width ?? 0) - inset - spacing
-        return max(80, (available / CGFloat(columns)).rounded(.down))
+        Self.columnWidth(for: collectionView?.bounds.width ?? 0,
+                         columns: Self.columns(for: collectionView?.bounds.width ?? 0),
+                         spacing: columnSpacing, inset: sectionInset.left + sectionInset.right)
+    }
+
+    /// How many columns fit across `width` at the board's minimum: two on a
+    /// portrait iPad, three or four across a landscape one.
+    static func columns(for width: CGFloat) -> Int {
+        let perColumn = minimumColumnWidth
+        let count = Int(((width + 10) / (perColumn + 10)).rounded(.down))
+        return min(max(count, 1), maximumColumns)
+    }
+
+    private static func columnWidth(for width: CGFloat, columns: Int, spacing: CGFloat, inset: CGFloat) -> CGFloat {
+        let spacing = CGFloat(max(columns - 1, 0)) * spacing
+        return max(80, ((width - inset - spacing) / CGFloat(max(columns, 1))).rounded(.down))
     }
 
     /// The item width a layout attributes would get — the collection view pads
@@ -53,6 +69,7 @@ final class MasonryLayout: UICollectionViewLayout {
         guard let collectionView else { return }
         let width = collectionView.bounds.width
         let count = numberOfItems?() ?? 0
+        let columns = Self.columns(for: width)
         let key = BuildKey(width: width, items: count, columns: columns, header: headerHeight)
         guard key != builtFor else { return }
         builtFor = key
@@ -61,8 +78,9 @@ final class MasonryLayout: UICollectionViewLayout {
         headerAttributes = nil
         footerAttributes = nil
 
-        let columns = max(1, self.columns)
-        let itemWidth = columnWidth
+        resolvedColumns = columns
+        let itemWidth = Self.columnWidth(for: width, columns: columns, spacing: columnSpacing,
+                                         inset: sectionInset.left + sectionInset.right)
         var tops = [CGFloat](repeating: sectionInset.top + headerHeight, count: columns)
         let usable = width - sectionInset.left - sectionInset.right
         let spacing = CGFloat(columns - 1) * columnSpacing

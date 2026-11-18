@@ -74,6 +74,16 @@ struct PadLayoutTests {
         #expect(closed.primaryWidth! > open.primaryWidth!)
     }
 
+    @Test("The board adds a column as the window widens, and drops one as it narrows")
+    func boardColumns() {
+        #expect(MasonryLayout.columns(for: 320) == 1)
+        #expect(MasonryLayout.columns(for: 728) == 2)
+        #expect(MasonryLayout.columns(for: 1008) == 3)
+        #expect(MasonryLayout.columns(for: 1128) == 3)
+        #expect(MasonryLayout.columns(for: 1240) == 4)
+        #expect(MasonryLayout.columns(for: 3000) == MasonryLayout.maximumColumns)
+    }
+
     @Test("Settings is the one tab with nowhere to put a second column")
     func detailColumnTabs() {
         #expect(TabItem.home.offersDetailColumn)

@@ -1,9 +1,8 @@
 import UIKit
 
-/// A two-column masonry layout for the feed on a wide iPad window: every post
-/// takes the narrowest column with room, so pictures and long posts sit beside
-/// short ones instead of leaving a ragged row, and the whole board scrolls as
-/// one list.
+/// A masonry layout for the feed on an iPad window: every post takes the
+/// narrowest column with room, so pictures and long posts sit beside short ones
+/// instead of leaving a ragged row, and the whole board scrolls as one list.
 ///
 /// Heights come from the caller, which measures a real `TweetCell` and keeps the
 /// answer: a feed's rows are self-sizing in a list, and a custom layout has to
@@ -12,9 +11,12 @@ import UIKit
 /// left alone while scrolling.
 final class MasonryLayout: UICollectionViewLayout {
     /// How narrow a column may get before the board drops one: about a phone's
-    /// width of text, so a picture post still reads.
+    /// width of text, so a picture post still reads. A window overrides both
+    /// this and the cap with `PadLayout.board(window:)`.
     static let minimumColumnWidth: CGFloat = 300
     static let maximumColumns = 4
+    var minimumColumnWidth: CGFloat = MasonryLayout.minimumColumnWidth
+    var maximumColumns: Int = MasonryLayout.maximumColumns
     var columnSpacing: CGFloat = 10
     var itemSpacing: CGFloat = 10
     var sectionInset = UIEdgeInsets(top: 8, left: 10, bottom: 24, right: 10)
@@ -44,16 +46,23 @@ final class MasonryLayout: UICollectionViewLayout {
     /// measure their text and pictures against it.
     var columnWidth: CGFloat {
         Self.columnWidth(for: collectionView?.bounds.width ?? 0,
-                         columns: Self.columns(for: collectionView?.bounds.width ?? 0),
+                         columns: columns(for: collectionView?.bounds.width ?? 0),
                          spacing: columnSpacing, inset: sectionInset.left + sectionInset.right)
     }
 
-    /// How many columns fit across `width` at the board's minimum: two on a
-    /// portrait iPad, three or four across a landscape one.
+    /// How many columns fit across `width` at the board's own minimum — pure
+    /// arithmetic, so it can be asked without a layout or a main thread.
     static func columns(for width: CGFloat) -> Int {
-        let perColumn = minimumColumnWidth
-        let count = Int(((width + 10) / (perColumn + 10)).rounded(.down))
-        return min(max(count, 1), maximumColumns)
+        columns(for: width, minimum: minimumColumnWidth, maximum: maximumColumns, spacing: 10)
+    }
+
+    static func columns(for width: CGFloat, minimum: CGFloat, maximum: Int, spacing: CGFloat) -> Int {
+        let count = Int(((width + spacing) / (minimum + spacing)).rounded(.down))
+        return min(max(count, 1), maximum)
+    }
+
+    func columns(for width: CGFloat) -> Int {
+        Self.columns(for: width, minimum: minimumColumnWidth, maximum: maximumColumns, spacing: columnSpacing)
     }
 
     private static func columnWidth(for width: CGFloat, columns: Int, spacing: CGFloat, inset: CGFloat) -> CGFloat {
@@ -69,7 +78,7 @@ final class MasonryLayout: UICollectionViewLayout {
         guard let collectionView else { return }
         let width = collectionView.bounds.width
         let count = numberOfItems?() ?? 0
-        let columns = Self.columns(for: width)
+        let columns = columns(for: width)
         let key = BuildKey(width: width, items: count, columns: columns, header: headerHeight)
         guard key != builtFor else { return }
         builtFor = key

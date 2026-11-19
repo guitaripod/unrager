@@ -309,11 +309,21 @@ final class HomeViewController: FeedViewController {
     private var composeAtEdge: NSLayoutConstraint?
 
     override func setGrid(_ on: Bool) {
+        let wasGrid = usesGrid
         super.setGrid(on)
-        guard let composeButton else { return }
+        guard let composeButton, usesGrid != wasGrid else { return }
         composeInColumn?.isActive = !usesGrid
         composeAtEdge?.isActive = usesGrid
         UIView.animate(withDuration: 0.25) { composeButton.superview?.layoutIfNeeded() }
+    }
+
+    /// The rail carries the Post button on a wide iPad window, so the floating
+    /// one goes away rather than doubling it in the corner.
+    override func setRailCarriesPost(_ carries: Bool) {
+        guard let composeButton, composeButton.alpha != (carries ? 0 : 1) else { return }
+        composeButton.isUserInteractionEnabled = !carries
+        composeButton.accessibilityElementsHidden = carries
+        UIView.animate(withDuration: 0.2) { composeButton.alpha = carries ? 0 : 1 }
     }
 
     private func presentCompose(opensPhotoPicker: Bool = false) {

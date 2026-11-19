@@ -215,15 +215,16 @@ class FeedViewController: UIViewController, TweetActionHandling {
         viewModel.first()
     }
 
-    /// Whether this feed shows its posts as a two-column board — a wide iPad
-    /// window with nothing open beside it. A feed with a header of its own (a
-    /// profile) always keeps its single list.
+    /// Whether this feed shows its posts as a board of cards — an iPad window
+    /// with room for more than one beside another. A feed with a header of its
+    /// own (a profile) always keeps its single list.
     private(set) var usesGrid = false
     private var gridLayout: MasonryLayout?
     /// The list sits in the reading column; the board takes the window, so a
     /// wide screen is filled instead of bordered by margins.
     private var guidePins: [NSLayoutConstraint] = []
     private var boardPins: [NSLayoutConstraint] = []
+    private var boardCap: NSLayoutConstraint?
     private var gridHeights: [String: CGFloat] = [:]
     private var measuringCell: TweetCell?
 
@@ -235,20 +236,41 @@ class FeedViewController: UIViewController, TweetActionHandling {
         applyGridMode()
     }
 
-    /// The board only makes sense with at least two columns; a window too narrow
-    /// for that keeps the list, with its swipe actions and its row per post.
-    private var boardWidth: CGFloat { max(0, min(view.bounds.width - 16, 1240)) }
+    /// Whether the iPad's rail carries the Post button. Where it does, the feed
+    /// keeps its own floating button out of the way: two ways to compose in one
+    /// window is one too many.
+    func setRailCarriesPost(_ carries: Bool) {}
+
+    /// The window this feed is laid out in, which decides how many posts the
+    /// board may set side by side — a mini sets two where a 13-inch iPad sets
+    /// three, and a tall window sets two wider ones.
+    private var windowSize: CGSize { view.window?.bounds.size ?? view.bounds.size }
+
+    /// The board's shape in this window: the narrowest a card may get, the most
+    /// that may sit beside another, and the widest the board grows.
+    private var boardProfile: PadLayout.Board { PadLayout.board(window: windowSize) }
+
+    /// The width the board lays its cards out in: the window, up to the width
+    /// its columns need, so a huge window doesn't stretch three cards across it.
+    private var boardWidth: CGFloat {
+        max(0, min(view.bounds.width - 20, boardProfile.maximumWidth))
+    }
 
     private func applyGridMode() {
         guard isViewLoaded else { return }
-        let fits = MasonryLayout.columns(for: boardWidth) >= 2
+        let profile = boardProfile
+        let fits = MasonryLayout.columns(for: boardWidth, minimum: profile.minimumColumnWidth,
+                                         maximum: profile.maximumColumns, spacing: 10) >= 2
         let wanted = wantsGrid && fits
+        boardCap?.constant = profile.maximumWidth
         guard wanted != usesGrid else { return }
         usesGrid = wanted
         NSLayoutConstraint.deactivate(wanted ? guidePins : boardPins)
         NSLayoutConstraint.activate(wanted ? boardPins : guidePins)
         if wanted { boardHeaderHeight = measureBoardHeader() }
-        collectionView.setCollectionViewLayout(wanted ? makeGridLayout() : makeLayout(), animated: false)
+        let layout = wanted ? makeGridLayout() : makeLayout()
+        gridHeights.removeAll()
+        collectionView.setCollectionViewLayout(layout, animated: false)
         dataSource.reconfigureVisibleItems(of: collectionView)
     }
 
@@ -284,6 +306,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
 
     private func makeGridLayout() -> MasonryLayout {
         let layout = MasonryLayout()
+        applyBoard(profile: boardProfile, to: layout)
         layout.numberOfItems = { [weak self] in
             guard let self, self.dataSource != nil else { return 0 }
             return self.dataSource.snapshot().numberOfItems
@@ -292,6 +315,17 @@ class FeedViewController: UIViewController, TweetActionHandling {
         layout.heightForItem = { [weak self] indexPath in self?.gridHeight(at: indexPath) ?? 320 }
         gridLayout = layout
         return layout
+    }
+
+    /// Gives the board the window's own column rules: how narrow a card may get,
+    /// how many may sit beside another, and a mini's tighter gutters.
+    private func applyBoard(profile: PadLayout.Board, to layout: MasonryLayout) {
+        layout.minimumColumnWidth = profile.minimumColumnWidth
+        layout.maximumColumns = profile.maximumColumns
+        layout.columnSpacing = profile.dense ? 8 : 10
+        layout.itemSpacing = profile.dense ? 8 : 10
+        layout.sectionInset = UIEdgeInsets(top: 8, left: profile.dense ? 8 : 10,
+                                           bottom: 24, right: profile.dense ? 8 : 10)
     }
 
     /// The post's height at the current column width, measured once with a
@@ -332,7 +366,10 @@ class FeedViewController: UIViewController, TweetActionHandling {
         laidOutWidth = width
         if usesGrid {
             gridHeights.removeAll()
-            collectionView.collectionViewLayout.invalidateLayout()
+            if let grid = collectionView.collectionViewLayout as? MasonryLayout {
+                applyBoard(profile: boardProfile, to: grid)
+                grid.invalidateLayout()
+            }
         }
         applyGridMode()
         collectionView.collectionViewLayout.invalidateLayout()
@@ -452,12 +489,14 @@ class FeedViewController: UIViewController, TweetActionHandling {
         contentGuide = makeContentGuide()
         view.addManaged(collectionView)
         guidePins = collectionView.pinEdges(to: contentGuide)
+        let cap = collectionView.widthAnchor.constraint(lessThanOrEqualToConstant: boardProfile.maximumWidth)
+        boardCap = cap
         boardPins = [
             collectionView.topAnchor.constraint(equalTo: view.topAnchor),
             collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             collectionView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            collectionView.widthAnchor.constraint(equalTo: view.widthAnchor, constant: -16).priority(.defaultHigh),
-            collectionView.widthAnchor.constraint(lessThanOrEqualToConstant: 1240),
+            collectionView.widthAnchor.constraint(equalTo: view.widthAnchor, constant: -20).priority(.defaultHigh),
+            cap,
         ]
         if usesGrid {
             NSLayoutConstraint.deactivate(guidePins)

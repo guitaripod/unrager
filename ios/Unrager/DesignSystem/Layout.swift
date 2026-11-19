@@ -87,3 +87,11 @@ extension UIView {
         ])
     }
 }
+
+extension NSLayoutConstraint {
+    /// A priority set inline, for a width that fills until it meets its cap.
+    func priority(_ priority: UILayoutPriority) -> NSLayoutConstraint {
+        self.priority = priority
+        return self
+    }
+}

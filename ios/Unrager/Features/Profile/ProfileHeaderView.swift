@@ -37,6 +37,9 @@ final class ProfileHeaderView: UIView {
     private let followButton = UIButton(configuration: .filled())
     private let briefButton = UIButton(configuration: .tinted())
     private let strip = ProfileTabStrip(titles: ["Posts", "Replies", "Media"])
+    /// The strip sits on its own row so it can stop short of the full column on a
+    /// wide iPad instead of stretching three words across 700 points.
+    private let stripRow = UIStackView()
     private let tiles = ProfileStatTiles()
     private let separator = HairlineView()
     private let retryButton = UIButton(configuration: .tinted())
@@ -161,8 +164,19 @@ final class ProfileHeaderView: UIView {
         }
         topRow.heightAnchor.constraint(greaterThanOrEqualToConstant: ProfileAvatarView.total / 2 + 8).isActive = true
 
+        stripRow.axis = .horizontal
+        stripRow.alignment = .fill
+        stripRow.addArrangedSubview(strip)
+        stripRow.addArrangedSubview(UIView())
+        let stripWidth = strip.widthAnchor.constraint(equalToConstant: 460)
+        stripWidth.priority = .defaultHigh
+        NSLayoutConstraint.activate([
+            stripWidth,
+            strip.trailingAnchor.constraint(lessThanOrEqualTo: stripRow.trailingAnchor),
+        ])
+
         [topRow, nameSkeleton, text, detailSkeleton, statusLabel, retryRow, bioLabel, factsView, tiles, tilesSkeleton,
-         insightsView, strip, lockedNotice].forEach(column.addArrangedSubview)
+         insightsView, stripRow, lockedNotice].forEach(column.addArrangedSubview)
         column.axis = .vertical
         column.spacing = DesignSystem.Spacing.m
         column.alignment = .fill
@@ -287,7 +301,7 @@ final class ProfileHeaderView: UIView {
         retryButton.isHidden = !state.offersRetry
         tiles.isHidden = !loaded
         briefButton.isHidden = state.isFinal
-        strip.isHidden = state.isFinal
+        stripRow.isHidden = state.isFinal
         if !loaded {
             bioLabel.isHidden = true
             factsView.configure([])
@@ -445,9 +459,9 @@ final class ProfileHeaderView: UIView {
         lockedNotice.isHidden = !shown
         if shown {
             lockedNotice.configure(handle: handle)
-            strip.isHidden = true
+            stripRow.isHidden = true
         } else if !state.isFinal {
-            strip.isHidden = false
+            stripRow.isHidden = false
         }
     }
 
@@ -493,7 +507,7 @@ final class ProfileHeaderView: UIView {
     /// The tab strip's frame in `view`'s coordinates, or nil while it isn't
     /// shown.
     func stripFrame(in view: UIView) -> CGRect? {
-        guard !strip.isHidden, strip.window != nil else { return nil }
+        guard !stripRow.isHidden, strip.window != nil else { return nil }
         return strip.convert(strip.bounds, to: view)
     }
 

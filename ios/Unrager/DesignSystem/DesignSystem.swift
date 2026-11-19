@@ -16,6 +16,9 @@ enum DesignSystem {
             }
         }
         static var background: UIColor { .systemBackground }
+        /// The iPad rail's own surface: a step off the page, so the sidebar and
+        /// the content beside it read as two columns rather than one sheet.
+        static var sidebar: UIColor { .secondarySystemBackground }
         static var elevatedBackground: UIColor { .secondarySystemBackground }
         static var surface: UIColor { .secondarySystemBackground }
         static var label: UIColor { .label }

@@ -16,15 +16,22 @@ enum ClientSettings {
         static let padSidebarShown = "unrager.ios.padSidebarShown"
     }
 
-    /// How wide the iPad's sidebar was dragged to, in points. Clamped to the
-    /// range its grip allows so a stale or hand-edited value can't leave the
+    /// How wide the iPad's sidebar was dragged to, in points, or zero when it
+    /// has never been dragged and the window's own iPad decides. Clamped to the
+    /// range the grip allows so a stale or hand-edited value can't leave the
     /// feed without room.
     static var padSidebarWidth: CGFloat {
         get {
             let stored = defaults.double(forKey: Key.padSidebarWidth)
-            return stored > 0 ? min(max(stored, 200), 360) : 248
+            let narrowest = PadLayout.metrics(for: .mini).narrowestRail
+            let widest = PadLayout.metrics(for: .regular).widestRail
+            return stored > 0 ? min(max(stored, narrowest), widest) : 0
         }
-        set { defaults.set(min(max(newValue, 200), 360), forKey: Key.padSidebarWidth) }
+        set {
+            let narrowest = PadLayout.metrics(for: .mini).narrowestRail
+            let widest = PadLayout.metrics(for: .regular).widestRail
+            defaults.set(newValue > 0 ? min(max(newValue, narrowest), widest) : 0, forKey: Key.padSidebarWidth)
+        }
     }
 
     /// Whether the iPad's sidebar is open. Persisted so a window reopens the

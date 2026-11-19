@@ -1,10 +1,10 @@
 import UIKit
 
 /// The tab bar on iPad, drawn as the system draws it: a rail down the leading
-/// edge of a landscape window, a floating glass bar at the bottom of a portrait
-/// or narrow one. It carries the same items as the phone's bar — the chosen tab
-/// tinted, unread activity badged — and adds a post button at the foot of the
-/// rail, where a sidebar has the room for one.
+/// edge of a wide window, a floating glass bar at the bottom of a tall or narrow
+/// one. It carries the same items as the phone's bar — the chosen tab tinted,
+/// unread activity badged — and adds a post button at the foot of the rail,
+/// where a sidebar has the room for one.
 final class TabChromeBar: UIView {
     enum Form: Equatable {
         case rail
@@ -40,6 +40,8 @@ final class TabChromeBar: UIView {
     private(set) var form: Form = .bottom
     private(set) var selectedIndex = 0
 
+    /// The rail's own surface: a solid tint a step away from the page, so the
+    /// sidebar and the feed read as two columns rather than one sheet.
     private let panel = UIView()
     private let glass = UIVisualEffectView.glass()
     private let edge = HairlineView()
@@ -55,24 +57,23 @@ final class TabChromeBar: UIView {
     /// Where the last grip report left the finger, so each report is a step and
     /// not the whole drag again.
     private var lastGripTravel: CGFloat = 0
+    private var metrics = PadLayout.metrics(for: .regular)
 
     private var edgeWidth: NSLayoutConstraint!
+    private var headerHeight: NSLayoutConstraint!
+    private var wordmarkLeading: NSLayoutConstraint!
     private var stackTop: NSLayoutConstraint!
     private var stackUnderHeader: NSLayoutConstraint!
     private var stackSide: NSLayoutConstraint!
     private var stackBottom: NSLayoutConstraint!
     private var postHeight: NSLayoutConstraint!
 
-    static let bottomHeight: CGFloat = 62
-    /// How much of the bottom a screen under the bar has to keep clear.
-    static let bottomClearance: CGFloat = bottomHeight + 22
-
     override init(frame: CGRect) {
         super.init(frame: frame)
         accessibilityContainerType = .semanticGroup
         isAccessibilityElement = false
 
-        panel.backgroundColor = DesignSystem.Color.elevatedBackground
+        panel.backgroundColor = DesignSystem.Color.sidebar
         panel.isUserInteractionEnabled = false
         addManaged(panel)
         panel.pinEdges(to: self)
@@ -121,8 +122,10 @@ final class TabChromeBar: UIView {
         addManaged(postButton)
         postHeight = postButton.heightAnchor.constraint(equalToConstant: 0)
 
+        wordmarkLeading = wordmark.leadingAnchor.constraint(equalTo: header.leadingAnchor)
+        headerHeight = header.heightAnchor.constraint(equalToConstant: 40)
         stackTop = stack.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 8)
-        stackUnderHeader = stack.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 4)
+        stackUnderHeader = stack.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 6)
         stackSide = stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10)
         stackBottom = stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
         NSLayoutConstraint.activate([
@@ -130,8 +133,8 @@ final class TabChromeBar: UIView {
             header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
             header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
             header.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 6),
-            header.heightAnchor.constraint(equalToConstant: 40),
-            wordmark.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            headerHeight,
+            wordmarkLeading,
             wordmark.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             hideButton.trailingAnchor.constraint(equalTo: header.trailingAnchor),
             hideButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
@@ -179,7 +182,7 @@ final class TabChromeBar: UIView {
                 row.removeFromSuperview()
             }
             rowViews = visible.map { _ in
-                let row = TabChromeRow(form: form)
+                let row = TabChromeRow(form: form, dense: metrics.rail <= 220)
                 stack.addArrangedSubview(row)
                 return row
             }
@@ -188,13 +191,31 @@ final class TabChromeBar: UIView {
             view.onTap = { [weak self] in self?.onRow?(row.id) }
             view.configure(row)
         }
+        spaceOutSections(visible)
     }
 
-    /// Switches between the rail and the bar; returns whether anything moved, so
-    /// the caller only animates a real change.
+    /// A little air above each top-level line, so the tabs read as groups rather
+    /// than one long list of equally-related places.
+    private func spaceOutSections(_ visible: [Row]) {
+        guard form == .rail else { return }
+        for (index, view) in rowViews.enumerated() {
+            let next = visible.indices.contains(index + 1) ? visible[index + 1] : nil
+            let gap: CGFloat = next?.depth == 0 ? 10 : 0
+            stack.setCustomSpacing(gap, after: view)
+        }
+    }
+
+    /// Switches between the rail and the bar, taking the window's measurements
+    /// with it; returns whether anything moved, so the caller only animates a
+    /// real change.
     @discardableResult
-    func apply(form newForm: Form) -> Bool {
-        guard newForm != form else { return false }
+    func apply(form newForm: Form, metrics newMetrics: PadLayout.Metrics) -> Bool {
+        let resized = newMetrics != metrics
+        metrics = newMetrics
+        guard newForm != form else {
+            if resized { applyDensity() }
+            return false
+        }
         install(form: newForm)
         return true
     }
@@ -202,7 +223,7 @@ final class TabChromeBar: UIView {
     private func install(form newForm: Form) {
         form = newForm
         let rail = newForm == .rail
-        glass.setFixedCorners(rail ? 0 : Self.bottomHeight / 2)
+        glass.setFixedCorners(rail ? 0 : metrics.barHeight / 2)
         edge.isHidden = !rail
         edgeWidth.constant = rail ? 1 / max(1, traitCollection.displayScale) : 0
         header.isHidden = !rail
@@ -210,23 +231,33 @@ final class TabChromeBar: UIView {
         panel.isHidden = !rail
         glass.isHidden = rail
         postButton.isHidden = !rail
-        postHeight.constant = rail ? 50 : 0
         stackTop.isActive = !rail
         stackUnderHeader.isActive = rail
         stackBottom.isActive = !rail
+        postHeight.constant = rail ? 50 : 0
         if rail {
-            stackSide.constant = 16
             stack.axis = .vertical
-            stack.spacing = 2
             stack.distribution = .fill
         } else {
-            stackSide.constant = 10
             stack.axis = .horizontal
-            stack.spacing = 2
             stack.distribution = .fillEqually
         }
         for row in rowViews { row.form = newForm }
+        applyDensity()
         rebuild()
+    }
+
+    /// The rail's own spacing: a mini's 208 points hold the same words as a
+    /// 13-inch window's 280, so its rows sit tighter and its title is a size
+    /// down rather than clipped or wrapped.
+    private func applyDensity() {
+        let dense = metrics.rail <= 220
+        stack.spacing = 2
+        stackSide.constant = dense ? 8 : 10
+        wordmarkLeading.constant = dense ? -4 : 0
+        wordmark.font = .systemFont(ofSize: (dense ? 18 : 22) * DesignSystem.Typography.scale, weight: .bold)
+        headerHeight.constant = dense ? 34 : 40
+        for row in rowViews { row.dense = dense }
     }
 
     @objc private func gripPanned(_ gesture: UIPanGestureRecognizer) {
@@ -244,8 +275,6 @@ final class TabChromeBar: UIView {
             lastGripTravel = 0
         }
     }
-
-
 }
 
 extension TabChromeBar.Form {
@@ -276,8 +305,17 @@ private final class TabChromeRow: UIView {
         }
     }
 
-    init(form: TabChromeBar.Form) {
+    /// A mini's rail is narrow enough that every row has to give a little.
+    var dense = false {
+        didSet {
+            guard oldValue != dense else { return }
+            build()
+        }
+    }
+
+    init(form: TabChromeBar.Form, dense: Bool) {
         self.form = form
+        self.dense = dense
         super.init(frame: .zero)
         addManaged(button)
         button.pinEdges(to: self)
@@ -319,14 +357,16 @@ private final class TabChromeRow: UIView {
         var config = UIButton.Configuration.plain()
         config.title = row.title
         config.image = row.image?.applyingSymbolConfiguration(
-            UIImage.SymbolConfiguration(pointSize: rail ? (child ? 15 : 19) : 20, weight: .regular))
+            UIImage.SymbolConfiguration(pointSize: rail ? (child ? (dense ? 14 : 15) : (dense ? 17 : 19)) : 19,
+                                        weight: .regular))
         config.imagePlacement = rail ? .leading : .top
-        config.imagePadding = rail ? (child ? 10 : 12) : 2
+        config.imagePadding = rail ? (child ? (dense ? 8 : 10) : (dense ? 9 : 12)) : 2
         button.contentHorizontalAlignment = rail ? .leading : .center
         config.contentInsets = rail
-            ? NSDirectionalEdgeInsets(top: child ? 7 : 10, leading: child ? 38 : 12,
-                                      bottom: child ? 7 : 10, trailing: 34)
-            : NSDirectionalEdgeInsets(top: 4, leading: 2, bottom: 4, trailing: 2)
+            ? NSDirectionalEdgeInsets(top: dense ? 8 : (child ? 7 : 10),
+                                      leading: child ? (dense ? 30 : 38) : (dense ? 9 : 12),
+                                      bottom: dense ? 8 : (child ? 7 : 10), trailing: 30)
+            : NSDirectionalEdgeInsets(top: 2, leading: 2, bottom: 2, trailing: 2)
         config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
             var out = incoming
             out.font = rail
@@ -345,7 +385,7 @@ private final class TabChromeRow: UIView {
         badgeConstraints = rail
             ? [badge.centerYAnchor.constraint(equalTo: centerYAnchor),
                badge.trailingAnchor.constraint(equalTo: trailingAnchor,
-                                              constant: row.isGroup ? -34 : -14)]
+                                               constant: row.isGroup ? -34 : -12)]
             : [badge.centerXAnchor.constraint(equalTo: centerXAnchor, constant: 15),
                badge.topAnchor.constraint(equalTo: topAnchor, constant: 2)]
         NSLayoutConstraint.activate(badgeConstraints)
@@ -355,7 +395,9 @@ private final class TabChromeRow: UIView {
     private func style() {
         var config = button.configuration ?? .plain()
         config.baseForegroundColor = row.chosen ? DesignSystem.Color.accent : DesignSystem.Color.label
-        config.background.backgroundColor = row.chosen && form == .rail
+        // One selection is filled — the tab itself. A place inside it is marked
+        // in the accent colour alone, so a sidebar never shows two filled rows.
+        config.background.backgroundColor = row.chosen && form == .rail && row.depth == 0
             ? DesignSystem.Color.accent.withAlphaComponent(0.16) : .clear
         button.configuration = config
         button.accessibilityTraits = row.chosen ? [.button, .selected] : .button

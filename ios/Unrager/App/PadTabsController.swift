@@ -2,10 +2,12 @@ import UIKit
 import UnragerKit
 
 /// The iPad's tabs: a rail down the side or a bar along the bottom, around the
-/// chosen tab. The tab's own feed fills whatever is left — as a board of cards
-/// where the window allows — and a post, a profile or a list of people opens by
-/// growing out of the card that was tapped and settling over the board, which
-/// never moves: no cell reflows and nothing behind it is rebuilt.
+/// chosen tab. The tab's own feed fills what is left — as a board of cards where
+/// the window allows — and a post, a profile or a list of people opens in the
+/// column beside it, the way the system's own split views do: the board gives up
+/// the width, nothing dims, and both sides stay live. In a tall or narrow window
+/// there is no room for a second column, so what you open takes the window and
+/// the board waits behind it with its place kept.
 final class PadTabsController: UIViewController {
     /// A tab was chosen from the rail or the bar.
     var onSelect: ((Int) -> Void)?
@@ -15,10 +17,12 @@ final class PadTabsController: UIViewController {
     var onCompose: (() -> Void)?
 
     private(set) var selectedIndex = 0
-    private(set) var layout = PadLayout(chrome: .bottom, railWidth: 0)
+    private(set) var layout = PadLayout.resolve(window: CGSize(width: 1024, height: 768))
 
     /// The sidebar's width and whether it is open; both survive a relaunch, the
-    /// way the system's own sidebars do.
+    /// way the system's own sidebars do. A width of zero means "the width this
+    /// iPad gives its sidebar", so a mini and a 13-inch window each get their own
+    /// until the reader drags one.
     private var sidebarWidth = PadTabsController.initialSidebarWidth
     private var sidebarShown = ClientSettings.padSidebarShown
 
@@ -27,7 +31,7 @@ final class PadTabsController: UIViewController {
     private static var initialSidebarWidth: CGFloat {
         #if DEBUG
         if let raw = ProcessInfo.processInfo.environment["UNRAGER_PAD_SIDEBAR"], let width = Double(raw) {
-            return min(max(width, PadLayout.narrowestRailWidth), PadLayout.widestRailWidth)
+            return width
         }
         #endif
         return ClientSettings.padSidebarWidth
@@ -43,15 +47,13 @@ final class PadTabsController: UIViewController {
     private let chrome = TabChromeBar()
     private let contentArea = UILayoutGuide()
     private let primary = UIView()
-    /// The panel a post grows into: `detailSurface` carries the shadow and the
-    /// frame that animates, `detail` clips the screen inside it.
-    private let scrim = UIView()
-    private let detailSurface = UIView()
+    /// The column a post opens into: the window's trailing column where there is
+    /// room for one beside the board, the whole content area where there isn't.
+    private let detailColumn = UIView()
+    private let divider = HairlineView()
     private let detail = UIView()
 
-    /// Whether the open tab's own list spreads into a board. The board never
-    /// folds: what a tap opens grows over it, so the reader's place in the feed
-    /// survives.
+    /// Whether the open tab's own list spreads into a board.
     private var showsBoard: Bool { tabUsesDetail }
 
     private var detailHasScreens: Bool {
@@ -67,10 +69,12 @@ final class PadTabsController: UIViewController {
 
     private var chromeConstraints: [NSLayoutConstraint] = []
     private var contentLeading: NSLayoutConstraint!
-    private var contentBottom: NSLayoutConstraint!
+    private var detailWidth: NSLayoutConstraint!
+    private var primaryBesideDetail: NSLayoutConstraint!
+    private var primaryFullWidth: NSLayoutConstraint!
 
     /// How long the column change takes. A screenshot run can stretch it, so a
-    /// still frame can catch a card in flight.
+    /// still frame can catch the board midway.
     private static var transitionDuration: TimeInterval {
         #if DEBUG
         if let raw = ProcessInfo.processInfo.environment["UNRAGER_TRANSITION_SECONDS"], let value = Double(raw),
@@ -95,46 +99,67 @@ final class PadTabsController: UIViewController {
 
         view.addLayoutGuide(contentArea)
         contentLeading = contentArea.leadingAnchor.constraint(equalTo: view.leadingAnchor)
-        contentBottom = contentArea.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         NSLayoutConstraint.activate([
             contentLeading,
-            contentBottom,
             contentArea.topAnchor.constraint(equalTo: view.topAnchor),
             contentArea.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            contentArea.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
 
         view.addManaged(primary)
+        primaryFullWidth = primary.trailingAnchor.constraint(equalTo: contentArea.trailingAnchor)
         NSLayoutConstraint.activate([
             primary.topAnchor.constraint(equalTo: contentArea.topAnchor),
             primary.bottomAnchor.constraint(equalTo: contentArea.bottomAnchor),
             primary.leadingAnchor.constraint(equalTo: contentArea.leadingAnchor),
-            primary.trailingAnchor.constraint(equalTo: contentArea.trailingAnchor),
+            primaryFullWidth,
         ])
 
-        detailSurface.isHidden = true
-        detailSurface.layer.shadowColor = UIColor.black.cgColor
-        detailSurface.layer.shadowOpacity = 0.18
-        detailSurface.layer.shadowRadius = 28
-        detailSurface.layer.shadowOffset = CGSize(width: 0, height: 10)
-        scrim.backgroundColor = UIColor.black.withAlphaComponent(0.18)
-        scrim.alpha = 0
-        scrim.isHidden = true
-        scrim.translatesAutoresizingMaskIntoConstraints = true
-        scrim.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        view.addSubview(scrim)
-        scrim.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(scrimTapped)))
+        detailColumn.backgroundColor = DesignSystem.Color.background
+        detailColumn.clipsToBounds = true
+        detailColumn.isHidden = true
+        view.addManaged(detailColumn)
+        detailWidth = detailColumn.widthAnchor.constraint(equalToConstant: 0)
+        primaryBesideDetail = primary.trailingAnchor.constraint(equalTo: detailColumn.leadingAnchor)
+        NSLayoutConstraint.activate([
+            detailColumn.trailingAnchor.constraint(equalTo: contentArea.trailingAnchor),
+            detailColumn.topAnchor.constraint(equalTo: view.topAnchor),
+            detailColumn.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            detailWidth,
+        ])
 
-        detailSurface.backgroundColor = DesignSystem.Color.background
-        detailSurface.translatesAutoresizingMaskIntoConstraints = true
-        detailSurface.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        view.addSubview(detailSurface)
+        detailColumn.addManaged(divider)
+        NSLayoutConstraint.activate([
+            divider.leadingAnchor.constraint(equalTo: detailColumn.leadingAnchor),
+            divider.topAnchor.constraint(equalTo: detailColumn.topAnchor),
+            divider.bottomAnchor.constraint(equalTo: detailColumn.bottomAnchor),
+            divider.widthAnchor.constraint(equalToConstant: 1 / max(1, traitCollection.displayScale)),
+        ])
+
+        detailColumn.addManaged(detail)
         detail.clipsToBounds = true
-        detailSurface.addManaged(detail)
-        detail.pinEdges(to: detailSurface)
-        let drag = UIPanGestureRecognizer(target: self, action: #selector(panelDragged(_:)))
-        drag.delegate = self
-        detailSurface.addGestureRecognizer(drag)
+        detail.pinEdges(to: detailColumn)
+
+        let edgeSwipe = UIScreenEdgePanGestureRecognizer(target: self, action: #selector(edgeSwiped))
+        edgeSwipe.edges = .left
+        edgeSwipe.delegate = self
+        edgeSwipe.cancelsTouchesInView = false
+        view.addGestureRecognizer(edgeSwipe)
+
         apply(PadLayout.resolve(window: view.bounds.size, rail: sidebarWidth, closed: !sidebarShown), force: true)
+    }
+
+    /// A swipe in from the leading edge brings a closed sidebar back, the way it
+    /// does in the system's own apps.
+    @objc private func edgeSwiped(_ gesture: UIScreenEdgePanGestureRecognizer) {
+        guard gesture.state == .recognized else { return }
+        Haptics.selection()
+        toggleSidebar()
+    }
+
+    /// Whether this window has a rail to reveal at all.
+    private var windowHasSidebar: Bool {
+        view.bounds.width > view.bounds.height && view.bounds.width >= PadLayout.railWindowMinimum
     }
 
     /// A screen's navigation item only holds what the screen has put there once
@@ -147,16 +172,20 @@ final class PadTabsController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        applySafeArea()
         let size = view.bounds.size
         guard size.width > 0, size.height > 0 else { return }
         apply(PadLayout.resolve(window: size, rail: sidebarWidth, closed: !sidebarShown))
+        // A tab's view is loaded the first time it is shown, which can be after
+        // the chrome was resolved: its board and its bar clearance are settled
+        // here, on every pass, so nothing waits for the next tap.
+        applyBoard()
+        applySafeArea()
         #if DEBUG
         if ProcessInfo.processInfo.environment["UNRAGER_LAYOUT_LOG"] != nil, size != loggedSize {
             loggedSize = size
             AppLogger.shared.info(
                 "pad layout \(layout) window=\(String(describing: view.window?.bounds)) "
-                + "primary=\(primary.frame) detail=\(detail.frame) chrome=\(chrome.frame)",
+                + "primary=\(primary.frame) detail=\(detailColumn.frame) chrome=\(chrome.frame)",
                 category: .app)
         }
         #endif
@@ -181,7 +210,6 @@ final class PadTabsController: UIViewController {
             expandedSections.insert(tabs[selectedIndex].rawValue)
         }
         refreshRows()
-        layoutPanel()
         applySelection()
         applySidebarButton()
     }
@@ -192,7 +220,6 @@ final class PadTabsController: UIViewController {
         guard controllers.indices.contains(index) else { return }
         selectedIndex = index
         refreshRows()
-        layoutPanel()
         applySelection()
         applySidebarButton()
     }
@@ -223,7 +250,6 @@ final class PadTabsController: UIViewController {
               view.bounds.width >= PadLayout.railWindowMinimum else { return }
         sidebarShown.toggle()
         ClientSettings.padSidebarShown = sidebarShown
-        sidebarWidth = ClientSettings.padSidebarWidth
         apply(PadLayout.resolve(window: view.bounds.size, rail: sidebarWidth, closed: !sidebarShown))
         applySidebarButton()
         animateLayout()
@@ -233,12 +259,13 @@ final class PadTabsController: UIViewController {
     /// taking up the difference.
     private func resizeSidebar(by travel: CGFloat) {
         guard layout.chrome == .rail, sidebarShown else { return }
-        let proposed = min(max(sidebarWidth + travel, PadLayout.narrowestRailWidth), PadLayout.widestRailWidth)
+        let metrics = layout.metrics
+        let current = layout.railWidth
+        let proposed = min(max(current + travel, metrics.narrowestRail), metrics.widestRail)
         guard proposed != sidebarWidth else { return }
         sidebarWidth = proposed
         ClientSettings.padSidebarWidth = proposed
         apply(PadLayout.resolve(window: view.bounds.size, rail: proposed, closed: false))
-        applyBoard()
         animateLayout()
     }
 
@@ -251,9 +278,12 @@ final class PadTabsController: UIViewController {
     }
 
     /// A closed sidebar leaves nothing to tap, so the tab's own navigation bar
-    /// carries the standard way back — the way the system's sidebars do.
+    /// carries the standard way back — the way the system's sidebars do, in a
+    /// window that could have one.
     private func applySidebarButton() {
-        let shows = layout.chrome == .rail && !sidebarShown
+        let canHaveSidebar = view.bounds.width > view.bounds.height
+            && view.bounds.width >= PadLayout.railWindowMinimum
+        let shows = canHaveSidebar && !sidebarShown
         for (index, controller) in controllers.enumerated() {
             guard let nav = controller as? UINavigationController else { continue }
             let wanted = shows && index == selectedIndex
@@ -297,12 +327,35 @@ final class PadTabsController: UIViewController {
     /// in front of them.
     private var savedLeading: [ObjectIdentifier: (items: [UIBarButtonItem]?, single: UIBarButtonItem?)] = [:]
 
-    /// A post opened beside the list has no back button of its own, so it gets
-    /// the button that puts the board back the way it was.
-    private func giveCloseButton(to screen: UIViewController) {
+    /// The column's own way back: a chevron when it fills the window, where it is
+    /// a pushed screen, and a close button where it sits beside the board.
+    private func giveWayBack(to screen: UIViewController) {
+        let wanted = layout.showsDetail ? closeItem : backItem
+        let key = ObjectIdentifier(screen)
+        if let current = installedWayBack[key] {
+            guard current !== wanted else { return }
+            let items = screen.navigationItem.leftBarButtonItems
+            screen.navigationItem.leftBarButtonItems = items?.map { $0 === current ? wanted : $0 }
+            if screen.navigationItem.leftBarButtonItem === current {
+                screen.navigationItem.leftBarButtonItem = wanted
+            }
+            installedWayBack[key] = wanted
+            return
+        }
         guard screen.navigationItem.leftBarButtonItem == nil,
               screen.navigationItem.leftBarButtonItems?.isEmpty != false else { return }
-        screen.navigationItem.leftBarButtonItem = closeItem
+        screen.navigationItem.leftBarButtonItem = wanted
+        installedWayBack[key] = wanted
+    }
+
+    /// The screens carrying the column's own way back, so a window that changes
+    /// shape can swap the close button for the chevron in place.
+    private var installedWayBack: [ObjectIdentifier: UIBarButtonItem] = [:]
+
+    /// Keeps that button honest as the window changes shape under it.
+    private func refreshWayBack() {
+        guard tabs.indices.contains(selectedIndex), let nav = details[tabs[selectedIndex]] else { return }
+        for screen in nav.viewControllers { giveWayBack(to: screen) }
     }
 
     private lazy var closeItem: UIBarButtonItem = {
@@ -313,18 +366,22 @@ final class PadTabsController: UIViewController {
         return item
     }()
 
-    /// Shrinks the open post back into its card, or off the edge when the card
-    /// has scrolled away.
+    private lazy var backItem: UIBarButtonItem = {
+        let item = UIBarButtonItem(
+            image: DesignSystem.icon("chevron.left", pointSize: 17, weight: .semibold),
+            primaryAction: UIAction { [weak self] _ in self?.closeDetail() })
+        item.accessibilityLabel = "Back"
+        return item
+    }()
+
+    /// Puts the board back: the column slides away and the board takes its width
+    /// again, both without anything behind them moving.
     func closeDetail() {
         guard tabs.indices.contains(selectedIndex), let nav = details[tabs[selectedIndex]] else { return }
-        let feed = boardHost(in: (controllers[selectedIndex] as? UINavigationController)?.topViewController)
-        let card = nav.viewControllers.compactMap { ($0 as? ThreadViewController)?.tweetID }
-            .last.flatMap { feed?.visibleCell(for: $0) }
-        let home = card.map { $0.convert($0.bounds, to: view) } ?? panelFrame.offsetBy(dx: 40, dy: 0)
-        hidePanel(towards: home) {
+        hideDetailColumn {
+            for screen in nav.viewControllers { self.installedWayBack[ObjectIdentifier(screen)] = nil }
             nav.setViewControllers([], animated: false)
             self.detachChildren(of: self.detail)
-            self.detailSurface.isHidden = true
         }
     }
 
@@ -342,6 +399,7 @@ final class PadTabsController: UIViewController {
             guard let nav = controller as? UINavigationController else { continue }
             for host in boardHosts(in: nav.topViewController) {
                 host.setGrid(index == selectedIndex && showsBoard)
+                host.setRailCarriesPost(layout.chrome == .rail)
             }
         }
     }
@@ -507,22 +565,26 @@ final class PadTabsController: UIViewController {
 
     // MARK: - Placement
 
-    /// Resolves the chrome, the board and the panel for a new window size.
+    /// Resolves the chrome, the board and the column for a new window size.
     private func apply(_ resolved: PadLayout, force: Bool = false) {
         guard force || resolved != layout else { return }
+        let reshaped = !force && (resolved.chrome != layout.chrome
+            || resolved.frame != layout.frame
+            || resolved.showsDetail != layout.showsDetail)
         layout = resolved
-        chrome.apply(form: TabChromeBar.Form(resolved.chrome))
+        chrome.apply(form: TabChromeBar.Form(resolved.chrome), metrics: resolved.metrics)
         layoutChrome()
         contentLeading.constant = resolved.railWidth
-        contentBottom.constant = 0
-        layoutPanel()
+        if reshaped { refreshWayBack() }
         applySelection()
         applySidebarButton()
         applyBoard()
+        applySafeArea()
     }
 
     private func layoutChrome() {
         NSLayoutConstraint.deactivate(chromeConstraints)
+        let metrics = layout.metrics
         chrome.isHidden = layout.chrome == .rail && layout.railWidth == 0
         chromeConstraints = layout.chrome == .rail
             ? [chrome.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -530,124 +592,113 @@ final class PadTabsController: UIViewController {
                chrome.bottomAnchor.constraint(equalTo: view.bottomAnchor),
                chrome.widthAnchor.constraint(equalToConstant: layout.railWidth)]
             : [chrome.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-               chrome.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12),
-               chrome.heightAnchor.constraint(equalToConstant: TabChromeBar.bottomHeight),
-               chrome.widthAnchor.constraint(equalTo: view.widthAnchor, constant: -48).priority(.defaultHigh),
-               chrome.widthAnchor.constraint(lessThanOrEqualToConstant: 560)]
+               chrome.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor,
+                                              constant: -PadLayout.barLift(for: layout.frame)),
+               chrome.heightAnchor.constraint(equalToConstant: metrics.barHeight),
+               chrome.widthAnchor.constraint(equalTo: view.widthAnchor, constant: -40).priority(.defaultHigh),
+               chrome.widthAnchor.constraint(lessThanOrEqualToConstant: metrics.barWidth)]
         NSLayoutConstraint.activate(chromeConstraints)
-        view.bringSubviewToFront(detailSurface)
         view.bringSubviewToFront(chrome)
     }
 
     /// Whether a post is open over the board at all.
     private var detailOnScreen: Bool { tabUsesDetail && detailHasScreens }
 
-    /// Where the open post sits: the trailing column beside a board in a wide
-    /// window, inset across the window in a narrow one — always over the feed,
-    /// never beside it in a way that moves the feed.
-    private var panelFrame: CGRect {
-        if let width = layout.detailWidth {
-            return CGRect(x: view.bounds.width - width - 12, y: 12,
-                          width: width, height: view.bounds.height - 24)
-        }
-        // Without room beside the board the panel floats over it as a card:
-        // inset on every side, clear of the navigation bar and above the tab
-        // bar, so the feed stays visible around it and a tap outside puts it
-        // away.
-        let area = contentArea.layoutFrame
-        guard !area.isEmpty else { return view.bounds.insetBy(dx: 16, dy: 16) }
-        let side: CGFloat = 20
-        let width = min(area.width - side * 2, 680)
-        let top = area.minY + view.safeAreaInsets.top + 8
-        let bottomInset = view.safeAreaInsets.bottom
-            + (layout.chrome == .bottom ? TabChromeBar.bottomHeight + 24 : 16)
-        let bottom = area.maxY - bottomInset
-        return CGRect(x: area.midX - width / 2, y: top,
-                      width: width, height: max(280, bottom - top))
+    /// The column's width when it is open: the room beside the board where the
+    /// window has it, the whole content area where it doesn't.
+    private var openDetailWidth: CGFloat {
+        if layout.showsDetail { return layout.detailWidth ?? 0 }
+        let width = contentArea.layoutFrame.width
+        return width > 0 ? width : max(0, view.bounds.width - layout.railWidth)
     }
 
-    /// A post opens as a card over the feed, not as another screen: it keeps its
-    /// margins, dims what is behind it, and can be put away by tapping outside
-    /// it, dragging it down from its bar, or its own close button.
-    @objc private func scrimTapped() {
-        closeDetail()
+    /// The board gives up the column's width only where the column sits beside
+    /// it; where the column fills the window, the board keeps its place behind.
+    private func setPrimaryBesideDetail(_ beside: Bool) {
+        guard beside != primaryBesideDetail.isActive else { return }
+        primaryFullWidth.isActive = !beside
+        primaryBesideDetail.isActive = beside
     }
 
-    @objc private func panelDragged(_ gesture: UIPanGestureRecognizer) {
-        let travel = gesture.translation(in: view).y
-        switch gesture.state {
-        case .changed:
-            let offset = max(0, travel)
-            detailSurface.transform = CGAffineTransform(translationX: 0, y: offset)
-            scrim.alpha = 0.22 * max(0, 1 - offset / 240)
-        case .ended, .cancelled:
-            let fast = gesture.velocity(in: view).y > 900
-            if travel > 120 || fast {
-                detailSurface.transform = .identity
-                closeDetail()
-            } else {
-                UIView.animate(withDuration: 0.28, delay: 0, usingSpringWithDamping: 0.85,
-                               initialSpringVelocity: 0.2, options: [.allowUserInteraction]) {
-                    self.detailSurface.transform = .identity
-                    self.scrim.alpha = 0.22
-                }
-            }
-        default:
-            break
-        }
-    }
-
-    private func layoutPanel() {
+    /// Shows the column for a post, a profile or a list of people: the board
+    /// narrows beside it where there is room, and the column slides the last few
+    /// points into place the first time it appears.
+    private func showDetail() {
         guard detailOnScreen else {
-            detailSurface.isHidden = true
+            hideDetailColumn(animated: false) {}
             return
         }
-        detailSurface.isHidden = false
-        detailSurface.frame = panelFrame
-        detailSurface.layer.cornerRadius = 24
-        detailSurface.layer.cornerCurve = .continuous
-        detail.layer.cornerRadius = 24
-        detail.layer.cornerCurve = .continuous
-    }
-
-    /// Under a bar the screens keep their feet clear of it; beside a rail they
-    /// run the full height.
-    /// The bar floats over the page — no backdrop of its own beyond its glass —
-    /// so every list inside a tab is given its height as a bottom inset: content
-    /// scrolls under the glass, as it does under the system's bars, and its last
-    /// row can always be brought clear.
-    private func applySafeArea() {
-        let clearance = layout.chrome == .bottom ? TabChromeBar.bottomClearance : 0
-        for controller in children {
-            guard let nav = controller as? UINavigationController else { continue }
-            for screen in nav.viewControllers {
-                screen.view.clearBottomBar(clearance)
-            }
+        let beside = layout.showsDetail
+        let appears = detailColumn.isHidden || detailWidth.constant <= 0
+        detailColumn.isHidden = false
+        divider.isHidden = !beside
+        setPrimaryBesideDetail(beside)
+        let animating = !UIAccessibility.isReduceMotionEnabled
+        if appears, animating {
+            detail.alpha = 0
+            detailColumn.transform = beside ? .identity : CGAffineTransform(translationX: 32, y: 0)
+        }
+        detailWidth.constant = openDetailWidth
+        guard animating else {
+            detail.alpha = 1
+            detailColumn.transform = .identity
+            view.layoutIfNeeded()
+            return
+        }
+        UIView.animate(withDuration: Self.transitionDuration, delay: 0,
+                       usingSpringWithDamping: 0.9, initialSpringVelocity: 0.2,
+                       options: [.allowUserInteraction, .beginFromCurrentState]) {
+            self.view.layoutIfNeeded()
+            self.detail.alpha = 1
+            self.detailColumn.transform = .identity
         }
     }
 
-    // MARK: - Columns
+    /// The way back: the column gives its width to the board again and what it
+    /// held is dropped once the move is done.
+    private func hideDetailColumn(animated: Bool = true, completion: @escaping () -> Void) {
+        let finish = {
+            self.detailWidth.constant = 0
+            self.detailColumn.isHidden = true
+            completion()
+        }
+        guard animated, !UIAccessibility.isReduceMotionEnabled, !detailColumn.isHidden else {
+            // Called from a layout pass as often as from a tap, so the column is
+            // collapsed by its constraints alone: laying out here would re-enter
+            // the pass that asked for it.
+            setPrimaryBesideDetail(false)
+            finish()
+            return
+        }
+        setPrimaryBesideDetail(false)
+        UIView.animate(withDuration: Self.transitionDuration * 0.85, delay: 0,
+                       usingSpringWithDamping: 0.95, initialSpringVelocity: 0.1,
+                       options: [.allowUserInteraction, .beginFromCurrentState]) {
+            self.detailWidth.constant = 0
+            self.view.layoutIfNeeded()
+            self.detail.alpha = self.layout.showsDetail ? 0 : 1
+        } completion: { _ in
+            self.detail.alpha = 1
+            finish()
+        }
+    }
 
     private func applySelection() {
         guard controllers.indices.contains(selectedIndex) else { return }
         show(controllers[selectedIndex], in: primary)
         showDetailIfAny()
-        applySafeArea()
-        applySidebarButton()
-        applyBoard()
     }
 
     private func showDetailIfAny() {
         let nav = tabs.indices.contains(selectedIndex) ? details[tabs[selectedIndex]] : nil
         guard detailOnScreen, let nav, !nav.viewControllers.isEmpty else {
-            detachChildren(of: detail)
-            detailSurface.isHidden = true
-            scrim.isHidden = true
+            hideDetailColumn(animated: false) {
+                self.detachChildren(of: self.detail)
+            }
             return
         }
         show(nav, in: detail)
-        view.bringSubviewToFront(detailSurface)
-        view.bringSubviewToFront(chrome)
+        showDetail()
     }
 
     /// Puts `controller` in `host`, taking out whatever lived there and keeping
@@ -672,6 +723,24 @@ final class PadTabsController: UIViewController {
             child.willMove(toParent: nil)
             child.view.removeFromSuperview()
             child.removeFromParent()
+        }
+    }
+
+    /// Under a bar the screens keep their feet clear of it; beside a rail they
+    /// run the full height. The bar floats over the page — no backdrop of its
+    /// own beyond its glass — so every list inside a tab is given its height as a
+    /// bottom inset: content scrolls under the glass, as it does under the
+    /// system's bars, and its last row can always be brought clear.
+    private func applySafeArea() {
+        let clearance = layout.chrome == .bottom ? layout.metrics.barClearance : 0
+        for controller in children {
+            guard let nav = controller as? UINavigationController else { continue }
+            for screen in nav.viewControllers {
+                screen.view.clearBottomBar(clearance)
+            }
+        }
+        for screen in details.values.flatMap(\.viewControllers) {
+            screen.view.clearBottomBar(clearance)
         }
     }
 
@@ -702,74 +771,16 @@ final class PadTabsController: UIViewController {
         }
     }
 
-    /// Shows `controller` over the board, replacing whatever was there. It grows
-    /// out of the card that was tapped and settles as a panel; the board and
-    /// every card on it stay exactly where they were.
+    /// Shows `controller` in the column, replacing whatever was there. The board
+    /// keeps every card where it was and gives up only the width the column needs.
     private func openInDetail(_ controller: UIViewController) {
         guard tabUsesDetail, tabs.indices.contains(selectedIndex) else { return }
         let nav = detailStack(for: tabs[selectedIndex])
         nav.setViewControllers([controller], animated: false)
-        giveCloseButton(to: controller)
-        let feed = boardHost(in: (controllers[selectedIndex] as? UINavigationController)?.topViewController)
-        let card = (controller as? ThreadViewController).flatMap { thread in feed?.visibleCell(for: thread.tweetID) }
-        showPanel(nav, growingFrom: card)
-    }
-
-    /// Grows the panel out of `card`, or drops it in when there is no card to
-    /// grow from (a deep link, a notification).
-    private func showPanel(_ nav: StatusNavigationController, growingFrom card: UIView?) {
+        giveWayBack(to: controller)
         show(nav, in: detail)
-        detailSurface.isHidden = false
-        scrim.isHidden = false
-        scrim.frame = view.bounds
-        view.bringSubviewToFront(scrim)
-        view.bringSubviewToFront(detailSurface)
-        view.bringSubviewToFront(chrome)
-        let target = panelFrame
-        let reduceMotion = UIAccessibility.isReduceMotionEnabled
-        guard !reduceMotion, let card else {
-            detailSurface.frame = target
-            detailSurface.layer.cornerRadius = 26
-            detail.alpha = 1
-            scrim.alpha = 0.22
-            return
-        }
-        let source = card.convert(card.bounds, to: view)
-        detailSurface.frame = source
-        detailSurface.layer.cornerRadius = 18
-        detail.alpha = 0
-        UIView.animate(withDuration: Self.transitionDuration, delay: 0,
-                       usingSpringWithDamping: 0.86, initialSpringVelocity: 0.2,
-                       options: [.allowUserInteraction, .beginFromCurrentState]) {
-            self.detailSurface.frame = target
-            self.detailSurface.layer.cornerRadius = 24
-        }
-        UIView.animate(withDuration: Self.transitionDuration * 0.7,
-                       delay: Self.transitionDuration * 0.35,
-                       options: [.allowUserInteraction, .beginFromCurrentState]) {
-            self.detail.alpha = 1
-            self.scrim.alpha = 0.22
-        }
-    }
-
-    /// The way back: the panel shrinks into `frame` and hands over to what it
-    /// was covering.
-    private func hidePanel(towards frame: CGRect, completion: @escaping () -> Void) {
-        guard !UIAccessibility.isReduceMotionEnabled else {
-            UIView.performWithoutAnimation(completion)
-            return
-        }
-        UIView.animate(withDuration: Self.transitionDuration * 0.9, delay: 0,
-                       usingSpringWithDamping: 0.92, initialSpringVelocity: 0.1,
-                       options: [.allowUserInteraction, .beginFromCurrentState]) {
-            self.detailSurface.frame = frame
-            self.detailSurface.layer.cornerRadius = 18
-            self.detail.alpha = 0
-            self.scrim.alpha = 0
-        } completion: { _ in
-            self.scrim.isHidden = true
-            completion()
-        }
+        showDetail()
+        applySafeArea()
     }
 
     private func detailStack(for tab: TabItem) -> StatusNavigationController {
@@ -778,26 +789,22 @@ final class PadTabsController: UIViewController {
         details[tab] = nav
         return nav
     }
-
-    private func stack(for tab: TabItem) -> UIViewController? {
-        zip(tabs, controllers).first { $0.0 == tab }?.1
-    }
 }
 
 extension PadTabsController: UIGestureRecognizerDelegate {
-    /// The drag follows a finger on the panel's own bar; a thread's list keeps
-    /// its scroll.
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
-                           shouldReceive touch: UITouch) -> Bool {
-        guard gestureRecognizer is UIPanGestureRecognizer else { return true }
-        return touch.location(in: detailSurface).y <= 120
+    /// The edge swipe only answers to a closed sidebar in a window that could
+    /// hold one — everywhere else the screen keeps its own edge gestures, such
+    /// as the way back out of a pushed page.
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard gestureRecognizer is UIScreenEdgePanGestureRecognizer else { return true }
+        return windowHasSidebar && !sidebarShown
     }
 }
 
-extension NSLayoutConstraint {
-    /// A priority set inline, for a width that yields to a cap.
-    func priority(_ priority: UILayoutPriority) -> NSLayoutConstraint {
-        self.priority = priority
-        return self
+extension PadLayout {
+    /// How far the floating bar sits above the window's bottom edge: the room a
+    /// mini has for it is a little tighter than a 13-inch window's.
+    static func barLift(for frame: Frame) -> CGFloat {
+        frame == .mini ? 10 : 12
     }
 }

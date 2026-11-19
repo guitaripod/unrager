@@ -84,8 +84,10 @@ final class PadTour: XCTestCase {
         snap("16-sidebar-closed")
         app.typeKey("\\", modifierFlags: .command)
         pause(2)
-        let grip = app.coordinate(withNormalizedOffset: CGVector(dx: 0.172, dy: 0.6))
-        grip.press(forDuration: 0.3, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.255, dy: 0.6)))
+        // The grip is the rail's own last few points, which a 1376-point window
+        // puts at about a fifth of its width.
+        let grip = app.coordinate(withNormalizedOffset: CGVector(dx: 0.202, dy: 0.6))
+        grip.press(forDuration: 0.3, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.285, dy: 0.6)))
         pause(2)
         snap("17-sidebar-wide")
     }
@@ -236,11 +238,12 @@ final class PadTour: XCTestCase {
         pause(9)
     }
 
-    /// Taps a post's text, not its picture: a tap on a photo opens the viewer.
+    /// Taps a post's own words: a tap on a picture opens the viewer, and one on
+    /// the header's blank space is nobody's.
     private func tapPost(_ index: Int) {
         let cell = app.cells.element(boundBy: index)
         guard cell.waitForExistence(timeout: 6) else { return }
-        cell.coordinate(withNormalizedOffset: CGVector(dx: 0.62, dy: 0.11)).tap()
+        cell.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.22)).tap()
         pause(4)
     }
 

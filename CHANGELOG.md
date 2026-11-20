@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **Resizing an iPad window deep in the feed redraws as fast as at its top.** A resized board used to measure every post from the top of the feed down to the one you were reading, so the deeper you were the longer iPadOS showed a stretched copy of the old window: on an iPad mini 300 posts down, about 450 ms. It now opens the board at the post you're reading, measures a screenful, and settles the posts above it in the background without moving what you see; the columns still start level at the top of the feed. The same resize now takes about 85 ms.
+
 - **An iPad window that only grows taller or shorter re-flows the feed's columns.** Dragging a window from wider-than-tall to taller-than-wide (or back) without changing its width left the board on the old column rule — three narrow columns in a tall window, or two where three belong — until the width next changed. The board now re-reads its rules on every size change.
 
 - **The feed's loading placeholder has the board's shape on an iPad.** Before the first page lands, a window that will show the feed as a board of cards waits as cards in the same columns and gutters, instead of a single phone-width list that the board then replaced.

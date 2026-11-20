@@ -732,17 +732,23 @@ class FeedViewController: UIViewController, TweetActionHandling {
         return tweetsByID[id]
     }
 
+    /// Like on a rightward swipe, where the feed is the tab's own screen; on a
+    /// page that can go back, the swipe goes back and Like waits on the left.
     private func leadingSwipeActions(at indexPath: IndexPath) -> UISwipeActionsConfiguration? {
-        guard let tweet = tweet(at: indexPath) else { return nil }
+        guard isAtRootOfStack, let tweet = tweet(at: indexPath) else { return nil }
+        let config = UISwipeActionsConfiguration(actions: [likeAction(for: tweet, at: indexPath)])
+        config.performsFirstActionWithFullSwipe = true
+        return config
+    }
+
+    private func likeAction(for tweet: Tweet, at indexPath: IndexPath) -> UIContextualAction {
         let like = UIContextualAction(style: .normal, title: tweet.favorited ? "Unlike" : "Like") { [weak self] _, _, done in
             self?.toggleLike(tweet, cell: self?.collectionView.cellForItem(at: indexPath) as? TweetCell)
             done(true)
         }
         like.image = DesignSystem.icon(tweet.favorited ? "heart.slash.fill" : "heart.fill", pointSize: 18)
         like.backgroundColor = DesignSystem.Color.like
-        let config = UISwipeActionsConfiguration(actions: [like])
-        config.performsFirstActionWithFullSwipe = true
-        return config
+        return like
     }
 
     private func trailingSwipeActions(at indexPath: IndexPath) -> UISwipeActionsConfiguration? {
@@ -761,7 +767,8 @@ class FeedViewController: UIViewController, TweetActionHandling {
         }
         ask.image = DesignSystem.icon("sparkles", pointSize: 18)
         ask.backgroundColor = DesignSystem.Color.quote
-        return UISwipeActionsConfiguration(actions: [reply, ask])
+        let actions = isAtRootOfStack ? [reply, ask] : [reply, likeAction(for: tweet, at: indexPath), ask]
+        return UISwipeActionsConfiguration(actions: actions)
     }
 
     private func configureDataSource() {

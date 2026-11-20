@@ -306,19 +306,13 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
         }
     }
 
+    /// A thread is always a page that can go back, so a rightward swipe is the
+    /// way back and never a row's action.
     private func leadingSwipeActions(at indexPath: IndexPath) -> UISwipeActionsConfiguration? {
-        guard let id = dataSource.itemIdentifier(for: indexPath), let tweet = tweetsByID[id] else { return nil }
-        let like = UIContextualAction(style: .normal, title: tweet.favorited ? "Unlike" : "Like") { [weak self] _, _, done in
-            self?.toggleLike(tweet, cell: self?.collectionView.cellForItem(at: indexPath) as? TweetCell)
-            done(true)
-        }
-        like.image = DesignSystem.icon(tweet.favorited ? "heart.slash.fill" : "heart.fill", pointSize: 18)
-        like.backgroundColor = DesignSystem.Color.like
-        let config = UISwipeActionsConfiguration(actions: [like])
-        config.performsFirstActionWithFullSwipe = true
-        return config
+        nil
     }
 
+    /// Reply and Like on a leftward swipe, the side the way back never uses.
     private func trailingSwipeActions(at indexPath: IndexPath) -> UISwipeActionsConfiguration? {
         guard let id = dataSource.itemIdentifier(for: indexPath), let tweet = tweetsByID[id] else { return nil }
         let reply = UIContextualAction(style: .normal, title: "Reply") { [weak self] _, _, done in
@@ -327,7 +321,13 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
         }
         reply.image = DesignSystem.icon("arrowshape.turn.up.left.fill", pointSize: 18)
         reply.backgroundColor = DesignSystem.Color.accent
-        return UISwipeActionsConfiguration(actions: [reply])
+        let like = UIContextualAction(style: .normal, title: tweet.favorited ? "Unlike" : "Like") { [weak self] _, _, done in
+            self?.toggleLike(tweet, cell: self?.collectionView.cellForItem(at: indexPath) as? TweetCell)
+            done(true)
+        }
+        like.image = DesignSystem.icon(tweet.favorited ? "heart.slash.fill" : "heart.fill", pointSize: 18)
+        like.backgroundColor = DesignSystem.Color.like
+        return UISwipeActionsConfiguration(actions: [reply, like])
     }
 
     /// The replies footer: "Loading replies…" until the thread first lands or

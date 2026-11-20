@@ -55,15 +55,9 @@ final class HiddenPostsViewController: UIViewController {
         var config = UICollectionLayoutListConfiguration(appearance: .plain)
         config.backgroundColor = .clear
         config.leadingSwipeActionsConfigurationProvider = { [weak self] indexPath in
-            guard let self, let id = self.dataSource.itemIdentifier(for: indexPath),
+            guard let self, self.isAtRootOfStack, let id = self.dataSource.itemIdentifier(for: indexPath),
                   let post = self.postsByID[id] else { return nil }
-            let action = UIContextualAction(style: .normal, title: "Open") { _, _, done in
-                self.open(post)
-                done(true)
-            }
-            action.image = DesignSystem.icon("text.bubble")
-            action.backgroundColor = DesignSystem.Color.secondaryLabel
-            return UISwipeActionsConfiguration(actions: [action])
+            return UISwipeActionsConfiguration(actions: [self.openAction(for: post)])
         }
         config.trailingSwipeActionsConfigurationProvider = { [weak self] indexPath in
             guard let self, let id = self.dataSource.itemIdentifier(for: indexPath),
@@ -73,7 +67,7 @@ final class HiddenPostsViewController: UIViewController {
                 done(true)
             }
             action.backgroundColor = DesignSystem.Color.accent
-            return UISwipeActionsConfiguration(actions: [action])
+            return UISwipeActionsConfiguration(actions: self.isAtRootOfStack ? [action] : [action, self.openAction(for: post)])
         }
         collectionView = UICollectionView(frame: view.bounds,
                                           collectionViewLayout: UICollectionViewCompositionalLayout.list(using: config))
@@ -129,6 +123,18 @@ final class HiddenPostsViewController: UIViewController {
         button.accessibilityLabel = "Show this post"
         button.frame = CGRect(origin: .zero, size: button.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize))
         return button
+    }
+
+    /// Opens the hidden post. On a pushed list it rides the leftward swipe beside
+    /// Show, because the rightward one is the way back.
+    private func openAction(for post: HiddenPost) -> UIContextualAction {
+        let action = UIContextualAction(style: .normal, title: "Open") { [weak self] _, _, done in
+            self?.open(post)
+            done(true)
+        }
+        action.image = DesignSystem.icon("text.bubble")
+        action.backgroundColor = DesignSystem.Color.secondaryLabel
+        return action
     }
 
     /// Opens the whole post, so one cut off at five lines, or hidden for its

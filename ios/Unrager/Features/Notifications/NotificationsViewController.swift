@@ -322,10 +322,12 @@ final class NotificationsViewController: UIViewController {
     }
 
     /// A leading swipe that reads one unread row and, on a reply, mention or
-    /// quote, likes the post. A full swipe only ever reads: liking by accident
-    /// is not worth one long swipe.
+    /// quote, likes the post, where Notifications is the tab's own screen;
+    /// anywhere it was pushed, a rightward swipe is the way back. A full swipe
+    /// only ever reads: liking by accident is not worth one long swipe.
     private func leadingSwipe(at indexPath: IndexPath) -> UISwipeActionsConfiguration? {
-        guard let id = dataSource.itemIdentifier(for: indexPath), let notification = items[id] else { return nil }
+        guard isAtRootOfStack, let id = dataSource.itemIdentifier(for: indexPath),
+              let notification = items[id] else { return nil }
         var actions: [UIContextualAction] = []
         if isUnread(notification) {
             let read = UIContextualAction(style: .normal, title: "Read") { [weak self] _, _, done in

@@ -508,7 +508,7 @@ final class TweetCell: UICollectionViewCell {
     /// row's real text width so the decision matches what renders.
     private func applyBodyLimit(_ body: NSAttributedString, limit: Int, contentWidth: CGFloat) {
         guard limit > 0, Self.mayExceedLimit(body.string, limit: limit),
-              Self.bodyExceedsLimit(body, limit: limit, contentWidth: contentWidth) else {
+              exceedsLimit(body, limit: limit, contentWidth: contentWidth) else {
             setBodyLines(0, truncating: false)
             showMoreButton.isHidden = true
             return
@@ -516,6 +516,33 @@ final class TweetCell: UICollectionViewCell {
         setBodyLines(limit, truncating: true)
         showMoreButton.isHidden = false
     }
+
+    /// Whether this post's body runs past `limit` lines at `contentWidth`,
+    /// measured once per post, width, limit and text size. The board binds every
+    /// post twice — a stand-in cell to measure its height, then the cell that
+    /// shows it — and typesetting the body for this answer was the costliest
+    /// step of binding a long post both times.
+    private func exceedsLimit(_ body: NSAttributedString, limit: Int, contentWidth: CGFloat) -> Bool {
+        guard let tweetID else { return Self.bodyExceedsLimit(body, limit: limit, contentWidth: contentWidth) }
+        let key = LimitKey(
+            post: tweetID, length: body.length, width: contentWidth, limit: limit,
+            textSize: DesignSystem.Typography.body().pointSize)
+        if let known = Self.limitAnswers[key] { return known }
+        let answer = Self.bodyExceedsLimit(body, limit: limit, contentWidth: contentWidth)
+        if Self.limitAnswers.count >= 4000 { Self.limitAnswers.removeAll(keepingCapacity: true) }
+        Self.limitAnswers[key] = answer
+        return answer
+    }
+
+    private struct LimitKey: Hashable {
+        let post: String
+        let length: Int
+        let width: CGFloat
+        let limit: Int
+        let textSize: CGFloat
+    }
+
+    private nonisolated(unsafe) static var limitAnswers: [LimitKey: Bool] = [:]
 
     /// Caps the body at `lines` (0 = unlimited) and makes it measure again, so
     /// "Show more" reveals the rest of the text.

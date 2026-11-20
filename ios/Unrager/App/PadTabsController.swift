@@ -556,7 +556,19 @@ final class PadTabsController: UIViewController {
     /// menu hides, the notification lenses, the settings pages, the posts the
     /// filter hid.
     private func refreshRows() {
+        let count = chrome.tabCount
         chrome.setRows(rows())
+        replaceBarIfTabsChanged(from: count)
+    }
+
+    /// The floating bar's width is made of its tabs, so a bar laid out before
+    /// they arrived — every launch straight into a tall window, which drew a
+    /// sliver of a bar with its names cut off — or before one was added or
+    /// hidden, is placed again.
+    private func replaceBarIfTabsChanged(from count: Int) {
+        guard chrome.tabCount != count, layout.chrome == .bottom, isViewLoaded else { return }
+        layoutChrome()
+        layoutFloatingControls()
     }
 
     private func rows() -> [TabChromeBar.Row] {
@@ -738,6 +750,11 @@ final class PadTabsController: UIViewController {
         let plan = reach.dock(width: layoutWidth, tabs: chrome.tabCount,
                               itemWidth: metrics.barItemWidth, maximumBar: metrics.barWidth,
                               button: metrics.barHeight)
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["UNRAGER_LAYOUT_LOG"] != nil {
+            AppLogger.shared.info("dock plan width=\(layoutWidth) tabs=\(chrome.tabCount) plan=\(plan)", category: .app)
+        }
+        #endif
         chromeConstraints = [
             chrome.bottomAnchor.constraint(equalTo: safe.bottomAnchor, constant: -PadLayout.barLift(for: layout.frame)),
             chrome.heightAnchor.constraint(equalToConstant: metrics.barHeight),

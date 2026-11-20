@@ -314,6 +314,7 @@ final class HomeViewController: FeedViewController {
         guard let composeButton, usesGrid != wasGrid else { return }
         composeInColumn?.isActive = !usesGrid
         composeAtEdge?.isActive = usesGrid
+        guard composeButton.window != nil else { return }
         UIView.animate(withDuration: 0.25) { composeButton.superview?.layoutIfNeeded() }
     }
 

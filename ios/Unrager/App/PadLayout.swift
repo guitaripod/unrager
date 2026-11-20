@@ -1,11 +1,10 @@
 import UIKit
 
-/// Where an iPad window puts its tabs and its columns: a rail down the side of
-/// a wide window, the board beside it and — when the board can spare the room —
-/// a real second column for the post you open; or, in a tall or narrow window,
-/// a floating bar along the bottom, where a post takes the whole window the way
-/// it does on the phone. Pure numbers, so every break point is testable without
-/// a window.
+/// Where an iPad window puts its tabs and its board: a rail down the side of a
+/// wide window with the board beside it, or, in a tall or narrow window, a
+/// floating bar along the bottom. A post opens over the board on the tab's own
+/// stack (`PostOpening`), so it needs no room of its own here. Pure numbers, so
+/// every break point is testable without a window.
 struct PadLayout: Equatable {
     enum Chrome: Equatable {
         /// Tabs down the leading edge, the iPad's widest shape.
@@ -15,7 +14,7 @@ struct PadLayout: Equatable {
     }
 
     /// The iPad this window is on. A mini is the same idea with less room:
-    /// a narrower rail, a narrower column, and never more than two posts across.
+    /// a narrower rail and never more than two posts across.
     enum Frame: Equatable {
         case mini
         case regular
@@ -35,8 +34,6 @@ struct PadLayout: Equatable {
         var rail: CGFloat
         var narrowestRail: CGFloat
         var widestRail: CGFloat
-        /// The range the column a post opens into may take.
-        var detail: ClosedRange<CGFloat>
         /// The most posts the board may set side by side.
         var boardColumns: Int
         /// How narrow a post may get before the board drops a column.
@@ -55,11 +52,11 @@ struct PadLayout: Equatable {
     private static let profiles: [Frame: Metrics] = [
         .regular: Metrics(
             rail: 280, narrowestRail: 232, widestRail: 380,
-            detail: 400...600, boardColumns: 3, boardColumnWidth: 300,
+            boardColumns: 3, boardColumnWidth: 300,
             barHeight: 62, barClearance: 84, barWidth: 560, barItemWidth: 86, railShare: 0.26),
         .mini: Metrics(
             rail: 208, narrowestRail: 188, widestRail: 264,
-            detail: 340...480, boardColumns: 2, boardColumnWidth: 300,
+            boardColumns: 2, boardColumnWidth: 300,
             barHeight: 56, barClearance: 78, barWidth: 470, barItemWidth: 78, railShare: 0.3),
     ]
 
@@ -82,16 +79,10 @@ struct PadLayout: Equatable {
     var chrome: Chrome
     var frame: Frame
     var railWidth: CGFloat
-    /// Width of the column a post opens into. Nil where the window has no room
-    /// for it, and the post fills the window instead.
-    var detailWidth: CGFloat?
     /// The cap on the board's columns, before the width decides.
     var boardColumns: Int
 
     var metrics: Metrics { Self.metrics(for: frame) }
-
-    /// Whether the window is wide enough to keep a post open beside the board.
-    var showsDetail: Bool { detailWidth != nil }
 
     /// Resolves the chrome and the columns for a window of `window` points on a
     /// screen of `screen` points (the window itself when unknown), with the
@@ -101,8 +92,7 @@ struct PadLayout: Equatable {
                         closed: Bool = false) -> PadLayout {
         let frame = Frame.of(screen ?? window)
         let metrics = metrics(for: frame)
-        let tall = PadLayout(chrome: .bottom, frame: frame, railWidth: 0,
-                             detailWidth: nil, boardColumns: metrics.boardColumns)
+        let tall = PadLayout(chrome: .bottom, frame: frame, railWidth: 0, boardColumns: metrics.boardColumns)
         guard allowsRail(window: window), !closed else {
             return tall
         }
@@ -110,31 +100,12 @@ struct PadLayout: Equatable {
         let share = min(metrics.widestRail, max(metrics.narrowestRail,
                                                 (window.width * metrics.railShare).rounded()))
         let width = min(max(rail > 0 ? rail : metrics.rail, metrics.narrowestRail), share)
-        let content = window.width - width
-        let wanted = detailWidth(content: content, metrics: metrics)
-        // The column takes what the board can spare: a card beside it, two where
-        // the window has that much. Where not even one fits, a post fills the
-        // window instead and the board waits behind it.
-        let detail = content - wanted >= metrics.boardColumnWidth + 30 ? wanted : nil
-        return PadLayout(chrome: .rail, frame: frame, railWidth: width,
-                         detailWidth: detail, boardColumns: metrics.boardColumns)
+        return PadLayout(chrome: .rail, frame: frame, railWidth: width, boardColumns: metrics.boardColumns)
     }
 
     /// The narrowest board that still sets two posts side by side.
     static func twoColumnBoard(_ metrics: Metrics) -> CGFloat {
         metrics.boardColumnWidth * 2 + 10 + 20
-    }
-
-    /// The width of the column a post opens into beside `content` points of
-    /// board. Where the board keeps two posts across beside it, the post takes
-    /// about two fifths; where it would be down to one anyway — a mini, an
-    /// 11-inch on its side — the two share the room evenly, rather than one
-    /// wide card beside a narrow post.
-    static func detailWidth(content: CGFloat, metrics: Metrics) -> CGFloat {
-        let range = metrics.detail
-        let alongside = min(range.upperBound, max(range.lowerBound, (content * 0.38).rounded()))
-        guard content - alongside < twoColumnBoard(metrics) else { return alongside }
-        return min(range.upperBound, max(range.lowerBound, (content / 2).rounded()))
     }
 
     /// How the feed's board takes shape in a window of `window` points: the

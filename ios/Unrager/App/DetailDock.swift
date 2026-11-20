@@ -26,13 +26,6 @@ final class DetailDock: UIView {
         var handler: (() -> Void)?
     }
 
-    enum WayBack: Equatable {
-        /// The post sits beside the board; closing gives the board its width back.
-        case close
-        /// The post fills the window; going back shows the board behind it.
-        case back
-    }
-
     var onWayBack: (() -> Void)?
 
     private let glass = UIVisualEffectView.glass(interactive: true)
@@ -41,7 +34,6 @@ final class DetailDock: UIView {
     private let divider = UIView()
     private var actionButtons: [UIButton] = []
     private var heightConstraint: NSLayoutConstraint!
-    private(set) var wayBack: WayBack = .close
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -81,7 +73,7 @@ final class DetailDock: UIView {
 
         heightConstraint = heightAnchor.constraint(equalToConstant: 56)
         heightConstraint.isActive = true
-        configure(wayBack: .close, actions: [])
+        configure(actions: [])
     }
 
     @available(*, unavailable)
@@ -92,14 +84,12 @@ final class DetailDock: UIView {
         heightConstraint.constant = height
     }
 
-    /// Shows the way back as `wayBack` and the open screen's `actions` after it.
-    func configure(wayBack newWayBack: WayBack, actions: [Action]) {
-        wayBack = newWayBack
+    /// Shows the way back and the open screen's `actions` after it.
+    func configure(actions: [Action]) {
         var config = wayBackButton.configuration ?? .plain()
-        config.image = DesignSystem.icon(newWayBack == .close ? "xmark" : "chevron.backward",
-                                         pointSize: 18, weight: .semibold)
+        config.image = DesignSystem.icon("chevron.backward", pointSize: 18, weight: .semibold)
         wayBackButton.configuration = config
-        wayBackButton.accessibilityLabel = newWayBack == .close ? "Close" : "Back"
+        wayBackButton.accessibilityLabel = "Back"
 
         for button in actionButtons { button.removeFromSuperview() }
         actionButtons = actions.map { action in

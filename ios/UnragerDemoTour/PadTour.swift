@@ -185,21 +185,25 @@ final class PadTour: XCTestCase {
         snap("25-sidebar-likes")
     }
 
-    /// A card lifted into the sidebar, caught in flight by stretching the
-    /// transition, then the settled thread.
-    func testPadPromotion() {
-        launch(.landscapeLeft, screen: "home", transitionSeconds: 3)
+    /// A card zooms into its post, and the post zooms back into the card when
+    /// it is pulled down.
+    func testPadPostZoom() {
+        launch(.landscapeLeft, screen: "home")
         let cell = app.cells.element(boundBy: 0)
         guard cell.waitForExistence(timeout: 6) else { XCTFail("no card"); return }
         cell.coordinate(withNormalizedOffset: CGVector(dx: 0.62, dy: 0.11)).tap()
-        pause(1.1)
-        snap("21-promotion-mid")
-        pause(4)
-        snap("22-promotion-end")
+        pause(0.2)
+        snap("21-post-zoom-mid")
+        pause(2)
+        snap("22-post-open")
+        let start = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.3))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 420)))
+        pause(2)
+        snap("23-post-closed")
     }
 
-    /// A window that loses its second column: the thread that was open beside
-    /// the feed has to come forward rather than vanish.
+    /// A turn with a post open: the post stays open across the new shape and
+    /// the board under it is where it was when the post closes.
     func testPadFold() {
         launch(.landscapeLeft, screen: "home")
         tapPost(0)
@@ -221,7 +225,7 @@ final class PadTour: XCTestCase {
     // MARK: - Steps
 
     private func launch(_ orientation: UIDeviceOrientation, screen: String, appearance: Int = 1,
-                        sidebarWidth: Int? = nil, transitionSeconds: Int? = nil) {
+                        sidebarWidth: Int? = nil) {
         app.launchArguments = [
             "-unrager.serverURL", "http://127.0.0.1:8790",
             "-unrager.filterEnabled", "0",
@@ -233,7 +237,6 @@ final class PadTour: XCTestCase {
         XCUIDevice.shared.orientation = orientation
         app.launchEnvironment["UNRAGER_SCREEN"] = screen
         if let sidebarWidth { app.launchEnvironment["UNRAGER_PAD_SIDEBAR"] = "\(sidebarWidth)" }
-        if let transitionSeconds { app.launchEnvironment["UNRAGER_TRANSITION_SECONDS"] = "\(transitionSeconds)" }
         app.launch()
         pause(9)
     }

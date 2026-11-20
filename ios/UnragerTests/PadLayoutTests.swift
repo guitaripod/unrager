@@ -10,19 +10,14 @@ struct PadLayoutTests {
         let layout = PadLayout.resolve(window: CGSize(width: 1032, height: 1376))
         #expect(layout.chrome == .bottom)
         #expect(layout.railWidth == 0)
-        #expect(!layout.showsDetail)
     }
 
-    @Test("A wide window puts the tabs on the side, with a column beside the feed")
+    @Test("A wide window puts the tabs on the side, with the board beside them")
     func landscape() {
         let layout = PadLayout.resolve(window: CGSize(width: 1376, height: 1032))
         #expect(layout.chrome == .rail)
         #expect(layout.railWidth == PadLayout.metrics(for: .regular).rail)
-        #expect(layout.showsDetail)
-        let column = try? #require(layout.detailWidth)
-        let metrics = PadLayout.metrics(for: .regular)
-        #expect(metrics.detail.contains(column ?? 0))
-        #expect(1376 - layout.railWidth - (column ?? 0) >= metrics.boardColumnWidth)
+        #expect(1376 - layout.railWidth >= PadLayout.twoColumnBoard(layout.metrics))
     }
 
     @Test("A rail dragged narrow is clamped to the band its grip allows")
@@ -37,7 +32,6 @@ struct PadLayoutTests {
         let layout = PadLayout.resolve(window: CGSize(width: 620, height: 1000))
         #expect(layout.chrome == .bottom)
         #expect(layout.railWidth == 0)
-        #expect(!layout.showsDetail)
         #expect(MasonryLayout.columns(for: 604) == 1)
         #expect(PadLayout.board(window: CGSize(width: 620, height: 1000)).maximumColumns == 2)
     }
@@ -46,68 +40,6 @@ struct PadLayoutTests {
     func slideOver() {
         let layout = PadLayout.resolve(window: CGSize(width: 320, height: 900))
         #expect(layout.chrome == .bottom)
-        #expect(!layout.showsDetail)
-    }
-
-    @Test("A mini on its side shares the room evenly between one card and the open post")
-    func miniLandscapeDetail() {
-        let window = CGSize(width: 1158, height: 756)
-        let layout = PadLayout.resolve(window: window, screen: window)
-        #expect(layout.frame == .mini)
-        let column = try? #require(layout.detailWidth)
-        let board = window.width - layout.railWidth - (column ?? 0)
-        #expect(abs(board - (column ?? 0)) <= 2)
-        #expect(MasonryLayout.columns(for: board - 16, minimum: 300, maximum: 2, spacing: 8) == 1)
-    }
-
-    @Test("An 11-inch on its side gives the open post half the board instead of two fifths")
-    func elevenInchLandscapeDetail() {
-        let window = CGSize(width: 1210, height: 834)
-        let layout = PadLayout.resolve(window: window, screen: window)
-        let column = try? #require(layout.detailWidth)
-        let board = window.width - layout.railWidth - (column ?? 0)
-        #expect(abs(board - (column ?? 0)) <= 2)
-    }
-
-    @Test("A 13-inch on its side keeps two cards across beside the open post")
-    func thirteenInchKeepsTwoColumns() {
-        let window = CGSize(width: 1376, height: 1032)
-        let layout = PadLayout.resolve(window: window, screen: window)
-        let column = try? #require(layout.detailWidth)
-        let board = window.width - layout.railWidth - (column ?? 0)
-        #expect(board >= PadLayout.twoColumnBoard(layout.metrics))
-    }
-
-    @Test("The column keeps a reading measure and never eats the board")
-    func wideWindow() {
-        let window = CGSize(width: 2400, height: 1000)
-        let layout = PadLayout.resolve(window: window)
-        let column = layout.detailWidth ?? 0
-        let metrics = layout.metrics
-        #expect(metrics.detail.contains(column))
-        #expect(window.width - layout.railWidth - column > 1200)
-    }
-
-    @Test("A column opens beside a one-column board in a split window")
-    func splitWindowPanel() {
-        let window = CGSize(width: 990, height: 744)
-        let layout = PadLayout.resolve(window: window)
-        #expect(layout.chrome == .rail)
-        let column = layout.detailWidth ?? 0
-        let metrics = layout.metrics
-        #expect(column >= metrics.detail.lowerBound)
-        #expect(window.width - layout.railWidth - column >= metrics.boardColumnWidth)
-    }
-
-    @Test("The column always leaves the board a readable one")
-    func panelFits() {
-        for width in stride(from: 700.0, through: 2000.0, by: 40) {
-            let layout = PadLayout.resolve(window: CGSize(width: width, height: 800))
-            guard let column = layout.detailWidth else { continue }
-            let metrics = layout.metrics
-            #expect(metrics.detail.contains(column))
-            #expect(width - layout.railWidth - column >= metrics.boardColumnWidth)
-        }
     }
 
     @Test("Closing the sidebar hands the tabs back to the bottom bar")
@@ -117,16 +49,6 @@ struct PadLayoutTests {
         #expect(open.chrome == .rail)
         #expect(closed.chrome == .bottom)
         #expect(closed.railWidth == 0)
-        #expect(!closed.showsDetail)
-    }
-
-    @Test("A landscape window too narrow for a column opens the post over the whole window")
-    func noRoomForColumn() {
-        let layout = PadLayout.resolve(window: CGSize(width: 920, height: 700),
-                                       screen: CGSize(width: 1194, height: 834))
-        #expect(layout.chrome == .rail)
-        #expect(!layout.showsDetail)
-        #expect(layout.railWidth >= layout.metrics.narrowestRail)
     }
 
     @Test("A rail only where the feed keeps two posts across beside it")
@@ -160,8 +82,8 @@ struct PadLayoutTests {
             for height in [600.0, 744, 834, 1032, 1194] {
                 let layout = PadLayout.resolve(window: CGSize(width: width, height: height),
                                                screen: CGSize(width: 1194, height: 834))
-                let content = width - layout.railWidth - (layout.detailWidth ?? 0)
-                #expect(content >= (layout.detailWidth == nil ? 320 : layout.metrics.boardColumnWidth))
+                let content = width - layout.railWidth
+                #expect(content >= 320)
                 if layout.chrome == .rail { #expect(width >= PadLayout.railWindowMinimum) }
             }
         }
@@ -202,15 +124,6 @@ struct PadLayoutTests {
         #expect(mini.railWidth == PadLayout.metrics(for: .mini).rail)
     }
 
-    @Test("A mini opens a post beside the board, in a column of its own measure")
-    func miniColumn() {
-        let mini = PadLayout.resolve(window: CGSize(width: 1133, height: 744))
-        let column = try? #require(mini.detailWidth)
-        let metrics = PadLayout.metrics(for: .mini)
-        #expect(metrics.detail.contains(column ?? 0))
-        #expect(1133 - mini.railWidth - (column ?? 0) >= metrics.boardColumnWidth)
-    }
-
     @Test("A mini never sets more than two posts side by side")
     func miniBoard() {
         for size in [CGSize(width: 744, height: 1133), CGSize(width: 1133, height: 744)] {
@@ -229,15 +142,14 @@ struct PadLayoutTests {
         #expect(mini.barHeight < regular.barHeight)
         #expect(mini.barClearance < regular.barClearance)
         #expect(mini.barWidth < regular.barWidth)
-        #expect(mini.detail.upperBound < regular.detail.upperBound)
     }
 
-    @Test("Settings is the one tab with nowhere to put a second column")
-    func detailColumnTabs() {
-        #expect(TabItem.home.offersDetailColumn)
-        #expect(TabItem.search.offersDetailColumn)
-        #expect(TabItem.notifications.offersDetailColumn)
-        #expect(!TabItem.settings.offersDetailColumn)
+    @Test("Settings is the one tab whose list stays a column of forms")
+    func boardTabs() {
+        #expect(TabItem.home.offersBoard)
+        #expect(TabItem.search.offersBoard)
+        #expect(TabItem.notifications.offersBoard)
+        #expect(!TabItem.settings.offersBoard)
     }
 
     @Test("A window that only grows taller can turn the board from three columns to two at the same width")

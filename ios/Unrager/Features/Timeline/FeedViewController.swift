@@ -231,8 +231,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
     private var measuringCell: TweetCell?
 
     /// Switches between the list and the board. The collection view keeps its
-    /// place by index, so a post open beside the list lands in the same column
-    /// it came from.
+    /// place by index, so the reader lands on the post they were reading.
     func setGrid(_ on: Bool) {
         wantsGrid = on
         applyGridMode()
@@ -511,7 +510,10 @@ class FeedViewController: UIViewController, TweetActionHandling {
     private func configureNavigationDefaults() {
         if openTweet == nil {
             openTweet = { [weak self] tweet in
-                self?.navigationController?.pushViewController(ThreadViewController(tweet: tweet), animated: true)
+                guard let self else { return }
+                let id = tweet.restID
+                PostOpening.open(ThreadViewController(tweet: tweet), on: navigationController,
+                                 zoomingFrom: usesGrid ? { [weak self] in self?.visibleCell(for: id) } : nil)
             }
         }
         if openProfile == nil {
@@ -532,8 +534,8 @@ class FeedViewController: UIViewController, TweetActionHandling {
 
     func tweetCell(for tweet: Tweet) -> TweetCell? { cell(for: tweet) }
 
-    /// The on-screen card for `id`, for a screen that wants to lift it into
-    /// wherever the post is going.
+    /// The on-screen card for `id`, which an opening post zooms out of and a
+    /// closing one back into.
     func visibleCell(for id: String) -> TweetCell? {
         guard let indexPath = dataSource.indexPath(for: id) else { return nil }
         return collectionView.cellForItem(at: indexPath) as? TweetCell

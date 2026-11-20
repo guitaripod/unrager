@@ -6,7 +6,7 @@ import UnragerKit
 /// puts a tapped post, a notification or a deep link where the reader can see
 /// it. The chrome around the tabs is the platform's: the native bar on iPhone,
 /// a rail on a landscape iPad window and a floating bar on a portrait or narrow
-/// one, with a second column beside the list when there is room for one.
+/// one. A post opens on the tab's own stack everywhere (`PostOpening`).
 ///
 /// Routing, badges, toasts and the hardware keyboard live here rather than in
 /// either chrome, so both behave the same and the commands have one home.
@@ -54,8 +54,7 @@ final class RootViewController: UIViewController {
         stacks.indices.contains(currentIndex) ? stacks[currentIndex] : nil
     }
 
-    /// The iPad's two-column shape reports which screens open beside the list;
-    /// the phone stacks everything on top of everything.
+    /// The iPad's rail, floating bar, board and dock; the phone's native tab bar.
     private var usesPadChrome: Bool { traitCollection.userInterfaceIdiom == .pad }
 
     private func installChrome() {
@@ -399,6 +398,12 @@ final class RootViewController: UIViewController {
 }
 
 extension RootViewController: UINavigationControllerDelegate {
+    func navigationController(
+        _ navigationController: UINavigationController, willShow viewController: UIViewController, animated: Bool
+    ) {
+        padChrome?.stackWillShow(navigationController)
+    }
+
     func navigationController(
         _ navigationController: UINavigationController, didShow viewController: UIViewController, animated: Bool
     ) {

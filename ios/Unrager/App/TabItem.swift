@@ -69,9 +69,9 @@ enum TabItem: String, CaseIterable, Sendable {
         }
     }
 
-    /// Whether the tab's screens can fill a second column beside the list on a
-    /// wide iPad window — Settings' pages are forms and take the whole width.
-    var offersDetailColumn: Bool { self != .settings }
+    /// Whether the tab's own list spreads into a board of cards on an iPad —
+    /// Settings' pages are forms and read better as one column.
+    var offersBoard: Bool { self != .settings }
 
     /// The Edit Tabs subtitle; only Home needs one (to explain that the single
     /// entry carries both feed modes).

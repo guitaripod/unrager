@@ -239,4 +239,16 @@ struct PadLayoutTests {
         #expect(TabItem.notifications.offersDetailColumn)
         #expect(!TabItem.settings.offersDetailColumn)
     }
+
+    @Test("A window that only grows taller can turn the board from three columns to two at the same width")
+    func heightAloneTurnsTheBoard() {
+        let screen = CGSize(width: 1366, height: 1024)
+        let wide = PadLayout.board(window: CGSize(width: 900, height: 850), screen: screen)
+        let tall = PadLayout.board(window: CGSize(width: 900, height: 1000), screen: screen)
+        #expect(wide != tall)
+        #expect(tall.maximumColumns == 2)
+        #expect(wide.maximumColumns > tall.maximumColumns)
+        let board = CGFloat(900 - 20)
+        #expect(min(board, wide.maximumWidth) == min(board, tall.maximumWidth))
+    }
 }

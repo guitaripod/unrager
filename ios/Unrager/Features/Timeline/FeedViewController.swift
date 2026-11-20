@@ -273,7 +273,10 @@ class FeedViewController: UIViewController, TweetActionHandling {
                                          maximum: profile.maximumColumns, spacing: 10) >= 2
         let wanted = wantsGrid && fits
         boardCap?.constant = profile.maximumWidth
-        guard wanted != usesGrid else { return false }
+        guard wanted != usesGrid else {
+            refreshBoardRules(profile)
+            return false
+        }
         let top = topVisiblePost()
         if !wanted { gridLayout?.retire() }
         usesGrid = wanted
@@ -346,9 +349,22 @@ class FeedViewController: UIViewController, TweetActionHandling {
         return layout
     }
 
+    /// A window that only changes height can still turn from landscape to
+    /// portrait, and with it from three narrow columns to two wider ones, while
+    /// the board keeps its width: the rules are re-read on every pass and the
+    /// board laid out again only when they changed.
+    private func refreshBoardRules(_ profile: PadLayout.Board) {
+        guard usesGrid, let gridLayout, appliedBoard != profile else { return }
+        applyBoard(profile: profile, to: gridLayout)
+        gridLayout.invalidateLayout()
+    }
+
+    private var appliedBoard: PadLayout.Board?
+
     /// Gives the board the window's own column rules: how narrow a card may get,
     /// how many may sit beside another, and a mini's tighter gutters.
     private func applyBoard(profile: PadLayout.Board, to layout: MasonryLayout) {
+        appliedBoard = profile
         layout.minimumColumnWidth = profile.minimumColumnWidth
         layout.maximumColumns = profile.maximumColumns
         layout.columnSpacing = profile.dense ? 8 : 10
@@ -454,6 +470,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
             }
         }
     }
+
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)

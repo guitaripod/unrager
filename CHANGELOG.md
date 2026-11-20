@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **An iPad window that only grows taller or shorter re-flows the feed's columns.** Dragging a window from wider-than-tall to taller-than-wide (or back) without changing its width left the board on the old column rule — three narrow columns in a tall window, or two where three belong — until the width next changed. The board now re-reads its rules on every size change.
+
 - **The feed's loading placeholder has the board's shape on an iPad.** Before the first page lands, a window that will show the feed as a board of cards waits as cards in the same columns and gutters, instead of a single phone-width list that the board then replaced.
 
 - **Post sits in the iPad keyboard's shortcut bar.** While you write a post, reply or quote on an iPad, Post is at the trailing end of the bar along the top of the keyboard — under the right thumb — and Add photo at its leading end, so a post typed with both hands goes out without reaching for the top of the sheet; with a hardware keyboard they ride in the floating shortcut bar.

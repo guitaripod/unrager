@@ -47,7 +47,10 @@ enum Engagement {
         weak var weakCell = shown
         weak var weakHost = host
         Task {
-            defer { inFlight.remove(key) }
+            defer {
+                inFlight.remove(key)
+                NotificationCenter.default.post(name: didSettle, object: tweet.restID)
+            }
             do {
                 try await send(kind, target, tweet.restID)
                 confirmed(target)
@@ -61,6 +64,10 @@ enum Engagement {
             }
         }
     }
+
+    /// Posted with the post's id once a toggle has landed or been put back, so
+    /// anything else showing that post's state can read it again.
+    static let didSettle = Notification.Name("unrager.engagement.didSettle")
 
     private static func key(_ kind: Kind, _ id: String) -> String { "\(id)-\(kind.rawValue)" }
 

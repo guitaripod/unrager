@@ -28,6 +28,8 @@ final class TabChromeBar: UIView {
     var onSelect: ((Int) -> Void)?
     var onReselect: ((Int) -> Void)?
     var onCompose: (() -> Void)?
+    /// What a long press on the rail's Post offers.
+    var composeMenu: (() -> [UIMenuElement])?
     /// A row was tapped: a tab row, a row inside a section, or a section's own
     /// line, which folds and unfolds.
     var onRow: ((String) -> Void)?
@@ -51,6 +53,12 @@ final class TabChromeBar: UIView {
     private let grip = UIView()
     private let gripLine = UIView()
     private let stack = UIStackView()
+    /// The rail's rows live in a scroll view whose content sits at its bottom,
+    /// so the tabs gather just above Post — where the left thumb rests on an
+    /// iPad held on its side — and only scroll when they outgrow the rail.
+    private let railScroll = UIScrollView()
+    private var railStackConstraints: [NSLayoutConstraint] = []
+    private var barStackConstraints: [NSLayoutConstraint] = []
     private let postButton = UIButton(configuration: .unragerProminentGlass())
     private var rows: [Row] = []
     private var rowViews: [TabChromeRow] = []
@@ -62,10 +70,7 @@ final class TabChromeBar: UIView {
     private var edgeWidth: NSLayoutConstraint!
     private var headerHeight: NSLayoutConstraint!
     private var wordmarkLeading: NSLayoutConstraint!
-    private var stackTop: NSLayoutConstraint!
-    private var stackUnderHeader: NSLayoutConstraint!
     private var stackSide: NSLayoutConstraint!
-    private var stackBottom: NSLayoutConstraint!
     private var postHeight: NSLayoutConstraint!
 
     override init(frame: CGRect) {
@@ -111,6 +116,10 @@ final class TabChromeBar: UIView {
 
         stack.axis = .vertical
         stack.alignment = .fill
+        railScroll.showsVerticalScrollIndicator = false
+        railScroll.alwaysBounceVertical = false
+        railScroll.contentInsetAdjustmentBehavior = .never
+        addManaged(railScroll)
         addManaged(stack)
 
         var post = UIButton.Configuration.unragerProminentGlass()
@@ -121,15 +130,35 @@ final class TabChromeBar: UIView {
         postButton.isHidden = true
         postButton.accessibilityLabel = "New post"
         postButton.addAction(UIAction { [weak self] _ in self?.onCompose?() }, for: .touchUpInside)
+        postButton.accessibilityHint = "Touch and hold for more."
+        postButton.menu = UIMenu(children: [
+            UIDeferredMenuElement.uncached { [weak self] completion in
+                completion(self?.composeMenu?() ?? [])
+            },
+        ])
         addManaged(postButton)
         postHeight = postButton.heightAnchor.constraint(equalToConstant: 0)
 
         wordmarkLeading = wordmark.leadingAnchor.constraint(equalTo: header.leadingAnchor)
         headerHeight = header.heightAnchor.constraint(equalToConstant: 40)
-        stackTop = stack.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 8)
-        stackUnderHeader = stack.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 6)
-        stackSide = stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10)
-        stackBottom = stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
+        let content = railScroll.contentLayoutGuide
+        let frameGuide = railScroll.frameLayoutGuide
+        stackSide = stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 10)
+        railStackConstraints = [
+            stackSide,
+            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -10),
+            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -4),
+            stack.topAnchor.constraint(greaterThanOrEqualTo: content.topAnchor, constant: 4),
+            content.widthAnchor.constraint(equalTo: frameGuide.widthAnchor),
+            content.heightAnchor.constraint(greaterThanOrEqualTo: frameGuide.heightAnchor),
+            content.heightAnchor.constraint(equalTo: stack.heightAnchor, constant: 8).priority(.defaultLow),
+        ]
+        barStackConstraints = [
+            stack.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 8),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+        ]
         // A window that isn't full screen keeps its controls in its top
         // leading corner, right where the wordmark sits: the header starts
         // after them.
@@ -160,9 +189,10 @@ final class TabChromeBar: UIView {
             edge.trailingAnchor.constraint(equalTo: trailingAnchor),
             edge.topAnchor.constraint(equalTo: topAnchor),
             edge.bottomAnchor.constraint(equalTo: bottomAnchor),
-            stackTop,
-            stackSide,
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            railScroll.leadingAnchor.constraint(equalTo: leadingAnchor),
+            railScroll.trailingAnchor.constraint(equalTo: trailingAnchor),
+            railScroll.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 6),
+            railScroll.bottomAnchor.constraint(equalTo: postButton.topAnchor, constant: -14),
             postButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
             postButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             postButton.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor, constant: -16),
@@ -182,6 +212,9 @@ final class TabChromeBar: UIView {
         rows = newRows
         rebuild()
     }
+
+    /// How many tabs the bar carries, which is what its width is made of.
+    var tabCount: Int { rows.filter { $0.depth == 0 }.count }
 
     private func rebuild() {
         let visible = form == .rail ? rows : rows.filter { $0.depth == 0 }
@@ -240,9 +273,15 @@ final class TabChromeBar: UIView {
         panel.isHidden = !rail
         glass.isHidden = rail
         postButton.isHidden = !rail
-        stackTop.isActive = !rail
-        stackUnderHeader.isActive = rail
-        stackBottom.isActive = !rail
+        railScroll.isHidden = !rail
+        NSLayoutConstraint.deactivate(railStackConstraints + barStackConstraints)
+        stack.removeFromSuperview()
+        if rail {
+            railScroll.addManaged(stack)
+        } else {
+            addManaged(stack)
+        }
+        NSLayoutConstraint.activate(rail ? railStackConstraints : barStackConstraints)
         postHeight.constant = rail ? 50 : 0
         if rail {
             stack.axis = .vertical
@@ -376,7 +415,7 @@ private final class TabChromeRow: UIView {
             ? NSDirectionalEdgeInsets(top: dense ? 8 : (child ? 7 : 10),
                                       leading: child ? (dense ? 30 : 38) : (dense ? 9 : 12),
                                       bottom: dense ? 8 : (child ? 7 : 10), trailing: 30)
-            : NSDirectionalEdgeInsets(top: 2, leading: 2, bottom: 2, trailing: 2)
+            : NSDirectionalEdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 0)
         config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
             var out = incoming
             out.font = rail

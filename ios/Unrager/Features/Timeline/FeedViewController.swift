@@ -236,10 +236,11 @@ class FeedViewController: UIViewController, TweetActionHandling {
         applyGridMode()
     }
 
-    /// Whether the iPad's rail carries the Post button. Where it does, the feed
-    /// keeps its own floating button out of the way: two ways to compose in one
-    /// window is one too many.
-    func setRailCarriesPost(_ carries: Bool) {}
+    /// Whether the iPad's chrome carries the compose button — the rail's Post,
+    /// or the round button that rides with the floating bar. Where it does, the
+    /// feed keeps its own floating button out of the way: two ways to compose
+    /// in one window is one too many.
+    func setChromeCarriesCompose(_ carries: Bool) {}
 
     /// The window this feed is laid out in, which decides how many posts the
     /// board may set side by side — a mini sets two where a 13-inch iPad sets

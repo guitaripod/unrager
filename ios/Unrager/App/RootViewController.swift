@@ -64,6 +64,7 @@ final class RootViewController: UIViewController {
             chrome.onSelect = { [weak self] index in self?.chromeChose(index) }
             chrome.onReselect = { [weak self] index in self?.chromeReselected(index) }
             chrome.onCompose = { [weak self] in self?.newTweetCommand() }
+            chrome.composeMenu = { [weak self] in self?.composeMenuElements() ?? [] }
             addChild(chrome)
             view.addManaged(chrome.view)
             chrome.view.pinEdges(to: view)
@@ -174,9 +175,30 @@ final class RootViewController: UIViewController {
     }
 
     @objc func newTweetCommand() {
+        presentCompose()
+    }
+
+    private func presentCompose(opensPhotoPicker: Bool = false) {
         guard presentedViewController == nil else { return }
-        let compose = ComposeViewController(mode: .new)
+        let compose = ComposeViewController(mode: .new, opensPhotoPicker: opensPhotoPicker)
         present(UINavigationController.sheet(rootViewController: compose), animated: true)
+    }
+
+    /// What a long press on the iPad's compose buttons offers: Home's own menu
+    /// — refresh, jump to top, mark read — when its feed is in front, and the
+    /// two ways to start a post everywhere else.
+    private func composeMenuElements() -> [UIMenuElement] {
+        if let home = (selectedViewController as? UINavigationController)?.topViewController as? HomeViewController {
+            return home.composeMenuElements()
+        }
+        return [
+            UIAction(title: "New post", image: DesignSystem.icon("square.and.pencil")) { [weak self] _ in
+                self?.presentCompose()
+            },
+            UIAction(title: "Post with a photo", image: DesignSystem.icon("photo.badge.plus")) { [weak self] _ in
+                self?.presentCompose(opensPhotoPicker: true)
+            },
+        ]
     }
 
     @objc func refreshCommand() {
@@ -202,7 +224,7 @@ final class RootViewController: UIViewController {
     override func validate(_ command: UICommand) {
         switch command.action {
         case #selector(toggleSidebarCommand):
-            command.attributes = padChrome != nil && layoutAllowsSidebar ? [] : .disabled
+            command.attributes = padChrome?.windowHasSidebar == true ? [] : .disabled
         case #selector(newTweetCommand):
             command.attributes = presentedViewController == nil ? [] : .disabled
         case #selector(refreshCommand):
@@ -213,11 +235,6 @@ final class RootViewController: UIViewController {
         default:
             super.validate(command)
         }
-    }
-
-    /// Whether this window has a sidebar to toggle at all.
-    private var layoutAllowsSidebar: Bool {
-        PadLayout.allowsRail(window: view.bounds.size)
     }
 
     private func topFeed() -> FeedViewController? {

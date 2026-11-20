@@ -29,6 +29,13 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         #endif
     }
 
+    /// A window moved, tiled or resized: the iPad's controls read again which
+    /// screen edge, and so which thumb, they belong to.
+    func windowScene(_ windowScene: UIWindowScene,
+                     didUpdateEffectiveGeometry previousEffectiveGeometry: UIWindowScene.Geometry) {
+        NotificationCenter.default.post(name: PadReach.windowMoved, object: windowScene)
+    }
+
     /// Puts the window controls in the toolbar, in line with the tab bar,
     /// instead of a permanent strip above it.
     func preferredWindowingControlStyle(for windowScene: UIWindowScene) -> UIWindowScene.WindowingControlStyle {

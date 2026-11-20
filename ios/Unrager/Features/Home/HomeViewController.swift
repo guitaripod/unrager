@@ -317,12 +317,17 @@ final class HomeViewController: FeedViewController {
         UIView.animate(withDuration: 0.25) { composeButton.superview?.layoutIfNeeded() }
     }
 
-    /// The rail carries the Post button on a wide iPad window, so the floating
-    /// one goes away rather than doubling it in the corner.
-    override func setRailCarriesPost(_ carries: Bool) {
+    /// The iPad's chrome carries compose — the rail's Post, or the round button
+    /// beside the floating bar — so the feed's own goes away rather than
+    /// doubling it, or hiding behind the bar in a narrow window.
+    override func setChromeCarriesCompose(_ carries: Bool) {
         guard let composeButton, composeButton.alpha != (carries ? 0 : 1) else { return }
         composeButton.isUserInteractionEnabled = !carries
         composeButton.accessibilityElementsHidden = carries
+        guard composeButton.window != nil else {
+            composeButton.alpha = carries ? 0 : 1
+            return
+        }
         UIView.animate(withDuration: 0.2) { composeButton.alpha = carries ? 0 : 1 }
     }
 
@@ -334,7 +339,7 @@ final class HomeViewController: FeedViewController {
     /// What a touch and hold on the compose button offers, built each time it
     /// opens so it reflects the feed as it is then: writing, the feed's own
     /// shortcuts, and which app a post goes through.
-    private func composeMenuElements() -> [UIMenuElement] {
+    func composeMenuElements() -> [UIMenuElement] {
         let writing = UIMenu(options: .displayInline, children: [
             UIAction(title: "New post", image: DesignSystem.icon("square.and.pencil")) { [weak self] _ in
                 self?.presentCompose()

@@ -44,8 +44,10 @@ struct PadLayout: Equatable {
         /// The floating bar's height, and the room a list keeps clear under it.
         var barHeight: CGFloat
         var barClearance: CGFloat
-        /// The widest the floating bar grows.
+        /// The widest the floating bar grows, and the room it would like per tab
+        /// before it is squeezed.
         var barWidth: CGFloat
+        var barItemWidth: CGFloat
         /// How much of the window's width the rail may claim.
         var railShare: CGFloat
     }
@@ -54,11 +56,11 @@ struct PadLayout: Equatable {
         .regular: Metrics(
             rail: 280, narrowestRail: 232, widestRail: 380,
             detail: 400...600, boardColumns: 3, boardColumnWidth: 300,
-            barHeight: 62, barClearance: 84, barWidth: 560, railShare: 0.26),
+            barHeight: 62, barClearance: 84, barWidth: 560, barItemWidth: 86, railShare: 0.26),
         .mini: Metrics(
             rail: 208, narrowestRail: 188, widestRail: 264,
             detail: 340...440, boardColumns: 2, boardColumnWidth: 300,
-            barHeight: 56, barClearance: 78, barWidth: 470, railShare: 0.3),
+            barHeight: 56, barClearance: 78, barWidth: 470, barItemWidth: 78, railShare: 0.3),
     ]
 
     /// A window has to be at least this wide — and wider than it is tall —

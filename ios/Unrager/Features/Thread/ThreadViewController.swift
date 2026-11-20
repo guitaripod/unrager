@@ -42,6 +42,8 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
     private var postedReplyID: String?
     private let emptyState = EmptyStateView()
     private let loadingSkeleton = FeedSkeletonView()
+    /// The iPad dock listening for the focal post's state.
+    var onDockChange: (() -> Void)?
 
     private enum Section: Int { case ancestors, focal, replies }
 
@@ -216,6 +218,13 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
     /// A text-size change re-renders every row; Twemoji art landing re-renders
     /// the rows on screen, whose native emoji glyphs it replaces.
     private func observeDisplayChanges() {
+        NotificationCenter.default.publisher(for: Engagement.didSettle)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] note in
+                guard let self, note.object as? String == self.focalID else { return }
+                self.onDockChange?()
+            }
+            .store(in: &cancellables)
         NotificationCenter.default.publisher(for: AppSettings.fontScaleDidChange)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.dataSource.reconfigureAllItems() }
@@ -438,6 +447,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
         snapshot.appendItems([focalID], toSection: .focal)
         dataSource.apply(snapshot, animatingDifferences: false)
         didRenderFocal = true
+        onDockChange?()
     }
 
     /// The signed-in handle: the confirmed one once `whoami` answers, the one
@@ -552,6 +562,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
     /// already-visible focal tweet, the content offset is corrected after layout
     /// so the focal tweet stays put — no scroll jump.
     private func applyThread(ancestors: [String], focal: String, reconfigureExisting: Bool = false) {
+        defer { onDockChange?() }
         let anchorBefore = focalCellFrameMinusOffset()
         let alreadyShown = Set(dataSource.snapshot().itemIdentifiers)
         var snapshot = NSDiffableDataSourceSnapshot<Section, String>()
@@ -836,6 +847,7 @@ final class ThreadViewController: UIViewController, TweetActionHandling {
     /// The shared confirmed-engagement write-back: swaps in `transform`'s copy
     /// (nil = already in that state) and reconfigures the row.
     private func confirmEngagement(id: String, _ transform: (Tweet) -> Tweet?) {
+        defer { if id == focalID { onDockChange?() } }
         guard let updated = tweetsByID[id].flatMap(transform) else { return }
         tweetsByID[id] = updated
         var snapshot = dataSource.snapshot()
@@ -966,5 +978,50 @@ extension ThreadViewController: UICollectionViewDelegate {
         return UIContextMenuConfiguration(identifier: id as NSString, previewProvider: nil) { [weak self] _ in
             self?.tweetContextMenu(tweet)
         }
+    }
+}
+
+extension ThreadViewController: DetailDockProviding {
+    /// Reply, repost, like and share for the post the thread is about, read
+    /// from its row while that row shows the post — so a like still on its way
+    /// reads as liked — and from the model otherwise.
+    func dockActions() -> [DetailDock.Action] {
+        guard let focal = focalTweet else { return [] }
+        let cell = focalCell().flatMap { $0.tweetID == focal.restID ? $0 : nil }
+        let liked = cell?.engagement(.like).on ?? focal.favorited
+        let reposted = cell?.engagement(.repost).on ?? focal.retweeted
+        let repostMenu = UIMenu(children: [
+            UIAction(title: reposted ? "Undo repost" : "Repost", image: DesignSystem.icon("arrow.2.squarepath"),
+                     attributes: reposted ? [.destructive] : []) { [weak self] _ in
+                guard let self, let focal = self.focalTweet else { return }
+                self.toggleRetweet(focal, cell: self.focalCell())
+                self.onDockChange?()
+            },
+            UIAction(title: "Quote", image: DesignSystem.icon("quote.bubble")) { [weak self] _ in
+                guard let self, let focal = self.focalTweet else { return }
+                self.presentQuote(focal)
+            },
+        ])
+        return [
+            DetailDock.Action(id: "reply", symbol: "bubble.left", title: "Reply") { [weak self] in
+                self?.replyToFocal()
+            },
+            DetailDock.Action(id: "repost", symbol: "arrow.2.squarepath", title: reposted ? "Undo repost" : "Repost",
+                              isOn: reposted, onTint: DesignSystem.Color.retweet, menu: repostMenu),
+            DetailDock.Action(id: "like", symbol: "heart", title: liked ? "Unlike" : "Like", isOn: liked,
+                              onSymbol: "heart.fill", onTint: DesignSystem.Color.like) { [weak self] in
+                guard let self, let focal = self.focalTweet else { return }
+                self.toggleLike(focal, cell: self.focalCell())
+                self.onDockChange?()
+            },
+            DetailDock.Action(id: "share", symbol: "square.and.arrow.up", title: "Share") { [weak self] in
+                guard let self, let focal = self.focalTweet else { return }
+                self.shareTweet(focal)
+            },
+        ]
+    }
+
+    private var focalTweet: Tweet? {
+        focalID.flatMap { tweetsByID[$0] }
     }
 }

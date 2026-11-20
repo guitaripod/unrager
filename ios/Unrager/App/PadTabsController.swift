@@ -13,8 +13,12 @@ final class PadTabsController: UIViewController {
     var onSelect: ((Int) -> Void)?
     /// The tab already showing was tapped again.
     var onReselect: ((Int) -> Void)?
-    /// The rail's post button, where a sidebar has room for one.
+    /// The rail's post button, where a sidebar has room for one, and the round
+    /// one beside the floating bar.
     var onCompose: (() -> Void)?
+    /// What a long press on either compose button offers: the tab in front's
+    /// own choices where it has them.
+    var composeMenu: (() -> [UIMenuElement])?
 
     private(set) var selectedIndex = 0
     private(set) var layout = PadLayout.resolve(window: CGSize(width: 1024, height: 768))
@@ -45,6 +49,17 @@ final class PadTabsController: UIViewController {
     private var details: [TabItem: StatusNavigationController] = [:]
 
     private let chrome = TabChromeBar()
+    /// Where the reader's thumbs reach in this window, read from where the
+    /// window sits on the screen.
+    private(set) var reach = PadReach.standard
+    /// The compose button that rides with the floating bar: level with it in
+    /// the corner where there is room, just above its outer end where there
+    /// isn't, and against the window's outer edge when it shares the screen.
+    private let composeOrb = UIButton(configuration: .unragerProminentGlass())
+    private var orbConstraints: [NSLayoutConstraint] = []
+    /// The way back and the open post's own actions, low and to one side.
+    private let dock = DetailDock()
+    private var dockConstraints: [NSLayoutConstraint] = []
     private let contentArea = UILayoutGuide()
     private let primary = UIView()
     /// The column a post opens into: the window's trailing column where there is
@@ -68,6 +83,9 @@ final class PadTabsController: UIViewController {
     }
 
     private var chromeConstraints: [NSLayoutConstraint] = []
+    /// The window width the chrome was last laid out for — the size a resize
+    /// is going to, never a frame read halfway through it.
+    private var layoutWidth: CGFloat = 0
     private var contentLeading: NSLayoutConstraint!
     /// The column's width where it sits beside the board — a number `PadLayout`
     /// works out from the window's size, never one read off a frame.
@@ -101,6 +119,8 @@ final class PadTabsController: UIViewController {
         chrome.onToggleSidebar = { [weak self] in self?.toggleSidebar() }
         chrome.onResize = { [weak self] travel in self?.resizeSidebar(by: travel) }
         chrome.onRow = { [weak self] id in self?.chooseRow(id) }
+        chrome.composeMenu = { [weak self] in self?.composeMenu?() ?? [] }
+        configureComposeOrb()
 
         view.addLayoutGuide(contentArea)
         contentLeading = contentArea.leadingAnchor.constraint(equalTo: view.leadingAnchor)
@@ -146,13 +166,59 @@ final class PadTabsController: UIViewController {
         detail.clipsToBounds = true
         detail.pinEdges(to: detailColumn)
 
+        view.addManaged(dock)
+        dock.isHidden = true
+        dock.alpha = 0
+        dock.onWayBack = { [weak self] in self?.dockWentBack() }
+
         let edgeSwipe = UIScreenEdgePanGestureRecognizer(target: self, action: #selector(edgeSwiped))
         edgeSwipe.edges = .left
         edgeSwipe.delegate = self
         edgeSwipe.cancelsTouchesInView = false
         view.addGestureRecognizer(edgeSwipe)
 
-        apply(resolvedLayout(for: view.bounds.size), force: true)
+        NotificationCenter.default.addObserver(self, selector: #selector(windowMoved),
+                                               name: PadReach.windowMoved, object: nil)
+        apply(resolvedLayout(for: view.bounds.size), width: view.bounds.width, force: true)
+    }
+
+    private func configureComposeOrb() {
+        var config = UIButton.Configuration.unragerProminentGlass()
+        config.image = DesignSystem.icon("square.and.pencil", pointSize: 20, weight: .semibold)
+        composeOrb.configuration = config
+        composeOrb.accessibilityLabel = "New post"
+        composeOrb.accessibilityHint = "Touch and hold for more."
+        composeOrb.addAction(UIAction { [weak self] _ in self?.onCompose?() }, for: .touchUpInside)
+        composeOrb.menu = UIMenu(children: [
+            UIDeferredMenuElement.uncached { [weak self] completion in
+                completion(self?.composeMenu?() ?? [])
+            },
+        ])
+        composeOrb.pointerStyleProvider = { button, _, _ in
+            UIPointerStyle(effect: .lift(UITargetedPreview(view: button)), shape: .roundedRect(button.bounds, radius: button.bounds.height / 2))
+        }
+        view.addManaged(composeOrb)
+    }
+
+    /// The system moved the window without resizing it — another app took the
+    /// other side of the screen, or the window was dragged — so the edge its
+    /// thumb is on may have changed with no layout pass to say so.
+    @objc private func windowMoved() {
+        refreshReach(animated: true)
+    }
+
+    /// Reads where the thumbs are and, if that moved, puts the floating
+    /// controls under them.
+    private func refreshReach(animated: Bool = false) {
+        let read = PadReach.reading(view)
+        guard read != reach else { return }
+        reach = read
+        let size = view.bounds.size
+        apply(resolvedLayout(for: size), width: size.width)
+        layoutChrome()
+        layoutFloatingControls()
+        guard animated else { return }
+        animateLayout()
     }
 
     /// The screen this window is on, which says what kind of iPad it is.
@@ -163,7 +229,28 @@ final class PadTabsController: UIViewController {
     /// The chrome and columns for a window of `size`, with the sidebar as the
     /// reader left it.
     private func resolvedLayout(for size: CGSize) -> PadLayout {
-        PadLayout.resolve(window: size, screen: screenSize, rail: sidebarWidth, closed: !sidebarShown)
+        PadLayout.resolve(window: size, screen: screenSize, rail: sidebarWidth,
+                          closed: !sidebarShown || railOutOfReach)
+    }
+
+    /// A wide window sharing the screen from its trailing side puts its leading
+    /// edge in the middle of the screen, where no thumb rests: its tabs go to
+    /// the bar along the bottom instead, hugging the edge the thumb is on.
+    private var railOutOfReach: Bool { !reach.railInReach }
+
+    // MARK: - Keyboard
+
+    override var keyCommands: [UIKeyCommand]? {
+        guard detailOnScreen else { return nil }
+        let close = UIKeyCommand(title: layout.showsDetail ? "Close" : "Back", action: #selector(closeFromKeyboard),
+                                 input: UIKeyCommand.inputEscape)
+        close.wantsPriorityOverSystemBehavior = true
+        return [close]
+    }
+
+    /// Escape closes the post that is open, the way it dismisses a sheet.
+    @objc private func closeFromKeyboard() {
+        dockWentBack()
     }
 
     /// A window about to change size moves its columns with the system's own
@@ -173,7 +260,7 @@ final class PadTabsController: UIViewController {
         super.viewWillTransition(to: size, with: coordinator)
         guard size.width > 0, size.height > 0 else { return }
         coordinator.animate { _ in
-            self.apply(self.resolvedLayout(for: size))
+            self.apply(self.resolvedLayout(for: size), width: size.width)
             self.view.layoutIfNeeded()
         }
     }
@@ -183,12 +270,16 @@ final class PadTabsController: UIViewController {
     @objc private func edgeSwiped(_ gesture: UIScreenEdgePanGestureRecognizer) {
         guard gesture.state == .recognized else { return }
         Haptics.selection()
-        toggleSidebar()
+        if detailOnScreen, !layout.showsDetail {
+            closeDetail()
+        } else {
+            toggleSidebar()
+        }
     }
 
     /// Whether this window has a rail to reveal at all.
-    private var windowHasSidebar: Bool {
-        PadLayout.allowsRail(window: view.bounds.size)
+    var windowHasSidebar: Bool {
+        PadLayout.allowsRail(window: view.bounds.size) && !railOutOfReach
     }
 
     /// A screen's navigation item only holds what the screen has put there once
@@ -203,7 +294,8 @@ final class PadTabsController: UIViewController {
         super.viewDidLayoutSubviews()
         let size = view.bounds.size
         guard size.width > 0, size.height > 0 else { return }
-        apply(resolvedLayout(for: size))
+        apply(resolvedLayout(for: size), width: size.width)
+        refreshReach()
         // A tab's view is loaded the first time it is shown, which can be after
         // the chrome was resolved: its board and its bar clearance are settled
         // here, on every pass, so nothing waits for the next tap.
@@ -278,7 +370,7 @@ final class PadTabsController: UIViewController {
         guard windowHasSidebar else { return }
         sidebarShown.toggle()
         ClientSettings.padSidebarShown = sidebarShown
-        apply(resolvedLayout(for: view.bounds.size))
+        apply(resolvedLayout(for: view.bounds.size), width: view.bounds.width)
         applySidebarButton()
         animateLayout()
     }
@@ -293,7 +385,7 @@ final class PadTabsController: UIViewController {
         guard proposed != sidebarWidth else { return }
         sidebarWidth = proposed
         ClientSettings.padSidebarWidth = proposed
-        apply(resolvedLayout(for: view.bounds.size))
+        apply(resolvedLayout(for: view.bounds.size), width: view.bounds.width)
         animateLayout()
     }
 
@@ -404,10 +496,13 @@ final class PadTabsController: UIViewController {
     /// again, both without anything behind them moving.
     func closeDetail() {
         guard tabs.indices.contains(selectedIndex), let nav = details[tabs[selectedIndex]] else { return }
+        dock.isUserInteractionEnabled = false
+        UIView.animate(withDuration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.18) { self.dock.alpha = 0 }
         hideDetailColumn {
             for screen in nav.viewControllers { self.installedWayBack[ObjectIdentifier(screen)] = nil }
             nav.setViewControllers([], animated: false)
             self.detachChildren(of: self.detail)
+            self.applyFloatingVisibility(animated: true)
         }
     }
 
@@ -425,7 +520,7 @@ final class PadTabsController: UIViewController {
             guard let nav = controller as? UINavigationController else { continue }
             for host in boardHosts(in: nav.topViewController) {
                 host.setGrid(index == selectedIndex && showsBoard)
-                host.setRailCarriesPost(layout.chrome == .rail)
+                host.setChromeCarriesCompose(true)
             }
         }
     }
@@ -592,8 +687,18 @@ final class PadTabsController: UIViewController {
     // MARK: - Placement
 
     /// Resolves the chrome, the board and the column for a new window size.
-    private func apply(_ resolved: PadLayout, force: Bool = false) {
-        guard force || resolved != layout else { return }
+    private func apply(_ resolved: PadLayout, width: CGFloat, force: Bool = false) {
+        let widthMoved = abs(width - layoutWidth) > 0.5
+        layoutWidth = width
+        guard force || resolved != layout else {
+            // The bar and its compose button are placed from the width itself,
+            // not only from the layout's break points.
+            if widthMoved, layout.chrome == .bottom {
+                layoutChrome()
+                layoutFloatingControls()
+            }
+            return
+        }
         let reshaped = !force && (resolved.chrome != layout.chrome
             || resolved.frame != layout.frame
             || resolved.showsDetail != layout.showsDetail)
@@ -603,32 +708,169 @@ final class PadTabsController: UIViewController {
         contentLeading.constant = resolved.railWidth
         if reshaped { refreshWayBack() }
         applySelection()
+        layoutFloatingControls()
+        refreshDock()
+        applyFloatingVisibility()
         applySidebarButton()
         applyBoard()
         applySafeArea()
     }
 
     private func layoutChrome() {
-        NSLayoutConstraint.deactivate(chromeConstraints)
-        let metrics = layout.metrics
+        NSLayoutConstraint.deactivate(chromeConstraints + orbConstraints)
+        orbConstraints = []
         chrome.isHidden = layout.chrome == .rail && layout.railWidth == 0
-        chromeConstraints = layout.chrome == .rail
-            ? [chrome.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-               chrome.topAnchor.constraint(equalTo: view.topAnchor),
-               chrome.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-               chrome.widthAnchor.constraint(equalToConstant: layout.railWidth)]
-            : [chrome.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-               chrome.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor,
-                                              constant: -PadLayout.barLift(for: layout.frame)),
-               chrome.heightAnchor.constraint(equalToConstant: metrics.barHeight),
-               chrome.widthAnchor.constraint(equalTo: view.widthAnchor, constant: -40).priority(.defaultHigh),
-               chrome.widthAnchor.constraint(lessThanOrEqualToConstant: metrics.barWidth)]
-        NSLayoutConstraint.activate(chromeConstraints)
+        guard layout.chrome == .bottom else {
+            chromeConstraints = [
+                chrome.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                chrome.topAnchor.constraint(equalTo: view.topAnchor),
+                chrome.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+                chrome.widthAnchor.constraint(equalToConstant: layout.railWidth),
+            ]
+            NSLayoutConstraint.activate(chromeConstraints)
+            composeOrb.isHidden = true
+            view.bringSubviewToFront(chrome)
+            return
+        }
+        let metrics = layout.metrics
+        let safe = view.safeAreaLayoutGuide
+        let margin = PadReach.dockMargin
+        let plan = reach.dock(width: layoutWidth, tabs: chrome.tabCount,
+                              itemWidth: metrics.barItemWidth, maximumBar: metrics.barWidth,
+                              button: metrics.barHeight)
+        chromeConstraints = [
+            chrome.bottomAnchor.constraint(equalTo: safe.bottomAnchor, constant: -PadLayout.barLift(for: layout.frame)),
+            chrome.heightAnchor.constraint(equalToConstant: metrics.barHeight),
+            chrome.widthAnchor.constraint(equalToConstant: plan.barWidth).priority(.defaultHigh),
+            chrome.leadingAnchor.constraint(greaterThanOrEqualTo: safe.leadingAnchor, constant: margin),
+            chrome.trailingAnchor.constraint(lessThanOrEqualTo: safe.trailingAnchor, constant: -margin),
+        ]
+        orbConstraints = [
+            composeOrb.widthAnchor.constraint(equalToConstant: metrics.barHeight),
+            composeOrb.heightAnchor.constraint(equalToConstant: metrics.barHeight),
+        ]
+        let orbAtEdge = plan.composeSide == .leading
+            ? composeOrb.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: margin)
+            : composeOrb.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -margin)
+        orbConstraints.append(orbAtEdge)
+        orbConstraints.append(plan.composeBesideBar
+            ? composeOrb.centerYAnchor.constraint(equalTo: chrome.centerYAnchor)
+            : composeOrb.bottomAnchor.constraint(equalTo: chrome.topAnchor, constant: -PadReach.dockGap))
+        switch plan.placement {
+        case .centred:
+            chromeConstraints.append(chrome.centerXAnchor.constraint(equalTo: safe.centerXAnchor))
+        case .hugging(let side):
+            let gap = PadReach.dockGap
+            switch (side, plan.composeBesideBar) {
+            case (.leading, true):
+                chromeConstraints.append(chrome.leadingAnchor.constraint(equalTo: composeOrb.trailingAnchor, constant: gap))
+            case (.trailing, true):
+                chromeConstraints.append(chrome.trailingAnchor.constraint(equalTo: composeOrb.leadingAnchor, constant: -gap))
+            case (.leading, false):
+                chromeConstraints.append(chrome.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: margin))
+            case (.trailing, false):
+                chromeConstraints.append(chrome.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -margin))
+            }
+        }
+        NSLayoutConstraint.activate(chromeConstraints + orbConstraints)
+        composeOrb.isHidden = false
         view.bringSubviewToFront(chrome)
+        view.bringSubviewToFront(composeOrb)
+        applyFloatingVisibility()
     }
 
     /// Whether a post is open over the board at all.
     private var detailOnScreen: Bool { tabUsesDetail && detailHasScreens }
+
+    /// The detail stack of the tab in front, when it has one.
+    private var frontDetailStack: StatusNavigationController? {
+        tabs.indices.contains(selectedIndex) ? details[tabs[selectedIndex]] : nil
+    }
+
+    /// Whether the floating bar steps aside for the dock: a post that fills a
+    /// window with the bar along its bottom has one row of controls, its own.
+    private var barMakesWayForDock: Bool { layout.chrome == .bottom && detailOnScreen }
+
+    /// Places the dock low in the open post, on the side the thumb reaches: the
+    /// column's trailing corner beside the board, the window's outer edge (or
+    /// its trailing one) where the post fills it.
+    private func layoutFloatingControls() {
+        NSLayoutConstraint.deactivate(dockConstraints)
+        let safe = view.safeAreaLayoutGuide
+        let beside = layout.showsDetail
+        let inset: CGFloat = 16
+        let lift = layout.chrome == .bottom ? PadLayout.barLift(for: layout.frame) : inset
+        let side: PadReach.Side = beside ? .trailing : reach.primarySide
+        let region: (leading: NSLayoutXAxisAnchor, trailing: NSLayoutXAxisAnchor) = beside
+            ? (detailColumn.leadingAnchor, detailColumn.trailingAnchor)
+            : (contentArea.leadingAnchor, contentArea.trailingAnchor)
+        dockConstraints = [
+            dock.bottomAnchor.constraint(equalTo: safe.bottomAnchor, constant: -lift),
+            dock.leadingAnchor.constraint(greaterThanOrEqualTo: region.leading, constant: 12),
+            dock.trailingAnchor.constraint(lessThanOrEqualTo: region.trailing, constant: -12),
+            side == .trailing
+                ? dock.trailingAnchor.constraint(equalTo: region.trailing, constant: -inset).priority(.defaultHigh)
+                : dock.leadingAnchor.constraint(equalTo: region.leading, constant: inset).priority(.defaultHigh),
+        ]
+        NSLayoutConstraint.activate(dockConstraints)
+        dock.setHeight(layout.metrics.barHeight)
+        view.bringSubviewToFront(dock)
+    }
+
+    /// Which floating controls show: the bar and its compose button, or the
+    /// dock of the post that is open.
+    private func applyFloatingVisibility(animated: Bool = false) {
+        let showsDock = detailOnScreen
+        let barAway = barMakesWayForDock
+        let change = {
+            self.dock.alpha = showsDock ? 1 : 0
+            if self.layout.chrome == .bottom {
+                self.chrome.alpha = barAway ? 0 : 1
+                self.composeOrb.alpha = barAway ? 0 : 1
+            } else {
+                self.chrome.alpha = 1
+            }
+        }
+        if showsDock { dock.isHidden = false }
+        chrome.isUserInteractionEnabled = !barAway
+        composeOrb.isUserInteractionEnabled = !barAway
+        dock.isUserInteractionEnabled = showsDock
+        chrome.accessibilityElementsHidden = barAway
+        composeOrb.accessibilityElementsHidden = barAway
+        guard animated, !UIAccessibility.isReduceMotionEnabled else {
+            change()
+            dock.isHidden = !showsDock
+            return
+        }
+        UIView.animate(withDuration: 0.22, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
+            change()
+        } completion: { _ in
+            self.dock.isHidden = self.dock.alpha == 0
+        }
+    }
+
+    /// Fills the dock for whatever is on top of the open stack: its way back —
+    /// a close beside the board, a chevron where the post fills the window or
+    /// a page was opened inside it — and the screen's own actions.
+    private func refreshDock() {
+        guard let nav = frontDetailStack, let top = nav.topViewController else { return }
+        let provider = top as? any DetailDockProviding
+        provider?.onDockChange = { [weak self, weak top] in
+            guard let self, let top, self.frontDetailStack?.topViewController === top else { return }
+            self.refreshDock()
+        }
+        let wayBack: DetailDock.WayBack = layout.showsDetail && nav.viewControllers.count == 1 ? .close : .back
+        dock.configure(wayBack: wayBack, actions: provider?.dockActions() ?? [])
+    }
+
+    /// The dock's way back steps back a page inside the open stack, or closes it.
+    private func dockWentBack() {
+        if let nav = frontDetailStack, nav.viewControllers.count > 1 {
+            nav.popViewController(animated: true)
+        } else {
+            closeDetail()
+        }
+    }
 
     /// Where the column is: shut, beside the board at the width the window
     /// gives it, or across the whole content area. Every case is constraints
@@ -747,6 +989,8 @@ final class PadTabsController: UIViewController {
         guard controllers.indices.contains(selectedIndex) else { return }
         show(controllers[selectedIndex], in: primary)
         showDetailIfAny()
+        refreshDock()
+        applyFloatingVisibility()
     }
 
     private func showDetailIfAny() {
@@ -793,14 +1037,17 @@ final class PadTabsController: UIViewController {
     /// system's bars, and its last row can always be brought clear.
     private func applySafeArea() {
         let clearance = layout.chrome == .bottom ? layout.metrics.barClearance : 0
+        let lift = layout.chrome == .bottom ? PadLayout.barLift(for: layout.frame) : 16
+        let dockClearance = layout.metrics.barHeight + lift + 10
         for controller in children {
-            guard let nav = controller as? UINavigationController else { continue }
+            guard let nav = controller as? UINavigationController, !details.values.contains(where: { $0 === nav })
+            else { continue }
             for screen in nav.viewControllers {
                 screen.view.clearBottomBar(clearance)
             }
         }
         for screen in details.values.flatMap(\.viewControllers) {
-            screen.view.clearBottomBar(clearance)
+            screen.view.clearBottomBar(dockClearance)
         }
     }
 
@@ -840,24 +1087,42 @@ final class PadTabsController: UIViewController {
         giveWayBack(to: controller)
         show(nav, in: detail)
         showDetail()
+        layoutFloatingControls()
+        refreshDock()
+        applyFloatingVisibility(animated: true)
         applySafeArea()
     }
 
     private func detailStack(for tab: TabItem) -> StatusNavigationController {
         if let existing = details[tab] { return existing }
         let nav = StatusNavigationController()
+        nav.delegate = self
         details[tab] = nav
         return nav
     }
 }
 
 extension PadTabsController: UIGestureRecognizerDelegate {
-    /// The edge swipe only answers to a closed sidebar in a window that could
-    /// hold one — everywhere else the screen keeps its own edge gestures, such
-    /// as the way back out of a pushed page.
+    /// The edge swipe answers to a closed sidebar in a window that could hold
+    /// one, and goes back from a post that fills the window the way a pushed
+    /// page does on the phone — never from a page pushed inside it, which its
+    /// own stack takes back.
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard gestureRecognizer is UIScreenEdgePanGestureRecognizer else { return true }
+        if detailOnScreen, !layout.showsDetail {
+            return (frontDetailStack?.viewControllers.count ?? 0) <= 1
+        }
         return windowHasSidebar && !sidebarShown
+    }
+}
+
+extension PadTabsController: UINavigationControllerDelegate {
+    /// A page opened or closed inside the open post changes what the dock offers.
+    func navigationController(_ navigationController: UINavigationController, didShow viewController: UIViewController,
+                              animated: Bool) {
+        guard navigationController === frontDetailStack else { return }
+        refreshDock()
+        applySafeArea()
     }
 }
 

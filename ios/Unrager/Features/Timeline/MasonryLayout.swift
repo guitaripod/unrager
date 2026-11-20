@@ -60,7 +60,16 @@ final class MasonryLayout: UICollectionViewLayout {
     private var builtFor: BuildKey?
     /// Posts laid out with a guess, measured a few at a time after the frame.
     private var guessed: [Int] = []
-    private var refining = false
+    /// Measures the guessed posts in what each frame leaves over.
+    private lazy var refiner = IdleFrameWork { [weak self] deadline in
+        self?.refine(until: deadline) ?? false
+    }
+    /// What measuring one post has been costing lately, so a slice only starts
+    /// a post it can finish before the frame's deadline.
+    private var measureCost: CFTimeInterval = 0.004
+    /// Frames in a row that a guessed post within a screen of the reader could
+    /// not be measured for want of time.
+    private var starvedFrames = 0
     /// The post at the top of the screen when the board was last rebuilt, and
     /// how far into it the screen began, so a new width keeps it there.
     private var anchor: (item: Int, within: CGFloat)?
@@ -315,6 +324,7 @@ final class MasonryLayout: UICollectionViewLayout {
     func retire() {
         retired = true
         guessed = []
+        refiner.stop()
     }
 
     /// The post nearest the top of the screen and how far down it the screen
@@ -329,31 +339,60 @@ final class MasonryLayout: UICollectionViewLayout {
         return (first.indexPath.item, top - first.frame.minY)
     }
 
-    /// Measures the guessed posts a few milliseconds at a time, after the frame
-    /// is up, and lays the board out again once they are all known — or sooner
-    /// when the reader scrolls to within a screen of one still guessed. Laying
-    /// the board out after every few posts would cost a pass of the whole
-    /// window, focus map included, for posts nobody can see yet.
+    /// Measures the guessed posts after each frame is drawn, nearest the screen
+    /// first, in the time that frame leaves over (`IdleFrameWork`), and lays the
+    /// board out again once they are all known — or sooner when the reader
+    /// scrolls to within a screen of one still guessed. Laying the board out
+    /// after every few posts would cost a pass of the whole board each time.
     private func refineSoon() {
-        guard !guessed.isEmpty, !refining, !retired else { return }
-        refining = true
+        guard !guessed.isEmpty, !retired else { return }
+        starvedFrames = 0
+        guard collectionView?.window != nil else { return refineOffScreen() }
+        refiner.start()
+    }
+
+    /// A board not on screen has no frames of its own to keep on time: it
+    /// measures in turns of the main queue, a slice at a time.
+    private func refineOffScreen() {
         DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.refining = false
-            let started = CACurrentMediaTime()
-            while let item = self.guessed.first, CACurrentMediaTime() - started < 0.008 {
-                self.guessed.removeFirst()
-                let indexPath = IndexPath(item: item, section: 0)
-                guard item < (self.numberOfItems?() ?? 0), self.knownHeightForItem?(indexPath) == nil else { continue }
-                _ = self.heightForItem?(indexPath)
-            }
-            if self.guessed.isEmpty || self.guessNearScreen {
-                self.relayoutKeepingReader()
-            } else {
-                self.refineSoon()
-            }
+            guard let self, !self.guessed.isEmpty, !self.refiner.isRunning else { return }
+            if self.refine(until: CACurrentMediaTime() + IdleFrameWork.fallbackSlice) { self.refineSoon() }
         }
     }
+
+    /// One frame's share: as many guessed posts as fit before `deadline`. A post
+    /// within a screen of the reader that has waited three frames for room is
+    /// measured anyway, since showing it at its guessed height would be worse
+    /// than one late frame. Answers whether any are left.
+    private func refine(until deadline: CFTimeInterval) -> Bool {
+        guard !retired else { return false }
+        var measured = false
+        while let item = guessed.first {
+            let started = CACurrentMediaTime()
+            let near = guessNearScreen
+            guard started + measureCost < deadline || (near && starvedFrames >= Self.starvationLimit) else {
+                if near { starvedFrames += 1 }
+                break
+            }
+            guessed.removeFirst()
+            let indexPath = IndexPath(item: item, section: 0)
+            guard item < (numberOfItems?() ?? 0), knownHeightForItem?(indexPath) == nil else { continue }
+            _ = heightForItem?(indexPath)
+            measureCost = max(0.0005, measureCost * 0.7 + (CACurrentMediaTime() - started) * 0.3)
+            measured = true
+            starvedFrames = 0
+        }
+        if guessed.isEmpty {
+            relayoutKeepingReader()
+            return !guessed.isEmpty
+        }
+        if measured, guessNearScreen { relayoutKeepingReader() }
+        return true
+    }
+
+    /// Frames a near guessed post may wait for room before it is measured in a
+    /// frame that has none.
+    static let starvationLimit = 3
 
     /// Lays the board out again with what has been measured, keeping the post
     /// at the top of the screen where it is: a post above the seam that turns

@@ -268,6 +268,15 @@ final class PadTour: XCTestCase {
         pause(seconds)
     }
 
+    /// Stands the simulator upright again for `UNRAGER_HOLD_SECONDS` (default
+    /// ten minutes), the counterpart to `testHoldLandscape`: a simulator keeps
+    /// the last orientation a test gave it.
+    func testHoldPortrait() {
+        let seconds = Double(ProcessInfo.processInfo.environment["UNRAGER_HOLD_SECONDS"] ?? "") ?? 600
+        XCUIDevice.shared.orientation = .portrait
+        pause(seconds)
+    }
+
     private func snap(_ name: String) {
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = name

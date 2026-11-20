@@ -259,6 +259,9 @@ final class PadTabsController: UIViewController {
     override func viewWillTransition(to size: CGSize, with coordinator: any UIViewControllerTransitionCoordinator) {
         super.viewWillTransition(to: size, with: coordinator)
         guard size.width > 0, size.height > 0 else { return }
+        #if DEBUG
+        ResizeTimer.shared.begin(size)
+        #endif
         coordinator.animate { _ in
             self.apply(self.resolvedLayout(for: size), width: size.width)
             self.view.layoutIfNeeded()

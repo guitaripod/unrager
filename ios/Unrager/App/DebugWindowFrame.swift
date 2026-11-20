@@ -9,7 +9,7 @@ import UIKit
 /// a window sharing the screen sits, so the outer-edge placement can be seen.
 final class DebugWindowFrame: UIViewController {
     private let content: UIViewController
-    private let size: CGSize
+    private var size: CGSize
     private let edge: String?
 
     static func wrapIfRequested(_ content: UIViewController) -> UIViewController {
@@ -45,6 +45,21 @@ final class DebugWindowFrame: UIViewController {
         addChild(content)
         view.addSubview(content.view)
         content.didMove(toParent: self)
+        stepBench(ResizeTimer.benchSizes)
+    }
+
+    /// Walks the window through `sizes`, four seconds apart, timing each.
+    private func stepBench(_ sizes: [CGSize]) {
+        guard let next = sizes.first else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+            guard let self else { return }
+            ResizeTimer.shared.begin(next)
+            self.size = next
+            self.content.traitOverrides.horizontalSizeClass = next.width >= 640 ? .regular : .compact
+            self.view.setNeedsLayout()
+            self.view.layoutIfNeeded()
+            self.stepBench(Array(sizes.dropFirst()))
+        }
     }
 
     override func viewDidLayoutSubviews() {

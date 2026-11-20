@@ -29,6 +29,7 @@ PAGE = 8
 LIKERS_PAGE = 10
 LATENCY = {"api": 0.0, "assets": 0.0, "likers": 0.0, "analytics": 0.0}
 MANY = False
+LONG_FEED = 0
 STATE = {"injected": [], "seen": dw.ago(minutes=100), "filter_enabled": True, "likes": set(), "bookmarks": set(), "retweets": set(), "overrides": {},
          "deleted": set(), "muting": {"hottakeshourly"}, "blocking": set(), "replies": []}
 
@@ -210,7 +211,10 @@ class Handler(BaseHTTPRequestHandler):
             ]})
         if path == "/api/sources/home":
             keys = [k for k in w.home_keys() if w.ids[k] not in STATE["deleted"]]
-            return self.send_json(self.page([self.engaged(w.home_tweet(k)) for k in keys], q("cursor")))
+            tweets = [self.engaged(w.home_tweet(k)) for k in keys]
+            if LONG_FEED:
+                tweets = [dict(tweets[i % len(tweets)], rest_id=dw.snowflake(5000 + i)) for i in range(LONG_FEED)]
+            return self.send_json(self.page(tweets, q("cursor")))
         if path.startswith("/api/sources/user/"):
             handle = path.split("/")[4]
             if handle in dw.SUSPENDED:
@@ -448,6 +452,10 @@ def main():
                         help="serve the media lab (python3 make_lab.py first): a feed of test charts in every aspect ratio")
     parser.add_argument("--stats-lab", action="store_true",
                         help="serve a feed of own and other posts in every shape of data a stats card can get")
+    parser.add_argument("--long-feed", type=int, default=0,
+                        help="serve a Home feed this many posts long (the demo's posts repeated under new ids), to time layouts over a long board")
+    parser.add_argument("--page", type=int, default=0,
+                        help="posts per timeline page (default 8)")
     parser.add_argument("--many-notifications", action="store_true",
                         help="serve a long, paged notifications history, to scroll into its next pages")
     parser.add_argument("--latency", type=float, default=0.0,
@@ -459,8 +467,11 @@ def main():
     parser.add_argument("--likers-latency", type=float, default=0.0,
                         help="seconds the Liked by list waits (also set at run time by GET /__likers_latency?seconds=)")
     args = parser.parse_args()
-    global MANY
+    global MANY, LONG_FEED, PAGE
     MANY = args.many_notifications
+    LONG_FEED = args.long_feed
+    if args.page:
+        PAGE = args.page
     LATENCY["api"] = args.latency
     LATENCY["assets"] = args.asset_latency
     LATENCY["likers"] = args.likers_latency
@@ -469,7 +480,6 @@ def main():
         dw.enable_stats_lab()
     if args.lab:
         dw.enable_lab()
-        global PAGE
         PAGE = 60
     Handler.assets_dir = args.assets
     server = Server(("0.0.0.0", args.port), Handler)

@@ -469,8 +469,28 @@ class FeedViewController: UIViewController, TweetActionHandling {
                 self?.dataSource.snapshot().numberOfItems ?? 0
             }
         }
+        #if DEBUG
+        readFromBenchDepth()
+        #endif
     }
 
+    #if DEBUG
+    /// `UNRAGER_BENCH_DEPTH=N` puts Home's reader N posts down as soon as the
+    /// feed holds that many, so `UNRAGER_RESIZE_BENCH` times a resize with a
+    /// long board above the screen rather than at its top.
+    private func readFromBenchDepth(tries: Int = 90) {
+        guard tries > 0, case .home = viewModel.source,
+              let depth = Int(ProcessInfo.processInfo.environment["UNRAGER_BENCH_DEPTH"] ?? "") else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self else { return }
+            guard self.dataSource.snapshot().numberOfItems > depth else {
+                return self.readFromBenchDepth(tries: tries - 1)
+            }
+            self.collectionView.scrollToItem(at: IndexPath(item: depth, section: 0), at: .top, animated: false)
+            AppLogger.shared.info("bench depth \(depth)", category: .app)
+        }
+    }
+    #endif
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)

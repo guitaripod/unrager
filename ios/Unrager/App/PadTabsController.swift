@@ -69,7 +69,12 @@ final class PadTabsController: UIViewController {
 
     private var chromeConstraints: [NSLayoutConstraint] = []
     private var contentLeading: NSLayoutConstraint!
+    /// The column's width where it sits beside the board — a number `PadLayout`
+    /// works out from the window's size, never one read off a frame.
     private var detailWidth: NSLayoutConstraint!
+    /// The column's leading edge on the content area's, where it fills the
+    /// window: a constraint, so it follows every resize on its own.
+    private var detailFills: NSLayoutConstraint!
     private var primaryBesideDetail: NSLayoutConstraint!
     private var primaryFullWidth: NSLayoutConstraint!
 
@@ -120,6 +125,7 @@ final class PadTabsController: UIViewController {
         detailColumn.isHidden = true
         view.addManaged(detailColumn)
         detailWidth = detailColumn.widthAnchor.constraint(equalToConstant: 0)
+        detailFills = detailColumn.leadingAnchor.constraint(equalTo: contentArea.leadingAnchor)
         primaryBesideDetail = primary.trailingAnchor.constraint(equalTo: detailColumn.leadingAnchor)
         NSLayoutConstraint.activate([
             detailColumn.trailingAnchor.constraint(equalTo: contentArea.trailingAnchor),
@@ -146,7 +152,30 @@ final class PadTabsController: UIViewController {
         edgeSwipe.cancelsTouchesInView = false
         view.addGestureRecognizer(edgeSwipe)
 
-        apply(PadLayout.resolve(window: view.bounds.size, rail: sidebarWidth, closed: !sidebarShown), force: true)
+        apply(resolvedLayout(for: view.bounds.size), force: true)
+    }
+
+    /// The screen this window is on, which says what kind of iPad it is.
+    private var screenSize: CGSize? {
+        view.window?.windowScene?.screen.bounds.size
+    }
+
+    /// The chrome and columns for a window of `size`, with the sidebar as the
+    /// reader left it.
+    private func resolvedLayout(for size: CGSize) -> PadLayout {
+        PadLayout.resolve(window: size, screen: screenSize, rail: sidebarWidth, closed: !sidebarShown)
+    }
+
+    /// A window about to change size moves its columns with the system's own
+    /// animation, from the size it is going to have, rather than catching up on
+    /// the next layout pass at whatever size that pass happens to read.
+    override func viewWillTransition(to size: CGSize, with coordinator: any UIViewControllerTransitionCoordinator) {
+        super.viewWillTransition(to: size, with: coordinator)
+        guard size.width > 0, size.height > 0 else { return }
+        coordinator.animate { _ in
+            self.apply(self.resolvedLayout(for: size))
+            self.view.layoutIfNeeded()
+        }
     }
 
     /// A swipe in from the leading edge brings a closed sidebar back, the way it
@@ -159,7 +188,7 @@ final class PadTabsController: UIViewController {
 
     /// Whether this window has a rail to reveal at all.
     private var windowHasSidebar: Bool {
-        view.bounds.width > view.bounds.height && view.bounds.width >= PadLayout.railWindowMinimum
+        PadLayout.allowsRail(window: view.bounds.size)
     }
 
     /// A screen's navigation item only holds what the screen has put there once
@@ -174,7 +203,7 @@ final class PadTabsController: UIViewController {
         super.viewDidLayoutSubviews()
         let size = view.bounds.size
         guard size.width > 0, size.height > 0 else { return }
-        apply(PadLayout.resolve(window: size, rail: sidebarWidth, closed: !sidebarShown))
+        apply(resolvedLayout(for: size))
         // A tab's view is loaded the first time it is shown, which can be after
         // the chrome was resolved: its board and its bar clearance are settled
         // here, on every pass, so nothing waits for the next tap.
@@ -246,11 +275,10 @@ final class PadTabsController: UIViewController {
     func toggleSidebar() {
         // A closed rail gives its tabs back to the bottom bar, so the toggle has
         // to answer to the window, not to what is on screen now.
-        guard view.bounds.width > view.bounds.height,
-              view.bounds.width >= PadLayout.railWindowMinimum else { return }
+        guard windowHasSidebar else { return }
         sidebarShown.toggle()
         ClientSettings.padSidebarShown = sidebarShown
-        apply(PadLayout.resolve(window: view.bounds.size, rail: sidebarWidth, closed: !sidebarShown))
+        apply(resolvedLayout(for: view.bounds.size))
         applySidebarButton()
         animateLayout()
     }
@@ -265,7 +293,7 @@ final class PadTabsController: UIViewController {
         guard proposed != sidebarWidth else { return }
         sidebarWidth = proposed
         ClientSettings.padSidebarWidth = proposed
-        apply(PadLayout.resolve(window: view.bounds.size, rail: proposed, closed: false))
+        apply(resolvedLayout(for: view.bounds.size))
         animateLayout()
     }
 
@@ -281,9 +309,7 @@ final class PadTabsController: UIViewController {
     /// carries the standard way back — the way the system's sidebars do, in a
     /// window that could have one.
     private func applySidebarButton() {
-        let canHaveSidebar = view.bounds.width > view.bounds.height
-            && view.bounds.width >= PadLayout.railWindowMinimum
-        let shows = canHaveSidebar && !sidebarShown
+        let shows = windowHasSidebar && !sidebarShown
         for (index, controller) in controllers.enumerated() {
             guard let nav = controller as? UINavigationController else { continue }
             let wanted = shows && index == selectedIndex
@@ -604,12 +630,37 @@ final class PadTabsController: UIViewController {
     /// Whether a post is open over the board at all.
     private var detailOnScreen: Bool { tabUsesDetail && detailHasScreens }
 
-    /// The column's width when it is open: the room beside the board where the
-    /// window has it, the whole content area where it doesn't.
-    private var openDetailWidth: CGFloat {
-        if layout.showsDetail { return layout.detailWidth ?? 0 }
-        let width = contentArea.layoutFrame.width
-        return width > 0 ? width : max(0, view.bounds.width - layout.railWidth)
+    /// Where the column is: shut, beside the board at the width the window
+    /// gives it, or across the whole content area. Every case is constraints
+    /// from the layout alone, so a window that changes size mid-way can never
+    /// leave the column at the width it had before.
+    private enum DetailPlacement: Equatable {
+        case closed
+        case beside(CGFloat)
+        case fills
+    }
+
+    private func place(_ placement: DetailPlacement) {
+        detailFills.isActive = false
+        detailWidth.isActive = false
+        switch placement {
+        case .closed:
+            detailWidth.constant = 0
+            detailWidth.isActive = true
+            setPrimaryBesideDetail(false)
+        case .beside(let width):
+            detailWidth.constant = width
+            detailWidth.isActive = true
+            setPrimaryBesideDetail(true)
+        case .fills:
+            detailFills.isActive = true
+            setPrimaryBesideDetail(false)
+        }
+    }
+
+    /// Where an open column belongs in the current layout.
+    private var openPlacement: DetailPlacement {
+        layout.detailWidth.map(DetailPlacement.beside) ?? .fills
     }
 
     /// The board gives up the column's width only where the column sits beside
@@ -629,22 +680,26 @@ final class PadTabsController: UIViewController {
             return
         }
         let beside = layout.showsDetail
-        let appears = detailColumn.isHidden || detailWidth.constant <= 0
-        detailColumn.isHidden = false
         divider.isHidden = !beside
-        setPrimaryBesideDetail(beside)
-        let animating = !UIAccessibility.isReduceMotionEnabled
-        if appears, animating {
-            detail.alpha = 0
-            detailColumn.transform = beside ? .identity : CGAffineTransform(translationX: 32, y: 0)
-        }
-        detailWidth.constant = openDetailWidth
-        guard animating else {
-            detail.alpha = 1
-            detailColumn.transform = .identity
-            view.layoutIfNeeded()
+        guard detailColumn.isHidden else {
+            // Already open: a new size or a new post. The constraints carry it,
+            // and a resize's own transition animates it; laying out here would
+            // re-enter the pass that asked.
+            place(openPlacement)
             return
         }
+        detailColumn.isHidden = false
+        let animating = !UIAccessibility.isReduceMotionEnabled
+        guard animating else {
+            place(openPlacement)
+            detail.alpha = 1
+            detailColumn.transform = .identity
+            return
+        }
+        detail.alpha = 0
+        detailColumn.transform = beside ? .identity : CGAffineTransform(translationX: 32, y: 0)
+        if beside { view.layoutIfNeeded() }
+        place(openPlacement)
         UIView.animate(withDuration: Self.transitionDuration, delay: 0,
                        usingSpringWithDamping: 0.9, initialSpringVelocity: 0.2,
                        options: [.allowUserInteraction, .beginFromCurrentState]) {
@@ -658,25 +713,30 @@ final class PadTabsController: UIViewController {
     /// held is dropped once the move is done.
     private func hideDetailColumn(animated: Bool = true, completion: @escaping () -> Void) {
         let finish = {
-            self.detailWidth.constant = 0
+            self.place(.closed)
             self.detailColumn.isHidden = true
+            self.detailColumn.transform = .identity
             completion()
         }
         guard animated, !UIAccessibility.isReduceMotionEnabled, !detailColumn.isHidden else {
             // Called from a layout pass as often as from a tap, so the column is
             // collapsed by its constraints alone: laying out here would re-enter
             // the pass that asked for it.
-            setPrimaryBesideDetail(false)
             finish()
             return
         }
-        setPrimaryBesideDetail(false)
+        let beside = detailWidth.isActive && detailWidth.constant > 0
+        if beside { place(.closed) }
         UIView.animate(withDuration: Self.transitionDuration * 0.85, delay: 0,
                        usingSpringWithDamping: 0.95, initialSpringVelocity: 0.1,
                        options: [.allowUserInteraction, .beginFromCurrentState]) {
-            self.detailWidth.constant = 0
-            self.view.layoutIfNeeded()
-            self.detail.alpha = self.layout.showsDetail ? 0 : 1
+            if beside {
+                self.view.layoutIfNeeded()
+                self.detail.alpha = 0
+            } else {
+                self.detail.alpha = 0
+                self.detailColumn.transform = CGAffineTransform(translationX: 32, y: 0)
+            }
         } completion: { _ in
             self.detail.alpha = 1
             finish()

@@ -20,10 +20,12 @@ struct PadLayout: Equatable {
         case mini
         case regular
 
-        /// A mini portrait window is 744 pt across and an 11-inch iPad 834, so
-        /// the short side is what tells them apart in either orientation.
-        static func of(_ window: CGSize) -> Frame {
-            min(window.width, window.height) <= 780 ? .mini : .regular
+        /// A mini's screen is 744 pt on its short side and an 11-inch iPad's 834,
+        /// so the short side of the *screen* tells them apart in either
+        /// orientation. Never the window's: a short window on a 13-inch iPad is
+        /// still a 13-inch iPad's window, with its thumbs and its type.
+        static func of(_ screen: CGSize) -> Frame {
+            min(screen.width, screen.height) <= 780 ? .mini : .regular
         }
     }
 
@@ -60,8 +62,16 @@ struct PadLayout: Equatable {
     ]
 
     /// A window has to be at least this wide — and wider than it is tall —
-    /// before the tabs move off the bottom.
-    static let railWindowMinimum: CGFloat = 700
+    /// before the tabs move off the bottom. Below it a rail would leave the feed
+    /// a single starved column: two thirds of an 11-inch iPad on its side, or a
+    /// short window across the top of a portrait one, keep the bar and get a
+    /// board of two instead.
+    static let railWindowMinimum: CGFloat = 900
+
+    /// Whether a window this shape has room for the rail at all.
+    static func allowsRail(window: CGSize) -> Bool {
+        window.width > window.height && window.width >= railWindowMinimum
+    }
 
     static func metrics(for frame: Frame) -> Metrics {
         profiles[frame] ?? profiles[.regular]!
@@ -81,15 +91,17 @@ struct PadLayout: Equatable {
     /// Whether the window is wide enough to keep a post open beside the board.
     var showsDetail: Bool { detailWidth != nil }
 
-    /// Resolves the chrome and the columns for a window of `window` points, with
-    /// the sidebar at `rail` points wide — or `0` for the frame's own default —
-    /// and closed, which gives its room back to the columns.
-    static func resolve(window: CGSize, rail: CGFloat = 0, closed: Bool = false) -> PadLayout {
-        let frame = Frame.of(window)
+    /// Resolves the chrome and the columns for a window of `window` points on a
+    /// screen of `screen` points (the window itself when unknown), with the
+    /// sidebar at `rail` points wide — or `0` for the frame's own default — and
+    /// closed, which gives its room back to the columns.
+    static func resolve(window: CGSize, screen: CGSize? = nil, rail: CGFloat = 0,
+                        closed: Bool = false) -> PadLayout {
+        let frame = Frame.of(screen ?? window)
         let metrics = metrics(for: frame)
         let tall = PadLayout(chrome: .bottom, frame: frame, railWidth: 0,
                              detailWidth: nil, boardColumns: metrics.boardColumns)
-        guard window.width > window.height, window.width >= railWindowMinimum, !closed else {
+        guard allowsRail(window: window), !closed else {
             return tall
         }
         // A rail is a slice of the window, never a fifth of a mini's screen.
@@ -112,14 +124,14 @@ struct PadLayout: Equatable {
     /// widest the board itself grows. A tall window sets two across — three
     /// narrow columns of text in portrait read worse than two wider ones — and
     /// a full-size landscape window sets three.
-    static func board(window: CGSize) -> Board {
-        let metrics = metrics(for: Frame.of(window))
-        let landscape = window.width > window.height && window.width >= railWindowMinimum
-        let columns = landscape ? metrics.boardColumns : 2
+    static func board(window: CGSize, screen: CGSize? = nil) -> Board {
+        let frame = Frame.of(screen ?? window)
+        let metrics = metrics(for: frame)
+        let columns = allowsRail(window: window) ? metrics.boardColumns : 2
         return Board(minimumColumnWidth: metrics.boardColumnWidth,
                      maximumColumns: columns,
                      maximumWidth: CGFloat(columns) * 480,
-                     dense: Frame.of(window) == .mini)
+                     dense: frame == .mini)
     }
 
     /// The feed board's shape, as `MasonryLayout` takes it.

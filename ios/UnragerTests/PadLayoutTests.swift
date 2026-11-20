@@ -93,10 +93,49 @@ struct PadLayoutTests {
 
     @Test("A landscape window too narrow for a column opens the post over the whole window")
     func noRoomForColumn() {
-        let layout = PadLayout.resolve(window: CGSize(width: 760, height: 620))
+        let layout = PadLayout.resolve(window: CGSize(width: 920, height: 700),
+                                       screen: CGSize(width: 1194, height: 834))
         #expect(layout.chrome == .rail)
         #expect(!layout.showsDetail)
         #expect(layout.railWidth >= layout.metrics.narrowestRail)
+    }
+
+    @Test("A rail only where the feed keeps two posts across beside it")
+    func railNeedsRoom() {
+        #expect(!PadLayout.allowsRail(window: CGSize(width: 834, height: 600)))
+        #expect(!PadLayout.allowsRail(window: CGSize(width: 800, height: 834)))
+        #expect(!PadLayout.allowsRail(window: CGSize(width: 880, height: 700)))
+        #expect(PadLayout.allowsRail(window: CGSize(width: 1194, height: 834)))
+        #expect(PadLayout.allowsRail(window: CGSize(width: 1133, height: 744)))
+        #expect(PadLayout.allowsRail(window: CGSize(width: 917, height: 1032)) == false)
+        let short = PadLayout.resolve(window: CGSize(width: 834, height: 600), screen: CGSize(width: 834, height: 1194))
+        #expect(short.chrome == .bottom)
+        #expect(PadLayout.board(window: CGSize(width: 834, height: 600)).maximumColumns == 2)
+    }
+
+    @Test("What kind of iPad it is comes from the screen, never the window")
+    func frameFromScreen() {
+        let shortOnBig = PadLayout.resolve(window: CGSize(width: 1032, height: 600),
+                                           screen: CGSize(width: 1376, height: 1032))
+        #expect(shortOnBig.frame == .regular)
+        let miniWindow = PadLayout.resolve(window: CGSize(width: 1133, height: 744),
+                                           screen: CGSize(width: 1133, height: 744))
+        #expect(miniWindow.frame == .mini)
+        #expect(PadLayout.board(window: CGSize(width: 1032, height: 600),
+                                screen: CGSize(width: 1376, height: 1032)).dense == false)
+    }
+
+    @Test("Every width from Slide Over to a 13-inch screen keeps the content area positive")
+    func everyWidthLeavesContent() {
+        for width in stride(from: 320.0, through: 1376.0, by: 2) {
+            for height in [600.0, 744, 834, 1032, 1194] {
+                let layout = PadLayout.resolve(window: CGSize(width: width, height: height),
+                                               screen: CGSize(width: 1194, height: 834))
+                let content = width - layout.railWidth - (layout.detailWidth ?? 0)
+                #expect(content >= (layout.detailWidth == nil ? 320 : layout.metrics.boardColumnWidth))
+                if layout.chrome == .rail { #expect(width >= PadLayout.railWindowMinimum) }
+            }
+        }
     }
 
     @Test("The board adds a column as the window widens, and drops one as it narrows")

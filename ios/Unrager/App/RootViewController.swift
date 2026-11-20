@@ -217,8 +217,7 @@ final class RootViewController: UIViewController {
 
     /// Whether this window has a sidebar to toggle at all.
     private var layoutAllowsSidebar: Bool {
-        let size = view.bounds.size
-        return size.width > size.height && size.width >= PadLayout.railWindowMinimum
+        PadLayout.allowsRail(window: view.bounds.size)
     }
 
     private func topFeed() -> FeedViewController? {
@@ -392,6 +391,17 @@ extension RootViewController: UINavigationControllerDelegate {
 }
 
 extension UIViewController {
+    /// The size of the app's own window: the root's view, which is the window
+    /// everywhere but a DEBUG run hosting the app at another size.
+    var appWindowSize: CGSize {
+        var current: UIViewController? = self
+        while let controller = current {
+            if controller is RootViewController { return controller.view.bounds.size }
+            current = controller.parent ?? controller.presentingViewController
+        }
+        return view.window?.bounds.size ?? view.bounds.size
+    }
+
     /// Tells the window list this screen is what's on top, and gives the iPad's
     /// chrome the tab titles it shows.
     func noteScreenForWindow() {

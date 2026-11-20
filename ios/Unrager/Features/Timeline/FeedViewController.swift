@@ -244,11 +244,13 @@ class FeedViewController: UIViewController, TweetActionHandling {
     /// The window this feed is laid out in, which decides how many posts the
     /// board may set side by side — a mini sets two where a 13-inch iPad sets
     /// three, and a tall window sets two wider ones.
-    private var windowSize: CGSize { view.window?.bounds.size ?? view.bounds.size }
+    private var windowSize: CGSize { appWindowSize }
 
     /// The board's shape in this window: the narrowest a card may get, the most
     /// that may sit beside another, and the widest the board grows.
-    private var boardProfile: PadLayout.Board { PadLayout.board(window: windowSize) }
+    private var boardProfile: PadLayout.Board {
+        PadLayout.board(window: windowSize, screen: view.window?.windowScene?.screen.bounds.size)
+    }
 
     /// The width the board lays its cards out in: the window, up to the width
     /// its columns need, so a huge window doesn't stretch three cards across it.

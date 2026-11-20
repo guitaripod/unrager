@@ -88,6 +88,8 @@ final class TabChromeBar: UIView {
         wordmark.text = "Unrager"
         wordmark.font = DesignSystem.Typography.title()
         wordmark.textColor = DesignSystem.Color.label
+        wordmark.adjustsFontSizeToFitWidth = true
+        wordmark.minimumScaleFactor = 0.7
         header.addManaged(wordmark)
         hideButton.setImage(DesignSystem.icon("sidebar.leading", pointSize: 17), for: .normal)
         hideButton.tintColor = DesignSystem.Color.secondaryLabel
@@ -128,14 +130,21 @@ final class TabChromeBar: UIView {
         stackUnderHeader = stack.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 6)
         stackSide = stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10)
         stackBottom = stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
+        // A window that isn't full screen keeps its controls in its top
+        // leading corner, right where the wordmark sits: the header starts
+        // after them.
+        let corner = layoutGuide(for: .safeArea(cornerAdaptation: .horizontal))
         NSLayoutConstraint.activate([
             edgeWidth,
-            header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
+            header.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 20),
+            header.leadingAnchor.constraint(greaterThanOrEqualTo: corner.leadingAnchor, constant: 8),
+            header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20).priority(.defaultLow),
             header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
             header.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 6),
             headerHeight,
             wordmarkLeading,
             wordmark.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            wordmark.trailingAnchor.constraint(lessThanOrEqualTo: hideButton.leadingAnchor, constant: -8),
             hideButton.trailingAnchor.constraint(equalTo: header.trailingAnchor),
             hideButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             hideButton.widthAnchor.constraint(equalToConstant: 32),
@@ -360,6 +369,7 @@ private final class TabChromeRow: UIView {
             UIImage.SymbolConfiguration(pointSize: rail ? (child ? (dense ? 14 : 15) : (dense ? 17 : 19)) : 19,
                                         weight: .regular))
         config.imagePlacement = rail ? .leading : .top
+        config.titleLineBreakMode = .byTruncatingTail
         config.imagePadding = rail ? (child ? (dense ? 8 : 10) : (dense ? 9 : 12)) : 2
         button.contentHorizontalAlignment = rail ? .leading : .center
         config.contentInsets = rail

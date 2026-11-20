@@ -6,6 +6,8 @@ The project follows [semantic versioning](https://semver.org). Breaking changes 
 
 ## [Unreleased]
 
+- **The feed's loading placeholder has the board's shape on an iPad.** Before the first page lands, a window that will show the feed as a board of cards waits as cards in the same columns and gutters, instead of a single phone-width list that the board then replaced.
+
 - **A post opened beside the feed on an iPad mini or an 11-inch on its side gets half the room.** Where the board can only keep one card beside the open post anyway, the two now share the width evenly — about 475 points each on a mini — instead of a wide card beside a narrow post; a 13-inch still keeps two cards across beside it.
 
 - **Resizing an iPad window redraws at once instead of showing a stretched copy.** iPadOS shows the app's last picture squeezed or cropped into a new tile until the app has drawn at the new size, and the board measured every loaded post at the new width first — half a second with 400 posts, more than two seconds for a turn to portrait — which is what a split or a turn looked like: crushed. The board now measures only the posts from the top down to a screenful past the one you're reading and guesses the rest until it measures them a few at a time once the frame is up, all below the screen; it remembers each width it has measured, so going back to a split you just left is instant; it keeps the post you were reading at the top through the change; and a window narrowing to the list no longer measures a board it is about to drop. With 400 posts on an iPad mini a resize now draws in 20–150 ms instead of 0.5–2.5 s.

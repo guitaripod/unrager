@@ -1106,12 +1106,21 @@ class FeedViewController: UIViewController, TweetActionHandling {
 
     /// Puts the placeholders just under the header (a profile's, say), or at
     /// the top of the list when there is none.
+    /// The placeholder takes the shape the posts will: the board's columns and
+    /// gutters, or the list.
+    private var skeletonShape: FeedSkeletonView.Shape {
+        guard usesGrid, let grid = gridLayout else { return .init(columns: 1, spacing: 0, inset: 0) }
+        return .init(columns: grid.columns(for: collectionView.bounds.width),
+                     spacing: grid.columnSpacing, inset: grid.sectionInset.left)
+    }
+
     private func positionSkeleton() {
         guard isViewLoaded, collectionView != nil else { return }
         let width = collectionView.bounds.width
         guard width > 0 else { return }
         let headerBottom = collectionView.collectionViewLayout.layoutAttributesForSupplementaryView(
             ofKind: Self.headerKind, at: IndexPath(item: 0, section: 0))?.frame.maxY ?? 0
+        skeleton.arrange(skeletonShape)
         let frame = CGRect(x: 0, y: headerBottom, width: width, height: skeleton.fittingHeight(width: width))
         if skeleton.frame != frame { skeleton.frame = frame }
         guard headerView != nil else { return }

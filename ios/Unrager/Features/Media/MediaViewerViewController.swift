@@ -174,7 +174,8 @@ final class MediaViewerViewController: UIViewController {
         view.addManaged(altButton)
         NSLayoutConstraint.activate([
             closeButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
-            closeButton.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
+            closeButton.leadingAnchor.constraint(
+                equalTo: view.layoutGuide(for: .safeArea(cornerAdaptation: .horizontal)).leadingAnchor, constant: 12),
             closeButton.widthAnchor.constraint(equalToConstant: 44),
             closeButton.heightAnchor.constraint(equalToConstant: 44),
             shareButton.topAnchor.constraint(equalTo: closeButton.topAnchor),

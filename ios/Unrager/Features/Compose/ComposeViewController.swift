@@ -54,6 +54,17 @@ final class ComposeViewController: UIViewController {
         item.accessibilityLabel = "Add photo"
         return item
     }()
+    /// Post and Add photo again, for the iPad keyboard's shortcut bar: a bar
+    /// item lives in one bar at a time.
+    private lazy var keyboardPostButton = UIBarButtonItem(
+        title: "Post", style: .prominent, target: self, action: #selector(post))
+    private lazy var keyboardPhotoButton: UIBarButtonItem = {
+        let item = UIBarButtonItem(
+            image: DesignSystem.icon("photo.on.rectangle"),
+            primaryAction: UIAction { [weak self] _ in self?.presentPicker() })
+        item.accessibilityLabel = "Add photo"
+        return item
+    }()
 
     private struct Attachment: Identifiable {
         let id = UUID()
@@ -97,6 +108,7 @@ final class ComposeViewController: UIViewController {
         navigationItem.leftBarButtonItem = cancelButton
         navigationItem.rightBarButtonItems = [postButton, photoButton]
         postButton.isEnabled = false
+        placeActionsInShortcutBar()
 
         textView.font = DesignSystem.Typography.editor()
         textView.adjustsFontForContentSizeCategory = true
@@ -230,7 +242,26 @@ final class ComposeViewController: UIViewController {
 
     private func updateControls() {
         photoButton.isEnabled = !isPosting && attachments.count + pendingLoads < Self.maxAttachments
+        keyboardPhotoButton.isEnabled = photoButton.isEnabled
         refreshState()
+    }
+
+    /// On an iPad the keyboard's shortcut bar runs along the top of its keys,
+    /// where the thumbs already are while typing: Post goes to its trailing
+    /// end, under the right thumb, and Add photo to its leading end, so a post
+    /// written with both hands on the glass goes out without reaching up to
+    /// the sheet's own bar. An iPhone has no such bar and ignores them.
+    private func placeActionsInShortcutBar() {
+        let assistant = textView.inputAssistantItem
+        assistant.leadingBarButtonGroups += [UIBarButtonItemGroup(barButtonItems: [keyboardPhotoButton], representativeItem: nil)]
+        assistant.trailingBarButtonGroups = [UIBarButtonItemGroup(barButtonItems: [keyboardPostButton], representativeItem: nil)]
+            + assistant.trailingBarButtonGroups
+    }
+
+    /// Keeps the shortcut bar's Post saying and allowing what the sheet's does.
+    private func syncKeyboardPost() {
+        keyboardPostButton.title = postButton.title
+        keyboardPostButton.isEnabled = postButton.isEnabled
     }
 
     /// Re-derives everything that follows from the draft, measuring it once:
@@ -243,6 +274,7 @@ final class ComposeViewController: UIViewController {
         counter.textColor = remaining < 0 ? .systemRed : DesignSystem.Color.secondaryLabel
         placeholder.isHidden = !textView.text.isEmpty
         postButton.isEnabled = !isPosting && pendingLoads == 0 && hasContent && remaining >= 0
+        syncKeyboardPost()
         let guarded = hasContent || isPosting
         isModalInPresentation = guarded
         navigationController?.isModalInPresentation = guarded
@@ -348,6 +380,7 @@ final class ComposeViewController: UIViewController {
         do {
             let mediaIDs = try await uploadPendingAttachments()
             postButton.title = "Posting…"
+            syncKeyboardPost()
             let text = textView.text.trimmingCharacters(in: .whitespacesAndNewlines)
             let result: ComposeResult
             var liked = false
@@ -431,6 +464,7 @@ final class ComposeViewController: UIViewController {
                 continue
             }
             postButton.title = "Uploading \(index + 1)/\(attachments.count)…"
+            syncKeyboardPost()
             let id = try await EngageService.publish.upload(attachment.media)
             uploadedIDs[attachment.id] = id
             ids.append(id)

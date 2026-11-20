@@ -13,7 +13,11 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window.overrideUserInterfaceStyle = UIUserInterfaceStyle(rawValue: AppSettings.appearance.rawValue) ?? .unspecified
         window.tintColor = DesignSystem.Color.accent
         let root = RootViewController()
+        #if DEBUG && targetEnvironment(simulator)
+        window.rootViewController = DebugWindowFrame.wrapIfRequested(root)
+        #else
         window.rootViewController = root
+        #endif
         self.window = window
         window.makeKeyAndVisible()
         AppLogger.shared.info("scene connected", category: .app)

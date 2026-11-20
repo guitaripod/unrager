@@ -258,6 +258,16 @@ final class PadTour: XCTestCase {
         snap(shot)
     }
 
+    /// Turns the simulator on its side and holds it there for
+    /// `UNRAGER_HOLD_SECONDS` (default ten minutes), launching nothing, so real
+    /// windows can be tiled and resized by hand or with `axe` in landscape —
+    /// the one shape a simulator can't be put in from the command line.
+    func testHoldLandscape() {
+        let seconds = Double(ProcessInfo.processInfo.environment["UNRAGER_HOLD_SECONDS"] ?? "") ?? 600
+        XCUIDevice.shared.orientation = .landscapeLeft
+        pause(seconds)
+    }
+
     private func snap(_ name: String) {
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = name

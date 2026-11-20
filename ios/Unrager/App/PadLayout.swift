@@ -59,7 +59,7 @@ struct PadLayout: Equatable {
             barHeight: 62, barClearance: 84, barWidth: 560, barItemWidth: 86, railShare: 0.26),
         .mini: Metrics(
             rail: 208, narrowestRail: 188, widestRail: 264,
-            detail: 340...440, boardColumns: 2, boardColumnWidth: 300,
+            detail: 340...480, boardColumns: 2, boardColumnWidth: 300,
             barHeight: 56, barClearance: 78, barWidth: 470, barItemWidth: 78, railShare: 0.3),
     ]
 
@@ -111,14 +111,30 @@ struct PadLayout: Equatable {
                                                 (window.width * metrics.railShare).rounded()))
         let width = min(max(rail > 0 ? rail : metrics.rail, metrics.narrowestRail), share)
         let content = window.width - width
-        let wanted = min(metrics.detail.upperBound,
-                         max(metrics.detail.lowerBound, (content * 0.38).rounded()))
+        let wanted = detailWidth(content: content, metrics: metrics)
         // The column takes what the board can spare: a card beside it, two where
         // the window has that much. Where not even one fits, a post fills the
         // window instead and the board waits behind it.
         let detail = content - wanted >= metrics.boardColumnWidth + 30 ? wanted : nil
         return PadLayout(chrome: .rail, frame: frame, railWidth: width,
                          detailWidth: detail, boardColumns: metrics.boardColumns)
+    }
+
+    /// The narrowest board that still sets two posts side by side.
+    static func twoColumnBoard(_ metrics: Metrics) -> CGFloat {
+        metrics.boardColumnWidth * 2 + 10 + 20
+    }
+
+    /// The width of the column a post opens into beside `content` points of
+    /// board. Where the board keeps two posts across beside it, the post takes
+    /// about two fifths; where it would be down to one anyway — a mini, an
+    /// 11-inch on its side — the two share the room evenly, rather than one
+    /// wide card beside a narrow post.
+    static func detailWidth(content: CGFloat, metrics: Metrics) -> CGFloat {
+        let range = metrics.detail
+        let alongside = min(range.upperBound, max(range.lowerBound, (content * 0.38).rounded()))
+        guard content - alongside < twoColumnBoard(metrics) else { return alongside }
+        return min(range.upperBound, max(range.lowerBound, (content / 2).rounded()))
     }
 
     /// How the feed's board takes shape in a window of `window` points: the

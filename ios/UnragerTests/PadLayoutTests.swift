@@ -49,6 +49,35 @@ struct PadLayoutTests {
         #expect(!layout.showsDetail)
     }
 
+    @Test("A mini on its side shares the room evenly between one card and the open post")
+    func miniLandscapeDetail() {
+        let window = CGSize(width: 1158, height: 756)
+        let layout = PadLayout.resolve(window: window, screen: window)
+        #expect(layout.frame == .mini)
+        let column = try? #require(layout.detailWidth)
+        let board = window.width - layout.railWidth - (column ?? 0)
+        #expect(abs(board - (column ?? 0)) <= 2)
+        #expect(MasonryLayout.columns(for: board - 16, minimum: 300, maximum: 2, spacing: 8) == 1)
+    }
+
+    @Test("An 11-inch on its side gives the open post half the board instead of two fifths")
+    func elevenInchLandscapeDetail() {
+        let window = CGSize(width: 1210, height: 834)
+        let layout = PadLayout.resolve(window: window, screen: window)
+        let column = try? #require(layout.detailWidth)
+        let board = window.width - layout.railWidth - (column ?? 0)
+        #expect(abs(board - (column ?? 0)) <= 2)
+    }
+
+    @Test("A 13-inch on its side keeps two cards across beside the open post")
+    func thirteenInchKeepsTwoColumns() {
+        let window = CGSize(width: 1376, height: 1032)
+        let layout = PadLayout.resolve(window: window, screen: window)
+        let column = try? #require(layout.detailWidth)
+        let board = window.width - layout.railWidth - (column ?? 0)
+        #expect(board >= PadLayout.twoColumnBoard(layout.metrics))
+    }
+
     @Test("The column keeps a reading measure and never eats the board")
     func wideWindow() {
         let window = CGSize(width: 2400, height: 1000)

@@ -212,7 +212,8 @@ final class TweetCell: UICollectionViewCell {
     override func preferredLayoutAttributesFitting(
         _ layoutAttributes: UICollectionViewLayoutAttributes
     ) -> UICollectionViewLayoutAttributes {
-        PerfProbe.time("sizing") {
+        guard !showsCardSurface else { return layoutAttributes }
+        return PerfProbe.time("sizing") {
             let attributes = super.preferredLayoutAttributesFitting(layoutAttributes)
             attributes.size.height = fittedHeight(forWidth: attributes.size.width)
             return attributes

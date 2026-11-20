@@ -226,6 +226,8 @@ class FeedViewController: UIViewController, TweetActionHandling {
     private var boardPins: [NSLayoutConstraint] = []
     private var boardCap: NSLayoutConstraint?
     private var gridHeights: [String: CGFloat] = [:]
+    /// Each post's most recent measured height at any width, for guessing.
+    private var lastGridHeight: [String: CGFloat] = [:]
     private var measuringCell: TweetCell?
 
     /// Switches between the list and the board. The collection view keeps its
@@ -259,22 +261,44 @@ class FeedViewController: UIViewController, TweetActionHandling {
         max(0, min(view.bounds.width - 20, boardProfile.maximumWidth))
     }
 
-    private func applyGridMode() {
-        guard isViewLoaded else { return }
+    /// Puts the feed in the board or the list for the window it has now, and
+    /// says whether it moved from one to the other. The mode is settled before
+    /// the old layout is asked anything at the new width, so a window leaving
+    /// the board never measures posts for a board it no longer shows.
+    @discardableResult
+    private func applyGridMode() -> Bool {
+        guard isViewLoaded else { return false }
         let profile = boardProfile
         let fits = MasonryLayout.columns(for: boardWidth, minimum: profile.minimumColumnWidth,
                                          maximum: profile.maximumColumns, spacing: 10) >= 2
         let wanted = wantsGrid && fits
         boardCap?.constant = profile.maximumWidth
-        guard wanted != usesGrid else { return }
+        guard wanted != usesGrid else { return false }
+        let top = topVisiblePost()
+        if !wanted { gridLayout?.retire() }
         usesGrid = wanted
         NSLayoutConstraint.deactivate(wanted ? guidePins : boardPins)
         NSLayoutConstraint.activate(wanted ? boardPins : guidePins)
         if wanted { boardHeaderHeight = measureBoardHeader() }
         let layout = wanted ? makeGridLayout() : makeLayout()
-        gridHeights.removeAll()
+        (layout as? MasonryLayout)?.anchorOnFirstBuild(top)
         collectionView.setCollectionViewLayout(layout, animated: false)
         dataSource.reconfigureVisibleItems(of: collectionView)
+        return true
+    }
+
+    /// The post nearest the top of the screen, for a board taking over from
+    /// the list to open on. Read from the cells on screen, never from the
+    /// layout, which would lay itself out again at the new width to answer.
+    private func topVisiblePost() -> Int? {
+        guard collectionView != nil else { return nil }
+        let top = collectionView.contentOffset.y + collectionView.adjustedContentInset.top
+        return collectionView.visibleCells
+            .compactMap { cell -> (Int, CGFloat)? in
+                guard cell.frame.maxY > top, let indexPath = collectionView.indexPath(for: cell) else { return nil }
+                return (indexPath.item, cell.frame.minY)
+            }
+            .min { $0.1 < $1.1 }?.0
     }
 
     /// A feed with a header (a profile) keeps it across the top of the board and
@@ -316,6 +340,8 @@ class FeedViewController: UIViewController, TweetActionHandling {
         }
         layout.headerHeight = boardHeaderHeight
         layout.heightForItem = { [weak self] indexPath in self?.gridHeight(at: indexPath) ?? 320 }
+        layout.knownHeightForItem = { [weak self] indexPath in self?.knownGridHeight(at: indexPath) }
+        layout.estimatedHeightForItem = { [weak self] indexPath in self?.estimatedGridHeight(at: indexPath) ?? 320 }
         gridLayout = layout
         return layout
     }
@@ -342,16 +368,53 @@ class FeedViewController: UIViewController, TweetActionHandling {
             measuringCell = made
             return made
         }()
+        #if DEBUG
+        let measureStart = CACurrentMediaTime()
+        #endif
         configure(cell, with: tweet, id: id, width: contentWidth)
+        #if DEBUG
+        let configured = CACurrentMediaTime()
+        #endif
         let height = cell.fittedHeight(forWidth: max(120, contentWidth))
         gridHeights[key] = height
+        lastGridHeight[id] = height
+        #if DEBUG
+        ResizeTimer.shared.noteMeasure(CACurrentMediaTime() - measureStart, configuring: configured - measureStart)
+        #endif
         return height
     }
 
     private func gridHeightKey(id: String) -> String {
+        gridHeightKey(id: id, width: contentWidth)
+    }
+
+    /// A post's measured height is kept per column width, so a window that goes
+    /// back to a width it had (a split opened and closed, a turn and back) lays
+    /// its board out at once instead of measuring every post again.
+    private func gridHeightKey(id: String, width: CGFloat) -> String {
         let stats = expandedStats.contains(id) ? "s1" : "s0"
         let body = expandedBodies.contains(id) ? "b1" : "b0"
-        return "\(id)|\(Int(contentWidth))|\(stats)|\(body)|\(Int(DesignSystem.Typography.scale * 100))"
+        let images = AppSettings.imagesEnabled ? "i1" : "i0"
+        let type = traitCollection.preferredContentSizeCategory.rawValue
+        return "\(id)|\(Int(width))|\(stats)|\(body)|\(images)|\(Int(DesignSystem.Typography.scale * 100))|\(type)"
+    }
+
+    private func knownGridHeight(at indexPath: IndexPath) -> CGFloat? {
+        guard let id = dataSource.itemIdentifier(for: indexPath) else { return nil }
+        return gridHeights[gridHeightKey(id: id)]
+    }
+
+    /// A guess at a post's height in a column it has not been measured in yet,
+    /// for posts below the screen until they are: the height it had the last
+    /// time it was measured, or one from what the post carries.
+    private func estimatedGridHeight(at indexPath: IndexPath) -> CGFloat {
+        guard let id = dataSource.itemIdentifier(for: indexPath), let tweet = tweetsByID[id] else { return 320 }
+        if let last = lastGridHeight[id] { return last }
+        let width = contentWidth
+        let lines = min(CGFloat(TweetCell.cardBodyLineLimit), ceil(CGFloat(tweet.text.count) * 8 / max(width - 70, 120)))
+        let media: CGFloat = tweet.media.isEmpty || !AppSettings.imagesEnabled ? 0 : (width - 70) * 0.62 + 8
+        let quote: CGFloat = tweet.quotedTweet == nil ? 0 : 140
+        return 112 + lines * 21 + media + quote
     }
 
     override func viewDidLayoutSubviews() {
@@ -367,16 +430,16 @@ class FeedViewController: UIViewController, TweetActionHandling {
         let width = collectionView.bounds.width
         guard width > 0, width != laidOutWidth else { return }
         laidOutWidth = width
-        if usesGrid {
+        if gridHeights.count > 8000 {
             gridHeights.removeAll()
-            if let grid = collectionView.collectionViewLayout as? MasonryLayout {
-                applyBoard(profile: boardProfile, to: grid)
-                grid.invalidateLayout()
-            }
+            lastGridHeight.removeAll()
         }
-        applyGridMode()
-        collectionView.collectionViewLayout.invalidateLayout()
-        guard dataSource != nil else { return }
+        let switched = applyGridMode()
+        if usesGrid, !switched, let grid = collectionView.collectionViewLayout as? MasonryLayout {
+            applyBoard(profile: boardProfile, to: grid)
+            grid.invalidateLayout()
+        }
+        guard dataSource != nil, !switched else { return }
         dataSource.reconfigureVisibleItems(of: collectionView)
     }
 
@@ -778,16 +841,27 @@ class FeedViewController: UIViewController, TweetActionHandling {
             .sink { [weak self] _ in self?.reloadForFontScale() }
             .store(in: &cancellables)
 
+        remeasureWhenSystemTextSizeChanges()
+
         NotificationCenter.default.publisher(for: OwnPost.didDelete)
             .compactMap { $0.userInfo?[OwnPost.idKey] as? String }
             .sink { [weak self] id in self?.viewModel.remove(id: id) }
             .store(in: &cancellables)
     }
 
+    /// The system's text size scales every font too, so a change there measures
+    /// the board again just as the app's own text size does.
+    private func remeasureWhenSystemTextSizeChanges() {
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (feed: FeedViewController, _) in
+            feed.reloadForFontScale()
+        }
+    }
+
     /// Re-renders every row (on- and off-screen) after a text-size change so
     /// fonts re-resolve and self-sizing heights re-measure.
     private func reloadForFontScale() {
         gridHeights.removeAll()
+        lastGridHeight.removeAll()
         collectionView.collectionViewLayout.invalidateLayout()
         var snapshot = dataSource.snapshot()
         guard snapshot.numberOfItems > 0 else { return }

@@ -121,7 +121,11 @@ final class TweetCell: UICollectionViewCell {
     private let shareButton = ActionButton(symbol: "square.and.arrow.up")
     private let viewsLabel = UILabel()
     private let viewsTap = UITapGestureRecognizer()
-    private let statsView = PostStatsView()
+    /// The stats strip, built the first time a post in this cell opens it: most
+    /// rows never do, and building it was a fifth of making a cell, which the
+    /// board does a dozen times as it first fills its columns.
+    private var statsView: PostStatsView?
+    private weak var columnStack: UIStackView?
     private var statsShown = false
     private let showMoreButton = TweetCell.makeShowMoreButton()
     private let likeLongPress = UILongPressGestureRecognizer()
@@ -276,8 +280,8 @@ final class TweetCell: UICollectionViewCell {
         onTapHashtag = nil
         onShowMore = nil
         onToggleStats = nil
-        statsView.isHidden = true
-        statsView.reset()
+        statsView?.isHidden = true
+        statsView?.reset()
         statsShown = false
         onTapReplyCaption = nil
         replyCaption.capturesPlainTaps = false
@@ -380,16 +384,27 @@ final class TweetCell: UICollectionViewCell {
         isAccessibilityElement = true
     }
 
+    private func madeStatsView() -> PostStatsView {
+        if let statsView { return statsView }
+        let made = PostStatsView()
+        made.isHidden = true
+        made.onTapQuotes = { [weak self] in self?.onViewQuotes?() }
+        columnStack?.addArrangedSubview(made)
+        statsView = made
+        return made
+    }
+
     /// Shows or hides the stats strip under the action bar, and makes the views
     /// count tappable when a tap is how the strip opens.
     private func configureStats(_ tweet: Tweet, content: PostStatsContent?, animate: Bool) {
         if let content {
-            let reshaped = statsView.configure(tweet: tweet, content: content, animate: animate)
-            statsView.isHidden = false
+            let strip = madeStatsView()
+            let reshaped = strip.configure(tweet: tweet, content: content, animate: animate)
+            strip.isHidden = false
             if reshaped { invalidateIntrinsicContentSize() }
         } else {
-            statsView.isHidden = true
-            statsView.reset()
+            statsView?.isHidden = true
+            statsView?.reset()
         }
         viewsTap.isEnabled = AppSettings.postStatsMode == .onTap && (tweet.viewCount ?? 0) > 0
         viewsLabel.isUserInteractionEnabled = viewsTap.isEnabled
@@ -986,10 +1001,8 @@ final class TweetCell: UICollectionViewCell {
         viewsLabel.isUserInteractionEnabled = true
         viewsTap.addTarget(self, action: #selector(viewsTapped))
         viewsLabel.addGestureRecognizer(viewsTap)
-        statsView.isHidden = true
-        statsView.onTapQuotes = { [weak self] in self?.onViewQuotes?() }
-
-        let column = UIStackView(arrangedSubviews: [repostRow, header, replyCaption, bodyView, showMoreButton, mediaContent, quotedWrap, actionBar, statsView])
+        let column = UIStackView(arrangedSubviews: [repostRow, header, replyCaption, bodyView, showMoreButton, mediaContent, quotedWrap, actionBar])
+        columnStack = column
         column.axis = .vertical
         column.spacing = DesignSystem.Spacing.s
         column.setCustomSpacing(DesignSystem.Spacing.xs, after: repostRow)

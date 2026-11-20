@@ -25,6 +25,9 @@ final class MediaContentView: UIView {
     private var card: MediaCardView?
     private var space: SpaceCardView?
     private var activeView: UIView?
+    /// Each surface's pins to this view, made once when the surface is first
+    /// shown and switched on and off from then on.
+    private var pins: [ObjectIdentifier: [NSLayoutConstraint]] = [:]
 
     init(compact: Bool = false) {
         self.compact = compact
@@ -63,7 +66,7 @@ final class MediaContentView: UIView {
     /// The view to zoom from for the photo at `index` — the exact grid tile, so a
     /// multi-photo tweet grows from the tapped image rather than the whole grid.
     func photoSourceView(at index: Int) -> UIView? {
-        grid.flatMap { $0.tileView(at: index) } ?? activeView
+        (activeView === grid ? grid : nil).flatMap { $0.tileView(at: index) } ?? activeView
     }
 
     /// Configures (and shows) whichever surface the tweet's media calls for, or
@@ -254,35 +257,48 @@ final class MediaContentView: UIView {
 
     // MARK: - View swapping
 
-    /// Shows `view` and takes the previous surface out of the hierarchy. A
-    /// hidden view still counts in layout: a photo grid or player left behind
-    /// by the row's last post kept its own height wanted (its constraints stay
-    /// pinned top to bottom), and the card was stretched to it, leaving a gap
-    /// between its cover and its labels.
+    /// Shows `view` and stands the previous surface down. A hidden view still
+    /// counts in layout: a photo grid or player left behind by the row's last
+    /// post kept its own height wanted (its constraints stay pinned top to
+    /// bottom), and the card was stretched to it, leaving a gap between its
+    /// cover and its labels. So a surface that is not shown has its pins
+    /// switched off as well as being hidden; it stays in the hierarchy, because
+    /// taking it out and putting it back for every post that changed kind moved
+    /// it between windows and rebuilt its constraints, a fifth of binding a post
+    /// while the board scrolled.
     private func swap(to view: UIView, inset: CGFloat) {
         directionalLayoutMargins = NSDirectionalEdgeInsets(top: 0, leading: inset, bottom: 0, trailing: inset)
         if activeView === view {
             view.isHidden = false
             return
         }
-        activeView?.removeFromSuperview()
-        if view.superview !== self {
-            view.translatesAutoresizingMaskIntoConstraints = false
-            addManaged(view)
-            NSLayoutConstraint.activate([
-                view.leadingAnchor.constraint(equalTo: layoutMarginsGuide.leadingAnchor),
-                view.trailingAnchor.constraint(equalTo: layoutMarginsGuide.trailingAnchor),
-                view.topAnchor.constraint(equalTo: topAnchor),
-                view.bottomAnchor.constraint(equalTo: bottomAnchor),
-            ])
-        }
+        if let activeView { standDown(activeView) }
+        if view.superview !== self { addManaged(view) }
+        NSLayoutConstraint.activate(pins(for: view))
         view.isHidden = false
         activeView = view
     }
 
+    private func pins(for view: UIView) -> [NSLayoutConstraint] {
+        if let made = pins[ObjectIdentifier(view)] { return made }
+        let made = [
+            view.leadingAnchor.constraint(equalTo: layoutMarginsGuide.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: layoutMarginsGuide.trailingAnchor),
+            view.topAnchor.constraint(equalTo: topAnchor),
+            view.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ]
+        pins[ObjectIdentifier(view)] = made
+        return made
+    }
+
+    private func standDown(_ view: UIView) {
+        if let made = pins[ObjectIdentifier(view)] { NSLayoutConstraint.deactivate(made) }
+        view.isHidden = true
+    }
+
     private func hideAll() {
         player?.tearDown()
-        [grid, player, poll, card, space].compactMap { $0 }.forEach { $0.removeFromSuperview() }
+        if let activeView { standDown(activeView) }
         activeView = nil
     }
 

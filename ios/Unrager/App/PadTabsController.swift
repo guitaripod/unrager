@@ -64,6 +64,14 @@ final class PadTabsController: UIViewController {
     }
 
     private var chromeConstraints: [NSLayoutConstraint] = []
+    /// The floating bar's width, and the width it has with every tab showing.
+    private var barWidth: NSLayoutConstraint?
+    private var fullBarWidth: CGFloat = 0
+    /// Whether the floating bar has drawn in to the chosen tab, which it does
+    /// as the reader scrolls on, the way the phone's tab bar does.
+    private var barMinimized = false
+    /// The list a drag in progress is scrolling.
+    private weak var draggedList: UIScrollView?
     /// The window width the chrome was last laid out for — the size a resize
     /// is going to, never a frame read halfway through it.
     private var layoutWidth: CGFloat = 0
@@ -110,6 +118,13 @@ final class PadTabsController: UIViewController {
         edgeSwipe.delegate = self
         edgeSwipe.cancelsTouchesInView = false
         view.addGestureRecognizer(edgeSwipe)
+
+        let scrollWatch = UIPanGestureRecognizer(target: self, action: #selector(listDragged))
+        scrollWatch.delegate = self
+        scrollWatch.cancelsTouchesInView = false
+        scrollWatch.delaysTouchesBegan = false
+        scrollWatch.delaysTouchesEnded = false
+        view.addGestureRecognizer(scrollWatch)
 
         NotificationCenter.default.addObserver(self, selector: #selector(windowMoved),
                                                name: PadReach.windowMoved, object: nil)
@@ -267,6 +282,7 @@ final class PadTabsController: UIViewController {
     /// rail and the bar, so ⌘1…⌘5 land here too.
     func select(_ index: Int) {
         guard controllers.indices.contains(index) else { return }
+        setBarMinimized(false)
         selectedIndex = index
         refreshRows()
         applySelection()
@@ -388,6 +404,7 @@ final class PadTabsController: UIViewController {
     /// let go of before it lands.
     func stackWillShow(_ navigationController: UINavigationController) {
         guard navigationController === frontStack else { return }
+        setBarMinimized(false)
         refreshDock()
         applyFloatingVisibility(animated: true, alongside: navigationController.transitionCoordinator)
     }
@@ -516,16 +533,15 @@ final class PadTabsController: UIViewController {
     private func chooseRow(_ id: String) {
         let parts = id.split(separator: ":", maxSplits: 1).map(String.init)
         guard parts.count == 2 else { return }
+        if barMinimized {
+            setBarMinimized(false)
+            return
+        }
         switch parts[0] {
         case "tab":
             guard let tab = TabItem(rawValue: parts[1]), let index = tabs.firstIndex(of: tab) else { return }
-            if index == selectedIndex, !children(of: tab).isEmpty {
-                if expandedSections.contains(tab.rawValue) {
-                    expandedSections.remove(tab.rawValue)
-                } else {
-                    expandedSections.insert(tab.rawValue)
-                }
-                refreshRows()
+            if index == selectedIndex {
+                reselected(tab, at: index)
                 return
             }
             if children(of: tab).isEmpty == false { expandedSections.insert(tab.rawValue) }
@@ -567,6 +583,91 @@ final class PadTabsController: UIViewController {
         }
     }
 
+    /// The tab in front was tapped again. As on the phone, that closes
+    /// whatever is open over the tab's own list; on the list itself it is
+    /// reported (two in a row flip Home between For You and Following), and
+    /// the rail folds or unfolds the tab's section.
+    private func reselected(_ tab: TabItem, at index: Int) {
+        if pageOnScreen {
+            frontStack?.popToRootViewController(animated: true)
+            return
+        }
+        AppLogger.shared.debug("tab \(tab.rawValue) tapped again", category: .app)
+        onReselect?(index)
+        guard layout.chrome == .rail, !children(of: tab).isEmpty else { return }
+        if expandedSections.contains(tab.rawValue) {
+            expandedSections.remove(tab.rawValue)
+        } else {
+            expandedSections.insert(tab.rawValue)
+        }
+        refreshRows()
+    }
+
+    // MARK: - Minimising the bar
+
+    /// Draws the floating bar in to the chosen tab, or lets it out again.
+    private func setBarMinimized(_ minimized: Bool) {
+        let wanted = minimized && layout.chrome == .bottom && !barMakesWayForDock
+        guard wanted != barMinimized else { return }
+        barMinimized = wanted
+        let change = {
+            self.chrome.setMinimized(wanted)
+            self.barWidth?.constant = self.currentBarWidth
+            self.view.layoutIfNeeded()
+        }
+        guard view.window != nil, !UIAccessibility.isReduceMotionEnabled else {
+            change()
+            return
+        }
+        UIView.animate(withDuration: 0.32, delay: 0, usingSpringWithDamping: 0.86, initialSpringVelocity: 0.2,
+                       options: [.allowUserInteraction, .beginFromCurrentState], animations: change)
+    }
+
+    private var currentBarWidth: CGFloat {
+        barMinimized ? layout.metrics.barItemWidth + 20 : fullBarWidth
+    }
+
+    /// How far a finger travels before the bar answers it.
+    private static let barDragThreshold: CGFloat = 28
+
+    /// Follows a drag on the list in front: scrolling on draws the bar in,
+    /// scrolling back lets it out, and a list back at its top always shows it.
+    @objc private func listDragged(_ gesture: UIPanGestureRecognizer) {
+        guard layout.chrome == .bottom else { return }
+        switch gesture.state {
+        case .began:
+            let touched = view.hitTest(gesture.location(in: view), with: nil)
+            draggedList = touched.flatMap(Self.verticalList(holding:))
+        case .changed:
+            guard let list = draggedList else { return }
+            let travel = gesture.translation(in: view)
+            guard abs(travel.y) > abs(travel.x), abs(travel.y) > Self.barDragThreshold else { return }
+            gesture.setTranslation(.zero, in: view)
+            setBarMinimized(travel.y < 0 && !Self.isAtTop(list))
+        default:
+            if let list = draggedList, Self.isAtTop(list) { setBarMinimized(false) }
+            draggedList = nil
+        }
+    }
+
+    private static func isAtTop(_ list: UIScrollView) -> Bool {
+        list.contentOffset.y <= -list.adjustedContentInset.top + 8
+    }
+
+    /// The list `view` sits in that scrolls up and down, if it has more to
+    /// show than fits.
+    private static func verticalList(holding view: UIView) -> UIScrollView? {
+        var next: UIView? = view
+        while let candidate = next {
+            if let list = candidate as? UIScrollView, list.isScrollEnabled,
+               list.contentSize.height > list.bounds.height {
+                return list
+            }
+            next = candidate.superview
+        }
+        return nil
+    }
+
     /// Moves the tabs to `tab` through the same path the rail uses.
     private func selectTab(_ tab: TabItem) {
         guard let index = tabs.firstIndex(of: tab), index != selectedIndex else { return }
@@ -589,6 +690,10 @@ final class PadTabsController: UIViewController {
             return
         }
         layout = resolved
+        if resolved.chrome != .bottom, barMinimized {
+            barMinimized = false
+            chrome.setMinimized(false)
+        }
         chrome.apply(form: TabChromeBar.Form(resolved.chrome), metrics: resolved.metrics)
         layoutChrome()
         contentLeading.constant = resolved.railWidth
@@ -631,7 +736,7 @@ final class PadTabsController: UIViewController {
         chromeConstraints = [
             chrome.bottomAnchor.constraint(equalTo: safe.bottomAnchor, constant: -PadLayout.barLift(for: layout.frame)),
             chrome.heightAnchor.constraint(equalToConstant: metrics.barHeight),
-            chrome.widthAnchor.constraint(equalToConstant: plan.barWidth).priority(.defaultHigh),
+            chromeWidth(plan.barWidth),
             chrome.leadingAnchor.constraint(greaterThanOrEqualTo: safe.leadingAnchor, constant: margin),
             chrome.trailingAnchor.constraint(lessThanOrEqualTo: safe.trailingAnchor, constant: -margin),
         ]
@@ -667,6 +772,15 @@ final class PadTabsController: UIViewController {
         view.bringSubviewToFront(chrome)
         view.bringSubviewToFront(composeOrb)
         applyFloatingVisibility()
+    }
+
+    /// The floating bar's width constraint, at `full` points with every tab
+    /// showing and at one tab's width while the bar is drawn in.
+    private func chromeWidth(_ full: CGFloat) -> NSLayoutConstraint {
+        fullBarWidth = full
+        let width = chrome.widthAnchor.constraint(equalToConstant: currentBarWidth).priority(.defaultHigh)
+        barWidth = width
+        return width
     }
 
     /// The tab in front's own stack.
@@ -832,6 +946,13 @@ extension PadTabsController: UIGestureRecognizerDelegate {
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard gestureRecognizer is UIScreenEdgePanGestureRecognizer else { return true }
         return windowHasSidebar && !sidebarShown && !pageOnScreen
+    }
+
+    /// The watch on the list's drags never competes with the list, or with
+    /// anything else, for the touch.
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        !(gestureRecognizer is UIScreenEdgePanGestureRecognizer)
     }
 }
 

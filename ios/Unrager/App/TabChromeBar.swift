@@ -213,6 +213,16 @@ final class TabChromeBar: UIView {
         rebuild()
     }
 
+    /// Whether the bar at the bottom has drawn in to the chosen tab alone,
+    /// out of the way of what is being read. A rail never does.
+    private(set) var minimized = false
+
+    func setMinimized(_ on: Bool) {
+        guard on != minimized else { return }
+        minimized = on
+        rebuild()
+    }
+
     /// How many tabs the bar carries, which is what its width is made of.
     var tabCount: Int { rows.filter { $0.depth == 0 }.count }
 
@@ -229,9 +239,13 @@ final class TabChromeBar: UIView {
                 return row
             }
         }
+        let drawnIn = form == .bottom && minimized && visible.contains { $0.chosen }
         for (view, row) in zip(rowViews, visible) {
             view.onTap = { [weak self] in self?.onRow?(row.id) }
             view.configure(row)
+            let hidden = drawnIn && !row.chosen
+            if view.isHidden != hidden { view.isHidden = hidden }
+            view.alpha = hidden ? 0 : 1
         }
         spaceOutSections(visible)
     }

@@ -14,7 +14,8 @@ struct PadLayout: Equatable {
     }
 
     /// The iPad this window is on. A mini is the same idea with less room:
-    /// a narrower rail and never more than two posts across.
+    /// a narrower rail, and a third post across only where the width has room
+    /// for it, which is a landscape window with the sidebar closed.
     enum Frame: Equatable {
         case mini
         case regular
@@ -56,7 +57,7 @@ struct PadLayout: Equatable {
             barHeight: 62, barClearance: 84, barWidth: 560, barItemWidth: 86, railShare: 0.26),
         .mini: Metrics(
             rail: 208, narrowestRail: 188, widestRail: 264,
-            boardColumns: 2, boardColumnWidth: 300,
+            boardColumns: 3, boardColumnWidth: 300,
             barHeight: 56, barClearance: 78, barWidth: 470, barItemWidth: 78, railShare: 0.3),
     ]
 
@@ -112,7 +113,8 @@ struct PadLayout: Equatable {
     /// narrowest a post may get, the most that may sit side by side, and the
     /// widest the board itself grows. A tall window sets two across — three
     /// narrow columns of text in portrait read worse than two wider ones — and
-    /// a full-size landscape window sets three.
+    /// a landscape window sets three where they fit: a mini's does with its
+    /// sidebar closed, and keeps two beside an open one.
     static func board(window: CGSize, screen: CGSize? = nil) -> Board {
         let frame = Frame.of(screen ?? window)
         let metrics = metrics(for: frame)

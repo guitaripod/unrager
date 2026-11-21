@@ -103,6 +103,7 @@ struct PadLayoutTests {
         #expect(PadLayout.board(window: CGSize(width: 1032, height: 1376)).maximumColumns == 2)
         #expect(PadLayout.board(window: CGSize(width: 1376, height: 1032)).maximumColumns == 3)
         #expect(PadLayout.board(window: CGSize(width: 744, height: 1133)).maximumColumns == 2)
+        #expect(PadLayout.board(window: CGSize(width: 1133, height: 744)).maximumColumns == 3)
     }
 
     // MARK: - iPad mini
@@ -124,14 +125,22 @@ struct PadLayoutTests {
         #expect(mini.railWidth == PadLayout.metrics(for: .mini).rail)
     }
 
-    @Test("A mini never sets more than two posts side by side")
+    @Test("A mini on its side sets three posts across with the sidebar closed, and two beside it")
     func miniBoard() {
-        for size in [CGSize(width: 744, height: 1133), CGSize(width: 1133, height: 744)] {
-            let board = PadLayout.board(window: size)
-            #expect(board.maximumColumns == 2)
-            #expect(board.minimumColumnWidth == PadLayout.metrics(for: .mini).boardColumnWidth)
-            #expect(MasonryLayout.columns(for: 728) <= board.maximumColumns)
+        let landscape = CGSize(width: 1133, height: 744)
+        let board = PadLayout.board(window: landscape)
+        #expect(board.minimumColumnWidth == PadLayout.metrics(for: .mini).boardColumnWidth)
+        func columns(in width: CGFloat) -> Int {
+            MasonryLayout.columns(for: min(width - 20, board.maximumWidth), minimum: board.minimumColumnWidth,
+                                  maximum: board.maximumColumns, spacing: 10)
         }
+        #expect(columns(in: landscape.width) == 3)
+        #expect(min(landscape.width - 20, board.maximumWidth) == landscape.width - 20)
+        #expect(columns(in: landscape.width - PadLayout.resolve(window: landscape).railWidth) == 2)
+
+        let portrait = PadLayout.board(window: CGSize(width: 744, height: 1133))
+        #expect(portrait.maximumColumns == 2)
+        #expect(MasonryLayout.columns(for: 728) <= portrait.maximumColumns)
     }
 
     @Test("A mini's bar, clearance and rail all sit tighter than a full-size iPad's")

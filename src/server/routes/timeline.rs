@@ -385,6 +385,9 @@ pub async fn notifications(
         .notifications
         .into_iter()
         .map(|n| unrager_model::Notification {
+            others_count: Some(n.people_count().saturating_sub(n.actors.len() as u64))
+                .filter(|unlisted| *unlisted > 0),
+            url: n.url,
             id: n.id,
             kind: n.notification_type,
             actors: n
@@ -403,7 +406,6 @@ pub async fn notifications(
             target_tweet_like_count: n.target_tweet_like_count,
             target_tweet_favorited: n.target_tweet_favorited,
             target_media: n.target_media,
-            others_count: n.others_count,
             message: n.message,
             timestamp: n.timestamp,
         })

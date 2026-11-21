@@ -62,6 +62,33 @@ struct DecodingTests {
         #expect(tweet.urls.first?.displayURL == "example.com/a")
     }
 
+    @Test("A quote the server could only name keeps its id, and a sent one needs none")
+    func unsentQuote() throws {
+        let named = """
+        {"rest_id":"1","author":{"rest_id":"2","handle":"a","name":"A","verified":false,
+          "followers":0,"following":0},"created_at":"2026-06-19T12:00:00Z","text":"look",
+          "reply_count":0,"retweet_count":0,"like_count":0,"quote_count":0,"view_count":null,
+          "quoted_tweet":null,"quoted_tweet_id":"77","url":"https://x.com/a/status/1"}
+        """
+        let tweet = try decode(Tweet.self, named)
+        #expect(tweet.quotedTweet == nil)
+        #expect(tweet.quotedTweetID == "77")
+        #expect(tweet.withLike(favorited: true, likeCount: 1).quotedTweetID == "77")
+    }
+
+    @Test("A notification with no post carries the page it opens")
+    func notificationPage() throws {
+        let json = """
+        {"id":"n","type":"CommunityNote","actors":[],"message":"Readers added a Community Note",
+          "target_tweet_snippet":"The clip is spliced.","url":"https://x.com/i/birdwatch/n/1",
+          "timestamp":"2026-06-19T12:00:00Z"}
+        """
+        let note = try decode(XNotification.self, json)
+        #expect(note.url == "https://x.com/i/birdwatch/n/1")
+        #expect(note.targetTweetSnippet == "The clip is spliced.")
+        #expect(note.targetTweetID == nil)
+    }
+
     @Test("Tweet tolerates missing default-able fields")
     func tweetDefaults() throws {
         let json = """

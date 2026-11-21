@@ -85,6 +85,7 @@ mod tests {
             target_tweet_snippet: None,
             target_tweet_favorited: false,
             target_media: Vec::new(),
+            url: None,
             timestamp: DateTime::from_timestamp_millis(ms).unwrap(),
         }
     }

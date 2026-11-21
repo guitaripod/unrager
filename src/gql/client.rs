@@ -44,6 +44,14 @@ struct SignedError {
     generation: u64,
 }
 
+/// What a legacy REST request carries: a form body (POST) or a query string
+/// (GET).
+#[derive(Clone, Copy)]
+enum RestPayload<'a> {
+    Form(&'a [(&'a str, &'a str)]),
+    Query(&'a [(&'a str, &'a str)]),
+}
+
 pub struct GqlClient {
     http: reqwest::Client,
     session: RwLock<SessionSlot>,
@@ -235,8 +243,19 @@ impl GqlClient {
     /// 429s land in that path's own bucket; a 401/403 triggers the same
     /// browser session re-extraction and single retry as GraphQL calls.
     pub async fn post_form_1_1(&self, path: &str, form: &[(&str, &str)]) -> Result<Value> {
+        self.rest(path, RestPayload::Form(form)).await
+    }
+
+    /// GET of a legacy `x.com/i/api/2` REST endpoint (e.g.
+    /// `notifications/device_follow.json`) with `query` as its query string,
+    /// signed, bucketed and retried like [`Self::post_form_1_1`].
+    pub async fn get_rest(&self, path: &str, query: &[(&str, &str)]) -> Result<Value> {
+        self.rest(path, RestPayload::Query(query)).await
+    }
+
+    async fn rest(&self, path: &str, payload: RestPayload<'_>) -> Result<Value> {
         self.ensure_online()?;
-        match self.post_form_once(path, form).await {
+        match self.rest_once(path, payload).await {
             Ok(v) => Ok(v),
             Err(signed) if is_auth_failure(&signed.error) => {
                 tracing::warn!(
@@ -244,7 +263,7 @@ impl GqlClient {
                     signed.error
                 );
                 if self.try_refresh_session(signed.generation).await {
-                    self.post_form_once(path, form)
+                    self.rest_once(path, payload)
                         .await
                         .map_err(|retry| retry.error)
                 } else {
@@ -255,22 +274,22 @@ impl GqlClient {
         }
     }
 
-    async fn post_form_once(
+    async fn rest_once(
         &self,
         path: &str,
-        form: &[(&str, &str)],
+        payload: RestPayload<'_>,
     ) -> std::result::Result<Value, SignedError> {
         let (session, generation) = self.session_snapshot();
-        self.post_form_signed(&session, path, form)
+        self.rest_signed(&session, path, payload)
             .await
             .map_err(|error| SignedError { error, generation })
     }
 
-    async fn post_form_signed(
+    async fn rest_signed(
         &self,
         session: &XSession,
         path: &str,
-        form: &[(&str, &str)],
+        payload: RestPayload<'_>,
     ) -> Result<Value> {
         let bucket = Bucket::Rest(path.to_string());
         if let Some(remaining) = self.cooldown_remaining(&bucket) {
@@ -280,19 +299,23 @@ impl GqlClient {
         }
         self.throttle().await;
         let url = format!("https://x.com{path}");
-        tracing::debug!(path, "rest form request");
-        let mut headers = self.headers(session, "POST", path)?;
-        headers.insert(
-            reqwest::header::CONTENT_TYPE,
-            HeaderValue::from_static("application/x-www-form-urlencoded"),
-        );
-        let res = self
-            .http
-            .post(&url)
-            .headers(headers)
-            .form(form)
-            .send()
-            .await?;
+        tracing::debug!(path, "rest request");
+        let request = match payload {
+            RestPayload::Form(form) => {
+                let mut headers = self.headers(session, "POST", path)?;
+                headers.insert(
+                    reqwest::header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/x-www-form-urlencoded"),
+                );
+                self.http.post(&url).headers(headers).form(form)
+            }
+            RestPayload::Query(query) => self
+                .http
+                .get(&url)
+                .headers(self.headers(session, "GET", path)?)
+                .query(query),
+        };
+        let res = request.send().await?;
 
         let status = res.status();
         if status.as_u16() == 429 {

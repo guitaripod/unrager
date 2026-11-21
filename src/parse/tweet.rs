@@ -346,6 +346,34 @@ pub fn decode_html_entities(s: &str) -> String {
         .replace("&amp;", "&")
 }
 
+/// A post read from X's legacy REST shape (`globalObjects.tweets`), where the
+/// tweet is the `legacy` block itself and its author is only an id.
+pub(crate) struct LegacyPost {
+    pub id: String,
+    pub author_id: String,
+    pub created_at: DateTime<Utc>,
+    pub text: String,
+    pub media: Vec<Media>,
+    pub favorited: bool,
+    pub like_count: u64,
+}
+
+pub(crate) fn parse_legacy_post(legacy: &Value) -> Option<LegacyPost> {
+    let text = legacy.get("full_text").and_then(Value::as_str)?;
+    Some(LegacyPost {
+        id: legacy.get("id_str").and_then(Value::as_str)?.to_string(),
+        author_id: legacy
+            .get("user_id_str")
+            .and_then(Value::as_str)?
+            .to_string(),
+        created_at: parse_created_at(legacy).ok()?,
+        text: scrub_urls_in_text(&decode_html_entities(text), legacy),
+        media: parse_media(legacy),
+        favorited: bool_field(legacy, "favorited"),
+        like_count: u64_field(legacy, "favorite_count"),
+    })
+}
+
 fn parse_created_at(legacy: &Value) -> Result<DateTime<Utc>> {
     let raw = legacy
         .get("created_at")

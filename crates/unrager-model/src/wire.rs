@@ -274,9 +274,9 @@ pub struct Notification {
     /// attachments), so clients can show a thumbnail. Empty otherwise.
     #[serde(default)]
     pub target_media: Vec<crate::Media>,
-    /// How many additional actors X aggregated beyond `actors`
-    /// ("A, B and 47 others liked your post"). Absent when the group is fully
-    /// enumerated.
+    /// How many people the notification stands for beyond those in `actors`.
+    /// Absent when everyone is listed, which X does for most groups: its
+    /// "A and 6 others" then comes with all seven in `actors`.
     #[serde(default)]
     pub others_count: Option<u64>,
     /// X's fully rendered notification text ("Your poll has ended",
@@ -284,6 +284,10 @@ pub struct Notification {
     /// for actor-less notification kinds instead of synthesizing copy.
     #[serde(default)]
     pub message: Option<String>,
+    /// The x.com page the notification opens when it has no post of its own
+    /// (a Community Note's page).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     pub timestamp: DateTime<Utc>,
 }
 

@@ -5,6 +5,7 @@ use crate::tui::event::{Event, EventTx};
 use crate::tui::filter::{ChatRequest, LlmConfig};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 use tracing::{debug, warn};
 
@@ -453,7 +454,58 @@ pub async fn fetch_notifications(
         return Ok(notification::NotificationPage::default());
     }
     let response = fetch_notifications_raw(client, cursor, count).await?;
-    notification::parse_notifications_timeline(&response)
+    let mut page = notification::parse_notifications_timeline(&response)?;
+    attach_followed_posts(client, &mut page.notifications).await;
+    Ok(page)
+}
+
+/// The followed-posts timeline as last read, and when.
+static FOLLOWED_POSTS: Mutex<Option<(DateTime<Utc>, Vec<notification::FollowedPost>)>> =
+    Mutex::new(None);
+
+/// How long a followed-posts read is trusted for notifications it has no post
+/// for (a deleted post never turns up, and must not be asked for every poll).
+const FOLLOWED_POSTS_RETRY_SECS: i64 = 5 * 60;
+
+/// Gives the "New post" notifications their posts, from the last read of the
+/// followed-posts timeline or, when a notification is newer than that read
+/// (or the read is old and something is still missing), from a fresh one. A
+/// failed read leaves those rows without a post; the next page tries again.
+async fn attach_followed_posts(
+    client: &GqlClient,
+    notifications: &mut [notification::RawNotification],
+) {
+    let Some(newest) = notifications
+        .iter()
+        .filter(|n| n.wants_followed_post())
+        .map(|n| n.timestamp)
+        .max()
+    else {
+        return;
+    };
+    let remembered = FOLLOWED_POSTS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    if let Some((read_at, posts)) = remembered {
+        let complete = notification::attach_followed_posts(notifications, &posts);
+        let retry_due = (Utc::now() - read_at).num_seconds() >= FOLLOWED_POSTS_RETRY_SECS;
+        if complete || (newest <= read_at && !retry_due) {
+            return;
+        }
+    }
+    let read_at = Utc::now();
+    match fetch_followed_posts_raw(client).await {
+        Ok(response) => {
+            let posts = notification::parse_followed_posts(&response);
+            tracing::info!(posts = posts.len(), "followed posts read");
+            notification::attach_followed_posts(notifications, &posts);
+            *FOLLOWED_POSTS
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Some((read_at, posts));
+        }
+        Err(e) => tracing::warn!("followed posts read failed: {e}"),
+    }
 }
 
 pub async fn fetch_notifications_raw(
@@ -468,6 +520,48 @@ pub async fn fetch_notifications_raw(
     let features = endpoints::notifications_timeline_features();
     client
         .get(Operation::NotificationsTimeline, &variables, &features)
+        .await
+}
+
+/// The posts behind a "New post notifications for …" row: what the accounts
+/// the user asked to be told about have posted, newest first, as X's legacy
+/// timeline (`globalObjects` plus a `timeline` of entries).
+pub async fn fetch_followed_posts_raw(client: &GqlClient) -> Result<serde_json::Value> {
+    client
+        .get_rest(
+            "/i/api/2/notifications/device_follow.json",
+            &[
+                ("include_profile_interstitial_type", "1"),
+                ("include_blocking", "1"),
+                ("include_blocked_by", "1"),
+                ("include_followed_by", "1"),
+                ("include_want_retweets", "1"),
+                ("include_mute_edge", "1"),
+                ("include_can_dm", "1"),
+                ("include_can_media_tag", "1"),
+                ("include_ext_is_blue_verified", "1"),
+                ("include_ext_verified_type", "1"),
+                ("skip_status", "1"),
+                ("cards_platform", "Web-12"),
+                ("include_cards", "1"),
+                ("include_ext_alt_text", "true"),
+                ("include_quote_count", "true"),
+                ("include_reply_count", "1"),
+                ("tweet_mode", "extended"),
+                ("include_ext_views", "true"),
+                ("include_entities", "true"),
+                ("include_user_entities", "true"),
+                ("include_ext_media_color", "true"),
+                ("include_ext_media_availability", "true"),
+                ("send_error_codes", "true"),
+                ("simple_quoted_tweet", "true"),
+                ("count", "20"),
+                (
+                    "ext",
+                    "mediaStats,highlightedLabel,voiceInfo,superFollowMetadata",
+                ),
+            ],
+        )
         .await
 }
 

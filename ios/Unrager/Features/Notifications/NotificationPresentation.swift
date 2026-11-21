@@ -6,6 +6,8 @@ import UnragerKit
 enum NotificationType: Equatable {
     case like, repost, reply, mention, follow, quote
     case communityNote, recommendation, trending
+    /// A post by an account the user asked to be told about.
+    case post
     case other(String)
 
     init(raw: String) {
@@ -17,6 +19,7 @@ enum NotificationType: Equatable {
         case "follow": self = .follow
         case "quote": self = .quote
         case "communitynote": self = .communityNote
+        case "post": self = .post
         case "recommendation": self = .recommendation
         case "trending": self = .trending
         default: self = .other(raw.replacingOccurrences(of: "_", with: " "))
@@ -31,6 +34,10 @@ enum NotificationType: Equatable {
         default: return false
         }
     }
+
+    /// The snippet is what someone else wrote, shown as their words: a
+    /// conversation, or a post the user asked to hear about.
+    var showsTheirWords: Bool { isConversation || self == .post }
 
     /// Engagement with the user's own post: the snippet is that post.
     var isEngagement: Bool { self == .like || self == .repost }
@@ -51,6 +58,8 @@ enum NotificationType: Equatable {
             return .init(color: DesignSystem.Color.quote, symbol: "quote.bubble.fill", verb: "quoted your post")
         case .communityNote:
             return .init(color: DesignSystem.Color.spark, symbol: "note.text", verb: "added a Community Note")
+        case .post:
+            return .init(color: DesignSystem.Color.accent, symbol: "bell.badge.fill", verb: "posted")
         case .recommendation:
             return .init(color: DesignSystem.Color.accent, symbol: "sparkles", verb: "— suggested for you")
         case .trending:
@@ -197,11 +206,11 @@ enum NotificationPresentation {
         NotificationType(raw: notification.type) == .like ? notification.targetTweetID : nil
     }
 
-    /// Whether a row is something a person wrote to the user, about a post the
-    /// user can like back: a reply, a mention or a quote. Likes and reposts are
-    /// about the user's own post, and a follow has none.
+    /// Whether a row is a post someone else wrote, which the user can like:
+    /// a reply, a mention, a quote or a post they asked to hear about. Likes
+    /// and reposts are about the user's own post, and a follow has none.
     static func canLike(_ notification: XNotification) -> Bool {
-        NotificationType(raw: notification.type).isConversation && notification.targetTweetID != nil
+        NotificationType(raw: notification.type).showsTheirWords && notification.targetTweetID != nil
     }
 
     /// The names a title leads with (at most two) and how many more people the
@@ -228,6 +237,17 @@ enum NotificationPresentation {
         }
     }
 
+    /// What a row without people says: a Community Note's own short line
+    /// (X's runs to "…a post to which you replied, Liked or reposted"), or
+    /// X's wording for the rest.
+    static func headline(for notification: XNotification) -> String? {
+        if NotificationType(raw: notification.type) == .communityNote {
+            return "Readers added a Community Note to a post you engaged with"
+        }
+        guard let message = notification.message, !message.isEmpty else { return nil }
+        return message
+    }
+
     /// Plain title + body for a local banner. The title carries the actor names
     /// and action verb; actor-less types fall back to X's own rendered message
     /// (never "Someone Poll"). The body is the target tweet snippet when present.
@@ -235,7 +255,7 @@ enum NotificationPresentation {
         let style = NotificationType(raw: notification.type).style
         let body = notification.targetTweetSnippet ?? ""
         if let who = whoText(for: notification) { return ("\(who) \(style.verb)", body) }
-        if let message = notification.message, !message.isEmpty { return (message, body) }
+        if let message = headline(for: notification) { return (message, body) }
         return ("Someone \(style.verb)", body)
     }
 
@@ -269,7 +289,7 @@ enum NotificationPresentation {
             let names = joined(names: who.names, remaining: who.remaining) { "\u{1}\($0)\u{2}" }
             result.append(styled(names, bold: bold, quiet: quiet))
             result.append(NSAttributedString(string: " " + style.verb, attributes: quiet))
-        } else if let message = notification.message, !message.isEmpty {
+        } else if let message = headline(for: notification) {
             result.append(NSAttributedString(string: message, attributes: bold))
         } else {
             result.append(NSAttributedString(string: "Someone", attributes: bold))
@@ -366,6 +386,7 @@ enum NotificationPresentation {
         if let tweetID = notification.targetTweetID { return .post(tweetID) }
         if hasPeopleList(notification) { return .people }
         if let actor = notification.actors.first { return .profile(actor.handle) }
+        if let url = notification.url.flatMap(URL.init), url.scheme == "https" { return .page(url) }
         return nil
     }
 
@@ -373,6 +394,8 @@ enum NotificationPresentation {
         case post(String)
         case people
         case profile(String)
+        /// A page on x.com, for a notification with no post or person.
+        case page(URL)
     }
 
     /// The link to a notification's post on x.com.

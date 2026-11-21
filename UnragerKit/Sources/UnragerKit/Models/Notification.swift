@@ -31,8 +31,8 @@ public struct XNotification: Decodable, Sendable, Hashable, Identifiable {
     public let id: String
     public let type: String
     public let actors: [NotificationActor]
-    /// How many additional actors X groups beyond `actors` ("and N others").
-    /// Absent on servers that predate the field — treat as zero.
+    /// How many people the notification stands for beyond those in `actors`.
+    /// Absent when everyone is listed.
     public let othersCount: Int?
     /// X's fully rendered notification text (e.g. "Your poll has ended").
     /// The fallback copy for actor-less types; absent on older servers.
@@ -44,10 +44,13 @@ public struct XNotification: Decodable, Sendable, Hashable, Identifiable {
     /// that predate the field — treat as not liked.
     public let targetTweetFavorited: Bool
     public let targetMedia: [Media]
+    /// The x.com page the notification opens when it has no post of its own
+    /// (a Community Note's page). Absent for the rest.
+    public let url: String?
     public let timestamp: Date
 
     enum CodingKeys: String, CodingKey {
-        case id, type, actors, message
+        case id, type, actors, message, url
         case othersCount = "others_count"
         case targetTweetID = "target_tweet_id"
         case targetTweetSnippet = "target_tweet_snippet"
@@ -69,6 +72,7 @@ public struct XNotification: Decodable, Sendable, Hashable, Identifiable {
         targetTweetLikeCount = try c.decodeIfPresent(Int.self, forKey: .targetTweetLikeCount)
         targetTweetFavorited = try c.decodeIfPresent(Bool.self, forKey: .targetTweetFavorited) ?? false
         targetMedia = try c.decodeLossy(Media.self, forKey: .targetMedia)
+        url = try c.decodeIfPresent(String.self, forKey: .url)
         timestamp = try c.decode(Date.self, forKey: .timestamp)
     }
 

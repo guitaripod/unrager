@@ -1,6 +1,6 @@
 use crate::error::{Error, Result};
 use crate::model::{Media, User};
-use crate::parse::tweet::{decode_html_entities, parse_tweet_result};
+use crate::parse::tweet::{decode_html_entities, parse_legacy_post, parse_tweet_result};
 use crate::parse::user::parse_user_result;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -21,7 +21,32 @@ pub struct RawNotification {
     pub target_tweet_snippet: Option<String>,
     pub target_tweet_favorited: bool,
     pub target_media: Vec<Media>,
+    /// Where X sends a reader who opens the notification when that isn't a
+    /// post in `target_tweet_id`: a Community Note's page, for one.
+    pub url: Option<String>,
     pub timestamp: DateTime<Utc>,
+}
+
+/// The type of a "New post notifications for …" row, about a post by an
+/// account the user asked to be told about.
+pub const POST_TYPE: &str = "Post";
+
+impl RawNotification {
+    /// How many people the notification stands for: everyone listed, or the
+    /// first name plus X's "and N others" when that says more.
+    pub fn people_count(&self) -> u64 {
+        let listed = self.actors.len() as u64;
+        match self.others_count {
+            Some(others) if !self.actors.is_empty() => listed.max(1 + others),
+            _ => listed,
+        }
+    }
+
+    /// Whether this is a "New post" row X sent without the post, which the
+    /// account's followed-posts timeline has (see [`attach_followed_posts`]).
+    pub fn wants_followed_post(&self) -> bool {
+        self.notification_type == POST_TYPE && self.target_tweet_id.is_none()
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -127,6 +152,7 @@ pub fn parse_notifications_timeline(response: &Value) -> Result<NotificationPage
 
     page.notifications
         .sort_by_key(|n| std::cmp::Reverse(n.timestamp));
+    merge_repeated_groups(&mut page.notifications);
 
     let mut type_counts: std::collections::BTreeMap<&str, usize> =
         std::collections::BTreeMap::new();
@@ -202,6 +228,7 @@ fn build_tweet_entry(_entry_id: &str, content: &Value) -> Option<RawNotification
         target_tweet_snippet: Some(tweet.text.clone()),
         target_tweet_favorited: tweet.favorited,
         target_media: tweet.media.clone(),
+        url: None,
         timestamp: tweet.created_at,
     })
 }
@@ -230,6 +257,10 @@ fn build_grouped_entry(entry_id: &str, content: &Value) -> Option<RawNotificatio
 
     let target = extract_target_tweet(item);
     let target_tweet_id = target.as_ref().map(|t| t.id.clone());
+    let snippet = match &target {
+        Some(target) => Some(target.snippet.clone()),
+        None => attached_note(item),
+    };
 
     // The timestamp must be a pure function of the notification, never the fetch
     // time: a drifting `Utc::now()` makes already-seen items re-count as unread on
@@ -251,9 +282,10 @@ fn build_grouped_entry(entry_id: &str, content: &Value) -> Option<RawNotificatio
         target_tweet_id,
         target_tweet_like_count: target.as_ref().map(|t| t.like_count),
         target_tweet_created_at: target.as_ref().map(|t| t.created_at),
-        target_tweet_snippet: target.as_ref().map(|t| t.snippet.clone()),
+        target_tweet_snippet: snippet,
         target_tweet_favorited: target.as_ref().is_some_and(|t| t.favorited),
         target_media: target.as_ref().map(|t| t.media.clone()).unwrap_or_default(),
+        url: external_url(item),
         timestamp,
     })
 }
@@ -278,6 +310,160 @@ fn composite_grouped_id(
     let mut handles: Vec<&str> = actors.iter().map(|u| u.handle.as_str()).collect();
     handles.sort_unstable();
     Some(format!("g-{notification_type}--{}", handles.join(",")))
+}
+
+/// The text X attaches under a notification that has no post of its own: a
+/// Community Note's wording. The sources a note lists after its text, one
+/// address per line, are left out.
+fn attached_note(item: &Value) -> Option<String> {
+    let text = item
+        .pointer("/template/additional_context/text")
+        .and_then(Value::as_str)?;
+    let kept: Vec<&str> = text
+        .lines()
+        .filter(|line| !is_bare_address(line.trim()))
+        .collect();
+    let note = decode_html_entities(kept.join("\n").trim());
+    (!note.is_empty()).then_some(note)
+}
+
+fn is_bare_address(line: &str) -> bool {
+    (line.starts_with("https://") || line.starts_with("http://"))
+        && !line.contains(char::is_whitespace)
+}
+
+/// The web page a notification opens, when X names one, on x.com.
+fn external_url(item: &Value) -> Option<String> {
+    let link = item.get("notification_url")?;
+    if link.get("urlType").and_then(Value::as_str) != Some("ExternalUrl") {
+        return None;
+    }
+    let url = link.get("url").and_then(Value::as_str)?;
+    let url = match url.strip_prefix("https://twitter.com/") {
+        Some(rest) => format!("https://x.com/{rest}"),
+        None => url.to_string(),
+    };
+    url.starts_with("https://").then_some(url)
+}
+
+/// Folds notifications that share an id into the newest of them. X starts a
+/// new group for a post each time activity resumes ("Dan liked your post" an
+/// hour after "Ann and 2 others liked your post"), and both carry the id of
+/// the post and the activity: one row then stands for everyone, newest first,
+/// at the time of the latest. `notifications` is newest first.
+fn merge_repeated_groups(notifications: &mut Vec<RawNotification>) {
+    let mut merged: Vec<RawNotification> = Vec::with_capacity(notifications.len());
+    for older in notifications.drain(..) {
+        match merged.iter_mut().find(|kept| kept.id == older.id) {
+            Some(kept) => absorb(kept, older),
+            None => merged.push(older),
+        }
+    }
+    *notifications = merged;
+}
+
+/// Adds `older`'s people to `kept`, a newer notification with the same id.
+fn absorb(kept: &mut RawNotification, older: RawNotification) {
+    let mut people = kept.people_count() + older.people_count();
+    for actor in older.actors {
+        if kept.actors.iter().any(|a| a.rest_id == actor.rest_id) {
+            people = people.saturating_sub(1);
+        } else {
+            kept.actors.push(actor);
+        }
+    }
+    if kept.actors.is_empty() {
+        return;
+    }
+    kept.others_count = (people > 1).then(|| people - 1);
+    kept.message = None;
+}
+
+/// A post by an account the user asked to be told about, from the timeline
+/// behind X's "New post notifications" rows.
+#[derive(Debug, Clone)]
+pub struct FollowedPost {
+    pub id: String,
+    pub author_id: String,
+    pub created_at: DateTime<Utc>,
+    pub text: String,
+    pub media: Vec<Media>,
+    pub favorited: bool,
+    pub like_count: u64,
+}
+
+/// Reads the posts of `/2/notifications/device_follow.json`: the tweets its
+/// timeline lists (`globalObjects` also holds the posts they quote).
+pub fn parse_followed_posts(response: &Value) -> Vec<FollowedPost> {
+    let Some(tweets) = response
+        .pointer("/globalObjects/tweets")
+        .and_then(Value::as_object)
+    else {
+        return Vec::new();
+    };
+    let listed: Vec<&str> = response
+        .pointer("/timeline/instructions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|i| i.pointer("/addEntries/entries").and_then(Value::as_array))
+        .flatten()
+        .filter_map(|e| e.pointer("/content/item/content/tweet/id"))
+        .filter_map(Value::as_str)
+        .collect();
+    listed
+        .iter()
+        .filter_map(|id| tweets.get(*id))
+        .filter_map(parse_legacy_post)
+        .map(|post| FollowedPost {
+            id: post.id,
+            author_id: post.author_id,
+            created_at: post.created_at,
+            text: post.text,
+            media: post.media,
+            favorited: post.favorited,
+            like_count: post.like_count,
+        })
+        .collect()
+}
+
+/// How long before its notification a followed account's post may have been
+/// written and still be the one the notification is about.
+const FOLLOWED_POST_WINDOW_SECS: i64 = 6 * 60 * 60;
+/// X stamps the notification a moment after the post; this much later still
+/// counts as before it.
+const FOLLOWED_POST_SLACK_SECS: i64 = 60;
+
+/// Gives each "New post" notification without a post the one it is about: the
+/// newest post by one of its accounts written up to the notification's time.
+/// The row then opens that post and is named after it. Returns whether every
+/// such notification found its post.
+pub fn attach_followed_posts(
+    notifications: &mut [RawNotification],
+    posts: &[FollowedPost],
+) -> bool {
+    let mut complete = true;
+    for notification in notifications.iter_mut().filter(|n| n.wants_followed_post()) {
+        let latest = notification.timestamp.timestamp() + FOLLOWED_POST_SLACK_SECS;
+        let earliest = latest - FOLLOWED_POST_WINDOW_SECS;
+        let post = posts
+            .iter()
+            .filter(|p| notification.actors.iter().any(|a| a.rest_id == p.author_id))
+            .filter(|p| (earliest..=latest).contains(&p.created_at.timestamp()))
+            .max_by_key(|p| p.created_at);
+        let Some(post) = post else {
+            complete = false;
+            continue;
+        };
+        notification.id = format!("g-{POST_TYPE}-{}", post.id);
+        notification.target_tweet_id = Some(post.id.clone());
+        notification.target_tweet_like_count = Some(post.like_count);
+        notification.target_tweet_created_at = Some(post.created_at);
+        notification.target_tweet_snippet = Some(post.text.clone());
+        notification.target_tweet_favorited = post.favorited;
+        notification.target_media = post.media.clone();
+    }
+    complete
 }
 
 fn parse_notification_timestamp(item: &Value) -> Option<DateTime<Utc>> {
@@ -314,6 +500,7 @@ fn classify_type(icon_id: &str, element: &str) -> String {
         "user_replied_to_your_tweet" | "users_replied_to_your_tweet" => Some("Reply"),
         "user_quoted_your_tweet" | "users_quoted_your_tweet" => Some("Quote"),
         "user_mentioned_you" | "users_mentioned_you" => Some("Mention"),
+        "device_follow_tweet_notification_entry" => Some(POST_TYPE),
         _ => None,
     };
     if let Some(t) = by_element {
@@ -716,5 +903,202 @@ mod tests {
         assert_eq!(classify_type("heart_icon", "users_followed_you"), "Follow");
         assert_eq!(classify_type("", "users_liked_your_tweet"), "Like");
         assert_eq!(classify_type("reply_icon", ""), "Reply");
+    }
+
+    fn user_json(id: &str, handle: &str) -> Value {
+        json!({ "user_results": { "result": {
+            "__typename": "User",
+            "rest_id": id,
+            "core": { "name": handle, "screen_name": handle },
+            "legacy": { "screen_name": handle, "name": handle }
+        }}})
+    }
+
+    fn like_entry(entry: &str, users: &[(&str, &str)], message: &str, at: &str) -> Value {
+        json!({
+            "entryId": entry,
+            "content": {
+                "clientEventInfo": { "element": "users_liked_your_tweet" },
+                "itemContent": {
+                    "__typename": "TimelineNotification",
+                    "notification_icon": "heart_icon",
+                    "rich_message": { "text": message },
+                    "timestamp_ms": at,
+                    "template": {
+                        "from_users": users.iter().map(|(id, h)| user_json(id, h)).collect::<Vec<_>>(),
+                        "target_objects": [{ "tweet_results": { "result": {
+                            "__typename": "Tweet",
+                            "rest_id": "900",
+                            "core": user_json("1", "me"),
+                            "legacy": {
+                                "full_text": "my post",
+                                "created_at": "Wed Oct 10 20:19:24 +0000 2018",
+                                "favorite_count": 4
+                            }
+                        }}}]
+                    }
+                }
+            }
+        })
+    }
+
+    fn timeline_of(entries: Vec<Value>) -> Value {
+        json!({ "data": { "notification_timeline": { "timeline": { "instructions": [
+            { "type": "TimelineAddEntries", "entries": entries }
+        ]}}}})
+    }
+
+    #[test]
+    fn two_groups_about_one_post_become_one_row_led_by_the_newest() {
+        let older = like_entry(
+            "n-1",
+            &[("11", "ann"), ("12", "bob"), ("13", "cat")],
+            "ann and 2 others liked your post",
+            "2026-11-20T23:38:21.000Z",
+        );
+        let newer = like_entry(
+            "n-2",
+            &[("14", "dan"), ("12", "bob")],
+            "dan and bob liked your post",
+            "2026-11-21T02:36:09.000Z",
+        );
+        let page = parse_notifications_timeline(&timeline_of(vec![older, newer])).unwrap();
+        assert_eq!(page.notifications.len(), 1);
+        let row = &page.notifications[0];
+        let handles: Vec<&str> = row.actors.iter().map(|a| a.handle.as_str()).collect();
+        assert_eq!(handles, ["dan", "bob", "ann", "cat"]);
+        assert_eq!(row.people_count(), 4);
+        assert_eq!(row.others_count, Some(3));
+        assert_eq!(row.timestamp.to_rfc3339(), "2026-11-21T02:36:09+00:00");
+    }
+
+    #[test]
+    fn people_count_reads_x_listing_everyone_it_counts() {
+        let entry = like_entry(
+            "n-1",
+            &[("11", "ann"), ("12", "bob"), ("13", "cat")],
+            "ann and 2 others liked your post",
+            "2026-11-20T23:38:21.000Z",
+        );
+        let page = parse_notifications_timeline(&timeline_of(vec![entry])).unwrap();
+        assert_eq!(page.notifications[0].people_count(), 3);
+    }
+
+    #[test]
+    fn a_community_note_carries_its_text_and_its_page() {
+        let entry = json!({
+            "entryId": "n-note",
+            "content": {
+                "clientEventInfo": { "element": "generic_birdwatch_new_community_note" },
+                "itemContent": {
+                    "__typename": "TimelineNotification",
+                    "notification_icon": "birdwatch_icon",
+                    "notification_url": {
+                        "url": "https://twitter.com/i/birdwatch/n/77?src=ntab",
+                        "urlType": "ExternalUrl"
+                    },
+                    "rich_message": { "text": "Readers added a Community Note to a post you liked" },
+                    "timestamp_ms": "2026-11-20T09:00:35.958Z",
+                    "template": {
+                        "additional_context": {
+                            "text": "The clip is spliced.\n\nhttps://example.com/a\nhttps://example.com/b"
+                        },
+                        "from_users": [],
+                        "target_objects": []
+                    }
+                }
+            }
+        });
+        let page = parse_notifications_timeline(&timeline_of(vec![entry])).unwrap();
+        let note = &page.notifications[0];
+        assert_eq!(note.notification_type, "CommunityNote");
+        assert_eq!(
+            note.target_tweet_snippet.as_deref(),
+            Some("The clip is spliced.")
+        );
+        assert_eq!(
+            note.url.as_deref(),
+            Some("https://x.com/i/birdwatch/n/77?src=ntab")
+        );
+        assert!(note.target_tweet_id.is_none());
+    }
+
+    fn new_post_entry(at: &str) -> Value {
+        json!({
+            "entryId": "n-post",
+            "content": {
+                "clientEventInfo": { "element": "device_follow_tweet_notification_entry" },
+                "itemContent": {
+                    "__typename": "TimelineNotification",
+                    "notification_icon": "bell_icon",
+                    "notification_url": {
+                        "url": "/2/notifications/device_follow.json",
+                        "urlType": "UrtEndpoint"
+                    },
+                    "rich_message": { "text": "New post notifications for ann" },
+                    "timestamp_ms": at,
+                    "template": { "from_users": [user_json("11", "ann")], "target_objects": [] }
+                }
+            }
+        })
+    }
+
+    fn followed(posts: &[(&str, &str, &str)]) -> Value {
+        let tweets: serde_json::Map<String, Value> = posts
+            .iter()
+            .map(|(id, author, at)| {
+                let tweet = json!({
+                    "id_str": id, "user_id_str": author, "created_at": at,
+                    "full_text": format!("post {id}"), "favorite_count": 2
+                });
+                (id.to_string(), tweet)
+            })
+            .collect();
+        let entries: Vec<Value> = posts
+            .iter()
+            .filter(|(id, _, _)| *id != "quoted")
+            .map(|(id, _, _)| json!({ "content": { "item": { "content": { "tweet": { "id": id } } } } }))
+            .collect();
+        json!({
+            "globalObjects": { "tweets": tweets },
+            "timeline": { "instructions": [{ "addEntries": { "entries": entries } }] }
+        })
+    }
+
+    #[test]
+    fn a_new_post_row_gets_the_post_it_is_about() {
+        let entry = new_post_entry("2026-11-20T20:18:34.000Z");
+        let mut page = parse_notifications_timeline(&timeline_of(vec![entry])).unwrap();
+        assert_eq!(page.notifications[0].notification_type, POST_TYPE);
+        assert!(page.notifications[0].wants_followed_post());
+        assert!(page.notifications[0].url.is_none());
+
+        let posts = parse_followed_posts(&followed(&[
+            ("501", "11", "Fri Nov 20 20:13:06 +0000 2026"),
+            ("502", "11", "Fri Nov 20 20:18:33 +0000 2026"),
+            ("503", "11", "Fri Nov 20 21:40:00 +0000 2026"),
+            ("504", "99", "Fri Nov 20 20:18:30 +0000 2026"),
+            ("quoted", "11", "Fri Nov 20 20:18:34 +0000 2026"),
+        ]));
+        assert_eq!(posts.len(), 4);
+        assert!(attach_followed_posts(&mut page.notifications, &posts));
+        let row = &page.notifications[0];
+        assert_eq!(row.target_tweet_id.as_deref(), Some("502"));
+        assert_eq!(row.target_tweet_snippet.as_deref(), Some("post 502"));
+        assert_eq!(row.id, "g-Post-502");
+        assert!(!row.wants_followed_post());
+    }
+
+    #[test]
+    fn a_new_post_row_whose_post_is_not_listed_stays_as_it_was() {
+        let entry = new_post_entry("2026-11-20T20:18:34.000Z");
+        let mut page = parse_notifications_timeline(&timeline_of(vec![entry])).unwrap();
+        let posts = parse_followed_posts(&followed(&[(
+            "503",
+            "11",
+            "Fri Nov 20 21:40:00 +0000 2026",
+        )]));
+        assert!(!attach_followed_posts(&mut page.notifications, &posts));
+        assert!(page.notifications[0].target_tweet_id.is_none());
     }
 }

@@ -91,7 +91,7 @@ POSTS = [
     ("f6", "lenapark", 66, "The second one. The shapes feel like they're exhaling.",
      None, (1, 0, 63, 0, 1200, 2), {"reply_to": "f2", "reply_handle": "mirakoski", "text_prefix": "@mirakoski "}),
     ("f7", "junocooks", 300, "Sunday bread. Three loaves, one very happy oven.",
-     ("photos", ["sq_01", "port_03", "sq_02"]), (22, 31, 940, 2, 12100, 188), {}),
+     ("photos", ["sq_01", "port_03", "sq_02"]), (22, 31, 940, 2, 12100, 188), {"quote_unsent": "a1"}),
     ("f8", "kitwren", 362, "This is the best explanation of resonance I've seen. Playing it to my students tomorrow.",
      None, (6, 14, 391, 4, 5200, 40), {"quote": "a1"}),
     ("f9", "outragedaily", 370, "THEY don't want you to know what your coffee is doing to YOU. Retweet before this gets deleted!!!",
@@ -421,6 +421,9 @@ class World:
         quote = spec[6].get("quote")
         if quote and layers > 0:
             tweet["quoted_tweet"] = self.tweet(quote, layers - 1)
+        unsent = spec[6].get("quote_unsent")
+        if unsent:
+            tweet["quoted_tweet_id"] = self.ids[unsent]
         return tweet
 
     def home_tweet(self, key: str) -> dict:
@@ -526,6 +529,13 @@ class World:
             {"id": "n2", "type": "Reply", "actors": [actor("tomasbuilds")], "target_tweet_id": self.ids["q2"],
              "target_tweet_snippet": "Details are the whole thing. Saving this one. Also: the way the tab bar tucks away on scroll is the nicest thing I have used all year 🙌",
              "target_media": [], "timestamp": ago(minutes=11)},
+            {"id": "n2b", "type": "Post", "actors": [actor("orbitaldaily")], "target_tweet_id": clip["rest_id"],
+             "target_tweet_snippet": clip["text"], "target_tweet_like_count": clip["like_count"],
+             "target_media": clip["media"], "timestamp": ago(minutes=20)},
+            {"id": "n2c", "type": "CommunityNote", "actors": [],
+             "message": "Readers added a Community Note to a post to which you replied, Liked or reposted",
+             "target_tweet_snippet": "The clip is two recordings spliced together: the frame-time graph resets at each cut.",
+             "url": "https://x.com/i/birdwatch/n/1", "target_media": [], "timestamp": ago(minutes=29)},
             {"id": "n3", "type": "Follow", "actors": [actor("kitwren"), actor("junocooks")], "others_count": 6,
              "target_media": [], "timestamp": ago(minutes=38)},
             {"id": "n3b", "type": "Follow", "actors": [actor("maxplays")], "target_media": [],

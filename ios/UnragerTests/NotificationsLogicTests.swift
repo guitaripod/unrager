@@ -147,6 +147,33 @@ struct NotificationsLogicTests {
         #expect(NotificationPresentation.destination(of: try notif("a", type: "Poll", actors: [], at: 1, tweet: nil)) == nil)
     }
 
+    @Test("A post the user asked to hear about reads as the account's words and opens the post")
+    func followedPost() throws {
+        let post = try notif("p", type: "Post", actors: ["ann"], at: 1, tweet: "44")
+        #expect(NotificationType(raw: post.type) == .post)
+        #expect(NotificationType.post.showsTheirWords && !NotificationType.post.isConversation)
+        #expect(NotificationPresentation.destination(of: post) == .post("44"))
+        #expect(NotificationPresentation.canLike(post))
+        #expect(NotificationPresentation.bannerCopy(for: post).title == "ann posted")
+        #expect(!NotificationCategory.mentions.includes(post))
+    }
+
+    @Test("A Community Note says so in a line and opens the note's page")
+    func communityNote() throws {
+        let json = """
+        {"id":"n","type":"CommunityNote","actors":[],
+         "message":"Readers added a Community Note to a post to which you replied, Liked or reposted",
+         "target_tweet_snippet":"The clip is spliced.","url":"https://x.com/i/birdwatch/n/1",
+         "timestamp":"2026-06-19T12:00:00Z"}
+        """
+        let note = try UnragerJSON.decode(XNotification.self, from: Data(json.utf8))
+        #expect(NotificationPresentation.headline(for: note)
+                == "Readers added a Community Note to a post you engaged with")
+        #expect(NotificationPresentation.destination(of: note)
+                == .page(URL(string: "https://x.com/i/birdwatch/n/1")!))
+        #expect(NotificationPresentation.bannerCopy(for: note).body == "The clip is spliced.")
+    }
+
     @Test("Only what someone wrote to the user about a post can be liked back")
     func likeEligibility() throws {
         #expect(NotificationPresentation.canLike(try notif("r", type: "Reply", actors: ["a"], at: 1)))

@@ -176,9 +176,9 @@ final class NotificationCell: UICollectionViewListCell {
     private func configureBody(for notification: XNotification, type: NotificationType, style: NotificationStyle) {
         let snippet = notification.targetTweetSnippet
         var showsPost = false
-        if type.isConversation || type.isEngagement || type == .communityNote {
+        if type.showsTheirWords || type.isEngagement || type == .communityNote {
             showsPost = postView.configure(
-                text: snippet, look: type.isConversation ? .bubble : .quoted, tint: style.color,
+                text: snippet, look: type.showsTheirWords ? .bubble : .quoted, tint: style.color,
                 likeCount: type.isEngagement ? notification.targetTweetLikeCount : nil,
                 thumbURL: notification.thumbnailURL,
                 isVideo: notification.targetMedia.first?.isVideo ?? false)

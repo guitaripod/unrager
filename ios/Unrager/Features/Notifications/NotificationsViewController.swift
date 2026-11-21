@@ -1,3 +1,4 @@
+import SafariServices
 import UIKit
 import UnragerKit
 
@@ -877,6 +878,10 @@ extension NotificationsViewController: UICollectionViewDelegate {
             showPeople(of: notification)
         case .profile(let handle)?:
             navigationController?.pushViewController(ProfileViewController(handle: handle), animated: true)
+        case .page(let url)?:
+            let safari = SFSafariViewController(url: url)
+            safari.preferredControlTintColor = DesignSystem.Color.accent
+            present(safari, animated: true)
         case nil:
             break
         }

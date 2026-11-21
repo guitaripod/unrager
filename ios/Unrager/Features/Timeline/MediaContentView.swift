@@ -69,6 +69,13 @@ final class MediaContentView: UIView {
         (activeView === grid ? grid : nil).flatMap { $0.tileView(at: index) } ?? activeView
     }
 
+    /// Shows nothing, for a row with no post to draw media for.
+    func clear() {
+        linkTarget = nil
+        hideAll()
+        isHidden = true
+    }
+
     /// Configures (and shows) whichever surface the tweet's media calls for, or
     /// hides itself entirely when there is nothing to render. Returns whether
     /// any media was shown so the cell can collapse the slot.

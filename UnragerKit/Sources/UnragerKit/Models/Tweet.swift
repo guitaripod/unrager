@@ -24,6 +24,10 @@ public final class Tweet: Codable, Sendable, Identifiable, Hashable {
     /// `@mentions` in the text. Absent from older servers.
     public let inReplyToHandle: String?
     public let quotedTweet: Tweet?
+    /// The id of the post this one quotes when the server couldn't send it
+    /// (withheld, deleted, or not fetched in time), so a client can still say
+    /// there is one and open it. Absent whenever `quotedTweet` is set.
+    public let quotedTweetID: String?
     /// Who reposted this into the feed. When set, this tweet is the original
     /// post (its author, text and counts) and `retweetedBy` is the account
     /// that reposted it. Absent for posts that aren't reposts, and from older
@@ -53,6 +57,7 @@ public final class Tweet: Codable, Sendable, Identifiable, Hashable {
         case inReplyToTweetID = "in_reply_to_tweet_id"
         case inReplyToHandle = "in_reply_to_handle"
         case quotedTweet = "quoted_tweet"
+        case quotedTweetID = "quoted_tweet_id"
         case retweetedBy = "retweeted_by"
         case media
         case url
@@ -78,6 +83,7 @@ public final class Tweet: Codable, Sendable, Identifiable, Hashable {
         inReplyToTweetID = try c.decodeIfPresent(String.self, forKey: .inReplyToTweetID)
         inReplyToHandle = try c.decodeIfPresent(String.self, forKey: .inReplyToHandle)
         quotedTweet = try c.decodeIfPresent(Tweet.self, forKey: .quotedTweet)
+        quotedTweetID = quotedTweet == nil ? try c.decodeIfPresent(String.self, forKey: .quotedTweetID) : nil
         retweetedBy = try? c.decodeIfPresent(User.self, forKey: .retweetedBy)
         media = try c.decodeLossy(Media.self, forKey: .media)
         url = try c.decode(String.self, forKey: .url)
@@ -103,6 +109,7 @@ public final class Tweet: Codable, Sendable, Identifiable, Hashable {
         try c.encodeIfPresent(inReplyToTweetID, forKey: .inReplyToTweetID)
         try c.encodeIfPresent(inReplyToHandle, forKey: .inReplyToHandle)
         try c.encodeIfPresent(quotedTweet, forKey: .quotedTweet)
+        try c.encodeIfPresent(quotedTweetID, forKey: .quotedTweetID)
         try c.encodeIfPresent(retweetedBy, forKey: .retweetedBy)
         try c.encode(media, forKey: .media)
         try c.encode(url, forKey: .url)
@@ -127,6 +134,7 @@ public final class Tweet: Codable, Sendable, Identifiable, Hashable {
         inReplyToTweetID = other.inReplyToTweetID
         inReplyToHandle = other.inReplyToHandle
         quotedTweet = other.quotedTweet
+        quotedTweetID = other.quotedTweetID
         retweetedBy = other.retweetedBy
         media = other.media
         url = other.url

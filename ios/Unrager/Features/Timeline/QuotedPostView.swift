@@ -25,10 +25,16 @@ extension Tweet {
 final class QuotedPostView: UIView {
     /// Fired with the post of the tapped card.
     var onTap: ((Tweet) -> Void)?
+    /// Fired with the id of a quoted post the server couldn't send, when the
+    /// card standing in for it is tapped.
+    var onTapMissing: ((String) -> Void)?
 
     /// Which card this is: 1 for the one a row's post quotes.
     private let layerNumber: Int
     private var post: Tweet?
+    private var missingID: String?
+    private let authorRow = UIStackView()
+    private let missingLabel = UILabel()
     private let avatar = AsyncImageView(frame: .zero)
     private let authorLabel = UILabel()
     private let bodyLabel = UILabel()
@@ -73,10 +79,30 @@ final class QuotedPostView: UIView {
 
     func prepareForReuse() {
         post = nil
+        missingID = nil
         avatar.cancel()
         media.prepareForReuse()
         onTap = nil
+        onTapMissing = nil
         inner?.prepareForReuse()
+    }
+
+    /// Stands in for a quoted post the server named but couldn't send: one
+    /// line saying so, which opens the post itself.
+    func configureMissing(id: String) {
+        post = nil
+        missingID = id
+        avatar.cancel()
+        media.prepareForReuse()
+        media.clear()
+        authorRow.isHidden = true
+        bodyLabel.isHidden = true
+        missingLabel.isHidden = false
+        inner?.isHidden = true
+        inner?.prepareForReuse()
+        isAccessibilityElement = true
+        accessibilityTraits = .button
+        accessibilityLabel = "Quoted post. Opens the post."
     }
 
     /// Shows `quoted` and the posts it quotes. `contentWidth` is the width the
@@ -84,6 +110,10 @@ final class QuotedPostView: UIView {
     /// `nestingInset` less of.
     func configure(with quoted: Tweet, imagesEnabled: Bool, contentWidth: CGFloat) {
         post = quoted
+        missingID = nil
+        authorRow.isHidden = false
+        missingLabel.isHidden = true
+        isAccessibilityElement = false
         authorLabel.attributedText = Self.header(for: quoted)
         let body = TweetText.attributed(for: quoted, seen: false, font: DesignSystem.Typography.metric())
         bodyLabel.attributedText = body
@@ -98,11 +128,11 @@ final class QuotedPostView: UIView {
         media.onTapPhoto = { [weak self] _ in self?.tapped() }
         media.onTapCard = { [weak self] _ in self?.tapped() }
         media.configure(with: quoted, imagesEnabled: imagesEnabled, contentWidth: max(120, contentWidth))
-        configureInner(quoted.quotedTweet, imagesEnabled: imagesEnabled, contentWidth: contentWidth - Self.nestingInset)
+        configureInner(of: quoted, imagesEnabled: imagesEnabled, contentWidth: contentWidth - Self.nestingInset)
     }
 
-    private func configureInner(_ quoted: Tweet?, imagesEnabled: Bool, contentWidth: CGFloat) {
-        guard layerNumber < Tweet.maxQuoteLayers, let quoted else {
+    private func configureInner(of outer: Tweet, imagesEnabled: Bool, contentWidth: CGFloat) {
+        guard layerNumber < Tweet.maxQuoteLayers, outer.quotedTweet != nil || outer.quotedTweetID != nil else {
             inner?.isHidden = true
             inner?.prepareForReuse()
             return
@@ -110,7 +140,12 @@ final class QuotedPostView: UIView {
         let view = inner ?? makeInner()
         view.isHidden = false
         view.onTap = { [weak self] tapped in self?.onTap?(tapped) }
-        view.configure(with: quoted, imagesEnabled: imagesEnabled, contentWidth: contentWidth)
+        view.onTapMissing = { [weak self] id in self?.onTapMissing?(id) }
+        if let quoted = outer.quotedTweet {
+            view.configure(with: quoted, imagesEnabled: imagesEnabled, contentWidth: contentWidth)
+        } else if let id = outer.quotedTweetID {
+            view.configureMissing(id: id)
+        }
     }
 
     private func makeInner() -> QuotedPostView {
@@ -147,14 +182,19 @@ final class QuotedPostView: UIView {
         bodyLabel.textColor = DesignSystem.Color.label
         bodyLabel.numberOfLines = bodyLines
 
-        let authorRow = UIStackView(arrangedSubviews: [avatar, authorLabel, UIView()])
+        for piece in [avatar, authorLabel, UIView()] { authorRow.addArrangedSubview(piece) }
         authorRow.axis = .horizontal
         authorRow.spacing = 6
         authorRow.alignment = .center
 
         media.translatesAutoresizingMaskIntoConstraints = false
 
+        missingLabel.attributedText = Self.missingText()
+        missingLabel.numberOfLines = 2
+        missingLabel.isHidden = true
+
         stack.addArrangedSubview(authorRow)
+        stack.addArrangedSubview(missingLabel)
         stack.addArrangedSubview(bodyLabel)
         stack.addArrangedSubview(media)
         stack.axis = .vertical
@@ -168,7 +208,29 @@ final class QuotedPostView: UIView {
     }
 
     @objc private func tapped() {
-        if let post { onTap?(post) }
+        if let post {
+            onTap?(post)
+        } else if let missingID {
+            onTapMissing?(missingID)
+        }
+    }
+
+    /// "Quoted post · Tap to open", led by a quote glyph.
+    private static func missingText() -> NSAttributedString {
+        let font = DesignSystem.Typography.metric()
+        let result = NSMutableAttributedString()
+        if let glyph = DesignSystem.icon("quote.bubble", pointSize: font.pointSize)?
+            .withTintColor(DesignSystem.Color.secondaryLabel, renderingMode: .alwaysOriginal) {
+            result.append(NSAttributedString(attachment: NSTextAttachment(image: glyph)))
+            result.append(NSAttributedString(string: "  "))
+        }
+        result.append(NSAttributedString(string: "Quoted post", attributes: [
+            .font: font, .foregroundColor: DesignSystem.Color.label,
+        ]))
+        result.append(NSAttributedString(string: " · Tap to open", attributes: [
+            .font: font, .foregroundColor: DesignSystem.Color.secondaryLabel,
+        ]))
+        return result
     }
 
     /// `Name` + a color-hashed `@handle` + a relative timestamp, the same

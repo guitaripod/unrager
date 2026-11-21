@@ -6,11 +6,13 @@
 use crate::error::Error;
 use crate::gql::GqlClient;
 use crate::server::state::fetch_tweet;
-use futures::future::BoxFuture;
+use futures::FutureExt;
+use futures::future::{BoxFuture, Shared};
 use futures::stream::{FuturesUnordered, StreamExt};
 use lru::LruCache;
+use std::collections::HashMap;
 use std::num::NonZeroUsize;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 use unrager_model::Tweet;
 
@@ -20,7 +22,13 @@ pub const MAX_QUOTE_LAYERS: usize = 3;
 
 const REMEMBERED: NonZeroUsize = NonZeroUsize::new(512).unwrap();
 const REMEMBERED_FOR: Duration = Duration::from_secs(15 * 60);
-const FETCH_TIMEOUT: Duration = Duration::from_secs(3);
+/// How long one quoted post may take to come back. Requests to X leave one
+/// at a time, a few hundred milliseconds apart, so most of this is the wait
+/// behind the page's other quotes and whatever else the server is asking.
+const FETCH_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long a page is held for its quotes. A quote that takes longer is still
+/// fetched and remembered, so the page's next load has it.
+const PAGE_WAIT: Duration = Duration::from_secs(4);
 const FETCH_CONCURRENCY: usize = 4;
 
 /// Asks for one quoted post by id.
@@ -35,29 +43,49 @@ pub enum Fetched {
     Failed,
 }
 
-/// The quoted posts fetched so far, kept for [`REMEMBERED_FOR`] so a feed
-/// scrolled back through (or one post quoted by many) costs one request.
+/// A quoted post on its way from X, which every page that wants it waits on.
+type Asking = Shared<BoxFuture<'static, Option<Tweet>>>;
+
+/// What the hydrator knows: the quoted posts fetched so far, kept for
+/// [`REMEMBERED_FOR`] so a feed scrolled back through (or one post quoted by
+/// many) costs one request, and the ones being fetched now.
+#[derive(Default)]
+struct Known {
+    fetched: Option<LruCache<String, (Instant, Option<Tweet>)>>,
+    asking: HashMap<String, Asking>,
+}
+
+impl Known {
+    fn fetched(&mut self) -> &mut LruCache<String, (Instant, Option<Tweet>)> {
+        self.fetched
+            .get_or_insert_with(|| LruCache::new(REMEMBERED))
+    }
+}
+
+/// Fills in the quoted posts X named without sending.
 pub struct QuoteHydrator {
-    fetched: Mutex<LruCache<String, (Instant, Option<Tweet>)>>,
+    known: Arc<Mutex<Known>>,
 }
 
 impl QuoteHydrator {
     pub fn new() -> Self {
         Self {
-            fetched: Mutex::new(LruCache::new(REMEMBERED)),
+            known: Arc::new(Mutex::new(Known::default())),
         }
     }
 
     /// Gives every post in `tweets` its quote tree, fetching what X left out
-    /// through `fetch` (four at a time). A post whose quote can't be fetched
-    /// keeps the layers it has.
+    /// through `fetch` (four at a time) for at most [`PAGE_WAIT`]. A post
+    /// whose quote can't be fetched, or isn't back in time, keeps the layers
+    /// it has.
     pub async fn hydrate(&self, tweets: &mut [Tweet], fetch: FetchQuoted<'_>) {
+        let deadline = tokio::time::Instant::now() + PAGE_WAIT;
         let mut waiting = tweets.iter_mut();
         let mut running = FuturesUnordered::new();
         loop {
             while running.len() < FETCH_CONCURRENCY {
                 let Some(tweet) = waiting.next() else { break };
-                running.push(self.fill(tweet, fetch));
+                running.push(self.fill(tweet, fetch, deadline));
             }
             if running.next().await.is_none() {
                 break;
@@ -67,14 +95,14 @@ impl QuoteHydrator {
 
     /// Walks down `root`'s chain of quotes, attaching each missing post, until
     /// [`MAX_QUOTE_LAYERS`] layers hang under it or the chain ends.
-    async fn fill(&self, root: &mut Tweet, fetch: FetchQuoted<'_>) {
+    async fn fill(&self, root: &mut Tweet, fetch: FetchQuoted<'_>, deadline: tokio::time::Instant) {
         let mut node = root;
         for _ in 0..MAX_QUOTE_LAYERS {
             if node.quoted_tweet.is_none() {
                 let Some(id) = node.quoted_tweet_id.take() else {
                     return;
                 };
-                match self.lookup(&id, fetch).await {
+                match self.lookup(&id, fetch, deadline).await {
                     Some(quoted) => node.quoted_tweet = Some(Box::new(quoted)),
                     None => {
                         node.quoted_tweet_id = Some(id);
@@ -89,30 +117,54 @@ impl QuoteHydrator {
         }
     }
 
-    /// A quoted post from the memory or from `fetch`, remembering what X
-    /// answered for good (a post, or that it is gone) but not a failure.
-    async fn lookup(&self, id: &str, fetch: FetchQuoted<'_>) -> Option<Tweet> {
-        if let Some(known) = self.recall(id) {
-            return known;
-        }
-        let answer = match fetch(id.to_string()).await {
-            Fetched::Post(post) => Some(*post),
-            Fetched::Gone => None,
-            Fetched::Failed => return None,
+    /// A quoted post from the memory or from X, waited for until `deadline`.
+    async fn lookup(
+        &self,
+        id: &str,
+        fetch: FetchQuoted<'_>,
+        deadline: tokio::time::Instant,
+    ) -> Option<Tweet> {
+        let asking = match self.recall_or_ask(id, fetch) {
+            Ok(known) => return known,
+            Err(asking) => asking,
         };
-        self.fetched
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .put(id.to_string(), (Instant::now(), answer.clone()));
-        answer
+        tokio::time::timeout_at(deadline, asking)
+            .await
+            .ok()
+            .flatten()
     }
 
-    fn recall(&self, id: &str) -> Option<Option<Tweet>> {
-        let mut fetched = self.fetched.lock().unwrap_or_else(PoisonError::into_inner);
-        match fetched.get(id) {
-            Some((at, answer)) if at.elapsed() < REMEMBERED_FOR => Some(answer.clone()),
-            _ => None,
+    /// What is remembered about `id`, or the request for it: the one already
+    /// under way, or a new one. The request runs on its own task and remembers
+    /// what X answered for good (a post, or that it is gone) but not a
+    /// failure, whether or not the page that started it is still waiting.
+    fn recall_or_ask(&self, id: &str, fetch: FetchQuoted<'_>) -> Result<Option<Tweet>, Asking> {
+        let mut known = self.known.lock().unwrap_or_else(PoisonError::into_inner);
+        match known.fetched().get(id) {
+            Some((at, answer)) if at.elapsed() < REMEMBERED_FOR => return Ok(answer.clone()),
+            _ => {}
         }
+        if let Some(asking) = known.asking.get(id) {
+            return Err(asking.clone());
+        }
+        let answer = fetch(id.to_string());
+        let shared = Arc::clone(&self.known);
+        let key = id.to_string();
+        let task = tokio::spawn(async move {
+            let answer = match answer.await {
+                Fetched::Post(post) => Some(Some(*post)),
+                Fetched::Gone => Some(None),
+                Fetched::Failed => None,
+            };
+            let mut known = shared.lock().unwrap_or_else(PoisonError::into_inner);
+            known.asking.remove(&key);
+            let answer = answer?;
+            known.fetched().put(key, (Instant::now(), answer.clone()));
+            answer
+        });
+        let asking: Asking = task.map(|joined| joined.ok().flatten()).boxed().shared();
+        known.asking.insert(id.to_string(), asking.clone());
+        Err(asking)
     }
 }
 
@@ -122,8 +174,7 @@ impl Default for QuoteHydrator {
     }
 }
 
-/// One quoted post from X, giving up after [`FETCH_TIMEOUT`] so a slow answer
-/// never holds a whole timeline page back.
+/// One quoted post from X, giving up after [`FETCH_TIMEOUT`].
 pub async fn fetch_quoted(gql: &GqlClient, id: String) -> Fetched {
     match tokio::time::timeout(FETCH_TIMEOUT, fetch_tweet(gql, &id)).await {
         Ok(Ok(post)) => Fetched::Post(Box::new(post)),

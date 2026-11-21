@@ -26,6 +26,9 @@ pub struct Args {
         help = "Maximum pages to fetch (~20 tweets each)"
     )]
     pub max_pages: u32,
+
+    #[arg(long, help = "Dump the raw API response JSON of the first page")]
+    pub raw: bool,
 }
 
 pub async fn run(args: Args) -> Result<()> {
@@ -35,6 +38,18 @@ pub async fn run(args: Args) -> Result<()> {
     } else {
         Operation::HomeTimeline
     };
+
+    if args.raw {
+        let response = client
+            .post(
+                op,
+                &endpoints::home_timeline_variables(args.count, None, &[]),
+                &endpoints::home_timeline_features(),
+            )
+            .await?;
+        println!("{}", serde_json::to_string_pretty(&response)?);
+        return Ok(());
+    }
 
     let tweets = common::paginate_timeline(args.max_pages, args.count as usize, async |cursor| {
         let response = client

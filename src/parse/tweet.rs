@@ -67,6 +67,9 @@ fn parse_tweet_node(node: &Value) -> Result<Tweet> {
         .get("legacy")
         .ok_or_else(|| Error::GraphqlShape("tweet missing legacy block".into()))?;
 
+    let with_note_links = with_note_links(node, legacy);
+    let legacy = with_note_links.as_ref();
+
     let author = parse_author(node)?;
     let text = extract_text(node, legacy);
     let text = scrub_urls_in_text(&text, legacy);
@@ -107,7 +110,7 @@ fn parse_tweet_node(node: &Value) -> Result<Tweet> {
         .pointer("/quoted_status_result/result")
         .and_then(|q| parse_tweet_result(q).ok())
         .map(Box::new);
-    let quoted_tweet_id = quoted_reference(node, legacy);
+    let quoted_tweet_id = quoted_reference(legacy, quoted_tweet.as_deref());
 
     let mut media = parse_media(legacy);
     let (youtube_media, youtube_tcos) = parse_youtube_embeds(legacy);
@@ -124,15 +127,23 @@ fn parse_tweet_node(node: &Value) -> Result<Tweet> {
     let text = strip_tco_urls(&text, &article_tcos);
     let text = strip_tco_urls(&text, &broadcast_tcos);
     let text = strip_tco_urls(&text, &space_tcos);
-    let text = strip_tco_urls(&text, &card_tcos);
+    let (text, card_tcos) = strip_card_link(text, card_tcos);
+    let quote_tcos = match &quoted_tweet {
+        Some(quoted) => quote_link_displays(legacy, &quoted.rest_id),
+        None => Vec::new(),
+    };
+    let text = strip_trailing_links(&text, &quote_tcos);
 
     let urls = collect_open_urls(
         legacy,
-        &youtube_tcos,
-        &article_tcos,
-        &broadcast_tcos,
-        &space_tcos,
-        &card_tcos,
+        &[
+            &youtube_tcos,
+            &article_tcos,
+            &broadcast_tcos,
+            &space_tcos,
+            &card_tcos,
+            &quote_tcos,
+        ],
     );
 
     let url = format!("https://x.com/{}/status/{}", author.handle, rest_id);
@@ -163,12 +174,13 @@ fn parse_tweet_node(node: &Value) -> Result<Tweet> {
     })
 }
 
-/// The id of the post `node` quotes when X named it without sending it: a
-/// quote that is itself quoted carries only `quotedRefResult` and
-/// `legacy.quoted_status_id_str`. A quote whose post X did send, even as a
-/// tombstone, has `quoted_status_result` and needs nothing fetched.
-fn quoted_reference(node: &Value, legacy: &Value) -> Option<String> {
-    if node.get("quoted_status_result").is_some() {
+/// The id of the post `node` quotes when X named it without sending one that
+/// can be read: a quote that is itself quoted carries only `quotedRefResult`
+/// and `legacy.quoted_status_id_str`, some timeline posts carry the id alone,
+/// and a quote X withholds arrives as a tombstone. `quoted` is what was read
+/// of the quote; a post that has it needs nothing fetched.
+fn quoted_reference(legacy: &Value, quoted: Option<&Tweet>) -> Option<String> {
+    if quoted.is_some() {
         return None;
     }
     legacy
@@ -176,6 +188,85 @@ fn quoted_reference(node: &Value, legacy: &Value) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|id| is_numeric_id(id))
         .map(str::to_string)
+}
+
+/// `legacy` with the links of a long post added to its `entities.urls`. A
+/// post past 280 characters keeps its whole text and that text's links apart
+/// (`note_tweet…entity_set`), each with a `t.co` of its own, while
+/// `legacy.entities` only covers the first 280 characters: read alone, the
+/// later links stay raw `t.co` addresses.
+fn with_note_links<'a>(node: &Value, legacy: &'a Value) -> std::borrow::Cow<'a, Value> {
+    let note_links = node
+        .pointer("/note_tweet/note_tweet_results/result/entity_set/urls")
+        .and_then(Value::as_array)
+        .filter(|links| !links.is_empty());
+    let Some(note_links) = note_links else {
+        return std::borrow::Cow::Borrowed(legacy);
+    };
+    let mut merged = legacy.clone();
+    let mut links = legacy
+        .pointer("/entities/urls")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    links.extend(note_links.iter().cloned());
+    if !merged.get("entities").is_some_and(Value::is_object) {
+        merged["entities"] = Value::Object(Default::default());
+    }
+    merged["entities"]["urls"] = Value::Array(links);
+    std::borrow::Cow::Owned(merged)
+}
+
+/// How the links to the quoted post `quoted_id` read in the text: X ends a
+/// quote's text with the address of the post it quotes, which says nothing
+/// once that post is shown under it.
+fn quote_link_displays(legacy: &Value, quoted_id: &str) -> Vec<String> {
+    let ending = format!("/status/{quoted_id}");
+    legacy
+        .pointer("/entities/urls")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|u| {
+            u.get("expanded_url")
+                .and_then(Value::as_str)
+                .is_some_and(|e| e.split(['?', '#']).next().unwrap_or(e).ends_with(&ending))
+        })
+        .filter_map(|u| u.get("display_url").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Takes a link card's address off the end of `text`, where the card under
+/// the post stands in for it. An address inside a sentence ("Source: … and
+/// more below") stays in the text, and is then not counted as taken by the
+/// card, so it is still a link there. A card whose link X left unexpanded is
+/// a raw `t.co` wherever it sits, and goes.
+fn strip_card_link(text: String, card_links: Vec<String>) -> (String, Vec<String>) {
+    if card_links
+        .iter()
+        .any(|link| link.starts_with("https://t.co/"))
+    {
+        return (strip_tco_urls(&text, &card_links), card_links);
+    }
+    let stripped = strip_trailing_links(&text, &card_links);
+    if stripped.len() == text.trim_end().len() {
+        return (text, Vec::new());
+    }
+    (stripped, card_links)
+}
+
+/// `text` without any of `links` it ends with.
+fn strip_trailing_links(text: &str, links: &[String]) -> String {
+    let mut out = text.trim_end();
+    while let Some(rest) = links
+        .iter()
+        .filter(|link| !link.is_empty())
+        .find_map(|link| out.strip_suffix(link.as_str()))
+    {
+        out = rest.trim_end();
+    }
+    out.to_string()
 }
 
 /// A repost arrives as the reposter's own tweet (`RT @alice: …`, cut short,
@@ -195,30 +286,21 @@ fn parse_reposted_original(node: &Value) -> Option<Tweet> {
 /// Collects entities.urls[] entries that aren't already consumed by the
 /// youtube / article / card embedders. These are the inline links that
 /// remain visible in the scrubbed tweet body and that the `M` key opens.
-fn collect_open_urls(
-    legacy: &Value,
-    youtube_tcos: &[String],
-    article_tcos: &[String],
-    broadcast_tcos: &[String],
-    space_tcos: &[String],
-    card_tcos: &[String],
-) -> Vec<TweetUrl> {
+fn collect_open_urls(legacy: &Value, consumed: &[&[String]]) -> Vec<TweetUrl> {
     let Some(arr) = legacy.pointer("/entities/urls").and_then(Value::as_array) else {
         return Vec::new();
     };
-    let mut out = Vec::with_capacity(arr.len());
+    let mut out: Vec<TweetUrl> = Vec::with_capacity(arr.len());
     for u in arr {
         let display = u.get("display_url").and_then(Value::as_str).unwrap_or("");
         let expanded = u.get("expanded_url").and_then(Value::as_str).unwrap_or("");
         if expanded.is_empty() {
             continue;
         }
-        if youtube_tcos.iter().any(|d| d == display)
-            || article_tcos.iter().any(|d| d == display)
-            || broadcast_tcos.iter().any(|d| d == display)
-            || space_tcos.iter().any(|d| d == display)
-            || card_tcos.iter().any(|d| d == display)
-        {
+        if consumed.iter().any(|set| set.iter().any(|d| d == display)) {
+            continue;
+        }
+        if out.iter().any(|known| known.expanded_url == expanded) {
             continue;
         }
         out.push(TweetUrl {
@@ -1228,7 +1310,7 @@ mod tests {
     }
 
     #[test]
-    fn a_quote_whose_post_was_sent_needs_nothing_fetched() {
+    fn a_withheld_quote_is_still_named() {
         let mut v = minimal_tweet_json("333", "look at this");
         v["quoted_status_result"] = json!({
             "result": { "__typename": "TweetTombstone", "tombstone": { "text": { "text": "gone" } } }
@@ -1236,7 +1318,73 @@ mod tests {
         v["legacy"]["quoted_status_id_str"] = json!("444");
         let tweet = parse_tweet_result(&v).unwrap();
         assert!(tweet.quoted_tweet.is_none());
-        assert!(tweet.quoted_tweet_id.is_none());
+        assert_eq!(tweet.quoted_tweet_id.as_deref(), Some("444"));
+    }
+
+    #[test]
+    fn a_quote_named_by_id_alone_is_named() {
+        let mut v = minimal_tweet_json("333", "look at this");
+        v["legacy"]["is_quote_status"] = json!(true);
+        v["legacy"]["quoted_status_id_str"] = json!("444");
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(tweet.quoted_tweet_id.as_deref(), Some("444"));
+    }
+
+    #[test]
+    fn a_quote_drops_the_link_to_the_post_shown_under_it() {
+        let mut v = minimal_tweet_json("333", "this is metal https://t.co/q");
+        v["legacy"]["entities"] = json!({ "urls": [{
+            "url": "https://t.co/q",
+            "expanded_url": "https://x.com/bob/status/444?s=20",
+            "display_url": "x.com/bob/status/4…"
+        }]});
+        v["legacy"]["quoted_status_id_str"] = json!("444");
+        let unsent = parse_tweet_result(&v).unwrap();
+        assert_eq!(unsent.text, "this is metal x.com/bob/status/4…");
+        assert_eq!(unsent.urls.len(), 1);
+
+        v["quoted_status_result"] = json!({ "result": minimal_tweet_json("444", "quoted") });
+        let sent = parse_tweet_result(&v).unwrap();
+        assert_eq!(sent.text, "this is metal");
+        assert!(sent.urls.is_empty());
+    }
+
+    #[test]
+    fn a_long_post_reads_its_own_links() {
+        let mut v = minimal_tweet_json("333", "Source: https://t.co/short and");
+        v["legacy"]["entities"] = json!({ "urls": [{
+            "url": "https://t.co/short",
+            "expanded_url": "https://example.com/story",
+            "display_url": "example.com/story"
+        }]});
+        v["note_tweet"] = json!({ "note_tweet_results": { "result": {
+            "text": "Source: https://t.co/long1 and the newsletter: https://t.co/long2",
+            "entity_set": { "urls": [
+                {
+                    "url": "https://t.co/long1",
+                    "expanded_url": "https://example.com/story",
+                    "display_url": "example.com/story"
+                },
+                {
+                    "url": "https://t.co/long2",
+                    "expanded_url": "https://example.com/newsletter",
+                    "display_url": "example.com/newsletter"
+                }
+            ]}
+        }}});
+        let tweet = parse_tweet_result(&v).unwrap();
+        assert_eq!(
+            tweet.text,
+            "Source: example.com/story and the newsletter: example.com/newsletter"
+        );
+        let opened: Vec<&str> = tweet.urls.iter().map(|u| u.expanded_url.as_str()).collect();
+        assert_eq!(
+            opened,
+            [
+                "https://example.com/story",
+                "https://example.com/newsletter"
+            ]
+        );
     }
 
     #[test]
@@ -1981,13 +2129,19 @@ mod tests {
         });
         v["card"] = card_json("https://t.co/CARD2");
         let tweet = parse_tweet_result(&v).unwrap();
-        assert_eq!(tweet.text, "read now");
+        assert_eq!(tweet.text, "read example.com/a now");
+        assert_eq!(tweet.urls.len(), 1);
         match &tweet.media[0].kind {
             MediaKind::LinkCard { target_url, .. } => {
                 assert_eq!(target_url, "https://example.com/a")
             }
             other => panic!("expected LinkCard, got {other:?}"),
         }
+
+        v["legacy"]["full_text"] = json!("read this https://t.co/CARD2");
+        let trailing = parse_tweet_result(&v).unwrap();
+        assert_eq!(trailing.text, "read this");
+        assert!(trailing.urls.is_empty());
     }
 
     #[test]

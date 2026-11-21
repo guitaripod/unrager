@@ -66,6 +66,8 @@ final class TweetCell: UICollectionViewCell {
     var onShowLikers: (() -> Void)?
     /// Fired with the post of whichever quoted card was tapped.
     var onTapQuoted: ((Tweet) -> Void)?
+    /// A quoted post the server couldn't send was tapped; carries its id.
+    var onTapMissingQuote: ((String) -> Void)?
     /// Routes a tapped `@mention` to a profile, or `#hashtag` to search.
     var onTapMention: ((String) -> Void)?
     var onTapHashtag: ((String) -> Void)?
@@ -276,6 +278,7 @@ final class TweetCell: UICollectionViewCell {
         onShowLikers = nil
         likeLongPress.isEnabled = false
         onTapQuoted = nil
+        onTapMissingQuote = nil
         onTapMention = nil
         onTapHashtag = nil
         onShowMore = nil
@@ -373,7 +376,7 @@ final class TweetCell: UICollectionViewCell {
         }
 
         PerfProbe.time("cfg.quote") {
-            configureQuoted(tweet.quotedTweet, imagesEnabled: imagesEnabled,
+            configureQuoted(of: tweet, imagesEnabled: imagesEnabled,
                             contentWidth: contentWidth - 2 * Self.sideMargin - QuotedPostView.nestingInset)
         }
         PerfProbe.time("cfg.actions") { configureActions(tweet) }
@@ -654,15 +657,22 @@ final class TweetCell: UICollectionViewCell {
         }
     }
 
-    private func configureQuoted(_ quoted: Tweet?, imagesEnabled: Bool, contentWidth: CGFloat) {
-        guard let quoted else {
+    /// Shows the post `tweet` quotes under it, or, when the server named one
+    /// it couldn't send, a line that opens it.
+    private func configureQuoted(of tweet: Tweet, imagesEnabled: Bool, contentWidth: CGFloat) {
+        guard tweet.quotedTweet != nil || tweet.quotedTweetID != nil else {
             quotedWrap.isHidden = true
             quotedPost.prepareForReuse()
             return
         }
         quotedWrap.isHidden = false
         quotedPost.onTap = { [weak self] tapped in self?.onTapQuoted?(tapped) }
-        quotedPost.configure(with: quoted, imagesEnabled: imagesEnabled, contentWidth: contentWidth)
+        quotedPost.onTapMissing = { [weak self] id in self?.onTapMissingQuote?(id) }
+        if let quoted = tweet.quotedTweet {
+            quotedPost.configure(with: quoted, imagesEnabled: imagesEnabled, contentWidth: contentWidth)
+        } else if let id = tweet.quotedTweetID {
+            quotedPost.configureMissing(id: id)
+        }
     }
 
     private func configureActions(_ tweet: Tweet) {

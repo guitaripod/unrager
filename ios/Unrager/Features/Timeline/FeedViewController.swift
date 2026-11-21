@@ -112,6 +112,9 @@ class FeedViewController: UIViewController, TweetActionHandling {
         cell.onTapCard = { [weak self] url in self?.openLink(url) }
         cell.onReply = { [weak self] in self?.presentReply(tweet) }
         cell.onTapQuoted = { [weak self] quoted in self?.handleSelect(quoted) }
+        cell.onTapMissingQuote = { [weak self] id in
+            PostOpening.open(ThreadViewController(tweetID: id), on: self?.navigationController, zoomingFrom: nil)
+        }
         cell.onLike = { [weak self, weak cell] in self?.toggleLike(tweet, cell: cell) }
         cell.onToggleRetweet = { [weak self, weak cell] in self?.toggleRetweet(tweet, cell: cell) }
         cell.onQuote = { [weak self] in self?.presentQuote(tweet) }
@@ -428,7 +431,7 @@ class FeedViewController: UIViewController, TweetActionHandling {
         let width = contentWidth
         let lines = min(CGFloat(TweetCell.cardBodyLineLimit), ceil(CGFloat(tweet.text.count) * 8 / max(width - 70, 120)))
         let media: CGFloat = tweet.media.isEmpty || !AppSettings.imagesEnabled ? 0 : (width - 70) * 0.62 + 8
-        let quote: CGFloat = tweet.quotedTweet == nil ? 0 : 140
+        let quote: CGFloat = tweet.quotedTweet != nil ? 140 : (tweet.quotedTweetID != nil ? 44 : 0)
         return 112 + lines * 21 + media + quote
     }
 
